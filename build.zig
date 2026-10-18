@@ -75,6 +75,12 @@ pub fn build(b: *std.Build) void {
     });
     const run_cli_tests = b.addRunArtifact(cli_tests);
 
+    const backend_options_step = backends.createOptionsStep(b, backend_opts);
+    lib.root_module.addOptions("backend_options", backend_options_step);
+    if (shared) {
+        exe.root_module.addOptions("backend_options", backend_options_step);
+    }
+
     const backend_test_mod = b.createModule(.{
         .root_source_file = b.path("zig/backends_test.zig"),
         .target = target,
@@ -82,7 +88,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     backend_test_mod.linkLibrary(lib);
-    backend_test_mod.addOptions("backend_options", backends.createOptionsStep(b, backend_opts));
+    backend_test_mod.addOptions("backend_options", backend_options_step);
 
     const backend_tests = b.addTest(.{
         .root_module = backend_test_mod,
@@ -95,6 +101,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    port_test_mod.addOptions("backend_options", backend_options_step);
     port_test_mod.linkLibrary(lib);
     const port_tests = b.addTest(.{
         .root_module = port_test_mod,
