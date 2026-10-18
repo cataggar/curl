@@ -27,6 +27,8 @@
 
 #ifndef CURL_DISABLE_DIGEST_AUTH
 
+#include "vauth/vauth.h"
+
 #define DIGEST_MAX_VALUE_LENGTH           256
 #define DIGEST_MAX_CONTENT_LENGTH         1024
 
@@ -35,6 +37,20 @@ struct Curl_str;
 /* This is used to extract the realm from a challenge message */
 bool Curl_auth_digest_get_pair(const char *str, struct Curl_str *value,
                                char *content, const char **endptr);
+
+CURLcode Curl_auth_create_digest_md5_message_host(struct Curl_easy *data,
+                                                  const char *hostname,
+                                                  const struct bufref *chlg,
+                                                  struct Curl_creds *creds,
+                                                  const char *default_service,
+                                                  struct bufref *out);
+
+#ifndef Curl_auth_create_digest_md5_message
+#define Curl_auth_create_digest_md5_message(data, chlg, creds, service, out) \
+  Curl_auth_create_digest_md5_message_host((data),                           \
+                                           (data)->state.origin->hostname,   \
+                                           (chlg), (creds), (service), (out))
+#endif
 
 #endif
 
