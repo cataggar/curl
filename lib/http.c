@@ -84,6 +84,7 @@
 #include "ws.h"
 #include "bufref.h"
 #include "curlx/strparse.h"
+#include "peer.h"
 
 void Curl_http_neg_init(struct Curl_easy *data, struct http_negotiation *neg)
 {
@@ -5132,3 +5133,271 @@ const struct Curl_protocol Curl_protocol_http = {
 };
 
 #endif /* CURL_DISABLE_HTTP */
+
+#ifndef CURL_DISABLE_FTP
+extern bool Curl_ftp_listmode_zig(struct Curl_easy *data, bool wildcardmatch,
+                                  struct WildcardData *wildcard);
+
+bool Curl_ftp_listmode(struct Curl_easy *data)
+{
+  return Curl_ftp_listmode_zig(data, (bool)data->state.wildcardmatch,
+                               data->wildcard);
+}
+
+void Curl_ftp_parselist_get_easy(struct Curl_easy *data,
+                                 struct WildcardData **pwc,
+                                 curl_fnmatch_callback *pfnmatch,
+                                 void **pfnmatch_data)
+{
+  *pwc = data->wildcard;
+  *pfnmatch = data->set.fnmatch;
+  *pfnmatch_data = data->set.fnmatch_data;
+}
+#endif
+
+#include "curl_sasl.h"
+
+extern void Curl_sasl_init_zig(struct SASL *sasl, struct Curl_easy *data,
+                               const struct SASLproto *params,
+                               uint32_t httpauth);
+extern bool Curl_sasl_can_authenticate_zig(struct SASL *sasl,
+                                           struct Curl_easy *data,
+                                           struct Curl_creds *conn_creds);
+extern CURLcode Curl_sasl_start_zig(struct SASL *sasl, struct Curl_easy *data,
+                                    bool force_ir, saslprogress *progress,
+                                    struct connectdata *conn,
+                                    struct Curl_creds *conn_creds,
+                                    struct Curl_creds *state_creds,
+                                    const char *conn_hostname,
+                                    int conn_port,
+                                    bool sasl_ir);
+extern CURLcode Curl_sasl_continue_zig(struct SASL *sasl,
+                                       struct Curl_easy *data,
+                                       int code, saslprogress *progress,
+                                       struct connectdata *conn,
+                                       struct Curl_creds *conn_creds,
+                                       struct Curl_creds *state_creds,
+                                       const char *conn_hostname,
+                                       int conn_port,
+                                       const char *origin_hostname,
+                                       bool sasl_ir);
+extern CURLcode Curl_sasl_is_blocked_zig(struct SASL *sasl,
+                                         struct Curl_easy *data,
+                                         struct Curl_creds *conn_creds);
+
+void Curl_sasl_init(struct SASL *sasl, struct Curl_easy *data,
+                    const struct SASLproto *params)
+{
+  Curl_sasl_init_zig(sasl, data, params, data->set.httpauth);
+}
+
+bool Curl_sasl_can_authenticate(struct SASL *sasl, struct Curl_easy *data)
+{
+  return Curl_sasl_can_authenticate_zig(sasl, data, data->conn->creds);
+}
+
+CURLcode Curl_sasl_start(struct SASL *sasl, struct Curl_easy *data,
+                         bool force_ir, saslprogress *progress)
+{
+  return Curl_sasl_start_zig(sasl, data, force_ir, progress,
+                             data->conn, data->conn->creds, data->state.creds,
+                             data->conn->origin->hostname,
+                             data->conn->origin->port,
+                             (bool)data->set.sasl_ir);
+}
+
+CURLcode Curl_sasl_continue(struct SASL *sasl, struct Curl_easy *data,
+                            int code, saslprogress *progress)
+{
+  return Curl_sasl_continue_zig(sasl, data, code, progress,
+                                data->conn, data->conn->creds,
+                                data->state.creds,
+                                data->conn->origin->hostname,
+                                data->conn->origin->port,
+                                data->state.origin->hostname,
+                                (bool)data->set.sasl_ir);
+}
+
+CURLcode Curl_sasl_is_blocked(struct SASL *sasl, struct Curl_easy *data)
+{
+  return Curl_sasl_is_blocked_zig(sasl, data, data->conn->creds);
+}
+
+#ifndef CURL_DISABLE_RTSP
+struct connectdata *Curl_rtsp_get_conn(struct Curl_easy *data)
+{
+  return data->conn;
+}
+
+curl_socket_t Curl_rtsp_get_firstsocket(struct Curl_easy *data)
+{
+  return data->conn->sock[FIRSTSOCKET];
+}
+
+void Curl_rtsp_init_cseq(struct Curl_easy *data)
+{
+  if(data->state.rtsp_next_client_CSeq == 0)
+    data->state.rtsp_next_client_CSeq = 1;
+  if(data->state.rtsp_next_server_CSeq == 0)
+    data->state.rtsp_next_server_CSeq = 1;
+}
+
+uint32_t Curl_rtsp_get_next_client_cseq(struct Curl_easy *data)
+{
+  return data->state.rtsp_next_client_CSeq;
+}
+
+void Curl_rtsp_inc_next_client_cseq(struct Curl_easy *data)
+{
+  data->state.rtsp_next_client_CSeq++;
+}
+
+void Curl_rtsp_set_cseq_recv(struct Curl_easy *data, uint32_t cseq)
+{
+  data->state.rtsp_CSeq_recv = cseq;
+}
+
+unsigned char Curl_rtsp_get_rtspreq(struct Curl_easy *data)
+{
+  return data->set.rtspreq;
+}
+
+bool Curl_rtsp_get_eos_written(struct Curl_easy *data)
+{
+  return (bool)data->req.eos_written;
+}
+
+void Curl_rtsp_set_no_body(struct Curl_easy *data, bool no_body)
+{
+  data->req.no_body = no_body;
+}
+
+void Curl_rtsp_set_httpreq(struct Curl_easy *data, unsigned char httpreq)
+{
+  data->state.httpreq = httpreq;
+}
+
+void Curl_rtsp_get_body_info(struct Curl_easy *data,
+                             bool *pupload,
+                             curl_off_t *pinfilesize,
+                             void **ppostfields,
+                             curl_off_t *ppostfieldsize,
+                             bool *pcrlf)
+{
+  *pupload = (bool)data->state.upload;
+  *pinfilesize = data->state.infilesize;
+  *ppostfields = data->set.postfields;
+  *ppostfieldsize = data->set.postfieldsize;
+  *pcrlf = (bool)data->set.crlf;
+}
+
+void Curl_rtsp_get_request_info(struct Curl_easy *data,
+                                const char **psession_id,
+                                const char **pstream_uri,
+                                const char **ptransport,
+                                const char **pencoding,
+                                const char **puseragent,
+                                const char **preferer,
+                                bool *puse_range,
+                                const char **prange,
+                                char ***prangeline)
+{
+  *psession_id = CURL_EASY_STR(data, STRING_RTSP_SESSION_ID);
+  *pstream_uri = CURL_EASY_STR(data, STRING_RTSP_STREAM_URI);
+  *ptransport = CURL_EASY_STR(data, STRING_RTSP_TRANSPORT);
+  *pencoding = CURL_EASY_STR(data, STRING_ENCODING);
+  *puseragent = CURL_EASY_STR(data, STRING_USERAGENT);
+  *preferer = Curl_bufref_ptr(&data->state.referer);
+  *puse_range = (bool)data->state.use_range;
+  *prange = data->state.range;
+  *prangeline = &data->state.rangeline;
+}
+
+void Curl_rtsp_get_auth_headers(struct Curl_easy *data,
+                                const char **phd_proxy_auth,
+                                const char **phd_auth)
+{
+#ifndef CURL_DISABLE_PROXY
+  *phd_proxy_auth = data->req.hd_proxy_auth;
+#else
+  *phd_proxy_auth = NULL;
+#endif
+  *phd_auth = data->req.hd_auth;
+}
+
+bool Curl_rtsp_allow_session_to_host(struct Curl_easy *data)
+{
+  if(data->state.rtsp_session_origin &&
+     !data->set.allow_auth_to_other_hosts &&
+     !Curl_peer_equal(data->state.origin, data->state.rtsp_session_origin))
+    return FALSE;
+  return TRUE;
+}
+
+curl_off_t Curl_rtsp_get_writebytecount(struct Curl_easy *data)
+{
+  return data->req.writebytecount;
+}
+
+void Curl_rtsp_get_req_state(struct Curl_easy *data,
+                             int *pheaderline,
+                             bool *pheader,
+                             curl_off_t *psize,
+                             curl_off_t *pbytecount,
+                             bool *pdone)
+{
+  *pheaderline = data->req.headerline;
+  *pheader = (bool)data->req.header;
+  *psize = data->req.size;
+  *pbytecount = data->req.bytecount;
+  *pdone = (bool)data->req.done;
+}
+
+void Curl_rtsp_set_req_size_zero_done(struct Curl_easy *data)
+{
+  data->req.size = 0;
+  data->req.download_done = TRUE;
+}
+
+void Curl_rtsp_set_download_done(struct Curl_easy *data)
+{
+  data->req.download_done = TRUE;
+}
+
+void Curl_rtsp_set_req_done_false(struct Curl_easy *data)
+{
+  data->req.done = FALSE;
+}
+
+void Curl_rtsp_get_rtp_writer(struct Curl_easy *data,
+                              curl_write_callback *pwriteit,
+                              void **puser_ptr)
+{
+  if(data->set.fwrite_rtp) {
+    *pwriteit = data->set.fwrite_rtp;
+    *puser_ptr = data->set.rtp_out;
+  }
+  else {
+    *pwriteit = data->set.fwrite_func;
+    *puser_ptr = data->set.out;
+  }
+}
+
+unsigned char *Curl_rtsp_get_rtp_channel_mask(struct Curl_easy *data)
+{
+  return data->state.rtp_channel_mask;
+}
+
+const char *Curl_rtsp_get_session_id(struct Curl_easy *data)
+{
+  return CURL_EASY_STR(data, STRING_RTSP_SESSION_ID);
+}
+
+CURLcode Curl_rtsp_set_session_id(struct Curl_easy *data, char *mem)
+{
+  if(CURL_EASY_STR_SETN(data, STRING_RTSP_SESSION_ID, mem))
+    return CURLE_OUT_OF_MEMORY;
+  Curl_peer_link(&data->state.rtsp_session_origin, data->state.origin);
+  return CURLE_OK;
+}
+#endif /* CURL_DISABLE_RTSP */
