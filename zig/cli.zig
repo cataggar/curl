@@ -46,9 +46,7 @@ pub const c_sources = [_][]const u8{
     "src/toolx/tool_time.c",
 };
 
-pub const curlx_c_sources = [_][]const u8{
-    "lib/curlx/dynbuf.c",
-};
+pub const curlx_c_sources = [_][]const u8{};
 
 pub fn addCurlExe(
     b: *std.Build,

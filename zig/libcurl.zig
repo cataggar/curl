@@ -19,7 +19,6 @@ pub const c_sources = [_][]const u8{
     "lib/amigaos.c",
     "lib/api.c",
     "lib/bufq.c",
-    "lib/bufref.c",
     "lib/cf-h1-proxy.c",
     "lib/cf-h2-proxy.c",
     "lib/cf-haproxy.c",
@@ -79,7 +78,6 @@ pub const c_sources = [_][]const u8{
     "lib/if2ip.c",
     "lib/imap.c",
     "lib/ldap.c",
-    "lib/llist.c",
     "lib/macos.c",
     "lib/memdebug.c",
     "lib/mime.c",
@@ -106,13 +104,11 @@ pub const c_sources = [_][]const u8{
     "lib/select.c",
     "lib/sendf.c",
     "lib/setopt.c",
-    "lib/slist.c",
     "lib/smtp.c",
     "lib/socketpair.c",
     "lib/socks.c",
     "lib/socks_gssapi.c",
     "lib/socks_sspi.c",
-    "lib/splay.c",
     "lib/strerror.c",
     "lib/telnet.c",
     "lib/tftp.c",
@@ -183,8 +179,6 @@ pub const c_sources = [_][]const u8{
     "lib/vssh/libssh.c",
     "lib/vssh/libssh2.c",
     "lib/vssh/vssh.c",
-    // LIB_CURLX_CFILES
-    "lib/curlx/dynbuf.c",
 };
 
 pub fn createConfigHeader(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Step.ConfigHeader {
