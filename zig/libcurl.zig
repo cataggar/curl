@@ -38,8 +38,6 @@ pub const c_sources = [_][]const u8{
     "lib/curl_addrinfo.c",
     "lib/curl_fnmatch.c",
     "lib/curl_fopen.c",
-    "lib/curl_get_line.c",
-    "lib/curl_gethostname.c",
     "lib/curl_gssapi.c",
     "lib/curl_ntlm_core.c",
     "lib/curl_range.c",
@@ -59,11 +57,9 @@ pub const c_sources = [_][]const u8{
     "lib/escape.c",
     "lib/fake_addrinfo.c",
     "lib/file.c",
-    "lib/fileinfo.c",
     "lib/formdata.c",
     "lib/ftp.c",
     "lib/ftplistparser.c",
-    "lib/getenv.c",
     "lib/getinfo.c",
     "lib/gopher.c",
     "lib/hash.c",
@@ -194,10 +190,6 @@ pub const c_sources = [_][]const u8{
     "lib/vssh/vssh.c",
     // LIB_CURLX_CFILES
     "lib/curlx/dynbuf.c",
-    "lib/curlx/win32-fopen.c",
-    "lib/curlx/multibyte.c",
-    "lib/curlx/version_win32.c",
-    "lib/curlx/winapi.c",
 };
 
 pub fn createConfigHeader(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Step.ConfigHeader {

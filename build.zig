@@ -95,6 +95,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    port_test_mod.linkLibrary(lib);
     const port_tests = b.addTest(.{
         .root_module = port_test_mod,
     });
