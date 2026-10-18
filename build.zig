@@ -89,9 +89,21 @@ pub fn build(b: *std.Build) void {
     });
     const run_backend_tests = b.addRunArtifact(backend_tests);
 
+    const port_test_mod = b.createModule(.{
+        .root_source_file = b.path("zig/port/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const port_tests = b.addTest(.{
+        .root_module = port_test_mod,
+    });
+    const run_port_tests = b.addRunArtifact(port_tests);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(b.getInstallStep());
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_backend_tests.step);
+    test_step.dependOn(&run_port_tests.step);
 }

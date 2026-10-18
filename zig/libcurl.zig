@@ -36,13 +36,11 @@ pub const c_sources = [_][]const u8{
     "lib/creds.c",
     "lib/cshutdn.c",
     "lib/curl_addrinfo.c",
-    "lib/curl_endian.c",
     "lib/curl_fnmatch.c",
     "lib/curl_fopen.c",
     "lib/curl_get_line.c",
     "lib/curl_gethostname.c",
     "lib/curl_gssapi.c",
-    "lib/curl_memrchr.c",
     "lib/curl_ntlm_core.c",
     "lib/curl_range.c",
     "lib/curl_sasl.c",
@@ -124,8 +122,6 @@ pub const c_sources = [_][]const u8{
     "lib/socks_gssapi.c",
     "lib/socks_sspi.c",
     "lib/splay.c",
-    "lib/strcase.c",
-    "lib/strequal.c",
     "lib/strerror.c",
     "lib/telnet.c",
     "lib/tftp.c",
@@ -205,8 +201,6 @@ pub const c_sources = [_][]const u8{
     "lib/curlx/inet_pton.c",
     "lib/curlx/multibyte.c",
     "lib/curlx/nonblock.c",
-    "lib/curlx/snprintf.c",
-    "lib/curlx/strcopy.c",
     "lib/curlx/strdup.c",
     "lib/curlx/strerr.c",
     "lib/curlx/strparse.c",
@@ -214,7 +208,6 @@ pub const c_sources = [_][]const u8{
     "lib/curlx/timeval.c",
     "lib/curlx/version_win32.c",
     "lib/curlx/wait.c",
-    "lib/curlx/warnless.c",
     "lib/curlx/winapi.c",
 };
 
@@ -427,6 +420,7 @@ pub fn addLibcurl(b: *std.Build, options: Options) *std.Build.Step.Compile {
     const os_tag = options.target.result.os.tag;
 
     const mod = b.createModule(.{
+        .root_source_file = b.path("zig/port/root.zig"),
         .target = options.target,
         .optimize = options.optimize,
         .link_libc = true,

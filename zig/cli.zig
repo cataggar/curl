@@ -53,7 +53,6 @@ pub const curlx_c_sources = [_][]const u8{
     "lib/curlx/win32-fopen.c",
     "lib/curlx/multibyte.c",
     "lib/curlx/nonblock.c",
-    "lib/curlx/strcopy.c",
     "lib/curlx/strdup.c",
     "lib/curlx/strerr.c",
     "lib/curlx/strparse.c",
@@ -61,7 +60,6 @@ pub const curlx_c_sources = [_][]const u8{
     "lib/curlx/timeval.c",
     "lib/curlx/version_win32.c",
     "lib/curlx/wait.c",
-    "lib/curlx/warnless.c",
     "lib/curlx/winapi.c",
 };
 
@@ -76,6 +74,7 @@ pub fn addCurlExe(
     const exe = b.addExecutable(.{
         .name = "curl",
         .root_module = b.createModule(.{
+            .root_source_file = if (!is_static_libcurl) b.path("zig/port/root.zig") else null,
             .target = target,
             .optimize = optimize,
             .link_libc = true,
