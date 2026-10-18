@@ -12,6 +12,7 @@ pub const io_buffers = @import("io_buffers.zig");
 pub const urlapi = @import("urlapi.zig");
 pub const headers_sock = @import("headers_sock.zig");
 pub const netrc_addr_idn = @import("netrc_addr_idn.zig");
+pub const threads_psl = @import("threads_psl.zig");
 
 // C executables (such as src/tool_main.c) provide their own C main().
 pub extern fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int;
@@ -30,6 +31,7 @@ comptime {
     _ = urlapi;
     _ = headers_sock;
     _ = netrc_addr_idn;
+    _ = threads_psl;
 }
 
 test {
