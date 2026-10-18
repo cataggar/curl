@@ -17,6 +17,7 @@ pub const http1_options = @import("http1_options.zig");
 pub const vauth_core = @import("vauth_core.zig");
 pub const mprintf_formdata = @import("mprintf_formdata.zig");
 pub const vtls_core = @import("vtls_core.zig");
+pub const vtls_scache_asn1 = @import("vtls_scache_asn1.zig");
 pub const vdns_cfilters = @import("vdns_cfilters.zig");
 pub const vauth_sspi = @import("vauth_sspi.zig");
 pub const vauth_digest_gssapi = @import("vauth_digest_gssapi.zig");
@@ -47,6 +48,7 @@ comptime {
     _ = vauth_core;
     _ = mprintf_formdata;
     _ = vtls_core;
+    _ = vtls_scache_asn1;
     _ = vdns_cfilters;
     _ = vauth_sspi;
     _ = vauth_digest_gssapi;

@@ -236,12 +236,7 @@ pub export fn Curl_tls_keylog_write(
 // 3. lib/vtls/vtls_spack.c — Curl_ssl_session_pack / Curl_ssl_session_unpack
 // ============================================================================
 
-pub const CurlLlistNode = extern struct {
-    _list: ?*anyopaque = null,
-    _ptr: ?*anyopaque = null,
-    _prev: ?*anyopaque = null,
-    _next: ?*anyopaque = null,
-};
+pub const CurlLlistNode = containers.Curl_llist_node;
 
 const bit0_mask: c_uint = if (builtin.cpu.arch.endian() == .little)
     1

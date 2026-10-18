@@ -95,37 +95,148 @@ struct ssl_easy_config {
 void Curl_ssl_config_init(struct ssl_easy_config *sslc);
 void Curl_ssl_config_cleanup(struct ssl_filter_config *sslc);
 
+#ifdef CURL_CA_PATH
+#define CURL_ZIG_DEFAULT_CA_PATH CURL_CA_PATH
+#else
+#define CURL_ZIG_DEFAULT_CA_PATH NULL
+#endif
+
+#ifdef CURL_CA_BUNDLE
+#define CURL_ZIG_DEFAULT_CA_BUNDLE CURL_CA_BUNDLE
+#else
+#define CURL_ZIG_DEFAULT_CA_BUNDLE NULL
+#endif
+
+#if defined(USE_APPLE_SECTRUST) || defined(CURL_CA_NATIVE)
+#define CURL_ZIG_FORCE_NATIVE_CA TRUE
+#else
+#define CURL_ZIG_FORCE_NATIVE_CA FALSE
+#endif
+
+struct u8_strset;
+
 /* Init the SSL filter configs *shallow* for connection matching
  * with origin and data's configuration settings. */
-CURLcode Curl_ssl_filter_config_tmp_init(
-  struct Curl_easy *data, struct Curl_peer *origin,
+CURLcode Curl_ssl_filter_config_tmp_init_zig(
+  struct Curl_easy *data,
+  struct Curl_peer *origin,
+  struct Curl_peer *initial_origin,
+  struct ssl_easy_config *sslc,
+  struct ssl_easy_config *proxy_sslc,
+  struct u8_strset *strings,
+  struct curl_blob **blobs,
   struct ssl_filter_config *ssl_origin,
-  struct ssl_filter_config *ssl_proxy);
+  struct ssl_filter_config *ssl_proxy,
+  const char *default_ca_path,
+  const char *default_ca_bundle,
+  bool force_native_ca,
+  unsigned int str_ec_curves_id,
+  unsigned int str_sig_algs_id);
+
+#ifndef CURL_DISABLE_PROXY
+#define Curl_ssl_filter_config_tmp_init(_vtls_data, _vtls_origin, \
+                                        _vtls_ssl_origin, _vtls_ssl_proxy) \
+  Curl_ssl_filter_config_tmp_init_zig( \
+    (_vtls_data), (_vtls_origin), (_vtls_data)->state.initial_origin, \
+    &(_vtls_data)->set.ssl, &(_vtls_data)->set.proxy_ssl, \
+    &(_vtls_data)->set.strings, (_vtls_data)->set.blobs, \
+    (_vtls_ssl_origin), (_vtls_ssl_proxy), \
+    CURL_ZIG_DEFAULT_CA_PATH, CURL_ZIG_DEFAULT_CA_BUNDLE, \
+    CURL_ZIG_FORCE_NATIVE_CA, \
+    (unsigned int)STRING_SSL_EC_CURVES, \
+    (unsigned int)STRING_SSL_SIGNATURE_ALGORITHMS)
+#else
+#define Curl_ssl_filter_config_tmp_init(_vtls_data, _vtls_origin, \
+                                        _vtls_ssl_origin, _vtls_ssl_proxy) \
+  Curl_ssl_filter_config_tmp_init_zig( \
+    (_vtls_data), (_vtls_origin), (_vtls_data)->state.initial_origin, \
+    &(_vtls_data)->set.ssl, NULL, \
+    &(_vtls_data)->set.strings, (_vtls_data)->set.blobs, \
+    (_vtls_ssl_origin), (_vtls_ssl_proxy), \
+    CURL_ZIG_DEFAULT_CA_PATH, CURL_ZIG_DEFAULT_CA_BUNDLE, \
+    CURL_ZIG_FORCE_NATIVE_CA, \
+    (unsigned int)STRING_SSL_EC_CURVES, \
+    (unsigned int)STRING_SSL_SIGNATURE_ALGORITHMS)
+#endif
 
 /* Clone the given filter configs into the connection. */
-CURLcode Curl_ssl_conn_config_clone(struct ssl_filter_config *ssl_config,
-                                    struct ssl_filter_config *proxy_ssl_config,
-                                    struct connectdata *conn);
+CURLcode Curl_ssl_conn_config_clone_zig(
+  struct ssl_filter_config *ssl_config,
+  struct ssl_filter_config *proxy_ssl_config,
+  struct ssl_filter_config *conn_ssl_config,
+  struct ssl_filter_config *conn_proxy_ssl_config);
+
+#ifndef CURL_DISABLE_PROXY
+#define Curl_ssl_conn_config_clone(_vtls_ssl_cfg, _vtls_proxy_ssl_cfg, \
+                                   _vtls_conn) \
+  Curl_ssl_conn_config_clone_zig((_vtls_ssl_cfg), (_vtls_proxy_ssl_cfg), \
+    &(_vtls_conn)->ssl_config, &(_vtls_conn)->proxy_ssl_config)
+#else
+#define Curl_ssl_conn_config_clone(_vtls_ssl_cfg, _vtls_proxy_ssl_cfg, \
+                                   _vtls_conn) \
+  Curl_ssl_conn_config_clone_zig((_vtls_ssl_cfg), (_vtls_proxy_ssl_cfg), \
+    &(_vtls_conn)->ssl_config, NULL)
+#endif
 
 /**
  * Free allocated resources in SSL configs (main + proxy) for
  * the given connection.
  */
-void Curl_ssl_conn_config_cleanup(struct connectdata *conn);
+void Curl_ssl_conn_config_cleanup_zig(
+  struct ssl_filter_config *conn_ssl_config,
+  struct ssl_filter_config *conn_proxy_ssl_config);
+
+#ifndef CURL_DISABLE_PROXY
+#define Curl_ssl_conn_config_cleanup(_vtls_conn) \
+  Curl_ssl_conn_config_cleanup_zig(&(_vtls_conn)->ssl_config, \
+    &(_vtls_conn)->proxy_ssl_config)
+#else
+#define Curl_ssl_conn_config_cleanup(_vtls_conn) \
+  Curl_ssl_conn_config_cleanup_zig(&(_vtls_conn)->ssl_config, NULL)
+#endif
 
 /**
  * Return TRUE if `conn_config` is functionally the
  * same as the one on `candidate`.
  * @param proxy   match the proxy SSL config or the main one
  */
-bool Curl_ssl_conn_config_match(struct Curl_easy *data,
-                                struct ssl_filter_config *conn_config,
-                                struct connectdata *candidate,
-                                bool proxy);
+bool Curl_ssl_conn_config_match_zig(
+  struct ssl_filter_config *conn_config,
+  struct ssl_filter_config *cand_ssl_config,
+  struct ssl_filter_config *cand_proxy_ssl_config,
+  bool proxy);
+
+#ifndef CURL_DISABLE_PROXY
+#define Curl_ssl_conn_config_match(_vtls_data, _vtls_conn_cfg, \
+                                   _vtls_cand, _vtls_proxy) \
+  ((void)(_vtls_data), Curl_ssl_conn_config_match_zig((_vtls_conn_cfg), \
+    &(_vtls_cand)->ssl_config, &(_vtls_cand)->proxy_ssl_config, \
+    (_vtls_proxy)))
+#else
+#define Curl_ssl_conn_config_match(_vtls_data, _vtls_conn_cfg, \
+                                   _vtls_cand, _vtls_proxy) \
+  ((void)(_vtls_data), Curl_ssl_conn_config_match_zig((_vtls_conn_cfg), \
+    &(_vtls_cand)->ssl_config, NULL, (_vtls_proxy)))
+#endif
 
 /* Update certain connection SSL config flags after they have
  * been changed on the easy handle. Works for `verifypeer`,
  * `verifyhost` and `verifystatus`. */
-void Curl_ssl_conn_config_update(struct Curl_easy *data, bool for_proxy);
+void Curl_ssl_conn_config_update_zig(struct ssl_easy_config *src,
+                                     struct ssl_filter_config *dest);
+
+#ifndef CURL_DISABLE_PROXY
+#define Curl_ssl_conn_config_update(_vtls_data, _vtls_for_proxy) \
+  Curl_ssl_conn_config_update_zig( \
+    (_vtls_for_proxy) ? &(_vtls_data)->set.proxy_ssl : &(_vtls_data)->set.ssl, \
+    (_vtls_data)->conn ? ((_vtls_for_proxy) ? \
+      &(_vtls_data)->conn->proxy_ssl_config : \
+      &(_vtls_data)->conn->ssl_config) : NULL)
+#else
+#define Curl_ssl_conn_config_update(_vtls_data, _vtls_for_proxy) \
+  ((void)(_vtls_for_proxy), Curl_ssl_conn_config_update_zig( \
+    &(_vtls_data)->set.ssl, \
+    (_vtls_data)->conn ? &(_vtls_data)->conn->ssl_config : NULL))
+#endif
 
 #endif /* HEADER_CURL_VTLS_CONFIG_H */

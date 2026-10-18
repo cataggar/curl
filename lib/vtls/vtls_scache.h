@@ -29,12 +29,43 @@
 
 #include "cfilters.h"
 #include "urldata.h"
+#include "curl_share.h"
+#include "curl_trc.h"
+#include "vtls/vtls.h"
 
 struct Curl_cfilter;
 struct Curl_easy;
 struct Curl_ssl_scache;
 struct Curl_ssl_session;
 struct ssl_peer;
+
+static inline struct Curl_ssl_scache *
+Curl_ssl_scache_get_from_easy(struct Curl_easy *data)
+{
+  if(!data)
+    return NULL;
+  if(data->share && data->share->ssl_scache)
+    return data->share->ssl_scache;
+  if(data->multi && data->multi->ssl_scache)
+    return data->multi->ssl_scache;
+  return NULL;
+}
+
+static inline bool
+Curl_ssl_scache_has_share(struct Curl_easy *data)
+{
+  return data && CURL_SHARE_ssl_scache(data);
+}
+
+static inline struct curl_trc_feat *
+Curl_ssl_scache_trc_feat(void)
+{
+#ifndef CURL_DISABLE_VERBOSE_STRINGS
+  return &Curl_trc_feat_ssls;
+#else
+  return NULL;
+#endif
+}
 
 /* RFC 8446 (TLSv1.3) restrict lifetime to one week max, for
  * other, less secure versions, we restrict it to a day */
@@ -70,7 +101,16 @@ CURLcode Curl_ssl_peer_key_make(const struct ssl_peer *peer,
  * An SSL session might not be configured or not available for
  * "connect-only" transfers.
  */
-bool Curl_ssl_scache_use(struct Curl_cfilter *cf, struct Curl_easy *data);
+bool Curl_ssl_scache_use_zig(struct Curl_easy *data,
+                             struct Curl_ssl_scache *scache,
+                             struct ssl_filter_config *conn_config);
+static inline bool Curl_ssl_scache_use(struct Curl_cfilter *cf,
+                                       struct Curl_easy *data)
+{
+  return Curl_ssl_scache_use_zig(
+    data, Curl_ssl_scache_get_from_easy(data),
+    cf ? Curl_ssl_cf_get_filter_config(cf) : NULL);
+}
 
 /* Lock session cache mutex.
  * Call this before calling other Curl_ssl_*session* functions
@@ -79,10 +119,24 @@ bool Curl_ssl_scache_use(struct Curl_cfilter *cf, struct Curl_easy *data);
  * The purpose of explicitly locking SSL session cache data is to allow
  * individual SSL engines to manage session lifetime in their specific way.
  */
-void Curl_ssl_scache_lock(struct Curl_easy *data);
+void Curl_ssl_scache_lock_zig(struct Curl_easy *data,
+                              struct Curl_ssl_scache *scache,
+                              bool has_share_scache);
+static inline void Curl_ssl_scache_lock(struct Curl_easy *data)
+{
+  Curl_ssl_scache_lock_zig(data, Curl_ssl_scache_get_from_easy(data),
+                           Curl_ssl_scache_has_share(data));
+}
 
 /* Unlock session cache mutex */
-void Curl_ssl_scache_unlock(struct Curl_easy *data);
+void Curl_ssl_scache_unlock_zig(struct Curl_easy *data,
+                                struct Curl_ssl_scache *scache,
+                                bool has_share_scache);
+static inline void Curl_ssl_scache_unlock(struct Curl_easy *data)
+{
+  Curl_ssl_scache_unlock_zig(data, Curl_ssl_scache_get_from_easy(data),
+                             Curl_ssl_scache_has_share(data));
+}
 
 /* Get TLS session object from the cache for the ssl_peer_key.
  * scache mutex must be locked (see Curl_ssl_scache_lock).
@@ -94,9 +148,23 @@ void Curl_ssl_scache_unlock(struct Curl_easy *data);
  * @param ssl_peer_key the key for lookup
  * @retval sobj   the object for the peer key or NULL
  */
-void *Curl_ssl_scache_get_obj(struct Curl_cfilter *cf,
-                              struct Curl_easy *data,
-                              const char *ssl_peer_key);
+void *Curl_ssl_scache_get_obj_zig(struct Curl_cfilter *cf,
+                                  struct Curl_easy *data,
+                                  struct Curl_ssl_scache *scache,
+                                  struct ssl_filter_config *conn_config,
+                                  struct curl_trc_feat *trc_feat,
+                                  const char *ssl_peer_key);
+static inline void *Curl_ssl_scache_get_obj(struct Curl_cfilter *cf,
+                                            struct Curl_easy *data,
+                                            const char *ssl_peer_key)
+{
+  return Curl_ssl_scache_get_obj_zig(
+    cf, data,
+    Curl_ssl_scache_get_from_easy(data),
+    cf ? Curl_ssl_cf_get_filter_config(cf) : NULL,
+    Curl_ssl_scache_trc_feat(),
+    ssl_peer_key);
+}
 
 typedef void Curl_ssl_scache_obj_dtor(void *sobj);
 
@@ -114,11 +182,28 @@ typedef void Curl_ssl_scache_obj_dtor(void *sobj);
  * @param sobj    the TLS session object
  * @param sobj_free_cb callback to free the session object
  */
-CURLcode Curl_ssl_scache_add_obj(struct Curl_cfilter *cf,
-                                 struct Curl_easy *data,
-                                 const char *ssl_peer_key,
-                                 void *sobj,
-                                 Curl_ssl_scache_obj_dtor *sobj_dtor_cb);
+CURLcode Curl_ssl_scache_add_obj_zig(struct Curl_cfilter *cf,
+                                     struct Curl_easy *data,
+                                     struct Curl_ssl_scache *scache,
+                                     struct ssl_filter_config *conn_config,
+                                     struct curl_trc_feat *trc_feat,
+                                     const char *ssl_peer_key,
+                                     void *sobj,
+                                     Curl_ssl_scache_obj_dtor *sobj_dtor_cb);
+static inline CURLcode
+Curl_ssl_scache_add_obj(struct Curl_cfilter *cf,
+                        struct Curl_easy *data,
+                        const char *ssl_peer_key,
+                        void *sobj,
+                        Curl_ssl_scache_obj_dtor *sobj_dtor_cb)
+{
+  return Curl_ssl_scache_add_obj_zig(
+    cf, data,
+    Curl_ssl_scache_get_from_easy(data),
+    cf ? Curl_ssl_cf_get_filter_config(cf) : NULL,
+    Curl_ssl_scache_trc_feat(),
+    ssl_peer_key, sobj, sobj_dtor_cb);
+}
 
 /* All about an SSL session ticket */
 struct Curl_ssl_session {
@@ -172,10 +257,27 @@ void Curl_ssl_session_destroy(struct Curl_ssl_session *s);
  * @param ssl_peer_key the key for lookup
  * @param s       the scache session object
  */
-CURLcode Curl_ssl_scache_put(struct Curl_cfilter *cf,
-                             struct Curl_easy *data,
-                             const char *ssl_peer_key,
-                             struct Curl_ssl_session *s);
+CURLcode Curl_ssl_scache_put_zig(struct Curl_cfilter *cf,
+                                 struct Curl_easy *data,
+                                 struct Curl_ssl_scache *scache,
+                                 bool has_share_scache,
+                                 struct ssl_filter_config *conn_config,
+                                 struct curl_trc_feat *trc_feat,
+                                 const char *ssl_peer_key,
+                                 struct Curl_ssl_session *s);
+static inline CURLcode Curl_ssl_scache_put(struct Curl_cfilter *cf,
+                                           struct Curl_easy *data,
+                                           const char *ssl_peer_key,
+                                           struct Curl_ssl_session *s)
+{
+  return Curl_ssl_scache_put_zig(
+    cf, data,
+    Curl_ssl_scache_get_from_easy(data),
+    Curl_ssl_scache_has_share(data),
+    cf ? Curl_ssl_cf_get_filter_config(cf) : NULL,
+    Curl_ssl_scache_trc_feat(),
+    ssl_peer_key, s);
+}
 
 /* Take a matching scache session from the cache. Does NOT need locking.
  * @param cf      the connection filter wanting to use it
@@ -183,37 +285,130 @@ CURLcode Curl_ssl_scache_put(struct Curl_cfilter *cf,
  * @param ssl_peer_key the key for lookup
  * @param s       on return, the scache session object or NULL
  */
-CURLcode Curl_ssl_scache_take(struct Curl_cfilter *cf,
-                              struct Curl_easy *data,
-                              const char *ssl_peer_key,
-                              struct Curl_ssl_session **ps);
+CURLcode Curl_ssl_scache_take_zig(struct Curl_cfilter *cf,
+                                  struct Curl_easy *data,
+                                  struct Curl_ssl_scache *scache,
+                                  bool has_share_scache,
+                                  struct ssl_filter_config *conn_config,
+                                  struct curl_trc_feat *trc_feat,
+                                  const char *ssl_peer_key,
+                                  struct Curl_ssl_session **ps);
+static inline CURLcode Curl_ssl_scache_take(struct Curl_cfilter *cf,
+                                            struct Curl_easy *data,
+                                            const char *ssl_peer_key,
+                                            struct Curl_ssl_session **ps)
+{
+  return Curl_ssl_scache_take_zig(
+    cf, data,
+    Curl_ssl_scache_get_from_easy(data),
+    Curl_ssl_scache_has_share(data),
+    cf ? Curl_ssl_cf_get_filter_config(cf) : NULL,
+    Curl_ssl_scache_trc_feat(),
+    ssl_peer_key, ps);
+}
 
 /* Return a taken scache session to the cache. Does NOT need locking.
  * Depending on TLS version and other criteria, it may cache it again
  * or destroy it. Maybe called with a NULL session.
  */
-void Curl_ssl_scache_return(struct Curl_cfilter *cf,
-                            struct Curl_easy *data,
-                            const char *ssl_peer_key,
-                            struct Curl_ssl_session *s);
+void Curl_ssl_scache_return_zig(struct Curl_cfilter *cf,
+                                struct Curl_easy *data,
+                                struct Curl_ssl_scache *scache,
+                                bool has_share_scache,
+                                struct ssl_filter_config *conn_config,
+                                struct curl_trc_feat *trc_feat,
+                                const char *ssl_peer_key,
+                                struct Curl_ssl_session *s);
+static inline void Curl_ssl_scache_return(struct Curl_cfilter *cf,
+                                          struct Curl_easy *data,
+                                          const char *ssl_peer_key,
+                                          struct Curl_ssl_session *s)
+{
+  Curl_ssl_scache_return_zig(
+    cf, data,
+    Curl_ssl_scache_get_from_easy(data),
+    Curl_ssl_scache_has_share(data),
+    cf ? Curl_ssl_cf_get_filter_config(cf) : NULL,
+    Curl_ssl_scache_trc_feat(),
+    ssl_peer_key, s);
+}
 
 /* Remove all sessions and obj for the peer_key. Does NOT need locking. */
-void Curl_ssl_scache_remove_all(struct Curl_cfilter *cf,
-                                struct Curl_easy *data,
-                                const char *ssl_peer_key);
+void Curl_ssl_scache_remove_all_zig(struct Curl_cfilter *cf,
+                                    struct Curl_easy *data,
+                                    struct Curl_ssl_scache *scache,
+                                    bool has_share_scache,
+                                    struct ssl_filter_config *conn_config,
+                                    struct curl_trc_feat *trc_feat,
+                                    const char *ssl_peer_key);
+static inline void Curl_ssl_scache_remove_all(struct Curl_cfilter *cf,
+                                              struct Curl_easy *data,
+                                              const char *ssl_peer_key)
+{
+  Curl_ssl_scache_remove_all_zig(
+    cf, data,
+    Curl_ssl_scache_get_from_easy(data),
+    Curl_ssl_scache_has_share(data),
+    cf ? Curl_ssl_cf_get_filter_config(cf) : NULL,
+    Curl_ssl_scache_trc_feat(),
+    ssl_peer_key);
+}
 
-bool Curl_ssl_scache_is_locked_by_current_thread(struct Curl_easy *data);
+bool Curl_ssl_scache_is_locked_by_current_thread_zig(
+  struct Curl_easy *data,
+  struct Curl_ssl_scache *scache);
+static inline bool
+Curl_ssl_scache_is_locked_by_current_thread(struct Curl_easy *data)
+{
+  return Curl_ssl_scache_is_locked_by_current_thread_zig(
+    data, Curl_ssl_scache_get_from_easy(data));
+}
 
 #ifdef USE_SSLS_EXPORT
 
-CURLcode Curl_ssl_session_import(struct Curl_easy *data,
-                                 const char *ssl_peer_key,
-                                 const unsigned char *shmac, size_t shmac_len,
-                                 const void *sdata, size_t sdata_len);
+CURLcode Curl_ssl_session_import_zig(struct Curl_easy *data,
+                                     struct Curl_ssl_scache *scache,
+                                     bool has_share_scache,
+                                     struct curl_trc_feat *trc_feat,
+                                     const char *ssl_peer_key,
+                                     const unsigned char *shmac,
+                                     size_t shmac_len,
+                                     const void *sdata,
+                                     size_t sdata_len);
+static inline CURLcode
+Curl_ssl_session_import(struct Curl_easy *data,
+                        const char *ssl_peer_key,
+                        const unsigned char *shmac,
+                        size_t shmac_len,
+                        const void *sdata,
+                        size_t sdata_len)
+{
+  return Curl_ssl_session_import_zig(
+    data,
+    Curl_ssl_scache_get_from_easy(data),
+    Curl_ssl_scache_has_share(data),
+    Curl_ssl_scache_trc_feat(),
+    ssl_peer_key, shmac, shmac_len, sdata, sdata_len);
+}
 
-CURLcode Curl_ssl_session_export(struct Curl_easy *data,
-                                 curl_ssls_export_cb *export_fn,
-                                 void *userptr);
+CURLcode Curl_ssl_session_export_zig(struct Curl_easy *data,
+                                     struct Curl_ssl_scache *scache,
+                                     bool has_share_scache,
+                                     struct curl_trc_feat *trc_feat,
+                                     curl_ssls_export_cb *export_fn,
+                                     void *userptr);
+static inline CURLcode
+Curl_ssl_session_export(struct Curl_easy *data,
+                        curl_ssls_export_cb *export_fn,
+                        void *userptr)
+{
+  return Curl_ssl_session_export_zig(
+    data,
+    Curl_ssl_scache_get_from_easy(data),
+    Curl_ssl_scache_has_share(data),
+    Curl_ssl_scache_trc_feat(),
+    export_fn, userptr);
+}
 
 #endif /* USE_SSLS_EXPORT */
 #endif /* USE_SSL */

@@ -75,10 +75,7 @@ pub const c_sources = [_][]const u8{
     "lib/vtls/rustls.c",
     "lib/vtls/schannel.c",
     "lib/vtls/vtls.c",
-    "lib/vtls/vtls_config.c",
-    "lib/vtls/vtls_scache.c",
     "lib/vtls/wolfssl.c",
-    "lib/vtls/x509asn1.c",
     // LIB_VQUIC_CFILES
     "lib/vquic/cf-ngtcp2.c",
     "lib/vquic/cf-ngtcp2-cmn.c",

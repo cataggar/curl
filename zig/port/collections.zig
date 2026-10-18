@@ -785,7 +785,7 @@ export fn Curl_u8_strset_count(set: *u8_strset) callconv(.c) u16 {
     return set.count;
 }
 
-export fn Curl_u8_strset_get(set: *u8_strset, id: u8) callconv(.c) ?[*:0]const u8 {
+pub export fn Curl_u8_strset_get(set: *u8_strset, id: u8) callconv(.c) ?[*:0]const u8 {
     var i: u8 = 0;
     if (u8_strset_get_index(set, id, &i)) {
         return set.data[i];
