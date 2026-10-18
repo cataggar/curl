@@ -290,6 +290,10 @@ bool Curl_auth_is_spnego_supported(void);
 
 /* Struct used for Negotiate (SPNEGO) authentication */
 struct negotiatedata {
+  BIT(noauthpersist);
+  BIT(havenoauthpersist);
+  BIT(havenegdata);
+  BIT(havemultiplerequests);
 #ifdef HAVE_GSSAPI
   OM_uint32 status;
   gss_ctx_id_t context;
@@ -313,10 +317,6 @@ struct negotiatedata {
   size_t output_token_length;
 #endif
 #endif
-  BIT(noauthpersist);
-  BIT(havenoauthpersist);
-  BIT(havenegdata);
-  BIT(havemultiplerequests);
 };
 
 struct negotiatedata *Curl_auth_nego_get(struct connectdata *conn, bool proxy);
