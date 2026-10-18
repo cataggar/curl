@@ -39,7 +39,9 @@ jobs:
         run: zig build test -Dzstd=true --summary all
 
       - name: Verify CLI --version
-        run: ./zig-out/bin/curl --version
+        run: |
+          zig build run -- --version
+          ./zig-out/bin/curl --version
 
   cross:
     name: Cross-compile (${{ matrix.target }})
