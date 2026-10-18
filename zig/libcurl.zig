@@ -400,11 +400,15 @@ pub fn createConfigHeader(b: *std.Build, target: std.Build.ResolvedTarget) *std.
             .macos => {
                 ch.addValues(.{
                     .HAVE_MACH_ABSOLUTE_TIME = 1,
-                    .HAVE_FSETXATTR = 1,
-                    .HAVE_FSETXATTR_6 = 1,
                     .HAVE_TERMIOS_H = 1,
                     .HAVE_POSIX_STRERROR_R = 1,
                 });
+                if (b.graph.host.result.os.tag == .macos) {
+                    ch.addValues(.{
+                        .HAVE_FSETXATTR = 1,
+                        .HAVE_FSETXATTR_6 = 1,
+                    });
+                }
             },
             else => {
                 ch.addValues(.{
