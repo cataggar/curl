@@ -27,17 +27,58 @@
 
 #if !defined(CURL_DISABLE_HTTP) && !defined(CURL_DISABLE_DIGEST_AUTH)
 
+#include "urldata.h"
+
 /* this is for digest header input */
 CURLcode Curl_input_digest(struct Curl_easy *data,
-                           bool proxy, const char *header);
+                           bool proxy, const char *header,
+                           struct digestdata *digest,
+                           struct Curl_peer *origin);
 
 /* this is for creating digest header output */
 CURLcode Curl_output_digest(struct Curl_easy *data,
                             bool proxy,
                             const unsigned char *request,
-                            const unsigned char *uripath);
+                            const unsigned char *uripath,
+                            struct digestdata *digest,
+                            struct Curl_peer *origin,
+                            struct Curl_creds *creds,
+                            char **allocuserpwd,
+                            struct auth *authp);
 
-void Curl_http_auth_cleanup_digest(struct Curl_easy *data);
+void Curl_http_auth_cleanup_digest(struct Curl_easy *data,
+                                   struct digestdata *digest,
+                                   struct digestdata *proxydigest);
+
+#ifndef CURL_DISABLE_PROXY
+#define Curl_input_digest(data, proxy, header) \
+  Curl_input_digest((data), (proxy), (header), \
+    (proxy) ? &(data)->state.proxydigest : &(data)->state.digest, \
+    (proxy) ? (data)->conn->http_proxy.peer : (data)->state.origin)
+#define Curl_output_digest(data, proxy, request, uripath) \
+  Curl_output_digest((data), (proxy), (request), (uripath), \
+    (proxy) ? &(data)->state.proxydigest : &(data)->state.digest, \
+    (proxy) ? (data)->conn->http_proxy.peer : (data)->state.origin, \
+    (proxy) ? (data)->conn->http_proxy.creds : (data)->state.creds, \
+    (proxy) ? &(data)->req.hd_proxy_auth : &(data)->req.hd_auth, \
+    (proxy) ? &(data)->state.authproxy : &(data)->state.authhost)
+#else
+#define Curl_input_digest(data, proxy, header) \
+  Curl_input_digest((data), (proxy), (header), \
+    (proxy) ? &(data)->state.proxydigest : &(data)->state.digest, \
+    (proxy) ? NULL : (data)->state.origin)
+#define Curl_output_digest(data, proxy, request, uripath) \
+  Curl_output_digest((data), (proxy), (request), (uripath), \
+    &(data)->state.digest, \
+    (data)->state.origin, \
+    (data)->state.creds, \
+    &(data)->req.hd_auth, \
+    &(data)->state.authhost)
+#endif
+
+#define Curl_http_auth_cleanup_digest(data) \
+  Curl_http_auth_cleanup_digest((data), &(data)->state.digest, \
+                                &(data)->state.proxydigest)
 
 #endif /* !CURL_DISABLE_HTTP && !CURL_DISABLE_DIGEST_AUTH */
 

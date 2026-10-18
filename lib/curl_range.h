@@ -24,8 +24,15 @@
  *
  ***************************************************************************/
 #include "curl_setup.h"
-
 #include "urldata.h"
 
-CURLcode Curl_range(struct Curl_easy *data);
+CURLcode Curl_range(struct Curl_easy *data,
+                    bool use_range,
+                    const char *range,
+                    curl_off_t *resume_from,
+                    curl_off_t *maxdownload);
+#define Curl_range(data) \
+  Curl_range((data), (bool)(data)->state.use_range, (data)->state.range, \
+             &(data)->state.resume_from, &(data)->req.maxdownload)
+
 #endif /* HEADER_CURL_RANGE_H */

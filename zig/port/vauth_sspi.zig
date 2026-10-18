@@ -315,6 +315,7 @@ pub const gss_buffer_desc = extern struct {
 };
 
 pub const negotiatedata = if (builtin.os.tag == .windows) extern struct {
+    flags: c_uint, // bit0: noauthpersist, bit1: havenoauthpersist, bit2: havenegdata, bit3: havemultiplerequests
     sslContext: ?*CtxtHandle,
     status: SECURITY_STATUS,
     credentials: ?*CredHandle,
@@ -325,15 +326,14 @@ pub const negotiatedata = if (builtin.os.tag == .windows) extern struct {
     token_max: usize,
     output_token: ?[*]u8,
     output_token_length: usize,
-    flags: c_uint, // bit0: noauthpersist, bit1: havenoauthpersist, bit2: havenegdata, bit3: havemultiplerequests
 } else extern struct {
+    flags: c_uint, // bit0: noauthpersist, bit1: havenoauthpersist, bit2: havenegdata, bit3: havemultiplerequests
     status: u32,
     context: ?*anyopaque,
     spn: ?*anyopaque,
     cred: ?*anyopaque,
     output_token: gss_buffer_desc,
     channel_binding_data: dynbuf,
-    flags: c_uint,
 };
 
 pub const CURL_META_NTLM_CONN: [*:0]const u8 = "meta:auth:ntml:conn";

@@ -1259,6 +1259,38 @@ bool Curl_creader_needs_rewind(struct Curl_easy *data)
   return FALSE;
 }
 
+bool Curl_chunked_te_skip(const struct Curl_easy *data)
+{
+  return data ? (bool)data->set.http_te_skip : FALSE;
+}
+
+void Curl_chunked_set_req_chunk(struct Curl_easy *data)
+{
+  if(data)
+    data->req.chunk = TRUE;
+}
+
+bool Curl_chunked_set_download_done(struct Curl_easy *data)
+{
+  if(!data)
+    return FALSE;
+  data->req.download_done = TRUE;
+  return (bool)data->req.no_body;
+}
+
+int Curl_chunked_call_trailer_cb(struct Curl_easy *data,
+                                 struct curl_slist **trailers)
+{
+  struct Curl_mapi_guard guard;
+  int rc;
+  if(!data || !data->set.trailer_callback)
+    return -1;
+  CURL_CBAPI_START(&guard, data, easy_trailer_callback);
+  rc = data->set.trailer_callback(trailers, data->set.trailer_data);
+  CURL_CBAPI_END(&guard);
+  return rc;
+}
+
 static CURLcode cr_null_read(struct Curl_easy *data,
                              struct Curl_creader *reader,
                              char *buf, size_t blen,
