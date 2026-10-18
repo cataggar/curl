@@ -17,10 +17,7 @@ pub const c_sources = [_][]const u8{
     // LIB_CFILES
     "lib/api.c",
     "lib/cf-h2-proxy.c",
-    "lib/cf-https-connect.c",
-    "lib/cf-ip-happy.c",
     "lib/cf-socket.c",
-    "lib/connect.c",
     "lib/easy.c",
     "lib/ftp.c",
     "lib/getinfo.c",
@@ -43,7 +40,6 @@ pub const c_sources = [_][]const u8{
     "lib/url.c",
     "lib/ws.c",
     // LIB_VDNS_CFILES
-    "lib/vdns/asyn-thrdd.c",
     "lib/vdns/doh.c",
     "lib/vdns/hostip.c",
     // LIB_VTLS_CFILES
