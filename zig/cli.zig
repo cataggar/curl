@@ -52,14 +52,9 @@ pub const curlx_c_sources = [_][]const u8{
     "lib/curlx/dynbuf.c",
     "lib/curlx/win32-fopen.c",
     "lib/curlx/multibyte.c",
-    "lib/curlx/nonblock.c",
     "lib/curlx/strdup.c",
-    "lib/curlx/strerr.c",
     "lib/curlx/strparse.c",
-    "lib/curlx/timediff.c",
-    "lib/curlx/timeval.c",
     "lib/curlx/version_win32.c",
-    "lib/curlx/wait.c",
     "lib/curlx/winapi.c",
 };
 
