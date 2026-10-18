@@ -1,11 +1,13 @@
 const std = @import("std");
 const libcurl = @import("zig/libcurl.zig");
 const cli = @import("zig/cli.zig");
+const backends = @import("zig/backends.zig");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const shared = b.option(bool, "shared", "Build shared libcurl library instead of static") orelse false;
+    const backend_opts = backends.fromBuild(b);
 
     const config_header = libcurl.createConfigHeader(b, target);
     const lib = libcurl.addLibcurl(b, .{
@@ -14,9 +16,15 @@ pub fn build(b: *std.Build) void {
         .linkage = if (shared) .dynamic else .static,
         .config_header = config_header,
     });
+    backends.applyCMacros(lib.root_module, target, backend_opts);
+    backends.linkBackends(lib.root_module, target, backend_opts);
     b.installArtifact(lib);
 
     const exe = cli.addCurlExe(b, target, optimize, lib, config_header, !shared);
+    backends.applyCMacros(exe.root_module, target, backend_opts);
+    if (shared) {
+        backends.linkBackends(exe.root_module, target, backend_opts);
+    }
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
@@ -67,7 +75,22 @@ pub fn build(b: *std.Build) void {
     });
     const run_cli_tests = b.addRunArtifact(cli_tests);
 
+    const backend_test_mod = b.createModule(.{
+        .root_source_file = b.path("zig/backends_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    backend_test_mod.linkLibrary(lib);
+    backend_test_mod.addOptions("backend_options", backends.createOptionsStep(b, backend_opts));
+
+    const backend_tests = b.addTest(.{
+        .root_module = backend_test_mod,
+    });
+    const run_backend_tests = b.addRunArtifact(backend_tests);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_cli_tests.step);
+    test_step.dependOn(&run_backend_tests.step);
 }
