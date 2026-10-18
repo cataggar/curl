@@ -34,6 +34,7 @@ struct Curl_asn1Element;
 
 #include "cfilters.h"
 #include "urldata.h"
+#include "vtls/vtls.h"
 
 /* ASN.1 classes. */
 /* #define CURL_ASN1_UNIVERSAL             0 */
@@ -108,10 +109,35 @@ struct Curl_X509certificate {
  * Prototypes.
  */
 
+const uint8_t *getASN1Element(struct Curl_asn1Element *elem,
+                              const uint8_t *beg, const uint8_t *end);
+CURLcode encodeOID(struct dynbuf *store,
+                   const uint8_t *beg, const uint8_t *end);
+CURLcode GTime2str(struct dynbuf *store,
+                   const char *beg, const char *end);
+CURLcode ASN1tostr(struct dynbuf *store,
+                   struct Curl_asn1Element *elem);
+
 int Curl_parseX509(struct Curl_X509certificate *cert,
                    const uint8_t *beg, const uint8_t *end);
-CURLcode Curl_extract_certinfo(struct Curl_easy *data, int certnum,
-                               const uint8_t *beg, const uint8_t *end);
+typedef CURLcode Curl_ssl_push_certinfo_len_fn(struct Curl_easy *data,
+                                               int certnum,
+                                               const char *label,
+                                               const char *value,
+                                               size_t valuelen);
+
+CURLcode Curl_extract_certinfo_zig(struct Curl_easy *data, int certnum,
+                                   const uint8_t *beg, const uint8_t *end,
+                                   bool certinfo,
+                                   Curl_ssl_push_certinfo_len_fn *push_fn);
+static inline CURLcode
+Curl_extract_certinfo(struct Curl_easy *data, int certnum,
+                      const uint8_t *beg, const uint8_t *end)
+{
+  return Curl_extract_certinfo_zig(data, certnum, beg, end,
+                                   (bool)(data->set.ssl.certinfo),
+                                   Curl_ssl_push_certinfo_len);
+}
 CURLcode Curl_verifyhost(struct Curl_cfilter *cf, struct Curl_easy *data,
                          const uint8_t *beg, const uint8_t *end);
 #endif /* USE_GNUTLS || USE_WOLFSSL || USE_SCHANNEL || USE_MBEDTLS ||

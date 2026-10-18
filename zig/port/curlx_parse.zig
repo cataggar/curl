@@ -415,7 +415,7 @@ const decodetable = [256]u8{
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 };
 
-export fn curlx_base64_decode(
+pub export fn curlx_base64_decode(
     src_in: [*:0]const u8,
     outptr: *?[*:0]u8,
     outlen: *usize,
@@ -562,7 +562,7 @@ fn base64Encode(
     return CURLE_OK;
 }
 
-export fn curlx_base64_encode(
+pub export fn curlx_base64_encode(
     inputbuff: ?[*]const u8,
     insize: usize,
     outptr: *?[*:0]u8,
