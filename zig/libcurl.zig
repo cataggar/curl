@@ -15,13 +15,11 @@ pub const c_flags = [_][]const u8{
 
 pub const c_sources = [_][]const u8{
     // LIB_CFILES
-    "lib/altsvc.c",
     "lib/api.c",
     "lib/cf-h1-proxy.c",
     "lib/cf-h2-proxy.c",
     "lib/cf-https-connect.c",
     "lib/cf-ip-happy.c",
-    "lib/cf-setup.c",
     "lib/cf-socket.c",
     "lib/cfilters.c",
     "lib/conncache.c",
@@ -42,7 +40,6 @@ pub const c_sources = [_][]const u8{
     "lib/getinfo.c",
     "lib/gopher.c",
     "lib/headers.c",
-    "lib/hsts.c",
     "lib/http.c",
     "lib/http2.c",
     "lib/http_aws_sigv4.c",
@@ -57,9 +54,7 @@ pub const c_sources = [_][]const u8{
     "lib/mqtt.c",
     "lib/multi.c",
     "lib/multi_ev.c",
-    "lib/multi_ntfy.c",
     "lib/openldap.c",
-    "lib/peer.c",
     "lib/pingpong.c",
     "lib/pop3.c",
     "lib/progress.c",
