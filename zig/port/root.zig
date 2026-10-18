@@ -23,6 +23,7 @@ pub const vauth_digest_gssapi = @import("vauth_digest_gssapi.zig");
 pub const protocol_version_mime = @import("protocol_version_mime.zig");
 pub const altsvc_hsts_peer = @import("altsvc_hsts_peer.zig");
 pub const http_auth_chunks = @import("http_auth_chunks.zig");
+pub const aws_sigv4_share_headers = @import("aws_sigv4_share_headers.zig");
 
 // C executables (such as src/tool_main.c) provide their own C main().
 pub extern fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int;
@@ -52,6 +53,7 @@ comptime {
     _ = protocol_version_mime;
     _ = altsvc_hsts_peer;
     _ = http_auth_chunks;
+    _ = aws_sigv4_share_headers;
 }
 
 test {

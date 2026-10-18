@@ -27,6 +27,8 @@
 
 #if !defined(CURL_DISABLE_HTTP) && !defined(CURL_DISABLE_HEADERS_API)
 
+#include "urldata.h"
+
 struct Curl_header_store {
   struct Curl_llist_node node;
   char *name; /* points into 'buffer' */
@@ -37,6 +39,16 @@ struct Curl_header_store {
   unsigned char type; /* CURLH_* defines */
   char buffer[1]; /* this is the raw header blob */
 };
+
+void Curl_headers_Register(struct Curl_easy *data,
+                           struct Curl_llist *httphdrs,
+                           struct curl_header *headerout,
+                           unsigned int *nh_origin,
+                           int *nh_request,
+                           size_t *nh_count,
+                           int *requests);
+
+CURLcode Curl_headers_init_ex(struct Curl_easy *data, unsigned int protocol);
 
 /*
  * Initialize header collecting for a transfer.
@@ -54,6 +66,68 @@ CURLcode Curl_headers_push(struct Curl_easy *data, const char *header,
  * Curl_headers_cleanup(). Free all stored headers and associated memory.
  */
 CURLcode Curl_headers_cleanup(struct Curl_easy *data);
+
+static inline CURLcode curl_headers_init_wrap(struct Curl_easy *data)
+{
+  if(data) {
+    unsigned int proto = (data->conn && data->conn->scheme) ?
+                         data->conn->scheme->protocol : 0;
+    Curl_headers_Register(data, &data->state.httphdrs, data->state.headerout,
+                          &data->state.nh_origin, &data->state.nh_request,
+                          &data->state.nh_count, &data->state.requests);
+    return Curl_headers_init_ex(data, proto);
+  }
+  return CURLE_OK;
+}
+
+static inline CURLcode curl_headers_push_wrap(struct Curl_easy *data,
+                                              const char *header,
+                                              size_t hlen,
+                                              unsigned char type)
+{
+  if(data) {
+    Curl_headers_Register(data, &data->state.httphdrs, data->state.headerout,
+                          &data->state.nh_origin, &data->state.nh_request,
+                          &data->state.nh_count, &data->state.requests);
+  }
+  return Curl_headers_push(data, header, hlen, type);
+}
+
+static inline CURLcode curl_headers_cleanup_wrap(struct Curl_easy *data)
+{
+  if(data) {
+    Curl_headers_Register(data, &data->state.httphdrs, data->state.headerout,
+                          &data->state.nh_origin, &data->state.nh_request,
+                          &data->state.nh_count, &data->state.requests);
+  }
+  return Curl_headers_cleanup(data);
+}
+
+#ifdef HEADER_CURL_VSSH_VSSH_H
+#include "cshutdn.h"
+
+void Curl_headers_auto_register(struct Curl_easy *data);
+void Curl_headers_auto_register(struct Curl_easy *data)
+{
+  if(data) {
+    Curl_headers_Register(data, &data->state.httphdrs, data->state.headerout,
+                          &data->state.nh_origin, &data->state.nh_request,
+                          &data->state.nh_count, &data->state.requests);
+  }
+}
+
+unsigned int Curl_headers_get_protocol(struct Curl_easy *data);
+unsigned int Curl_headers_get_protocol(struct Curl_easy *data)
+{
+  return (data && data->conn && data->conn->scheme) ?
+         data->conn->scheme->protocol : 0;
+}
+#endif
+
+#define Curl_headers_init(data) curl_headers_init_wrap(data)
+#define Curl_headers_push(data, header, hlen, type) \
+  curl_headers_push_wrap(data, header, hlen, type)
+#define Curl_headers_cleanup(data) curl_headers_cleanup_wrap(data)
 
 #else
 #define Curl_headers_init(x)          CURLE_OK
