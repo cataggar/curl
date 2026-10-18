@@ -5,6 +5,7 @@ const mem = @import("mem.zig");
 const primitives = @import("primitives.zig");
 const os_leaf = @import("os_leaf.zig");
 const io_buffers = @import("io_buffers.zig");
+const small_protocols = @import("small_protocols.zig");
 
 pub const CURLcode = c_uint;
 pub const CURLE_OK: CURLcode = 0;
@@ -124,15 +125,15 @@ const Curl_protocol_opaque = extern struct {
     _opaque: usize,
 };
 
-extern const Curl_protocol_dict: Curl_protocol_opaque;
-extern const Curl_protocol_file: Curl_protocol_opaque;
+const Curl_protocol_dict = small_protocols.Curl_protocol_dict;
+const Curl_protocol_file = small_protocols.Curl_protocol_file;
 extern const Curl_protocol_ftp: Curl_protocol_opaque;
-extern const Curl_protocol_gopher: Curl_protocol_opaque;
-extern const Curl_protocol_gophers: Curl_protocol_opaque;
+const Curl_protocol_gopher = small_protocols.Curl_protocol_gopher;
+const Curl_protocol_gophers = small_protocols.Curl_protocol_gophers;
 extern const Curl_protocol_http: Curl_protocol_opaque;
 extern const Curl_protocol_imap: Curl_protocol_opaque;
-extern const Curl_protocol_mqtt: Curl_protocol_opaque;
-extern const Curl_protocol_mqtts: Curl_protocol_opaque;
+const Curl_protocol_mqtt = small_protocols.Curl_protocol_mqtt;
+const Curl_protocol_mqtts = small_protocols.Curl_protocol_mqtts;
 extern const Curl_protocol_pop3: Curl_protocol_opaque;
 extern const Curl_protocol_rtsp: Curl_protocol_opaque;
 extern const Curl_protocol_smtp: Curl_protocol_opaque;
