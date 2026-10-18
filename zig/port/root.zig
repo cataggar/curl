@@ -5,6 +5,7 @@ pub const curlx_parse = @import("curlx_parse.zig");
 pub const curlx_time_net = @import("curlx_time_net.zig");
 pub const os_leaf = @import("os_leaf.zig");
 pub const crypto = @import("crypto.zig");
+pub const containers = @import("containers.zig");
 
 // C executables (such as src/tool_main.c) provide their own C main().
 pub extern fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int;
@@ -16,6 +17,7 @@ comptime {
     _ = curlx_time_net;
     _ = os_leaf;
     _ = crypto;
+    _ = containers;
 }
 
 test {

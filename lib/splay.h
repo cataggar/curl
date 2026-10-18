@@ -47,7 +47,7 @@ struct Curl_timeouts {
 void Curl_timeouts_init(struct Curl_timeouts *timeouts,
                         const struct curltime *ptime_base);
 
-bool Curl_timeouts_has(struct Curl_easy *data);
+bool Curl_timeouts_has_node(const struct Curl_tree *node);
 
 timediff_t Curl_timeouts_offset_us(struct Curl_timeouts *timeouts,
                                    const struct curltime *pts);
@@ -61,13 +61,22 @@ bool Curl_timeouts_remove_expired(struct Curl_timeouts *timeouts,
                                   const struct curltime *ts,
                                   uint32_t *pmid);
 
-void Curl_timeouts_add(struct Curl_timeouts *timeouts,
-                       struct Curl_easy *data,
-                       timediff_t offset_us);
+void Curl_timeouts_add_node(struct Curl_timeouts *timeouts,
+                            struct Curl_tree *node,
+                            uint32_t mid,
+                            timediff_t offset_us);
 
 /* Returns TRUE if data was registered in timeouts before */
-bool Curl_timeouts_remove(struct Curl_timeouts *timeouts,
-                          struct Curl_easy *data);
+bool Curl_timeouts_remove_node(struct Curl_timeouts *timeouts,
+                               struct Curl_tree *node);
+
+#define Curl_timeouts_has(data_) \
+  Curl_timeouts_has_node((data_) ? &(data_)->state.timeouts.splaynode : NULL)
+#define Curl_timeouts_add(to_, data_, offset_us_) \
+  Curl_timeouts_add_node((to_), &(data_)->state.timeouts.splaynode, \
+                         (data_)->mid, (offset_us_))
+#define Curl_timeouts_remove(to_, data_) \
+  Curl_timeouts_remove_node((to_), &(data_)->state.timeouts.splaynode)
 
 #ifdef UNITTESTS
 uint32_t Curl_splayget(struct Curl_tree *node);
