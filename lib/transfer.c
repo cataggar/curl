@@ -57,6 +57,7 @@
 #include "urldata.h"
 
 #include "cfilters.h"
+#include "curl_range.h"
 #include "cw-out.h"
 #include "transfer.h"
 #include "sendf.h"
@@ -906,3 +907,131 @@ bool Curl_xfer_is_secure(struct Curl_easy *data)
 #endif
   return (data->state.origin->scheme->flags & PROTOPT_SSL);
 }
+
+/* Accessor helpers for Zig protocol handlers (gopher, dict, file, mqtt) */
+
+struct connectdata *Curl_proto_get_conn(struct Curl_easy *data)
+{
+  return data->conn;
+}
+
+curl_socket_t Curl_proto_get_firstsocket(struct Curl_easy *data)
+{
+  return data->conn->sock[FIRSTSOCKET];
+}
+
+const char *Curl_proto_get_up_path(struct Curl_easy *data)
+{
+  return data->state.up.path;
+}
+
+const char *Curl_proto_get_up_query(struct Curl_easy *data)
+{
+  return data->state.up.query;
+}
+
+bool Curl_proto_is_upload(struct Curl_easy *data)
+{
+  return data->state.upload;
+}
+
+curl_off_t Curl_proto_get_resume_from(struct Curl_easy *data)
+{
+  return data->state.resume_from;
+}
+
+void Curl_proto_set_resume_from(struct Curl_easy *data, curl_off_t val)
+{
+  data->state.resume_from = val;
+}
+
+uint32_t Curl_proto_get_new_file_perms(struct Curl_easy *data)
+{
+  return data->set.new_file_perms;
+}
+
+curl_off_t Curl_proto_get_infilesize(struct Curl_easy *data)
+{
+  return data->state.infilesize;
+}
+
+time_t Curl_proto_get_filetime(struct Curl_easy *data)
+{
+  return data->info.filetime;
+}
+
+void Curl_proto_set_filetime(struct Curl_easy *data, time_t val)
+{
+  data->info.filetime = val;
+}
+
+bool Curl_proto_has_range(struct Curl_easy *data)
+{
+  return data->state.range != NULL;
+}
+
+bool Curl_proto_has_timecondition(struct Curl_easy *data)
+{
+  return data->set.timecondition != 0;
+}
+
+bool Curl_proto_is_no_body(struct Curl_easy *data)
+{
+  return data->req.no_body;
+}
+
+curl_off_t Curl_proto_get_maxdownload(struct Curl_easy *data)
+{
+  return data->req.maxdownload;
+}
+
+void Curl_proto_get_creds(struct Curl_easy *data,
+                          const char **user, const char **passwd)
+{
+  struct Curl_creds *creds = data->state.creds;
+  *user = creds ? creds->user : NULL;
+  *passwd = creds ? creds->passwd : NULL;
+}
+
+void Curl_proto_unlink_creds(struct Curl_easy *data)
+{
+  Curl_creds_unlink(&data->state.creds);
+}
+
+char *Curl_proto_get_postfields(struct Curl_easy *data)
+{
+  return (char *)data->set.postfields;
+}
+
+curl_off_t Curl_proto_get_postfieldsize(struct Curl_easy *data)
+{
+  return data->set.postfieldsize;
+}
+
+curl_off_t Curl_proto_get_max_filesize(struct Curl_easy *data)
+{
+  return data->set.max_filesize;
+}
+
+void Curl_proto_set_req_download(struct Curl_easy *data, curl_off_t size)
+{
+  data->req.bytecount = 0;
+  data->req.size = size;
+}
+
+timediff_t Curl_proto_get_upkeep_interval_ms(struct Curl_easy *data)
+{
+  return data->set.upkeep_interval_ms;
+}
+
+bool Curl_proto_is_httpreq_post(struct Curl_easy *data)
+{
+  return data->state.httpreq == HTTPREQ_POST;
+}
+
+CURLcode Curl_proto_range(struct Curl_easy *data)
+{
+  return Curl_range(data);
+}
+
+
