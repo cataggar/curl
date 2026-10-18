@@ -1515,3 +1515,299 @@ out:
 }
 
 #endif /* !CURL_DISABLE_HTTP && !CURL_DISABLE_PROXY && USE_NGHTTP2 */
+
+#if !defined(CURL_DISABLE_PROXY) || !defined(CURL_DISABLE_HTTP)
+#include "urldata.h"
+#include "request.h"
+#include "vauth/vauth.h"
+#include "strcase.h"
+#include "curlx/strdup.h"
+
+struct Curl_peer *Curl_proxy_get_origin(struct Curl_easy *data);
+const char *Curl_proxy_str_noproxy(struct Curl_easy *data);
+const char *Curl_proxy_str_proxy(struct Curl_easy *data);
+const char *Curl_proxy_str_pre_proxy(struct Curl_easy *data);
+const char *Curl_proxy_str_proxy_service_name(struct Curl_easy *data);
+const char *Curl_proxy_str_proxyusername(struct Curl_easy *data);
+const char *Curl_proxy_str_proxypassword(struct Curl_easy *data);
+const char *Curl_proxy_str_useragent(struct Curl_easy *data);
+uint8_t Curl_proxy_get_set_proxytype(struct Curl_easy *data);
+uint16_t Curl_proxy_get_set_proxyport(struct Curl_easy *data);
+bool Curl_proxy_get_tunnel_thru_httpproxy(struct Curl_easy *data);
+void Curl_proxy_update_envproxy(struct Curl_easy *data, const char *proxy);
+void Curl_proxy_conn_set_origin_is_proxy(struct connectdata *conn, bool val);
+const struct Curl_scheme *Curl_proxy_conn_get_scheme(struct connectdata *conn);
+void Curl_proxy_conn_set_scheme(struct connectdata *conn,
+                                const struct Curl_scheme *scheme);
+struct proxy_info *Curl_proxy_conn_get_socks_proxy(struct connectdata *conn);
+struct proxy_info *Curl_proxy_conn_get_http_proxy(struct connectdata *conn);
+struct Curl_peer **Curl_proxy_conn_get_via_peer_ptr(struct connectdata *conn);
+struct Curl_peer **Curl_proxy_conn_get_origin_ptr(struct connectdata *conn);
+bool Curl_proxy_data_origin_is_proxy(struct Curl_easy *data);
+bool Curl_proxy_get_sep_headers(struct Curl_easy *data);
+struct curl_slist *Curl_proxy_get_headers(struct Curl_easy *data);
+struct curl_slist *Curl_proxy_get_proxyheaders(struct Curl_easy *data);
+const char *Curl_proxy_get_http_host(struct Curl_easy *data);
+uint8_t Curl_proxy_get_httpreq(struct Curl_easy *data);
+bool Curl_proxy_get_authneg(struct Curl_easy *data);
+bool Curl_proxy_auth_allowed_to_host(struct Curl_easy *data);
+const char *Curl_proxy_get_hd_proxy_auth(struct Curl_easy *data);
+void Curl_proxy_clear_hd_proxy_auth(struct Curl_easy *data);
+const char *Curl_proxy_get_newurl(struct Curl_easy *data);
+bool Curl_proxy_clear_newurl(struct Curl_easy *data);
+void Curl_proxy_start_connect_auth(struct Curl_easy *data);
+void Curl_proxy_set_info_httpcode(struct Curl_easy *data, int code);
+int Curl_proxy_get_httpproxycode(struct Curl_easy *data);
+int Curl_proxy_get_req_httpcode(struct Curl_easy *data);
+void Curl_proxy_set_proxy_and_req_httpcode(struct Curl_easy *data, int code);
+bool Curl_proxy_get_authproblem(struct Curl_easy *data);
+bool Curl_proxy_has_avail_auth(struct Curl_easy *data);
+void Curl_proxy_req_soft_reset(struct Curl_easy *data);
+bool Curl_proxy_conn_is_closed(struct connectdata *conn);
+bool Curl_ce_should_skip(struct Curl_easy *data, int is_transfer);
+void Curl_ce_set_ignorebody(struct Curl_easy *data);
+
+struct Curl_peer *Curl_proxy_get_origin(struct Curl_easy *data)
+{
+  return data->state.origin;
+}
+
+const char *Curl_proxy_str_noproxy(struct Curl_easy *data)
+{
+  return CURL_EASY_STR(data, STRING_NOPROXY);
+}
+
+const char *Curl_proxy_str_proxy(struct Curl_easy *data)
+{
+  return CURL_EASY_STR(data, STRING_PROXY);
+}
+
+const char *Curl_proxy_str_pre_proxy(struct Curl_easy *data)
+{
+  return CURL_EASY_STR(data, STRING_PRE_PROXY);
+}
+
+const char *Curl_proxy_str_proxy_service_name(struct Curl_easy *data)
+{
+  return CURL_EASY_STR(data, STRING_PROXY_SERVICE_NAME);
+}
+
+const char *Curl_proxy_str_proxyusername(struct Curl_easy *data)
+{
+  return CURL_EASY_STR(data, STRING_PROXYUSERNAME);
+}
+
+const char *Curl_proxy_str_proxypassword(struct Curl_easy *data)
+{
+  return CURL_EASY_STR(data, STRING_PROXYPASSWORD);
+}
+
+const char *Curl_proxy_str_useragent(struct Curl_easy *data)
+{
+  return CURL_EASY_STR(data, STRING_USERAGENT);
+}
+
+uint8_t Curl_proxy_get_set_proxytype(struct Curl_easy *data)
+{
+  return data->set.proxytype;
+}
+
+uint16_t Curl_proxy_get_set_proxyport(struct Curl_easy *data)
+{
+  return (uint16_t)data->set.proxyport;
+}
+
+bool Curl_proxy_get_tunnel_thru_httpproxy(struct Curl_easy *data)
+{
+  return (bool)data->set.tunnel_thru_httpproxy;
+}
+
+void Curl_proxy_update_envproxy(struct Curl_easy *data, const char *proxy)
+{
+#ifndef CURL_DISABLE_DIGEST_AUTH
+  if(!Curl_safecmp(data->state.envproxy, proxy)) {
+    Curl_auth_digest_cleanup(&data->state.proxydigest);
+    curlx_free(data->state.envproxy);
+    data->state.envproxy = curlx_strdup(proxy);
+  }
+#else
+  (void)data;
+  (void)proxy;
+#endif
+}
+
+void Curl_proxy_conn_set_origin_is_proxy(struct connectdata *conn, bool val)
+{
+  conn->bits.origin_is_proxy = val;
+}
+
+const struct Curl_scheme *Curl_proxy_conn_get_scheme(struct connectdata *conn)
+{
+  return conn->scheme;
+}
+
+void Curl_proxy_conn_set_scheme(struct connectdata *conn,
+                                const struct Curl_scheme *scheme)
+{
+  conn->scheme = scheme;
+}
+
+struct proxy_info *Curl_proxy_conn_get_socks_proxy(struct connectdata *conn)
+{
+  return &conn->socks_proxy;
+}
+
+struct proxy_info *Curl_proxy_conn_get_http_proxy(struct connectdata *conn)
+{
+  return &conn->http_proxy;
+}
+
+struct Curl_peer **Curl_proxy_conn_get_via_peer_ptr(struct connectdata *conn)
+{
+  return &conn->via_peer;
+}
+
+struct Curl_peer **Curl_proxy_conn_get_origin_ptr(struct connectdata *conn)
+{
+  return &conn->origin;
+}
+
+bool Curl_proxy_data_origin_is_proxy(struct Curl_easy *data)
+{
+  return (bool)data->conn->bits.origin_is_proxy;
+}
+
+bool Curl_proxy_get_sep_headers(struct Curl_easy *data)
+{
+  return (bool)data->set.sep_headers;
+}
+
+struct curl_slist *Curl_proxy_get_headers(struct Curl_easy *data)
+{
+  return data->set.headers;
+}
+
+struct curl_slist *Curl_proxy_get_proxyheaders(struct Curl_easy *data)
+{
+  return data->set.proxyheaders;
+}
+
+const char *Curl_proxy_get_http_host(struct Curl_easy *data)
+{
+  return data->state.http_host;
+}
+
+uint8_t Curl_proxy_get_httpreq(struct Curl_easy *data)
+{
+  return data->state.httpreq;
+}
+
+bool Curl_proxy_get_authneg(struct Curl_easy *data)
+{
+  return (bool)data->req.authneg;
+}
+
+bool Curl_proxy_auth_allowed_to_host(struct Curl_easy *data)
+{
+  return Curl_auth_allowed_to_host(data);
+}
+
+const char *Curl_proxy_get_hd_proxy_auth(struct Curl_easy *data)
+{
+  return data->req.hd_proxy_auth;
+}
+
+void Curl_proxy_clear_hd_proxy_auth(struct Curl_easy *data)
+{
+  curlx_safefree(data->req.hd_proxy_auth);
+}
+
+const char *Curl_proxy_get_newurl(struct Curl_easy *data)
+{
+  return data->req.newurl;
+}
+
+bool Curl_proxy_clear_newurl(struct Curl_easy *data)
+{
+  if(data->req.newurl) {
+    curlx_safefree(data->req.newurl);
+    return TRUE;
+  }
+  return FALSE;
+}
+
+void Curl_proxy_start_connect_auth(struct Curl_easy *data)
+{
+  data->state.authproxy.done = TRUE;
+  data->state.authproxy.multipass = FALSE;
+}
+
+void Curl_proxy_set_info_httpcode(struct Curl_easy *data, int code)
+{
+  data->info.httpcode = code;
+}
+
+int Curl_proxy_get_httpproxycode(struct Curl_easy *data)
+{
+  return data->info.httpproxycode;
+}
+
+int Curl_proxy_get_req_httpcode(struct Curl_easy *data)
+{
+  return data->req.httpcode;
+}
+
+void Curl_proxy_set_proxy_and_req_httpcode(struct Curl_easy *data, int code)
+{
+  data->info.httpproxycode = data->req.httpcode = code;
+}
+
+bool Curl_proxy_get_authproblem(struct Curl_easy *data)
+{
+  return (bool)data->state.authproblem;
+}
+
+bool Curl_proxy_has_avail_auth(struct Curl_easy *data)
+{
+  return (bool)(data->set.proxyauth && data->state.authproxy.avail &&
+                data->req.hd_proxy_auth);
+}
+
+void Curl_proxy_req_soft_reset(struct Curl_easy *data)
+{
+  Curl_req_soft_reset(&data->req, data);
+}
+
+bool Curl_ce_get_http_transfer_encoding(struct Curl_easy *data)
+{
+  return (bool)data->set.http_transfer_encoding;
+}
+
+bool Curl_ce_get_http_ce_skip(struct Curl_easy *data)
+{
+  return (bool)data->set.http_ce_skip;
+}
+
+bool Curl_ce_get_http_te_skip(struct Curl_easy *data)
+{
+  return (bool)data->set.http_te_skip;
+}
+
+
+bool Curl_proxy_conn_is_closed(struct connectdata *conn)
+{
+  return (bool)conn->bits.close;
+}
+
+bool Curl_ce_should_skip(struct Curl_easy *data, int is_transfer)
+{
+  return (!is_transfer && data->set.http_ce_skip) ||
+         (is_transfer && data->set.http_te_skip);
+}
+
+void Curl_ce_set_ignorebody(struct Curl_easy *data)
+{
+  data->req.ignorebody = TRUE;
+}
+#endif
+
