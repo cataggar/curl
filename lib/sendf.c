@@ -43,6 +43,11 @@
 #include "cw-pause.h"
 #include "multiif.h"
 #include "progress.h"
+#include "sigpipe.h"
+#include "cshutdn.h"
+#include "ftp.h"
+#include "curl_share.h"
+#include "conncache.h"
 
 static void cl_reset_writer(struct Curl_easy *data)
 {
@@ -1523,4 +1528,1098 @@ struct Curl_creader *Curl_creader_get_by_type(struct Curl_easy *data,
       return r;
   }
   return NULL;
+}
+
+/* Helpers for zig/port/cfilters_progress.zig */
+void Curl_cw_out_get_writefunc(struct Curl_easy *data, int otype,
+                               curl_write_callback *pwcb, void **pwcb_data,
+                               size_t *pmax_write, size_t *pmin_write);
+void Curl_cw_out_get_writefunc(struct Curl_easy *data, int otype,
+                               curl_write_callback *pwcb, void **pwcb_data,
+                               size_t *pmax_write, size_t *pmin_write)
+{
+  switch(otype) {
+  case 1: /* CW_OUT_BODY */
+  case 2: /* CW_OUT_BODY_0LEN */
+    if(Curl_ftp_listmode(data)) {
+      *pwcb = Curl_ftp_parselist;
+      *pwcb_data = data;
+    }
+    else {
+      *pwcb = data->set.fwrite_func;
+      *pwcb_data = data->set.out;
+    }
+    *pmax_write = CURL_MAX_WRITE_SIZE;
+    *pmin_write = 0;
+    break;
+  case 3: /* CW_OUT_HDS */
+    *pwcb = data->set.fwrite_header ? data->set.fwrite_header :
+             (data->set.writeheader ? data->set.fwrite_func : NULL);
+    *pwcb_data = data->set.writeheader;
+    *pmax_write = 0;
+    *pmin_write = 0;
+    break;
+  default:
+    *pwcb = NULL;
+    *pwcb_data = NULL;
+    *pmax_write = CURL_MAX_WRITE_SIZE;
+    *pmin_write = 0;
+  }
+}
+
+bool Curl_cw_out_is_paused(struct Curl_easy *data);
+bool Curl_cw_out_is_paused(struct Curl_easy *data)
+{
+  return (bool)data->req.writer.paused;
+}
+
+void Curl_cw_out_set_paused(struct Curl_easy *data, bool paused);
+void Curl_cw_out_set_paused(struct Curl_easy *data, bool paused)
+{
+  data->req.writer.paused = paused;
+}
+
+bool Curl_trc_is_verbose_fn(struct Curl_easy *data);
+bool Curl_trc_is_verbose_fn(struct Curl_easy *data)
+{
+  return (bool)Curl_trc_is_verbose(data);
+}
+
+bool Curl_trc_ft_is_verbose_fn(struct Curl_easy *data,
+                               const struct curl_trc_feat *ft);
+bool Curl_trc_ft_is_verbose_fn(struct Curl_easy *data,
+                               const struct curl_trc_feat *ft)
+{
+  return (bool)Curl_trc_ft_is_verbose(data, ft);
+}
+
+bool Curl_cw_out_is_nonetwork(struct Curl_easy *data);
+bool Curl_cw_out_is_nonetwork(struct Curl_easy *data)
+{
+  return data->conn && data->conn->scheme &&
+         (data->conn->scheme->flags & PROTOPT_NONETWORK);
+}
+
+bool Curl_cw_out_include_header(struct Curl_easy *data);
+bool Curl_cw_out_include_header(struct Curl_easy *data)
+{
+  return (bool)data->set.include_header;
+}
+
+struct Progress *Curl_easy_progress(struct Curl_easy *data);
+struct Progress *Curl_easy_progress(struct Curl_easy *data)
+{
+  return &data->progress;
+}
+
+curl_off_t Curl_easy_max_filesize(struct Curl_easy *data);
+curl_off_t Curl_easy_max_filesize(struct Curl_easy *data)
+{
+  return data->set.max_filesize;
+}
+
+struct Curl_cfilter *Curl_easy_conn_cfilter(struct Curl_easy *data,
+                                            int8_t sockindex);
+struct Curl_cfilter *Curl_easy_conn_cfilter(struct Curl_easy *data,
+                                            int8_t sockindex)
+{
+  return (data && data->conn && CONN_SOCK_IDX_VALID(sockindex)) ?
+         data->conn->cfilter[sockindex] : NULL;
+}
+
+bool Curl_share_keep_connect(const struct Curl_share *share);
+bool Curl_share_keep_connect(const struct Curl_share *share)
+{
+  return CURL_SHARE_KEEP_CONNECT(share) ? TRUE : FALSE;
+}
+
+void Curl_cpool_with_sigpipe(struct Curl_easy *admin,
+                             struct cpool *cpool,
+                             void (*fn)(struct cpool *, struct Curl_easy *));
+void Curl_cpool_with_sigpipe(struct Curl_easy *admin,
+                             struct cpool *cpool,
+                             void (*fn)(struct cpool *, struct Curl_easy *))
+{
+  struct Curl_sigpipe_ctx pipe_ctx;
+  sigpipe_init(&pipe_ctx);
+  sigpipe_apply(admin, &pipe_ctx);
+  fn(cpool, admin);
+  sigpipe_restore(&pipe_ctx);
+}
+
+uint32_t Curl_conn_get_cpid(const struct connectdata *conn);
+uint32_t Curl_conn_get_cpid(const struct connectdata *conn)
+{
+  return conn->cpid;
+}
+
+void Curl_conn_set_cpid(struct connectdata *conn, uint32_t cpid);
+void Curl_conn_set_cpid(struct connectdata *conn, uint32_t cpid)
+{
+  conn->cpid = cpid;
+}
+
+uint32_t Curl_conn_get_attached_xfers(const struct connectdata *conn);
+uint32_t Curl_conn_get_attached_xfers(const struct connectdata *conn)
+{
+  return conn->attached_xfers;
+}
+
+bool Curl_conn_is_connect_only(const struct connectdata *conn);
+bool Curl_conn_is_connect_only(const struct connectdata *conn)
+{
+  return (bool)conn->bits.connect_only;
+}
+
+bool Curl_conn_is_aborted(const struct connectdata *conn);
+bool Curl_conn_is_aborted(const struct connectdata *conn)
+{
+  return (bool)conn->bits.aborted;
+}
+
+void Curl_conn_set_aborted(struct connectdata *conn, bool aborted);
+void Curl_conn_set_aborted(struct connectdata *conn, bool aborted)
+{
+  conn->bits.aborted = aborted;
+}
+
+bool Curl_conn_is_no_reuse_or_close(const struct connectdata *conn);
+bool Curl_conn_is_no_reuse_or_close(const struct connectdata *conn)
+{
+  return (bool)(conn->bits.no_reuse || conn->bits.close);
+}
+
+bool Curl_conn_is_close(const struct connectdata *conn);
+bool Curl_conn_is_close(const struct connectdata *conn)
+{
+  return (bool)conn->bits.close;
+}
+
+void Curl_conn_set_no_reuse(struct connectdata *conn, bool no_reuse);
+void Curl_conn_set_no_reuse(struct connectdata *conn, bool no_reuse)
+{
+  conn->bits.no_reuse = no_reuse;
+}
+
+curl_off_t Curl_conn_get_id(const struct connectdata *conn);
+curl_off_t Curl_conn_get_id(const struct connectdata *conn)
+{
+  return conn->connection_id;
+}
+
+void Curl_conn_set_id(struct connectdata *conn, curl_off_t id);
+void Curl_conn_set_id(struct connectdata *conn, curl_off_t id)
+{
+  conn->connection_id = id;
+}
+
+const char *Curl_cpool_conn_get_destination(const struct connectdata *conn);
+const char *Curl_cpool_conn_get_destination(const struct connectdata *conn)
+{
+  return conn->destination;
+}
+
+const struct curltime *Curl_conn_get_created(const struct connectdata *conn);
+const struct curltime *Curl_conn_get_created(const struct connectdata *conn)
+{
+  return &conn->created;
+}
+
+void Curl_conn_init_cpool_times(struct connectdata *conn,
+                                const struct curltime *pnow);
+void Curl_conn_init_cpool_times(struct connectdata *conn,
+                                const struct curltime *pnow)
+{
+  conn->created = *pnow;
+  conn->shutdown.start_ms[FIRSTSOCKET] =
+    conn->shutdown.start_ms[SECONDARYSOCKET] = -1;
+}
+
+timediff_t Curl_conn_get_lastused_ms(const struct connectdata *conn);
+timediff_t Curl_conn_get_lastused_ms(const struct connectdata *conn)
+{
+  return conn->lastused_ms;
+}
+
+timediff_t Curl_conn_get_lastchecked_ms(const struct connectdata *conn);
+timediff_t Curl_conn_get_lastchecked_ms(const struct connectdata *conn)
+{
+  return conn->lastchecked_ms;
+}
+
+void Curl_conn_set_lastchecked_ms(struct connectdata *conn, timediff_t ms);
+void Curl_conn_set_lastchecked_ms(struct connectdata *conn, timediff_t ms)
+{
+  conn->lastchecked_ms = ms;
+}
+
+timediff_t Curl_conn_get_lastupkeep_ms(const struct connectdata *conn);
+timediff_t Curl_conn_get_lastupkeep_ms(const struct connectdata *conn)
+{
+  return conn->lastupkeep_ms;
+}
+
+void Curl_conn_set_lastupkeep_ms(struct connectdata *conn, timediff_t ms);
+void Curl_conn_set_lastupkeep_ms(struct connectdata *conn, timediff_t ms)
+{
+  conn->lastupkeep_ms = ms;
+}
+
+void Curl_conn_set_return_times(struct connectdata *conn, timediff_t ms);
+void Curl_conn_set_return_times(struct connectdata *conn, timediff_t ms)
+{
+  conn->lastchecked_ms = conn->lastupkeep_ms = conn->lastused_ms = ms;
+}
+
+void Curl_conn_get_origin_info(const struct connectdata *conn,
+                               const char **puser_hostname,
+                               uint16_t *pport);
+void Curl_conn_get_origin_info(const struct connectdata *conn,
+                               const char **puser_hostname,
+                               uint16_t *pport)
+{
+  *puser_hostname = conn->origin->user_hostname;
+  *pport = conn->origin->port;
+}
+
+struct Curl_cfilter **Curl_conn_get_cfilters(struct connectdata *conn);
+struct Curl_cfilter **Curl_conn_get_cfilters(struct connectdata *conn)
+{
+  return conn ? conn->cfilter : NULL;
+}
+
+bool Curl_conn_has_dead_cb(const struct connectdata *conn);
+bool Curl_conn_has_dead_cb(const struct connectdata *conn)
+{
+  return conn && conn->scheme && conn->scheme->run &&
+         conn->scheme->run->connection_is_dead != NULL;
+}
+
+bool Curl_conn_call_dead_cb(struct Curl_easy *admin,
+                            struct connectdata *conn);
+bool Curl_conn_call_dead_cb(struct Curl_easy *admin,
+                            struct connectdata *conn)
+{
+  return conn->scheme->run->connection_is_dead(admin, conn);
+}
+
+void Curl_easy_get_multi_cpool(struct Curl_easy *data,
+                               struct Curl_multi **pmulti,
+                               struct Curl_easy **pmulti_admin,
+                               struct cpool **pmulti_cpool,
+                               struct cshutdn **pmulti_cshutdn,
+                               uint32_t *pmax_total_conns,
+                               uint32_t *pmaxconnects);
+void Curl_easy_get_multi_cpool(struct Curl_easy *data,
+                               struct Curl_multi **pmulti,
+                               struct Curl_easy **pmulti_admin,
+                               struct cpool **pmulti_cpool,
+                               struct cshutdn **pmulti_cshutdn,
+                               uint32_t *pmax_total_conns,
+                               uint32_t *pmaxconnects)
+{
+  struct Curl_multi *multi = data ? data->multi : NULL;
+  *pmulti = multi;
+  *pmulti_admin = multi ? multi->admin : NULL;
+  *pmulti_cpool = multi ? &multi->cpool : NULL;
+  *pmulti_cshutdn = multi ? &multi->cshutdn : NULL;
+  *pmax_total_conns = multi ? multi->max_total_connections : 0;
+  *pmaxconnects = multi ? multi->maxconnects : 0;
+}
+
+void Curl_easy_get_conn_age_limits(struct Curl_easy *data,
+                                   timediff_t *pmax_idle_ms,
+                                   timediff_t *pmax_age_ms,
+                                   timediff_t *pupkeep_interval_ms);
+void Curl_easy_get_conn_age_limits(struct Curl_easy *data,
+                                   timediff_t *pmax_idle_ms,
+                                   timediff_t *pmax_age_ms,
+                                   timediff_t *pupkeep_interval_ms)
+{
+  *pmax_idle_ms = data->set.conn_max_idle_ms;
+  *pmax_age_ms = data->set.conn_max_age_ms;
+  *pupkeep_interval_ms = data->set.upkeep_interval_ms;
+}
+
+#define CURL_CPOOL_INSTANCE(d) \
+  ((d) ? (CURL_SHARE_KEEP_CONNECT((d)->share) ? &(d)->share->cpool : \
+          ((d)->multi_easy ? &(d)->multi_easy->cpool : \
+           ((d)->multi ? &(d)->multi->cpool : NULL))) : NULL)
+
+/* progress.h wrappers */
+const struct curltime *Curl_pgrs_now_zig(struct Curl_easy *data,
+                                         struct Progress *p);
+const struct curltime *Curl_pgrs_now(struct Curl_easy *data)
+{
+  return Curl_pgrs_now_zig(data, &data->progress);
+}
+
+int Curl_pgrsDone_zig(struct Curl_easy *data,
+                      const struct curltime *pnow,
+                      struct Progress *p,
+                      bool req_done,
+                      curl_off_t resume_from,
+                      FILE *err,
+                      curl_xferinfo_callback fxferinfo,
+                      curl_progress_callback fprogress,
+                      void *progress_client);
+int Curl_pgrsDone(struct Curl_easy *data, const struct curltime *pnow)
+{
+  return Curl_pgrsDone_zig(data, pnow, &data->progress,
+                           (bool)data->req.done, data->state.resume_from,
+                           data->set.err, data->set.fxferinfo,
+                           data->set.fprogress, data->set.progress_client);
+}
+
+void Curl_pgrsStart_zig(struct Curl_easy *data,
+                        const struct curltime *pnow,
+                        struct Progress *p);
+void Curl_pgrsStart(struct Curl_easy *data, const struct curltime *pnow)
+{
+  Curl_pgrsStart_zig(data, pnow, &data->progress);
+}
+
+void Curl_pgrsSetDownloadSize_zig(struct Curl_easy *data,
+                                  curl_off_t size,
+                                  struct Progress *p);
+void Curl_pgrsSetDownloadSize(struct Curl_easy *data, curl_off_t size)
+{
+  Curl_pgrsSetDownloadSize_zig(data, size, &data->progress);
+}
+
+void Curl_pgrsSetUploadSize_zig(struct Curl_easy *data,
+                                curl_off_t size,
+                                struct Progress *p);
+void Curl_pgrsSetUploadSize(struct Curl_easy *data, curl_off_t size)
+{
+  Curl_pgrsSetUploadSize_zig(data, size, &data->progress);
+}
+
+CURLcode Curl_pgrs_deliver_check_zig(struct Curl_easy *data,
+                                     size_t delta,
+                                     const struct Progress *p,
+                                     curl_off_t max_filesize);
+CURLcode Curl_pgrs_deliver_check(struct Curl_easy *data, size_t delta)
+{
+  return Curl_pgrs_deliver_check_zig(data, delta, &data->progress,
+                                     data->set.max_filesize);
+}
+
+void Curl_pgrs_deliver_inc_zig(struct Curl_easy *data,
+                               size_t delta,
+                               struct Progress *p);
+void Curl_pgrs_deliver_inc(struct Curl_easy *data, size_t delta)
+{
+  Curl_pgrs_deliver_inc_zig(data, delta, &data->progress);
+}
+
+void Curl_pgrs_download_inc_zig(struct Curl_easy *data,
+                                size_t delta,
+                                struct Progress *p);
+void Curl_pgrs_download_inc(struct Curl_easy *data, size_t delta)
+{
+  Curl_pgrs_download_inc_zig(data, delta, &data->progress);
+}
+
+void Curl_pgrs_upload_inc_zig(struct Curl_easy *data,
+                              size_t delta,
+                              struct Progress *p);
+void Curl_pgrs_upload_inc(struct Curl_easy *data, size_t delta)
+{
+  Curl_pgrs_upload_inc_zig(data, delta, &data->progress);
+}
+
+void Curl_pgrsSetUploadCounter_zig(struct Curl_easy *data,
+                                   curl_off_t size,
+                                   struct Progress *p);
+void Curl_pgrsSetUploadCounter(struct Curl_easy *data, curl_off_t size)
+{
+  Curl_pgrsSetUploadCounter_zig(data, size, &data->progress);
+}
+
+CURLcode Curl_pgrsUpdate_zig(struct Curl_easy *data,
+                             struct Progress *p,
+                             bool req_done,
+                             curl_off_t resume_from,
+                             FILE *err,
+                             curl_xferinfo_callback fxferinfo,
+                             curl_progress_callback fprogress,
+                             void *progress_client);
+CURLcode Curl_pgrsUpdate(struct Curl_easy *data)
+{
+  return Curl_pgrsUpdate_zig(data, &data->progress,
+                             (bool)data->req.done, data->state.resume_from,
+                             data->set.err, data->set.fxferinfo,
+                             data->set.fprogress, data->set.progress_client);
+}
+
+CURLcode Curl_pgrsUpdateX_zig(struct Curl_easy *data,
+                              const struct curltime *pnow,
+                              struct Progress *p,
+                              bool req_done,
+                              curl_off_t resume_from,
+                              FILE *err,
+                              curl_xferinfo_callback fxferinfo,
+                              curl_progress_callback fprogress,
+                              void *progress_client);
+CURLcode Curl_pgrsUpdateX(struct Curl_easy *data, const struct curltime *pnow)
+{
+  return Curl_pgrsUpdateX_zig(data, pnow, &data->progress,
+                              (bool)data->req.done, data->state.resume_from,
+                              data->set.err, data->set.fxferinfo,
+                              data->set.fprogress, data->set.progress_client);
+}
+
+void Curl_pgrsUpdate_nometer_zig(struct Curl_easy *data,
+                                 struct Progress *p,
+                                 bool req_done);
+void Curl_pgrsUpdate_nometer(struct Curl_easy *data)
+{
+  Curl_pgrsUpdate_nometer_zig(data, &data->progress, (bool)data->req.done);
+}
+
+CURLcode Curl_pgrsCheck_zig(struct Curl_easy *data,
+                            struct Progress *p,
+                            bool req_done,
+                            curl_off_t resume_from,
+                            FILE *err,
+                            curl_xferinfo_callback fxferinfo,
+                            curl_progress_callback fprogress,
+                            void *progress_client,
+                            uint32_t low_speed_time,
+                            curl_off_t low_speed_limit,
+                            struct curltime *keeps_speed);
+CURLcode Curl_pgrsCheck(struct Curl_easy *data)
+{
+  return Curl_pgrsCheck_zig(data, &data->progress,
+                            (bool)data->req.done, data->state.resume_from,
+                            data->set.err, data->set.fxferinfo,
+                            data->set.fprogress, data->set.progress_client,
+                            data->set.low_speed_time, data->set.low_speed_limit,
+                            &data->state.keeps_speed);
+}
+
+CURLcode Curl_pgrsCheckX_zig(struct Curl_easy *data,
+                             const struct curltime *pnow,
+                             struct Progress *p,
+                             bool req_done,
+                             curl_off_t resume_from,
+                             FILE *err,
+                             curl_xferinfo_callback fxferinfo,
+                             curl_progress_callback fprogress,
+                             void *progress_client,
+                             uint32_t low_speed_time,
+                             curl_off_t low_speed_limit,
+                             struct curltime *keeps_speed);
+CURLcode Curl_pgrsCheckX(struct Curl_easy *data, const struct curltime *pnow)
+{
+  return Curl_pgrsCheckX_zig(data, pnow, &data->progress,
+                             (bool)data->req.done, data->state.resume_from,
+                             data->set.err, data->set.fxferinfo,
+                             data->set.fprogress, data->set.progress_client,
+                             data->set.low_speed_time, data->set.low_speed_limit,
+                             &data->state.keeps_speed);
+}
+
+void Curl_pgrsRecvPause_zig(struct Curl_easy *data,
+                            bool enable,
+                            struct Progress *p,
+                            struct curltime *keeps_speed);
+void Curl_pgrsRecvPause(struct Curl_easy *data, bool enable)
+{
+  Curl_pgrsRecvPause_zig(data, enable, &data->progress,
+                         &data->state.keeps_speed);
+}
+
+void Curl_pgrsSendPause_zig(struct Curl_easy *data,
+                            bool enable,
+                            struct Progress *p,
+                            struct curltime *keeps_speed);
+void Curl_pgrsSendPause(struct Curl_easy *data, bool enable)
+{
+  Curl_pgrsSendPause_zig(data, enable, &data->progress,
+                         &data->state.keeps_speed);
+}
+
+void Curl_pgrsReset_zig(struct Curl_easy *data,
+                        struct Progress *p,
+                        struct curltime *keeps_speed);
+void Curl_pgrsReset(struct Curl_easy *data)
+{
+  Curl_pgrsReset_zig(data, &data->progress, &data->state.keeps_speed);
+}
+
+void Curl_pgrsResetTransferSizes_zig(struct Curl_easy *data,
+                                     struct Progress *p);
+void Curl_pgrsResetTransferSizes(struct Curl_easy *data)
+{
+  Curl_pgrsResetTransferSizes_zig(data, &data->progress);
+}
+
+void Curl_pgrsTime_zig(struct Curl_easy *data,
+                       timerid timer,
+                       struct Progress *p);
+void Curl_pgrsTime(struct Curl_easy *data, timerid timer)
+{
+  Curl_pgrsTime_zig(data, timer, &data->progress);
+}
+
+void Curl_pgrsTimeWas_zig(struct Curl_easy *data,
+                          timerid timer,
+                          struct curltime timestamp,
+                          struct Progress *p);
+void Curl_pgrsTimeWas(struct Curl_easy *data, timerid timer,
+                      struct curltime timestamp)
+{
+  Curl_pgrsTimeWas_zig(data, timer, timestamp, &data->progress);
+}
+
+void Curl_pgrsEarlyData_zig(struct Curl_easy *data,
+                            curl_off_t sent,
+                            struct Progress *p);
+void Curl_pgrsEarlyData(struct Curl_easy *data, curl_off_t sent)
+{
+  Curl_pgrsEarlyData_zig(data, sent, &data->progress);
+}
+
+void Curl_pgrsCompleted_zig(struct Curl_easy *data,
+                            struct Progress *p);
+void Curl_pgrsCompleted(struct Curl_easy *data)
+{
+  Curl_pgrsCompleted_zig(data, &data->progress);
+}
+
+timediff_t Curl_pgrs_since_ms_zig(struct Curl_easy *data,
+                                  const struct curltime *pnow,
+                                  timerid timer,
+                                  struct Progress *p);
+timediff_t Curl_pgrs_since_ms(struct Curl_easy *data,
+                              const struct curltime *pnow,
+                              timerid timer)
+{
+  return Curl_pgrs_since_ms_zig(data, pnow, timer, &data->progress);
+}
+
+CURLcode pgrs_speedcheck_zig(struct Curl_easy *data,
+                             const struct curltime *pnow,
+                             struct Progress *p,
+                             uint32_t low_speed_time,
+                             curl_off_t low_speed_limit,
+                             struct curltime *keeps_speed);
+CURLcode pgrs_speedcheck(struct Curl_easy *data, const struct curltime *pnow);
+CURLcode pgrs_speedcheck(struct Curl_easy *data, const struct curltime *pnow)
+{
+  return pgrs_speedcheck_zig(data, pnow, &data->progress,
+                             data->set.low_speed_time, data->set.low_speed_limit,
+                             &data->state.keeps_speed);
+}
+
+/* cfilters.h wrappers */
+void Curl_conn_cf_add_zig(struct Curl_easy *data,
+                          struct connectdata *conn,
+                          int8_t sockindex,
+                          struct Curl_cfilter *cf,
+                          struct Curl_cfilter **conn_cfilters);
+void Curl_conn_cf_add(struct Curl_easy *data,
+                      struct connectdata *conn,
+                      int8_t sockindex,
+                      struct Curl_cfilter *cf)
+{
+  Curl_conn_cf_add_zig(data, conn, sockindex, cf, conn->cfilter);
+}
+
+bool Curl_conn_cf_discard_zig(struct Curl_cfilter **pcf,
+                              struct Curl_easy *data,
+                              struct Curl_cfilter **conn_cfilters);
+bool Curl_conn_cf_discard(struct Curl_cfilter **pcf,
+                          struct Curl_easy *data)
+{
+  return Curl_conn_cf_discard_zig(pcf, data,
+                                  (*pcf && (*pcf)->conn) ?
+                                  (*pcf)->conn->cfilter : NULL);
+}
+
+void Curl_conn_cf_discard_all_zig(struct Curl_easy *data,
+                                  struct connectdata *conn, int8_t sockindex,
+                                  struct Curl_cfilter **conn_cfilters,
+                                  timediff_t *shutdown_start_ms);
+void Curl_conn_cf_discard_all(struct Curl_easy *data,
+                              struct connectdata *conn, int8_t sockindex)
+{
+  Curl_conn_cf_discard_all_zig(data, conn, sockindex, conn->cfilter,
+                               conn->shutdown.start_ms);
+}
+
+unsigned char Curl_conn_cf_get_transport_zig(struct Curl_cfilter *cf,
+                                             struct Curl_easy *data,
+                                             uint8_t transport_wanted);
+unsigned char Curl_conn_cf_get_transport(struct Curl_cfilter *cf,
+                                         struct Curl_easy *data)
+{
+  return Curl_conn_cf_get_transport_zig(cf, data,
+                                        (data && data->conn) ?
+                                        data->conn->transport_wanted : 0);
+}
+
+bool Curl_conn_is_setup_zig(struct connectdata *conn, int8_t sockindex,
+                            struct Curl_cfilter * const *conn_cfilters);
+bool Curl_conn_is_setup(struct connectdata *conn, int8_t sockindex)
+{
+  return Curl_conn_is_setup_zig(conn, sockindex,
+                                conn ? conn->cfilter : NULL);
+}
+
+bool Curl_conn_is_connected_zig(struct connectdata *conn, int8_t sockindex,
+                                struct Curl_cfilter * const *conn_cfilters,
+                                unsigned int scheme_flags);
+bool Curl_conn_is_connected(struct connectdata *conn, int8_t sockindex)
+{
+  return Curl_conn_is_connected_zig(conn, sockindex,
+                                    conn ? conn->cfilter : NULL,
+                                    (conn && conn->scheme) ?
+                                    conn->scheme->flags : 0);
+}
+
+bool Curl_conn_is_ip_connected_zig(struct Curl_easy *data, int8_t sockindex,
+                                   struct Curl_cfilter * const *conn_cfilters);
+bool Curl_conn_is_ip_connected(struct Curl_easy *data, int8_t sockindex)
+{
+  return Curl_conn_is_ip_connected_zig(data, sockindex,
+                                       data->conn->cfilter);
+}
+
+bool Curl_conn_is_ssl_zig(struct connectdata *conn, int8_t sockindex,
+                          struct Curl_cfilter * const *conn_cfilters);
+bool Curl_conn_is_ssl(struct connectdata *conn, int8_t sockindex)
+{
+  return Curl_conn_is_ssl_zig(conn, sockindex,
+                              conn ? conn->cfilter : NULL);
+}
+
+bool Curl_conn_is_tunneling_zig(struct connectdata *conn, int8_t sockindex,
+                                struct Curl_cfilter * const *conn_cfilters);
+bool Curl_conn_is_tunneling(struct connectdata *conn, int8_t sockindex)
+{
+  return Curl_conn_is_tunneling_zig(conn, sockindex,
+                                    conn ? conn->cfilter : NULL);
+}
+
+bool Curl_conn_get_ssl_info_zig(struct Curl_easy *data,
+                                struct connectdata *conn, int8_t sockindex,
+                                int query,
+                                struct curl_tlssessioninfo *info,
+                                struct Curl_cfilter * const *conn_cfilters);
+bool Curl_conn_get_ssl_info(struct Curl_easy *data,
+                            struct connectdata *conn, int8_t sockindex,
+                            int query,
+                            struct curl_tlssessioninfo *info)
+{
+  return Curl_conn_get_ssl_info_zig(data, conn, sockindex, query, info,
+                                    conn ? conn->cfilter : NULL);
+}
+
+CURLcode Curl_conn_get_ip_info_zig(struct Curl_easy *data,
+                                   struct connectdata *conn, int8_t sockindex,
+                                   bool *is_ipv6, struct ip_quadruple *ipquad,
+                                   struct Curl_cfilter * const *conn_cfilters);
+CURLcode Curl_conn_get_ip_info(struct Curl_easy *data,
+                               struct connectdata *conn, int8_t sockindex,
+                               bool *is_ipv6, struct ip_quadruple *ipquad)
+{
+  return Curl_conn_get_ip_info_zig(data, conn, sockindex, is_ipv6, ipquad,
+                                   conn->cfilter);
+}
+
+bool Curl_conn_is_multiplex_zig(struct connectdata *conn, int8_t sockindex,
+                                struct Curl_cfilter * const *conn_cfilters);
+bool Curl_conn_is_multiplex(struct connectdata *conn, int8_t sockindex)
+{
+  return Curl_conn_is_multiplex_zig(conn, sockindex,
+                                    conn ? conn->cfilter : NULL);
+}
+
+unsigned char Curl_conn_http_version_zig(struct Curl_easy *data,
+                                         struct connectdata *conn,
+                                         struct Curl_cfilter * const *conn_cfilters);
+unsigned char Curl_conn_http_version(struct Curl_easy *data,
+                                     struct connectdata *conn)
+{
+  return Curl_conn_http_version_zig(data, conn,
+                                    conn ? conn->cfilter : NULL);
+}
+
+unsigned char Curl_conn_get_transport_zig(struct Curl_easy *data,
+                                          struct connectdata *conn,
+                                          struct Curl_cfilter * const *conn_cfilters,
+                                          uint8_t transport_wanted);
+unsigned char Curl_conn_get_transport(struct Curl_easy *data,
+                                      struct connectdata *conn)
+{
+  return Curl_conn_get_transport_zig(data, conn, conn->cfilter,
+                                     conn->transport_wanted);
+}
+
+const char *Curl_conn_get_alpn_negotiated_zig(struct Curl_easy *data,
+                                              struct connectdata *conn,
+                                              struct Curl_cfilter * const *conn_cfilters);
+const char *Curl_conn_get_alpn_negotiated(struct Curl_easy *data,
+                                          struct connectdata *conn)
+{
+  return Curl_conn_get_alpn_negotiated_zig(data, conn, conn->cfilter);
+}
+
+void Curl_conn_cntrl_update_info_zig(struct Curl_easy *data,
+                                     struct connectdata *conn,
+                                     struct Curl_cfilter * const *conn_cfilters);
+void Curl_conn_cntrl_update_info(struct Curl_easy *data,
+                                 struct connectdata *conn)
+{
+  Curl_conn_cntrl_update_info_zig(data, conn, conn->cfilter);
+}
+
+void Curl_conn_cntrl_report_stats_zig(struct Curl_easy *data,
+                                      struct connectdata *conn,
+                                      int sockindex,
+                                      struct Curl_cfilter * const *conn_cfilters);
+void Curl_conn_cntrl_report_stats(struct Curl_easy *data,
+                                  struct connectdata *conn,
+                                  int sockindex)
+{
+  Curl_conn_cntrl_report_stats_zig(data, conn, sockindex, conn->cfilter);
+}
+
+void Curl_conn_remove_setup_filters_zig(struct Curl_easy *data,
+                                        int8_t sockindex,
+                                        struct Curl_cfilter **conn_cfilters);
+void Curl_conn_remove_setup_filters(struct Curl_easy *data,
+                                    int8_t sockindex)
+{
+  Curl_conn_remove_setup_filters_zig(data, sockindex,
+                                     data->conn ? data->conn->cfilter : NULL);
+}
+
+bool Curl_conn_data_pending_zig(struct Curl_easy *data,
+                                int8_t sockindex,
+                                struct Curl_cfilter * const *conn_cfilters);
+bool Curl_conn_data_pending(struct Curl_easy *data,
+                            int8_t sockindex)
+{
+  return Curl_conn_data_pending_zig(data, sockindex, data->conn->cfilter);
+}
+
+bool Curl_conn_needs_flush_zig(struct Curl_easy *data, int8_t sockindex,
+                               struct Curl_cfilter * const *conn_cfilters);
+bool Curl_conn_needs_flush(struct Curl_easy *data, int8_t sockindex)
+{
+  return Curl_conn_needs_flush_zig(data, sockindex, data->conn->cfilter);
+}
+
+CURLcode Curl_conn_flush_zig(struct Curl_easy *data, int8_t sockindex,
+                             struct Curl_cfilter * const *conn_cfilters);
+CURLcode Curl_conn_flush(struct Curl_easy *data, int8_t sockindex)
+{
+  return Curl_conn_flush_zig(data, sockindex, data->conn->cfilter);
+}
+
+curl_socket_t Curl_conn_get_first_socket_zig(struct Curl_easy *data,
+                                             struct Curl_cfilter * const *conn_cfilters,
+                                             const curl_socket_t *conn_sock);
+curl_socket_t Curl_conn_get_first_socket(struct Curl_easy *data)
+{
+  return Curl_conn_get_first_socket_zig(data,
+                                        data->conn ? data->conn->cfilter : NULL,
+                                        data->conn ? data->conn->sock : NULL);
+}
+
+const struct Curl_sockaddr_ex *
+Curl_conn_get_remote_addr_zig(struct Curl_easy *data, int8_t sockindex,
+                              struct Curl_cfilter * const *conn_cfilters);
+const struct Curl_sockaddr_ex *
+Curl_conn_get_remote_addr(struct Curl_easy *data, int8_t sockindex)
+{
+  return Curl_conn_get_remote_addr_zig(data, sockindex,
+                                       data->conn ? data->conn->cfilter : NULL);
+}
+
+CURLcode Curl_conn_adjust_pollset_zig(struct Curl_easy *data,
+                                      struct connectdata *conn,
+                                      struct easy_pollset *ps,
+                                      struct Curl_cfilter **conn_cfilters,
+                                      const timediff_t *shutdown_start_ms);
+CURLcode Curl_conn_adjust_pollset(struct Curl_easy *data,
+                                  struct connectdata *conn,
+                                  struct easy_pollset *ps)
+{
+  return Curl_conn_adjust_pollset_zig(data, conn, ps, conn->cfilter,
+                                      conn->shutdown.start_ms);
+}
+
+CURLcode Curl_conn_ev_data_setup_zig(struct Curl_easy *data,
+                                     struct Curl_cfilter **conn_cfilters,
+                                     const timediff_t *shutdown_start_ms);
+CURLcode Curl_conn_ev_data_setup(struct Curl_easy *data)
+{
+  return Curl_conn_ev_data_setup_zig(data, data->conn->cfilter,
+                                     data->conn->shutdown.start_ms);
+}
+
+void Curl_conn_ev_data_done_send_zig(struct Curl_easy *data,
+                                     struct Curl_cfilter **conn_cfilters,
+                                     const timediff_t *shutdown_start_ms);
+void Curl_conn_ev_data_done_send(struct Curl_easy *data)
+{
+  Curl_conn_ev_data_done_send_zig(data, data->conn->cfilter,
+                                  data->conn->shutdown.start_ms);
+}
+
+void Curl_conn_ev_data_done_zig(struct Curl_easy *data, bool premature,
+                                struct Curl_cfilter **conn_cfilters,
+                                const timediff_t *shutdown_start_ms);
+void Curl_conn_ev_data_done(struct Curl_easy *data, bool premature)
+{
+  Curl_conn_ev_data_done_zig(data, premature, data->conn->cfilter,
+                             data->conn->shutdown.start_ms);
+}
+
+CURLcode Curl_conn_ev_data_pause_zig(struct Curl_easy *data, bool do_pause,
+                                     struct Curl_cfilter **conn_cfilters,
+                                     const timediff_t *shutdown_start_ms);
+CURLcode Curl_conn_ev_data_pause(struct Curl_easy *data, bool do_pause)
+{
+  return Curl_conn_ev_data_pause_zig(data, do_pause, data->conn->cfilter,
+                                     data->conn->shutdown.start_ms);
+}
+
+bool Curl_conn_is_alive_zig(struct Curl_easy *data, struct connectdata *conn,
+                            bool *input_pending,
+                            struct Curl_cfilter * const *conn_cfilters,
+                            bool conn_bits_close);
+bool Curl_conn_is_alive(struct Curl_easy *data, struct connectdata *conn,
+                        bool *input_pending)
+{
+  return Curl_conn_is_alive_zig(data, conn, input_pending,
+                                conn->cfilter, (bool)conn->bits.close);
+}
+
+CURLcode Curl_conn_keep_alive_zig(struct Curl_easy *data,
+                                  struct connectdata *conn,
+                                  struct Curl_cfilter **conn_cfilters,
+                                  const timediff_t *shutdown_start_ms);
+CURLcode Curl_conn_keep_alive(struct Curl_easy *data,
+                              struct connectdata *conn)
+{
+  return Curl_conn_keep_alive_zig(data, conn, conn->cfilter,
+                                  conn->shutdown.start_ms);
+}
+
+void Curl_conn_get_current_host_zig(struct Curl_easy *data, int8_t sockindex,
+                                    const char **phost, int *pport,
+                                    struct Curl_cfilter * const *conn_cfilters,
+                                    const char *origin_hostname,
+                                    int origin_port);
+void Curl_conn_get_current_host(struct Curl_easy *data, int8_t sockindex,
+                                const char **phost, int *pport)
+{
+  Curl_conn_get_current_host_zig(data, sockindex, phost, pport,
+                                 data->conn->cfilter,
+                                 data->conn->origin->hostname,
+                                 data->conn->origin->port);
+}
+
+size_t Curl_conn_get_max_concurrent_zig(struct Curl_easy *data,
+                                        struct connectdata *conn,
+                                        int8_t sockindex,
+                                        struct Curl_cfilter * const *conn_cfilters);
+size_t Curl_conn_get_max_concurrent(struct Curl_easy *data,
+                                    struct connectdata *conn,
+                                    int8_t sockindex)
+{
+  return Curl_conn_get_max_concurrent_zig(data, conn, sockindex,
+                                          conn->cfilter);
+}
+
+int Curl_conn_get_stream_error_zig(struct Curl_easy *data,
+                                   struct connectdata *conn,
+                                   int8_t sockindex,
+                                   struct Curl_cfilter * const *conn_cfilters);
+int Curl_conn_get_stream_error(struct Curl_easy *data,
+                               struct connectdata *conn,
+                               int8_t sockindex)
+{
+  return Curl_conn_get_stream_error_zig(data, conn, sockindex, conn->cfilter);
+}
+
+#ifdef CURLVERBOSE
+void Curl_conn_trc_filters_zig(struct Curl_easy *data,
+                               int8_t sockindex, const char *info,
+                               struct Curl_cfilter * const *conn_cfilters);
+void Curl_conn_trc_filters(struct Curl_easy *data,
+                           int8_t sockindex, const char *info)
+{
+  Curl_conn_trc_filters_zig(data, sockindex, info,
+                            data->conn ? data->conn->cfilter : NULL);
+}
+#endif
+
+int8_t Curl_conn_sockindex_zig(struct Curl_easy *data, curl_socket_t sockfd,
+                               const curl_socket_t *conn_sock);
+int8_t Curl_conn_sockindex(struct Curl_easy *data, curl_socket_t sockfd)
+{
+  return Curl_conn_sockindex_zig(data, sockfd,
+                                 (data && data->conn) ? data->conn->sock : NULL);
+}
+
+CURLcode Curl_conn_recv_zig(struct Curl_easy *data, int8_t sockindex,
+                            char *buf, size_t len, size_t *pnread,
+                            const void *conn_recv);
+CURLcode Curl_conn_recv(struct Curl_easy *data, int8_t sockindex,
+                        char *buf, size_t len, size_t *pnread)
+{
+  return Curl_conn_recv_zig(data, sockindex, buf, len, pnread,
+                            data->conn ? data->conn->recv : NULL);
+}
+
+CURLcode Curl_conn_send_zig(struct Curl_easy *data, int8_t sockindex,
+                            const void *buf, size_t len, bool eos,
+                            size_t *pnwritten,
+                            const void *conn_send);
+CURLcode Curl_conn_send(struct Curl_easy *data, int8_t sockindex,
+                        const void *buf, size_t len, bool eos,
+                        size_t *pnwritten)
+{
+  return Curl_conn_send_zig(data, sockindex, buf, len, eos, pnwritten,
+                            data->conn ? data->conn->send : NULL);
+}
+
+/* conncache.h wrappers */
+void Curl_conn_close_zig(struct Curl_easy *data,
+                         struct connectdata *conn,
+                         bool aborted,
+                         struct cpool *cpool);
+void Curl_conn_close(struct Curl_easy *data,
+                     struct connectdata *conn,
+                     bool aborted)
+{
+  Curl_conn_close_zig(data, conn, aborted, CURL_CPOOL_INSTANCE(data));
+}
+
+struct cpool *Curl_cpool_get_instance_zig(struct Curl_easy *data,
+                                          struct cpool *cpool);
+struct cpool *Curl_cpool_get_instance(struct Curl_easy *data)
+{
+  return Curl_cpool_get_instance_zig(data, CURL_CPOOL_INSTANCE(data));
+}
+
+void Curl_cpool_xfer_init_zig(struct Curl_easy *data,
+                              struct cpool *cpool,
+                              curl_off_t *p_easy_id,
+                              curl_off_t *p_last_conn_id,
+                              uint32_t *p_last_cpid);
+void Curl_cpool_xfer_init(struct Curl_easy *data)
+{
+  Curl_cpool_xfer_init_zig(data, CURL_CPOOL_INSTANCE(data),
+                           &data->id, &data->state.last_conn_id,
+                           &data->state.last_cpid);
+}
+
+struct connectdata *Curl_cpool_get_last_conn_zig(struct Curl_easy *data,
+                                                 struct cpool *cpool,
+                                                 curl_off_t *p_last_conn_id,
+                                                 uint32_t *p_last_cpid);
+struct connectdata *Curl_cpool_get_last_conn(struct Curl_easy *data)
+{
+  return Curl_cpool_get_last_conn_zig(data, CURL_CPOOL_INSTANCE(data),
+                                      &data->state.last_conn_id,
+                                      &data->state.last_cpid);
+}
+
+CURLcode Curl_cpool_add_zig(struct Curl_easy *data,
+                            struct connectdata *conn,
+                            uint32_t max_total,
+                            uint32_t max_host,
+                            const struct curltime *pnow,
+                            struct cpool *cpool,
+                            bool data_internal);
+CURLcode Curl_cpool_add(struct Curl_easy *data,
+                        struct connectdata *conn,
+                        uint32_t max_total,
+                        uint32_t max_host,
+                        const struct curltime *pnow)
+{
+  return Curl_cpool_add_zig(data, conn, max_total, max_host, pnow,
+                            CURL_CPOOL_INSTANCE(data),
+                            (bool)data->state.internal);
+}
+
+void Curl_cpool_conn_was_used_zig(struct Curl_easy *data,
+                                  struct connectdata *conn,
+                                  const struct curltime *pnow,
+                                  const struct curltime *conn_created,
+                                  timediff_t *p_lastupkeep_ms);
+void Curl_cpool_conn_was_used(struct Curl_easy *data,
+                              struct connectdata *conn,
+                              const struct curltime *pnow)
+{
+  Curl_cpool_conn_was_used_zig(data, conn, pnow, &conn->created,
+                               &conn->lastupkeep_ms);
+}
+
+timediff_t Curl_cpool_conn_age_ms_zig(struct Curl_easy *data,
+                                      struct connectdata *conn,
+                                      const struct curltime *pnow,
+                                      const struct curltime *conn_created);
+timediff_t Curl_cpool_conn_age_ms(struct Curl_easy *data,
+                                  struct connectdata *conn,
+                                  const struct curltime *pnow)
+{
+  return Curl_cpool_conn_age_ms_zig(data, conn, pnow, &conn->created);
+}
+
+bool Curl_cpool_find_zig(struct Curl_easy *data,
+                         const char *destination,
+                         bool prune_dead,
+                         const struct curltime *pnow,
+                         Curl_cpool_conn_match_cb *conn_cb,
+                         Curl_cpool_done_match_cb *done_cb,
+                         void *userdata,
+                         struct cpool *cpool,
+                         curl_off_t *p_last_conn_id,
+                         uint32_t *p_last_cpid);
+bool Curl_cpool_find(struct Curl_easy *data,
+                     const char *destination,
+                     bool prune_dead,
+                     const struct curltime *pnow,
+                     Curl_cpool_conn_match_cb *conn_cb,
+                     Curl_cpool_done_match_cb *done_cb,
+                     void *userdata)
+{
+  return Curl_cpool_find_zig(data, destination, prune_dead, pnow,
+                             conn_cb, done_cb, userdata,
+                             CURL_CPOOL_INSTANCE(data),
+                             &data->state.last_conn_id,
+                             &data->state.last_cpid);
+}
+
+CURLcode Curl_cpool_upkeep_zig(struct Curl_easy *data,
+                               struct cpool *cpool);
+CURLcode Curl_cpool_upkeep(struct Curl_easy *data)
+{
+  return Curl_cpool_upkeep_zig(data, CURL_CPOOL_INSTANCE(data));
+}
+
+void Curl_cpool_return_zig(struct Curl_easy *data,
+                           struct connectdata *conn,
+                           Curl_cpool_return_cb *cb, void *cbdata,
+                           const struct curltime *pnow,
+                           struct cpool *cpool,
+                           curl_off_t *p_last_conn_id,
+                           uint32_t *p_last_cpid);
+void Curl_cpool_return(struct Curl_easy *data,
+                       struct connectdata *conn,
+                       Curl_cpool_return_cb *cb, void *cbdata,
+                       const struct curltime *pnow)
+{
+  Curl_cpool_return_zig(data, conn, cb, cbdata, pnow,
+                        CURL_CPOOL_INSTANCE(data),
+                        &data->state.last_conn_id, &data->state.last_cpid);
 }
