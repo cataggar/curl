@@ -90,6 +90,7 @@ pub fn build(b: *std.Build) void {
     const run_backend_tests = b.addRunArtifact(backend_tests);
 
     const test_step = b.step("test", "Run unit tests");
+    test_step.dependOn(b.getInstallStep());
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_backend_tests.step);
