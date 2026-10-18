@@ -46,9 +46,22 @@ CURLcode Curl_blockread_all(struct Curl_cfilter *cf,
 /*
  * This function handles the SOCKS5 GSS-API negotiation and initialization
  */
-CURLcode Curl_SOCKS5_gssapi_negotiate(struct Curl_cfilter *cf,
-                                      struct Curl_easy *data,
-                                      struct Curl_creds *creds);
+CURLcode Curl_SOCKS5_gssapi_negotiate_ex(struct Curl_cfilter *cf_next,
+                                         struct Curl_easy *data,
+                                         struct Curl_creds *creds,
+                                         curl_socket_t sock,
+                                         const char *service_name,
+                                         const char *proxy_hostname,
+                                         bool socks5_gssapi_nec,
+                                         int *socks5_gssapi_enctype);
+#define Curl_SOCKS5_gssapi_negotiate(cf, data, creds)                         \
+  Curl_SOCKS5_gssapi_negotiate_ex((cf)->next, (data), (creds),                \
+                                  (cf)->conn->sock[(cf)->sockindex],          \
+                                  CURL_EASY_STR((data),                       \
+                                                STRING_PROXY_SERVICE_NAME),   \
+                                  (cf)->conn->socks_proxy.peer->hostname,     \
+                                  (bool)(data)->set.socks5_gssapi_nec,        \
+                                  &(cf)->conn->socks5_gssapi_enctype)
 #endif
 
 /* Insert a SOCKS filter after `cf_at` for connecting to `dest`.

@@ -41,6 +41,7 @@
 #include "urldata.h"
 #include "curlx/base64.h"
 #include "vauth/vauth.h"
+#include "vauth/digest.h"
 #include "cfilters.h"
 #include "curl_sasl.h"
 #include "curl_trc.h"
