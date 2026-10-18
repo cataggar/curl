@@ -835,11 +835,11 @@ fn ntlmDecodeType2Target(
     return CURLE_OK;
 }
 
-pub export fn Curl_auth_is_ntlm_supported() callconv(.c) bool {
+pub fn Curl_auth_is_ntlm_supported() callconv(.c) bool {
     return true;
 }
 
-pub export fn Curl_auth_decode_ntlm_type2_message(
+pub fn Curl_auth_decode_ntlm_type2_message(
     data: ?*anyopaque,
     type2ref: *const bufref,
     ntlm: *ntlmdata,
@@ -873,7 +873,7 @@ pub export fn Curl_auth_decode_ntlm_type2_message(
     return CURLE_OK;
 }
 
-pub export fn Curl_auth_create_ntlm_type1_message(
+pub fn Curl_auth_create_ntlm_type1_message(
     data: ?*anyopaque,
     creds: ?*const Curl_creds,
     default_service: ?[*:0]const u8,
@@ -916,7 +916,7 @@ fn writeSecurityBuffer(dest: *[8]u8, len: usize, offset: usize) void {
     dest[7] = 0;
 }
 
-pub export fn Curl_auth_create_ntlm_type3_message(
+pub fn Curl_auth_create_ntlm_type3_message(
     data: ?*anyopaque,
     creds: ?*const Curl_creds,
     ntlm: *ntlmdata,
@@ -1049,12 +1049,22 @@ pub export fn Curl_auth_create_ntlm_type3_message(
     return Curl_bufref_memdup0(out, &ntlmbuf, size);
 }
 
-pub export fn Curl_auth_cleanup_ntlm(ntlm: *ntlmdata) callconv(.c) void {
+pub fn Curl_auth_cleanup_ntlm(ntlm: *ntlmdata) callconv(.c) void {
     if (ntlm.target_info) |ti| {
         mem.free(ti);
         ntlm.target_info = null;
     }
     ntlm.target_info_len = 0;
+}
+
+comptime {
+    if (builtin.os.tag != .windows) {
+        @export(&Curl_auth_is_ntlm_supported, .{ .name = "Curl_auth_is_ntlm_supported" });
+        @export(&Curl_auth_decode_ntlm_type2_message, .{ .name = "Curl_auth_decode_ntlm_type2_message" });
+        @export(&Curl_auth_create_ntlm_type1_message, .{ .name = "Curl_auth_create_ntlm_type1_message" });
+        @export(&Curl_auth_create_ntlm_type3_message, .{ .name = "Curl_auth_create_ntlm_type3_message" });
+        @export(&Curl_auth_cleanup_ntlm, .{ .name = "Curl_auth_cleanup_ntlm" });
+    }
 }
 
 // ============================================================================

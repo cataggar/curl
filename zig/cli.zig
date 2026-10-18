@@ -92,6 +92,9 @@ pub fn addCurlExe(
         },
         .windows => {
             exe.root_module.addCMacro("WIN32_LEAN_AND_MEAN", "1");
+            if (!is_static_libcurl) {
+                exe.root_module.linkSystemLibrary("secur32", .{});
+            }
         },
         else => {},
     }
