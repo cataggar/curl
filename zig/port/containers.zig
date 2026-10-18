@@ -358,14 +358,14 @@ pub const Curl_llist_node = extern struct {
     _next: ?*Curl_llist_node,
 };
 
-export fn Curl_llist_init(l: *Curl_llist, dtor: ?Curl_llist_dtor) callconv(.c) void {
+pub export fn Curl_llist_init(l: *Curl_llist, dtor: ?Curl_llist_dtor) callconv(.c) void {
     l._size = 0;
     l._dtor = dtor;
     l._head = null;
     l._tail = null;
 }
 
-export fn llist_insert_next(
+pub export fn llist_insert_next(
     list: *Curl_llist,
     e: ?*Curl_llist_node,
     p: ?*const anyopaque,
@@ -398,7 +398,7 @@ export fn llist_insert_next(
     list._size += 1;
 }
 
-export fn Curl_llist_insert_next(
+pub export fn Curl_llist_insert_next(
     list: *Curl_llist,
     e: ?*Curl_llist_node,
     p: ?*const anyopaque,
@@ -407,7 +407,7 @@ export fn Curl_llist_insert_next(
     llist_insert_next(list, e, p, ne);
 }
 
-export fn Curl_llist_append(
+pub export fn Curl_llist_append(
     list: *Curl_llist,
     p: ?*const anyopaque,
     ne: *Curl_llist_node,
@@ -415,7 +415,7 @@ export fn Curl_llist_append(
     llist_insert_next(list, list._tail, p, ne);
 }
 
-export fn Curl_node_take_elem(e: ?*Curl_llist_node) callconv(.c) ?*anyopaque {
+pub export fn Curl_node_take_elem(e: ?*Curl_llist_node) callconv(.c) ?*anyopaque {
     const node = e orelse return null;
     if (node._list) |list| {
         if (node == list._head) {
@@ -455,11 +455,11 @@ fn nodeUremove(e: ?*Curl_llist_node, user: ?*anyopaque) void {
     }
 }
 
-export fn Curl_node_remove(e: ?*Curl_llist_node) callconv(.c) void {
+pub export fn Curl_node_remove(e: ?*Curl_llist_node) callconv(.c) void {
     nodeUremove(e, null);
 }
 
-export fn Curl_llist_remove(
+pub export fn Curl_llist_remove(
     list: ?*Curl_llist,
     e: ?*Curl_llist_node,
     user: ?*anyopaque,
@@ -468,7 +468,7 @@ export fn Curl_llist_remove(
     nodeUremove(e, user);
 }
 
-export fn Curl_llist_destroy(list: ?*Curl_llist, user: ?*anyopaque) callconv(.c) void {
+pub export fn Curl_llist_destroy(list: ?*Curl_llist, user: ?*anyopaque) callconv(.c) void {
     if (list) |l| {
         while (l._size > 0) {
             nodeUremove(l._tail, user);
@@ -476,39 +476,39 @@ export fn Curl_llist_destroy(list: ?*Curl_llist, user: ?*anyopaque) callconv(.c)
     }
 }
 
-export fn Curl_llist_head(list: *const Curl_llist) callconv(.c) ?*Curl_llist_node {
+pub export fn Curl_llist_head(list: *const Curl_llist) callconv(.c) ?*Curl_llist_node {
     return list._head;
 }
 
-export fn llist_tail(list: *const Curl_llist) callconv(.c) ?*Curl_llist_node {
+pub export fn llist_tail(list: *const Curl_llist) callconv(.c) ?*Curl_llist_node {
     return list._tail;
 }
 
-export fn Curl_llist_tail(list: *const Curl_llist) callconv(.c) ?*Curl_llist_node {
+pub export fn Curl_llist_tail(list: *const Curl_llist) callconv(.c) ?*Curl_llist_node {
     return list._tail;
 }
 
-export fn Curl_llist_count(list: *const Curl_llist) callconv(.c) usize {
+pub export fn Curl_llist_count(list: *const Curl_llist) callconv(.c) usize {
     return list._size;
 }
 
-export fn Curl_node_elem(n: *const Curl_llist_node) callconv(.c) ?*anyopaque {
+pub export fn Curl_node_elem(n: *const Curl_llist_node) callconv(.c) ?*anyopaque {
     return n._ptr;
 }
 
-export fn Curl_node_next(n: *const Curl_llist_node) callconv(.c) ?*Curl_llist_node {
+pub export fn Curl_node_next(n: *const Curl_llist_node) callconv(.c) ?*Curl_llist_node {
     return n._next;
 }
 
-export fn llist_node_prev(n: *const Curl_llist_node) callconv(.c) ?*Curl_llist_node {
+pub export fn llist_node_prev(n: *const Curl_llist_node) callconv(.c) ?*Curl_llist_node {
     return n._prev;
 }
 
-export fn Curl_node_prev(n: *const Curl_llist_node) callconv(.c) ?*Curl_llist_node {
+pub export fn Curl_node_prev(n: *const Curl_llist_node) callconv(.c) ?*Curl_llist_node {
     return n._prev;
 }
 
-export fn Curl_node_llist(n: *const Curl_llist_node) callconv(.c) ?*Curl_llist {
+pub export fn Curl_node_llist(n: *const Curl_llist_node) callconv(.c) ?*Curl_llist {
     return n._list;
 }
 
