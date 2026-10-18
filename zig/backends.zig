@@ -115,5 +115,7 @@ pub fn createOptionsStep(b: *std.Build, opts: Options) *std.Build.Step.Options {
     step.addOption(bool, "zstd", opts.zstd);
     step.addOption(bool, "zlib", opts.zlib);
     step.addOption(bool, "nghttp2", opts.nghttp2);
+    step.addOption(?[]const u8, "ca_bundle", opts.ca_bundle);
+    step.addOption(bool, "ca_fallback", opts.ca_fallback);
     return step;
 }

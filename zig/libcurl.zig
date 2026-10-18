@@ -54,7 +54,6 @@ pub const c_sources = [_][]const u8{
     "lib/http_proxy.c",
     "lib/imap.c",
     "lib/ldap.c",
-    "lib/mime.c",
     "lib/mqtt.c",
     "lib/multi.c",
     "lib/multi_ev.c",
@@ -64,7 +63,6 @@ pub const c_sources = [_][]const u8{
     "lib/pingpong.c",
     "lib/pop3.c",
     "lib/progress.c",
-    "lib/protocol.c",
     "lib/proxy.c",
     "lib/request.c",
     "lib/rtsp.c",
@@ -76,7 +74,6 @@ pub const c_sources = [_][]const u8{
     "lib/tftp.c",
     "lib/transfer.c",
     "lib/url.c",
-    "lib/version.c",
     "lib/ws.c",
     // LIB_VDNS_CFILES
     "lib/vdns/asyn-ares.c",

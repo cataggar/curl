@@ -145,11 +145,21 @@ CURLcode Curl_mime_duppart(struct Curl_easy *data,
 CURLcode Curl_mime_set_subparts(struct curl_mimepart *part,
                                 struct curl_mime *subparts,
                                 int take_ownership);
+CURLcode Curl_mime_prepare_headers_ex(bool mime_formescape,
+                                      struct curl_mimepart *part,
+                                      const char *contenttype,
+                                      const char *disposition,
+                                      enum mimestrategy strategy);
 CURLcode Curl_mime_prepare_headers(struct Curl_easy *data,
                                    struct curl_mimepart *part,
                                    const char *contenttype,
                                    const char *disposition,
                                    enum mimestrategy strategy);
+#define Curl_mime_prepare_headers(data, part, contenttype, disposition, strategy) \
+  Curl_mime_prepare_headers_ex(                                                   \
+    (bool)(((const struct Curl_easy *)(data)) &&                                  \
+           ((const struct Curl_easy *)(data))->set.mime_formescape),              \
+    (part), (contenttype), (disposition), (strategy))
 size_t Curl_mime_read(char *buffer, size_t size, size_t nitems,
                       void *instream);
 const char *Curl_mime_contenttype(const char *filename);
