@@ -47,13 +47,9 @@ pub const c_sources = [_][]const u8{
 };
 
 pub const curlx_c_sources = [_][]const u8{
-    "lib/curlx/base64.c",
-    "lib/curlx/basename.c",
     "lib/curlx/dynbuf.c",
     "lib/curlx/win32-fopen.c",
     "lib/curlx/multibyte.c",
-    "lib/curlx/strdup.c",
-    "lib/curlx/strparse.c",
     "lib/curlx/version_win32.c",
     "lib/curlx/winapi.c",
 };
