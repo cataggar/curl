@@ -23,13 +23,36 @@
  * SPDX-License-Identifier: curl
  *
  ***************************************************************************/
+#include "curl_setup.h"
+
 struct Curl_easy;
 struct Curl_cfilter;
+struct Curl_cftype;
+
+#ifdef USE_SSL
+extern struct Curl_cftype Curl_cft_ssl;
+#ifndef CURL_DISABLE_PROXY
+extern struct Curl_cftype Curl_cft_ssl_proxy;
+#endif
+#endif
+
+void Curl_trc_register_ssl_cfts(void *cft_ssl, void *cft_ssl_proxy);
+#if defined(USE_SSL) && !defined(CURL_DISABLE_PROXY)
+#define CURL_TRC_REG_SSL() \
+  Curl_trc_register_ssl_cfts(&Curl_cft_ssl, &Curl_cft_ssl_proxy)
+#elif defined(USE_SSL)
+#define CURL_TRC_REG_SSL() \
+  Curl_trc_register_ssl_cfts(&Curl_cft_ssl, NULL)
+#else
+#define CURL_TRC_REG_SSL() \
+  Curl_trc_register_ssl_cfts(NULL, NULL)
+#endif
 
 /**
  * Init logging, return != 0 on failure.
  */
 CURLcode Curl_trc_init(void);
+#define Curl_trc_init() (CURL_TRC_REG_SSL(), Curl_trc_init())
 
 /**
  * Configure tracing. May be called several times during global
@@ -48,16 +71,44 @@ CURLcode Curl_trc_init(void);
  * @param config configuration string
  */
 CURLcode Curl_trc_opt(const char *config);
+#define Curl_trc_opt(config) (CURL_TRC_REG_SSL(), Curl_trc_opt(config))
+
+bool Curl_trc_bind_easy(const struct Curl_easy *data,
+                        const void *peasy_id,
+                        const void *pmstate,
+                        const void *plast_conn_id,
+                        const void *pstate_feat,
+                        const void *perrorbuffer,
+                        const void *phttpreq,
+                        bool verbose,
+                        const void *pfdebug,
+                        const void *pdebugdata,
+                        const void *perr);
+
+#define CURL_TRC_BIND(data) \
+  ((data) ? Curl_trc_bind_easy((data), &(data)->id, &(data)->mstate, \
+                               &(data)->state.last_conn_id, \
+                               &(data)->state.feat, \
+                               &(data)->set.errorbuffer, \
+                               &(data)->state.httpreq, \
+                               (bool)((data)->set.verbose), \
+                               &(data)->set.fdebug, \
+                               &(data)->set.debugdata, \
+                               &(data)->set.err) : FALSE)
 
 /* the function used to output verbose information */
 void Curl_debug(struct Curl_easy *data, curl_infotype type,
                 const char *ptr, size_t size);
+#define Curl_debug(data, type, ptr, size) \
+  (CURL_TRC_BIND(data), Curl_debug(data, type, ptr, size))
 
 /**
  * Output a failure message on registered callbacks for transfer.
  */
 void Curl_failf(struct Curl_easy *data,
                 const char *fmt, ...) CURL_PRINTF(2, 3);
+#define Curl_failf(data, ...) \
+  (CURL_TRC_BIND(data), Curl_failf(data, __VA_ARGS__))
 
 #define failf Curl_failf
 
@@ -65,6 +116,8 @@ void Curl_failf(struct Curl_easy *data,
  * This is used to clear information from happy eyeballing attempts
  * when ultimately a successful attempt was made. */
 void Curl_reset_fail(struct Curl_easy *data);
+#define Curl_reset_fail(data) \
+  (CURL_TRC_BIND(data), Curl_reset_fail(data))
 
 #define CURL_LOG_LVL_NONE  0
 #define CURL_LOG_LVL_INFO  1
@@ -74,6 +127,8 @@ void Curl_reset_fail(struct Curl_easy *data);
  */
 void Curl_infof(struct Curl_easy *data,
                 const char *fmt, ...) CURL_PRINTF(2, 3);
+#define Curl_infof(data, ...) \
+  (CURL_TRC_BIND(data), Curl_infof(data, __VA_ARGS__))
 
 /**
  * Output an informational message when both transfer's verbose logging
@@ -81,20 +136,48 @@ void Curl_infof(struct Curl_easy *data,
  */
 void Curl_trc_cf_infof(struct Curl_easy *data, const struct Curl_cfilter *cf,
                        const char *fmt, ...) CURL_PRINTF(3, 4);
+#define Curl_trc_cf_infof(data, cf, ...) \
+  (CURL_TRC_BIND(data), Curl_trc_cf_infof(data, cf, __VA_ARGS__))
+
 void Curl_trc_multi(struct Curl_easy *data,
                     const char *fmt, ...) CURL_PRINTF(2, 3);
+#define Curl_trc_multi(data, ...) \
+  (CURL_TRC_BIND(data), Curl_trc_multi(data, __VA_ARGS__))
+
 const char *Curl_trc_mstate_name(int state);
 const char *Curl_trc_timer_name(int tid);
-void Curl_trc_easy_timers(struct Curl_easy *data);
+void Curl_trc_easy_timers(struct Curl_easy *data,
+                          const void *multi_timeouts,
+                          const void *offset_us,
+                          const uint8_t *next,
+                          uint8_t first);
+#define Curl_trc_easy_timers(data) \
+  (CURL_TRC_BIND(data), \
+   Curl_trc_easy_timers((data), \
+                        (data)->multi ? &(data)->multi->timeouts : NULL, \
+                        (data)->state.timeouts.offset_us, \
+                        (data)->state.timeouts.next, \
+                        (data)->state.timeouts.first))
 
 void Curl_trc_write(struct Curl_easy *data,
                     const char *fmt, ...) CURL_PRINTF(2, 3);
+#define Curl_trc_write(data, ...) \
+  (CURL_TRC_BIND(data), Curl_trc_write(data, __VA_ARGS__))
+
 void Curl_trc_read(struct Curl_easy *data,
                    const char *fmt, ...) CURL_PRINTF(2, 3);
+#define Curl_trc_read(data, ...) \
+  (CURL_TRC_BIND(data), Curl_trc_read(data, __VA_ARGS__))
+
 void Curl_trc_dns(struct Curl_easy *data,
                   const char *fmt, ...) CURL_PRINTF(2, 3);
+#define Curl_trc_dns(data, ...) \
+  (CURL_TRC_BIND(data), Curl_trc_dns(data, __VA_ARGS__))
+
 void Curl_trc_timer(struct Curl_easy *data, int tid,
                     const char *fmt, ...) CURL_PRINTF(3, 4);
+#define Curl_trc_timer(data, tid, ...) \
+  (CURL_TRC_BIND(data), Curl_trc_timer(data, tid, __VA_ARGS__))
 
 struct curl_trc_feat {
   const char *name;
@@ -104,31 +187,43 @@ struct curl_trc_feat {
 void Curl_trc_feat_infof(struct Curl_easy *data,
                          struct curl_trc_feat *feat,
                          const char *fmt, ...) CURL_PRINTF(3, 4);
+#define Curl_trc_feat_infof(data, feat, ...) \
+  (CURL_TRC_BIND(data), Curl_trc_feat_infof(data, feat, __VA_ARGS__))
 
 #ifndef CURL_DISABLE_FTP
 extern struct curl_trc_feat Curl_trc_feat_ftp;
 void Curl_trc_ftp(struct Curl_easy *data,
                   const char *fmt, ...) CURL_PRINTF(2, 3);
+#define Curl_trc_ftp(data, ...) \
+  (CURL_TRC_BIND(data), Curl_trc_ftp(data, __VA_ARGS__))
 #endif
 #ifndef CURL_DISABLE_SMTP
 extern struct curl_trc_feat Curl_trc_feat_smtp;
 void Curl_trc_smtp(struct Curl_easy *data,
                    const char *fmt, ...) CURL_PRINTF(2, 3);
+#define Curl_trc_smtp(data, ...) \
+  (CURL_TRC_BIND(data), Curl_trc_smtp(data, __VA_ARGS__))
 #endif
 #ifdef USE_SSL
 extern struct curl_trc_feat Curl_trc_feat_ssls;
 void Curl_trc_ssls(struct Curl_easy *data,
                    const char *fmt, ...) CURL_PRINTF(2, 3);
+#define Curl_trc_ssls(data, ...) \
+  (CURL_TRC_BIND(data), Curl_trc_ssls(data, __VA_ARGS__))
 #endif
 #ifdef USE_SSH
 extern struct curl_trc_feat Curl_trc_feat_ssh;
 void Curl_trc_ssh(struct Curl_easy *data,
                   const char *fmt, ...) CURL_PRINTF(2, 3);
+#define Curl_trc_ssh(data, ...) \
+  (CURL_TRC_BIND(data), Curl_trc_ssh(data, __VA_ARGS__))
 #endif
 #if !defined(CURL_DISABLE_WEBSOCKETS) && !defined(CURL_DISABLE_HTTP)
 extern struct curl_trc_feat Curl_trc_feat_ws;
 void Curl_trc_ws(struct Curl_easy *data,
                  const char *fmt, ...) CURL_PRINTF(2, 3);
+#define Curl_trc_ws(data, ...) \
+  (CURL_TRC_BIND(data), Curl_trc_ws(data, __VA_ARGS__))
 #endif
 
 #define CURL_TRC_M_is_verbose(data) \
@@ -319,7 +414,7 @@ extern struct curl_trc_feat Curl_trc_feat_threads;
 #ifndef CURL_DISABLE_VERBOSE_STRINGS
 /* informational messages enabled */
 #define Curl_trc_is_verbose(data)                          \
-  ((data) && (data)->set.verbose &&                        \
+  ((data) && (CURL_TRC_BIND(data), (data)->set.verbose) && \
    (!(data)->state.feat ||                                 \
     ((data)->state.feat->log_level >= CURL_LOG_LVL_INFO)))
 #define Curl_trc_cf_is_verbose(cf, data)              \

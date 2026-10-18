@@ -122,10 +122,21 @@ CURLcode Curl_cookie_add(struct Curl_easy *data,
                          const char *lineptr,
                          const char *domain,
                          const char *path,
-                         const int flags) WARN_UNUSED_RESULT;
+                         const int flags,
+                         unsigned char *psetcookies) WARN_UNUSED_RESULT;
+#define Curl_cookie_add(data, ci, lineptr, domain, path, flags) \
+  Curl_cookie_add(data, ci, lineptr, domain, path, flags, \
+                  (data) ? &(data)->req.setcookies : NULL)
+
 CURLcode Curl_cookie_getlist(struct Curl_easy *data,
+                             struct CookieInfo *ci,
+                             const char *uri_path,
                              bool *okay, const char *host,
                              struct Curl_llist *list) WARN_UNUSED_RESULT;
+#define Curl_cookie_getlist(data, okay, host, list) \
+  Curl_cookie_getlist(data, (data)->cookies, (data)->state.up.path, \
+                      okay, host, list)
+
 void Curl_cookie_clearall(struct CookieInfo *ci);
 void Curl_cookie_clearsess(struct CookieInfo *ci);
 
@@ -137,13 +148,38 @@ void Curl_cookie_clearsess(struct CookieInfo *ci);
 #define Curl_cookie_cleanup(x)   Curl_nop_stmt
 #define Curl_flush_cookies(x, y) Curl_nop_stmt
 #else
-void Curl_flush_cookies(struct Curl_easy *data, bool cleanup);
+void Curl_flush_cookies(struct Curl_easy *data, bool cleanup,
+                        struct CookieInfo **pcookies,
+                        const char *cookiejar,
+                        struct CookieInfo *share_cookies);
+#define Curl_flush_cookies(data, cleanup) \
+  Curl_flush_cookies(data, cleanup, &(data)->cookies, \
+                     CURL_EASY_STR(data, STRING_COOKIEJAR), \
+                     (data)->share ? (data)->share->cookies : NULL)
+
 void Curl_cookie_cleanup(struct CookieInfo *ci);
 struct CookieInfo *Curl_cookie_init(void);
-struct curl_slist *Curl_cookie_list(struct Curl_easy *data);
+struct curl_slist *Curl_cookie_list(struct Curl_easy *data,
+                                    struct CookieInfo *cookies);
+#define Curl_cookie_list(data) \
+  Curl_cookie_list(data, (data)->cookies)
+
 CURLcode Curl_cookie_loadfiles(struct Curl_easy *data,
-                               int flags) WARN_UNUSED_RESULT;
-void Curl_cookie_run(struct Curl_easy *data);
+                               int flags,
+                               struct curl_slist *cookielist,
+                               struct CookieInfo **pcookies,
+                               unsigned char *psetcookies) WARN_UNUSED_RESULT;
+#define Curl_cookie_loadfiles(data, flags) \
+  ((data)->state.cookielist ? \
+   (((data)->state.cookie_engine = TRUE), \
+    Curl_cookie_loadfiles(data, flags, (data)->state.cookielist, \
+                          &(data)->cookies, &(data)->req.setcookies)) : \
+   CURLE_OK)
+
+void Curl_cookie_run(struct Curl_easy *data,
+                     struct CookieInfo *cookies);
+#define Curl_cookie_run(data) \
+  Curl_cookie_run(data, (data)->cookies)
 #endif
 
 #endif /* HEADER_CURL_COOKIE_H */

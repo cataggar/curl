@@ -87,7 +87,15 @@ struct pingpong {
  * socket if there is no traffic.
  */
 CURLcode Curl_pp_statemach(struct Curl_easy *data, struct pingpong *pp,
-                           bool block, bool disconnecting);
+                           bool block, bool disconnecting,
+                           struct connectdata *conn,
+                           curl_socket_t sock,
+                           timediff_t server_response_timeout);
+#define Curl_pp_statemach(data, pp, block, disconnecting) \
+  Curl_pp_statemach(data, pp, block, disconnecting, \
+                    (data)->conn, \
+                    (data)->conn->sock[FIRSTSOCKET], \
+                    (data)->set.server_response_timeout)
 
 /* initialize stuff to prepare for reading a fresh new response */
 void Curl_pp_init(struct pingpong *pp, const struct curltime *pnow);
@@ -95,7 +103,10 @@ void Curl_pp_init(struct pingpong *pp, const struct curltime *pnow);
 /* Returns time remaining in ms. 0 or negative number means the
   timeout has already triggered */
 timediff_t Curl_pp_state_timeleft_ms(struct Curl_easy *data,
-                                     struct pingpong *pp);
+                                     struct pingpong *pp,
+                                     timediff_t server_response_timeout);
+#define Curl_pp_state_timeleft_ms(data, pp) \
+  Curl_pp_state_timeleft_ms(data, pp, (data)->set.server_response_timeout)
 
 /***********************************************************************
  *
@@ -137,7 +148,12 @@ CURLcode Curl_pp_readresp(struct Curl_easy *data,
                           int8_t sockindex,
                           struct pingpong *pp,
                           int *code, /* return the server code if done */
-                          size_t *size); /* size of the response */
+                          size_t *size, /* size of the response */
+                          struct connectdata *conn,
+                          unsigned int *pheaderbytecount);
+#define Curl_pp_readresp(data, sockindex, pp, code, size) \
+  Curl_pp_readresp(data, sockindex, pp, code, size, \
+                   (data)->conn, &(data)->req.headerbytecount)
 
 bool Curl_pp_needs_flush(struct Curl_easy *data,
                          struct pingpong *pp);
@@ -150,7 +166,10 @@ CURLcode Curl_pp_disconnect(struct pingpong *pp);
 
 CURLcode Curl_pp_pollset(struct Curl_easy *data,
                          struct pingpong *pp,
-                         struct easy_pollset *ps);
+                         struct easy_pollset *ps,
+                         curl_socket_t sock);
+#define Curl_pp_pollset(data, pp, ps) \
+  Curl_pp_pollset(data, pp, ps, (data)->conn->sock[FIRSTSOCKET])
 
 /***********************************************************************
  *
