@@ -34,6 +34,7 @@ pub const sasl_rtsp_ftplist = @import("sasl_rtsp_ftplist.zig");
 pub const proxies_encoding = @import("proxies_encoding.zig");
 pub const cf_connect_happy = @import("cf_connect_happy.zig");
 pub const tftp_socks_telnet = @import("tftp_socks_telnet.zig");
+pub const optional_backends = @import("optional_backends.zig");
 
 // C executables (such as src/tool_main.c) provide their own C main().
 pub extern fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int;
@@ -74,6 +75,7 @@ comptime {
     _ = proxies_encoding;
     _ = cf_connect_happy;
     _ = tftp_socks_telnet;
+    _ = optional_backends;
 }
 
 test {

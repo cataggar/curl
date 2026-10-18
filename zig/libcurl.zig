@@ -22,9 +22,7 @@ pub const c_sources = [_][]const u8{
     "lib/http.c",
     "lib/http2.c",
     "lib/imap.c",
-    "lib/ldap.c",
     "lib/multi.c",
-    "lib/openldap.c",
     "lib/pop3.c",
     "lib/sendf.c",
     "lib/setopt.c",
@@ -36,24 +34,10 @@ pub const c_sources = [_][]const u8{
     "lib/vdns/doh.c",
     "lib/vdns/hostip.c",
     // LIB_VTLS_CFILES
-    "lib/vtls/gtls.c",
     "lib/vtls/mbedtls.c",
     "lib/vtls/openssl.c",
-    "lib/vtls/rustls.c",
     "lib/vtls/schannel.c",
     "lib/vtls/vtls.c",
-    "lib/vtls/wolfssl.c",
-    // LIB_VQUIC_CFILES
-    "lib/vquic/cf-ngtcp2.c",
-    "lib/vquic/cf-ngtcp2-cmn.c",
-    "lib/vquic/cf-ngtcp2-proxy.c",
-    "lib/vquic/cf-quiche.c",
-    "lib/vquic/vquic.c",
-    "lib/vquic/vquic-tls.c",
-    // LIB_VSSH_CFILES
-    "lib/vssh/libssh.c",
-    "lib/vssh/libssh2.c",
-    "lib/vssh/vssh.c",
 };
 
 pub fn createConfigHeader(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Step.ConfigHeader {
