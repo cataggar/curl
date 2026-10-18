@@ -108,7 +108,6 @@ pub const c_sources = [_][]const u8{
     "lib/thrdqueue.c",
     "lib/transfer.c",
     "lib/url.c",
-    "lib/urlapi.c",
     "lib/version.c",
     "lib/ws.c",
     // LIB_VAUTH_CFILES
