@@ -1811,4 +1811,46 @@ struct Curl_ssl_session *Curl_ssl_get_cf_session(struct Curl_easy *data,
   return NULL;
 }
 
+#else /* !USE_SSL */
+
+#undef Curl_ssl_supports
+bool Curl_ssl_supports(struct Curl_easy *data, unsigned int ssl_option);
+bool Curl_ssl_supports(struct Curl_easy *data, unsigned int ssl_option)
+{
+  (void)data;
+  (void)ssl_option;
+  return FALSE;
+}
+
+CURLcode Curl_cf_ssl_insert_after(struct Curl_cfilter *cf_at,
+                                  struct Curl_easy *data,
+                                  struct Curl_peer *origin,
+                                  struct Curl_peer *peer);
+CURLcode Curl_cf_ssl_insert_after(struct Curl_cfilter *cf_at,
+                                  struct Curl_easy *data,
+                                  struct Curl_peer *origin,
+                                  struct Curl_peer *peer)
+{
+  (void)cf_at;
+  (void)data;
+  (void)origin;
+  (void)peer;
+  return CURLE_NOT_BUILT_IN;
+}
+
+#ifndef CURL_DISABLE_PROXY
+CURLcode Curl_cf_ssl_proxy_insert_after(struct Curl_cfilter *cf_at,
+                                        struct Curl_easy *data,
+                                        struct Curl_peer *peer);
+CURLcode Curl_cf_ssl_proxy_insert_after(struct Curl_cfilter *cf_at,
+                                        struct Curl_easy *data,
+                                        struct Curl_peer *peer)
+{
+  (void)cf_at;
+  (void)data;
+  (void)peer;
+  return CURLE_NOT_BUILT_IN;
+}
+#endif
+
 #endif /* USE_SSL */

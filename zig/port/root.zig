@@ -21,6 +21,7 @@ pub const vdns_cfilters = @import("vdns_cfilters.zig");
 pub const vauth_sspi = @import("vauth_sspi.zig");
 pub const vauth_digest_gssapi = @import("vauth_digest_gssapi.zig");
 pub const protocol_version_mime = @import("protocol_version_mime.zig");
+pub const altsvc_hsts_peer = @import("altsvc_hsts_peer.zig");
 
 // C executables (such as src/tool_main.c) provide their own C main().
 pub extern fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int;
@@ -48,6 +49,7 @@ comptime {
     _ = vauth_sspi;
     _ = vauth_digest_gssapi;
     _ = protocol_version_mime;
+    _ = altsvc_hsts_peer;
 }
 
 test {

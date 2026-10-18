@@ -83,7 +83,11 @@ bool Curl_peer_same_destination(struct Curl_peer *p1, struct Curl_peer *p2);
 CURLcode Curl_peer_from_url(CURLU *uh, struct Curl_easy *data,
                             uint16_t port_override,
                             uint32_t scopeid_override,
+                            bool is_a_follow,
                             struct Curl_peer **ppeer);
+#define Curl_peer_from_url(uh, data, port, scope, ppeer) \
+  Curl_peer_from_url((uh), (data), (port), (scope), \
+                     (bool)(data)->state.this_is_a_follow, (ppeer))
 
 CURLcode Curl_peer_from_connect_to(struct Curl_easy *data,
                                    const struct Curl_peer *dest,
@@ -101,8 +105,12 @@ CURLcode Curl_peer_from_proxy_url(CURLU *uh,
                                   struct Curl_easy *data,
                                   const char *url,
                                   uint8_t proxytype,
+                                  uint16_t default_proxyport,
                                   struct Curl_peer **ppeer,
                                   uint8_t *pproxytype);
+#define Curl_peer_from_proxy_url(uh, data, url, type, ppeer, ptype) \
+  Curl_peer_from_proxy_url((uh), (data), (url), (type), \
+                           (uint16_t)(data)->set.proxyport, (ppeer), (ptype))
 #endif /* !CURL_DISABLE_PROXY */
 
 #endif /* HEADER_CURL_PEER_H */

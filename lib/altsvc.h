@@ -58,7 +58,8 @@ struct altsvcinfo *Curl_altsvc_init(void);
 CURLcode Curl_altsvc_load(struct altsvcinfo *asi, const char *file);
 CURLcode Curl_altsvc_save(struct Curl_easy *data,
                           struct altsvcinfo *asi, const char *file);
-CURLcode Curl_altsvc_ctrl(struct Curl_easy *data, const long ctrl);
+CURLcode Curl_altsvc_ctrl(struct altsvcinfo **asip, const long ctrl);
+#define Curl_altsvc_ctrl(data, ctrl) Curl_altsvc_ctrl(&(data)->asi, (ctrl))
 void Curl_altsvc_cleanup(struct altsvcinfo **asi);
 CURLcode Curl_altsvc_parse(struct Curl_easy *data,
                            struct altsvcinfo *asi, const char *value,
