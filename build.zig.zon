@@ -1,0 +1,16 @@
+.{
+    .name = .curl,
+    .version = "8.23.1-dev",
+    .fingerprint = 0x3e01b4dd89fe94a,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "zig",
+        "include",
+        "lib",
+        "src",
+        "COPYING",
+    },
+}
