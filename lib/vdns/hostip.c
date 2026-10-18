@@ -44,7 +44,9 @@
 #include <signal.h>
 
 #include "urldata.h"
+#include "cfilters.h"
 #include "curl_addrinfo.h"
+#include "curl_share.h"
 #include "curl_trc.h"
 #include "url.h"
 #include "multiif.h"
@@ -1181,3 +1183,139 @@ void Curl_resolv_destroy_all(struct Curl_easy *data)
 }
 
 #endif /* USE_CURL_ASYNC */
+
+/* Thin accessors for zig/port/vdns_core.zig */
+struct Curl_peer *Curl_vdns_data_conn_origin(const struct Curl_easy *data);
+bool Curl_vdns_trc_is_verbose(const struct Curl_easy *data);
+bool Curl_vdns_trc_dns_is_verbose(const struct Curl_easy *data);
+struct connectdata *Curl_vdns_data_conn(const struct Curl_easy *data);
+struct Curl_cfilter *Curl_vdns_conn_cfilter(const struct connectdata *conn,
+                                            int8_t sockindex);
+uint8_t Curl_vdns_conn_transport_wanted(const struct connectdata *conn);
+void Curl_vdns_conn_set_dns_resolved(struct connectdata *conn);
+bool Curl_vdns_conn_is_proxy_peer(const struct connectdata *conn,
+                                  const struct Curl_peer *peer);
+struct Curl_dnscache *Curl_vdns_dnscache_get(const struct Curl_easy *data);
+void Curl_vdns_dnscache_lock(struct Curl_easy *data,
+                             struct Curl_dnscache *dnscache);
+void Curl_vdns_dnscache_unlock(struct Curl_easy *data,
+                               struct Curl_dnscache *dnscache);
+timediff_t Curl_vdns_data_dns_cache_timeout_ms(const struct Curl_easy *data);
+bool Curl_vdns_data_get_wildcard_resolve(const struct Curl_easy *data);
+void Curl_vdns_data_set_wildcard_resolve(struct Curl_easy *data, bool val);
+bool Curl_vdns_data_dns_shuffle_addresses(const struct Curl_easy *data);
+struct curl_slist *Curl_vdns_data_get_resolve(const struct Curl_easy *data);
+void Curl_vdns_data_clear_resolve(struct Curl_easy *data);
+
+struct Curl_peer *Curl_vdns_data_conn_origin(const struct Curl_easy *data)
+{
+  return (data && data->conn) ? data->conn->origin : NULL;
+}
+
+bool Curl_vdns_trc_is_verbose(const struct Curl_easy *data)
+{
+  return Curl_trc_is_verbose(data);
+}
+
+bool Curl_vdns_trc_dns_is_verbose(const struct Curl_easy *data)
+{
+  return CURL_TRC_DNS_is_verbose(data);
+}
+
+struct connectdata *Curl_vdns_data_conn(const struct Curl_easy *data)
+{
+  return data ? data->conn : NULL;
+}
+
+struct Curl_cfilter *Curl_vdns_conn_cfilter(const struct connectdata *conn,
+                                            int8_t sockindex)
+{
+  return conn ? conn->cfilter[sockindex] : NULL;
+}
+
+uint8_t Curl_vdns_conn_transport_wanted(const struct connectdata *conn)
+{
+  return conn ? conn->transport_wanted : 0;
+}
+
+void Curl_vdns_conn_set_dns_resolved(struct connectdata *conn)
+{
+  if(conn)
+    conn->bits.dns_resolved = TRUE;
+}
+
+bool Curl_vdns_conn_is_proxy_peer(const struct connectdata *conn,
+                                  const struct Curl_peer *peer)
+{
+#ifndef CURL_DISABLE_PROXY
+  return conn &&
+    ((peer == conn->socks_proxy.peer) || (peer == conn->http_proxy.peer));
+#else
+  (void)conn;
+  (void)peer;
+  return FALSE;
+#endif
+}
+
+struct Curl_dnscache *Curl_vdns_dnscache_get(const struct Curl_easy *data)
+{
+  if(!data)
+    return NULL;
+  if(data->share && (data->share->specifier & (1 << CURL_LOCK_DATA_DNS)))
+    return &data->share->dnscache;
+  if(data->multi)
+    return &data->multi->dnscache;
+  return NULL;
+}
+
+void Curl_vdns_dnscache_lock(struct Curl_easy *data,
+                             struct Curl_dnscache *dnscache)
+{
+  if(data && data->share && (dnscache == &data->share->dnscache))
+    Curl_share_lock(data, CURL_LOCK_DATA_DNS, CURL_LOCK_ACCESS_SINGLE);
+}
+
+void Curl_vdns_dnscache_unlock(struct Curl_easy *data,
+                               struct Curl_dnscache *dnscache)
+{
+  if(data && data->share && (dnscache == &data->share->dnscache))
+    Curl_share_unlock(data, CURL_LOCK_DATA_DNS);
+}
+
+timediff_t Curl_vdns_data_dns_cache_timeout_ms(const struct Curl_easy *data)
+{
+  return data ? data->set.dns_cache_timeout_ms : 0;
+}
+
+bool Curl_vdns_data_get_wildcard_resolve(const struct Curl_easy *data)
+{
+  return data ? data->state.wildcard_resolve : FALSE;
+}
+
+void Curl_vdns_data_set_wildcard_resolve(struct Curl_easy *data, bool val)
+{
+  if(data)
+    data->state.wildcard_resolve = val;
+}
+
+bool Curl_vdns_data_dns_shuffle_addresses(const struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_SHUFFLE_DNS
+  return data ? data->set.dns_shuffle_addresses : FALSE;
+#else
+  (void)data;
+  return FALSE;
+#endif
+}
+
+struct curl_slist *Curl_vdns_data_get_resolve(const struct Curl_easy *data)
+{
+  return data ? data->state.resolve : NULL;
+}
+
+void Curl_vdns_data_clear_resolve(struct Curl_easy *data)
+{
+  if(data)
+    data->state.resolve = NULL;
+}
+

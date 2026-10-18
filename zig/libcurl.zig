@@ -58,13 +58,9 @@ pub const c_sources = [_][]const u8{
     "lib/url.c",
     "lib/ws.c",
     // LIB_VDNS_CFILES
-    "lib/vdns/asyn-ares.c",
     "lib/vdns/asyn-thrdd.c",
-    "lib/vdns/cf-dns.c",
-    "lib/vdns/dnscache.c",
     "lib/vdns/doh.c",
     "lib/vdns/hostip.c",
-    "lib/vdns/httpsrr.c",
     // LIB_VTLS_CFILES
     "lib/vtls/gtls.c",
     "lib/vtls/mbedtls.c",
