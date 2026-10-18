@@ -16,6 +16,7 @@ pub const threads_psl = @import("threads_psl.zig");
 pub const http1_options = @import("http1_options.zig");
 pub const vauth_core = @import("vauth_core.zig");
 pub const mprintf_formdata = @import("mprintf_formdata.zig");
+pub const vtls_core = @import("vtls_core.zig");
 
 // C executables (such as src/tool_main.c) provide their own C main().
 pub extern fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int;
@@ -38,6 +39,7 @@ comptime {
     _ = http1_options;
     _ = vauth_core;
     _ = mprintf_formdata;
+    _ = vtls_core;
 }
 
 test {
