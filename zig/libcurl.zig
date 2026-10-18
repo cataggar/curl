@@ -15,21 +15,17 @@ pub const c_flags = [_][]const u8{
 
 pub const c_sources = [_][]const u8{
     // LIB_CFILES
-    "lib/api.c",
     "lib/cf-h2-proxy.c",
     "lib/cf-socket.c",
     "lib/easy.c",
     "lib/ftp.c",
-    "lib/getinfo.c",
     "lib/http.c",
     "lib/http2.c",
     "lib/imap.c",
     "lib/ldap.c",
     "lib/multi.c",
-    "lib/multi_ev.c",
     "lib/openldap.c",
     "lib/pop3.c",
-    "lib/request.c",
     "lib/sendf.c",
     "lib/setopt.c",
     "lib/smtp.c",

@@ -4272,3 +4272,373 @@ static void multi_xfer_tbl_dump(struct Curl_multi *multi)
   fflush(stderr);
 }
 #endif /* DEBUGBUILD */
+
+/* C ABI forwarders to Zig-ported Session 30 functions (api, getinfo,
+ * request, multi_ev) that unpack struct Curl_easy / struct Curl_multi
+ * fields while preserving original C symbol signatures across modules. */
+#include "getinfo.h"
+#include "request.h"
+
+bool Curl_eapi_enter_zig(struct Curl_eapi_guard *guard, CURL *curl,
+                         bool is_internal, unsigned int fn,
+                         CURLcode *presult);
+
+bool Curl_eapi_enter(struct Curl_eapi_guard *guard,
+                     CURL *curl,
+                     Curl_eapi_fn fn,
+                     CURLcode *presult)
+{
+  return Curl_eapi_enter_zig(guard, curl,
+                             curl &&
+                             ((struct Curl_easy *)curl)->state.internal,
+                             (unsigned int)fn, presult);
+}
+
+struct Curl_getinfo_ctx {
+  struct PureInfo *info;
+  struct curl_tlssessioninfo *tsi;
+  const char *url;
+  const char *customrequest;
+  const char *referer;
+  const char *ftp_entrypath;
+  const char *most_recent_ftp_entrypath;
+  int64_t spent_us;
+  int64_t ns_us;
+  int64_t connect_us;
+  int64_t appconnect_us;
+  int64_t pretransfer_us;
+  int64_t posttransfer_us;
+  int64_t starttransfer_us;
+  int64_t redirect_us;
+  int64_t queue_us;
+  int64_t earlydata_sent;
+  int64_t ul_cur_size;
+  int64_t dl_cur_size;
+  int64_t dl_speed;
+  int64_t ul_speed;
+  int64_t dl_total_size;
+  int64_t ul_total_size;
+  long rtsp_client_cseq;
+  long rtsp_server_cseq;
+  long rtsp_cseq_recv;
+  uint32_t redirects;
+  unsigned char httpreq;
+  unsigned char path_as_is;
+  unsigned char prefer_ascii;
+  unsigned char timecond;
+  unsigned char used_proxy;
+  unsigned char dl_size_known;
+  unsigned char ul_size_known;
+  unsigned char _pad;
+};
+
+void Curl_initinfo_zig(struct Curl_easy *data,
+                       void *pro_delta,
+                       void *pro_total,
+                       struct PureInfo *info);
+CURLcode Curl_getinfo_zig(struct Curl_easy *data,
+                          const struct Curl_getinfo_ctx *ctx,
+                          CURLINFO info,
+                          void *param);
+
+void Curl_initinfo(struct Curl_easy *data)
+{
+  if(data) {
+    Curl_initinfo_zig(data, &data->progress.delta,
+                      &data->progress.total, &data->info);
+    data->progress.startransfer_added = FALSE;
+    data->info.timecond = FALSE;
+    data->info.used_proxy = 0;
+  }
+}
+
+CURLcode Curl_getinfo(struct Curl_easy *data, CURLINFO info, ...)
+{
+  va_list arg;
+  void *paramp;
+  struct Curl_getinfo_ctx ctx;
+  if(!data)
+    return CURLE_BAD_FUNCTION_ARGUMENT;
+  va_start(arg, info);
+  paramp = va_arg(arg, void *);
+  va_end(arg);
+  ctx.info = &data->info;
+  ctx.tsi = &data->tsi;
+  ctx.url = Curl_bufref_ptr(&data->state.url);
+  ctx.customrequest = CURL_EASY_STR(data, STRING_CUSTOMREQUEST);
+  ctx.referer = Curl_bufref_ptr(&data->state.referer);
+  ctx.ftp_entrypath = NULL;
+  ctx.most_recent_ftp_entrypath = data->state.most_recent_ftp_entrypath;
+  ctx.spent_us = data->progress.total.spent_us;
+  ctx.ns_us = data->progress.total.nslookup_us;
+  ctx.connect_us = data->progress.total.connect_us;
+  ctx.appconnect_us = data->progress.total.appconnect_us;
+  ctx.pretransfer_us = data->progress.total.pretransfer_us;
+  ctx.posttransfer_us = data->progress.total.posttransfer_us;
+  ctx.starttransfer_us = data->progress.total.starttransfer_us;
+  ctx.redirect_us = data->progress.delta.startredirect_us;
+  ctx.queue_us = data->progress.total.queued_us;
+  ctx.earlydata_sent = data->progress.earlydata_sent;
+  ctx.ul_cur_size = data->progress.ul.cur_size;
+  ctx.dl_cur_size = data->progress.dl.cur_size;
+  ctx.dl_speed = data->progress.dl.speed;
+  ctx.ul_speed = data->progress.ul.speed;
+  ctx.dl_total_size = data->progress.dl.total_size;
+  ctx.ul_total_size = data->progress.ul.total_size;
+#ifndef CURL_DISABLE_RTSP
+  ctx.rtsp_client_cseq = data->state.rtsp_next_client_CSeq;
+  ctx.rtsp_server_cseq = data->state.rtsp_next_server_CSeq;
+  ctx.rtsp_cseq_recv = data->state.rtsp_CSeq_recv;
+#else
+  ctx.rtsp_client_cseq = 0;
+  ctx.rtsp_server_cseq = 0;
+  ctx.rtsp_cseq_recv = 0;
+#endif
+  ctx.redirects = data->state.followlocation;
+  ctx.httpreq = data->state.httpreq;
+  ctx.path_as_is = data->set.path_as_is ? 1 : 0;
+  ctx.prefer_ascii = data->state.prefer_ascii ? 1 : 0;
+  ctx.timecond = data->info.timecond ? 1 : 0;
+  ctx.used_proxy = data->info.used_proxy ? 1 : 0;
+  ctx.dl_size_known = data->progress.dl_size_known ? 1 : 0;
+  ctx.ul_size_known = data->progress.ul_size_known ? 1 : 0;
+  ctx._pad = 0;
+  return Curl_getinfo_zig(data, &ctx, info, paramp);
+}
+
+CURLcode Curl_req_soft_reset_zig(struct SingleRequest *req,
+                                 struct Curl_easy *data,
+                                 uint32_t upload_buffer_size);
+CURLcode Curl_req_start_zig(struct SingleRequest *req,
+                            struct Curl_easy *data,
+                            uint32_t upload_buffer_size);
+CURLcode Curl_req_done_zig(struct SingleRequest *req,
+                           struct Curl_easy *data, bool aborted,
+                           curl_off_t max_send_speed);
+void Curl_req_hard_reset_zig(struct SingleRequest *req,
+                             struct Curl_easy *data,
+                             bool opt_no_body,
+                             void *dl_rlimit,
+                             void *ul_rlimit);
+CURLcode Curl_req_send_zig(struct Curl_easy *data,
+                           struct SingleRequest *sreq,
+                           struct dynbuf *req,
+                           unsigned char httpversion,
+                           curl_off_t max_send_speed);
+bool Curl_req_sendbuf_empty_zig(struct SingleRequest *sreq);
+bool Curl_req_want_send_zig(struct Curl_easy *data,
+                            struct SingleRequest *sreq,
+                            const void *ul_rlimit);
+bool Curl_req_want_recv_zig(struct SingleRequest *sreq,
+                            const void *dl_rlimit);
+bool Curl_req_done_sending_zig(struct Curl_easy *data,
+                               struct SingleRequest *sreq,
+                               const void *ul_rlimit);
+CURLcode Curl_req_send_more_zig(struct Curl_easy *data,
+                                struct SingleRequest *sreq,
+                                curl_off_t max_send_speed);
+CURLcode Curl_req_abort_sending_zig(struct Curl_easy *data,
+                                    struct SingleRequest *sreq);
+CURLcode Curl_req_stop_send_recv_zig(struct Curl_easy *data,
+                                     struct SingleRequest *sreq);
+
+CURLcode Curl_req_soft_reset(struct SingleRequest *req,
+                             struct Curl_easy *data)
+{
+  return Curl_req_soft_reset_zig(req, data, data->set.upload_buffer_size);
+}
+
+CURLcode Curl_req_start(struct SingleRequest *req,
+                        struct Curl_easy *data)
+{
+  return Curl_req_start_zig(req, data, data->set.upload_buffer_size);
+}
+
+CURLcode Curl_req_done(struct SingleRequest *req,
+                       struct Curl_easy *data, bool aborted)
+{
+  return Curl_req_done_zig(req, data, aborted, data->set.max_send_speed);
+}
+
+void Curl_req_hard_reset(struct SingleRequest *req,
+                         struct Curl_easy *data)
+{
+  Curl_req_hard_reset_zig(req, data, (bool)data->set.opt_no_body,
+                          &data->progress.dl.rlimit,
+                          &data->progress.ul.rlimit);
+}
+
+CURLcode Curl_req_send(struct Curl_easy *data, struct dynbuf *req,
+                       unsigned char httpversion)
+{
+  return Curl_req_send_zig(data, &data->req, req, httpversion,
+                           data->set.max_send_speed);
+}
+
+bool Curl_req_sendbuf_empty(struct Curl_easy *data)
+{
+  return Curl_req_sendbuf_empty_zig(&data->req);
+}
+
+bool Curl_req_want_send(struct Curl_easy *data)
+{
+  return Curl_req_want_send_zig(data, &data->req, &data->progress.ul.rlimit);
+}
+
+bool Curl_req_want_recv(struct Curl_easy *data)
+{
+  return Curl_req_want_recv_zig(&data->req, &data->progress.dl.rlimit);
+}
+
+bool Curl_req_done_sending(struct Curl_easy *data)
+{
+  return Curl_req_done_sending_zig(data, &data->req,
+                                   &data->progress.ul.rlimit);
+}
+
+CURLcode Curl_req_send_more(struct Curl_easy *data)
+{
+  return Curl_req_send_more_zig(data, &data->req, data->set.max_send_speed);
+}
+
+CURLcode Curl_req_abort_sending(struct Curl_easy *data)
+{
+  return Curl_req_abort_sending_zig(data, &data->req);
+}
+
+CURLcode Curl_req_stop_send_recv(struct Curl_easy *data)
+{
+  return Curl_req_stop_send_recv_zig(data, &data->req);
+}
+
+void Curl_multi_ev_init_zig(struct Curl_multi *multi,
+                            struct curl_multi_ev *ev,
+                            size_t hashsize);
+void Curl_multi_ev_cleanup_zig(struct Curl_multi *multi,
+                               struct curl_multi_ev *ev);
+CURLMcode Curl_multi_ev_assign_zig(struct Curl_multi *multi,
+                                   struct curl_multi_ev *ev,
+                                   curl_socket_t s,
+                                   void *user_data);
+CURLMcode Curl_multi_ev_assess_xfer_zig(struct Curl_multi *multi,
+                                        struct curl_multi_ev *ev,
+                                        struct Curl_easy *data);
+CURLMcode Curl_multi_ev_assess_conn_zig(struct Curl_multi *multi,
+                                        struct curl_multi_ev *ev,
+                                        struct Curl_easy *data,
+                                        struct connectdata *conn);
+CURLMcode Curl_multi_ev_assess_xfer_bset_zig(struct Curl_multi *multi,
+                                             struct curl_multi_ev *ev,
+                                             struct uint32_bset *set);
+void Curl_multi_ev_dirty_xfers_zig(struct Curl_multi *multi,
+                                   struct curl_multi_ev *ev,
+                                   curl_socket_t s);
+CURLMcode Curl_multi_ev_socket_done_zig(struct Curl_multi *multi,
+                                        struct curl_multi_ev *ev,
+                                        struct Curl_easy *data,
+                                        curl_socket_t s);
+CURLMcode Curl_multi_ev_xfer_done_zig(struct Curl_multi *multi,
+                                      struct curl_multi_ev *ev,
+                                      struct Curl_easy *data);
+CURLMcode Curl_multi_ev_conn_done_zig(struct Curl_multi *multi,
+                                      struct curl_multi_ev *ev,
+                                      struct Curl_easy *data,
+                                      struct connectdata *conn);
+
+void Curl_multi_ev_init(struct Curl_multi *multi, size_t hashsize)
+{
+  Curl_multi_ev_init_zig(multi, &multi->ev, hashsize);
+}
+
+void Curl_multi_ev_cleanup(struct Curl_multi *multi)
+{
+  Curl_multi_ev_cleanup_zig(multi, &multi->ev);
+}
+
+CURLMcode Curl_multi_ev_assign(struct Curl_multi *multi,
+                               curl_socket_t s,
+                               void *user_data)
+{
+  return Curl_multi_ev_assign_zig(multi, &multi->ev, s, user_data);
+}
+
+CURLMcode Curl_multi_ev_assess_xfer(struct Curl_multi *multi,
+                                    struct Curl_easy *data)
+{
+  CURLMcode r = Curl_multi_ev_assess_xfer_zig(multi, &multi->ev, data);
+  if(r == CURLM_ABORTED_BY_CALLBACK)
+    multi->dead = TRUE;
+  return r;
+}
+
+CURLMcode Curl_multi_ev_assess_conn(struct Curl_multi *multi,
+                                    struct Curl_easy *data,
+                                    struct connectdata *conn)
+{
+  CURLMcode r = Curl_multi_ev_assess_conn_zig(multi, &multi->ev, data, conn);
+  if(r == CURLM_ABORTED_BY_CALLBACK)
+    multi->dead = TRUE;
+  return r;
+}
+
+CURLMcode Curl_multi_ev_assess_xfer_bset(struct Curl_multi *multi,
+                                         struct uint32_bset *set)
+{
+  CURLMcode r = Curl_multi_ev_assess_xfer_bset_zig(multi, &multi->ev, set);
+  if(r == CURLM_ABORTED_BY_CALLBACK)
+    multi->dead = TRUE;
+  return r;
+}
+
+void Curl_multi_ev_dirty_xfers(struct Curl_multi *multi, curl_socket_t s)
+{
+  Curl_multi_ev_dirty_xfers_zig(multi, &multi->ev, s);
+}
+
+void Curl_multi_ev_socket_done(struct Curl_multi *multi,
+                               struct Curl_easy *data, curl_socket_t s)
+{
+  if(Curl_multi_ev_socket_done_zig(multi, &multi->ev, data, s) ==
+     CURLM_ABORTED_BY_CALLBACK)
+    multi->dead = TRUE;
+}
+
+void Curl_multi_ev_xfer_done(struct Curl_multi *multi,
+                             struct Curl_easy *data)
+{
+  if(Curl_multi_ev_xfer_done_zig(multi, &multi->ev, data) ==
+     CURLM_ABORTED_BY_CALLBACK)
+    multi->dead = TRUE;
+}
+
+void Curl_multi_ev_conn_done(struct Curl_multi *multi,
+                             struct Curl_easy *data,
+                             struct connectdata *conn)
+{
+  if(Curl_multi_ev_conn_done_zig(multi, &multi->ev, data, conn) ==
+     CURLM_ABORTED_BY_CALLBACK)
+    multi->dead = TRUE;
+}
+
+#include "vtls/vtls_scache.h"
+#include "cookie.h"
+
+bool Curl_api_scache_is_locked(struct Curl_easy *data)
+{
+#ifdef USE_SSL
+  return Curl_ssl_scache_is_locked_by_current_thread(data);
+#else
+  (void)data;
+  return FALSE;
+#endif
+}
+
+struct curl_slist *Curl_getinfo_cookie_list(struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_COOKIES
+  return Curl_cookie_list(data);
+#else
+  (void)data;
+  return NULL;
+#endif
+}
