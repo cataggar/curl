@@ -59,9 +59,14 @@ struct gsasldata;
  * Curl_auth_allowed_to_host() tells if authentication, cookies or other
  * "sensitive data" can (still) be sent to this host.
  */
-bool Curl_auth_allowed_to_host(struct Curl_easy *data);
-bool Curl_auth_allowed_to_origin(struct Curl_easy *data,
-                                 struct Curl_peer *origin);
+bool Curl_auth_allowed_to_origin_ex(bool allow_auth_to_other_hosts,
+                                    struct Curl_peer *initial_origin,
+                                    struct Curl_peer *origin);
+#define Curl_auth_allowed_to_origin(data, origin) \
+  Curl_auth_allowed_to_origin_ex((data)->set.allow_auth_to_other_hosts != 0, \
+                                 (data)->state.initial_origin, (origin))
+#define Curl_auth_allowed_to_host(data) \
+  Curl_auth_allowed_to_origin((data), (data)->state.origin)
 
 /* This is used to build an SPN string */
 #ifndef USE_WINDOWS_SSPI
@@ -318,12 +323,18 @@ struct negotiatedata *Curl_auth_nego_get(struct connectdata *conn, bool proxy);
 
 /* This is used to decode a base64 encoded SPNEGO (Negotiate) challenge
    message */
-CURLcode Curl_auth_decode_spnego_message(struct Curl_easy *data,
-                                         struct Curl_creds *creds,
-                                         const char *default_service,
-                                         const char *host,
-                                         const char *chlg64,
-                                         struct negotiatedata *nego);
+CURLcode Curl_auth_decode_spnego_message_ex(struct Curl_easy *data,
+                                            unsigned char gssapi_delegation,
+                                            struct Curl_creds *creds,
+                                            const char *default_service,
+                                            const char *host,
+                                            const char *chlg64,
+                                            struct negotiatedata *nego);
+#define Curl_auth_decode_spnego_message(data, creds, default_service, host, \
+                                        chlg64, nego)                       \
+  Curl_auth_decode_spnego_message_ex((data), (data)->set.gssapi_delegation, \
+                                     (creds), (default_service), (host),    \
+                                     (chlg64), (nego))
 
 /* This is used to generate a base64 encoded SPNEGO (Negotiate) response
    message */

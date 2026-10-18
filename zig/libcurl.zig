@@ -33,7 +33,6 @@ pub const c_sources = [_][]const u8{
     "lib/curl_range.c",
     "lib/curl_sasl.c",
     "lib/curl_share.c",
-    "lib/curl_sspi.c",
     "lib/curl_trc.c",
     "lib/cw-out.c",
     "lib/dict.c",
@@ -85,12 +84,6 @@ pub const c_sources = [_][]const u8{
     // LIB_VAUTH_CFILES
     "lib/vauth/digest.c",
     "lib/vauth/digest_sspi.c",
-    "lib/vauth/krb5_gssapi.c",
-    "lib/vauth/krb5_sspi.c",
-    "lib/vauth/ntlm_sspi.c",
-    "lib/vauth/spnego_gssapi.c",
-    "lib/vauth/spnego_sspi.c",
-    "lib/vauth/vauth.c",
     // LIB_VDNS_CFILES
     "lib/vdns/asyn-ares.c",
     "lib/vdns/asyn-thrdd.c",
@@ -388,6 +381,7 @@ pub fn addLibcurl(b: *std.Build, options: Options) *std.Build.Step.Compile {
             mod.linkSystemLibrary("bcrypt", .{});
             mod.linkSystemLibrary("advapi32", .{});
             mod.linkSystemLibrary("crypt32", .{});
+            mod.linkSystemLibrary("secur32", .{});
         },
         else => {
             mod.linkSystemLibrary("pthread", .{});
