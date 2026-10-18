@@ -45,14 +45,14 @@ const test_libc = struct {
     extern "c" fn vsnprintf(buf: [*]u8, size: usize, format: [*:0]const u8, ap: CVaListParam) c_int;
 };
 
-export fn curlx_dyn_init(s: *dynbuf, toobig: usize) callconv(.c) void {
+pub export fn curlx_dyn_init(s: *dynbuf, toobig: usize) callconv(.c) void {
     s.bufr = null;
     s.leng = 0;
     s.allc = 0;
     s.toobig = toobig;
 }
 
-export fn curlx_dyn_free(s: *dynbuf) callconv(.c) void {
+pub export fn curlx_dyn_free(s: *dynbuf) callconv(.c) void {
     if (s.bufr) |b| {
         mem.free(b);
     }
@@ -113,7 +113,7 @@ fn dynNappend(s: *dynbuf, mem_ptr: ?[*]const u8, len: usize) CURLcode {
     return CURLE_OK;
 }
 
-export fn curlx_dyn_reset(s: *dynbuf) callconv(.c) void {
+pub export fn curlx_dyn_reset(s: *dynbuf) callconv(.c) void {
     if (s.leng > 0) {
         if (s.bufr) |b| {
             b[0] = 0;
@@ -122,7 +122,7 @@ export fn curlx_dyn_reset(s: *dynbuf) callconv(.c) void {
     s.leng = 0;
 }
 
-export fn curlx_dyn_tail(s: *dynbuf, trail: usize) callconv(.c) CURLcode {
+pub export fn curlx_dyn_tail(s: *dynbuf, trail: usize) callconv(.c) CURLcode {
     if (trail > s.leng) {
         return CURLE_BAD_FUNCTION_ARGUMENT;
     } else if (trail == s.leng) {
@@ -138,12 +138,12 @@ export fn curlx_dyn_tail(s: *dynbuf, trail: usize) callconv(.c) CURLcode {
     return CURLE_OK;
 }
 
-export fn curlx_dyn_addn(s: *dynbuf, mem_ptr: ?*const anyopaque, len: usize) callconv(.c) CURLcode {
+pub export fn curlx_dyn_addn(s: *dynbuf, mem_ptr: ?*const anyopaque, len: usize) callconv(.c) CURLcode {
     const p: ?[*]const u8 = if (mem_ptr) |m| @ptrCast(m) else null;
     return dynNappend(s, p, len);
 }
 
-export fn curlx_dyn_add(s: *dynbuf, str: [*:0]const u8) callconv(.c) CURLcode {
+pub export fn curlx_dyn_add(s: *dynbuf, str: [*:0]const u8) callconv(.c) CURLcode {
     const n = std.mem.len(str);
     return dynNappend(s, str, n);
 }
@@ -239,11 +239,11 @@ comptime {
 
 extern fn curlx_dyn_addf(s: *dynbuf, fmt: [*:0]const u8, ...) callconv(.c) CURLcode;
 
-export fn curlx_dyn_ptr(s: *const dynbuf) callconv(.c) ?[*:0]u8 {
+pub export fn curlx_dyn_ptr(s: *const dynbuf) callconv(.c) ?[*:0]u8 {
     return if (s.bufr) |b| @ptrCast(b) else null;
 }
 
-export fn curlx_dyn_take(s: *dynbuf, plen: *usize) callconv(.c) ?[*:0]u8 {
+pub export fn curlx_dyn_take(s: *dynbuf, plen: *usize) callconv(.c) ?[*:0]u8 {
     const ptr: ?[*:0]u8 = if (s.bufr) |b| @ptrCast(b) else null;
     plen.* = s.leng;
     s.bufr = null;
@@ -252,15 +252,15 @@ export fn curlx_dyn_take(s: *dynbuf, plen: *usize) callconv(.c) ?[*:0]u8 {
     return ptr;
 }
 
-export fn curlx_dyn_uptr(s: *const dynbuf) callconv(.c) ?[*]u8 {
+pub export fn curlx_dyn_uptr(s: *const dynbuf) callconv(.c) ?[*]u8 {
     return s.bufr;
 }
 
-export fn curlx_dyn_len(s: *const dynbuf) callconv(.c) usize {
+pub export fn curlx_dyn_len(s: *const dynbuf) callconv(.c) usize {
     return s.leng;
 }
 
-export fn curlx_dyn_setlen(s: *dynbuf, set: usize) callconv(.c) CURLcode {
+pub export fn curlx_dyn_setlen(s: *dynbuf, set: usize) callconv(.c) CURLcode {
     if (set > s.leng) {
         return CURLE_BAD_FUNCTION_ARGUMENT;
     }

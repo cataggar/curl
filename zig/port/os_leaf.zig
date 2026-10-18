@@ -77,7 +77,7 @@ const posix_c = struct {
     extern fn fseeko(stream: ?*anyopaque, offset: i64, whence: c_int) callconv(.c) c_int;
 };
 
-const win32 = struct {
+pub const win32 = struct {
     const CP_UTF8: u32 = 65001;
     const MB_ERR_INVALID_CHARS: u32 = 0x00000008;
     const MAX_PATH: usize = 260;
