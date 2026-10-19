@@ -3367,51 +3367,260 @@ const openssl_backend = struct {
     const SSL_CTX = opaque {};
     const SSL = opaque {};
     const SSL_METHOD = opaque {};
+    const SSL_SESSION = opaque {};
     const BIO = opaque {};
     const BIO_METHOD = opaque {};
     const X509 = opaque {};
+    const X509_CRL = opaque {};
     const X509_STORE = opaque {};
+    const X509_NAME = opaque {};
+    const X509_NAME_ENTRY = opaque {};
+    const X509_EXTENSION = opaque {};
+    const X509_PUBKEY = opaque {};
+    const X509_ALGOR = opaque {};
+    const X509_LOOKUP = opaque {};
+    const X509_LOOKUP_METHOD = opaque {};
+    const ASN1_OBJECT = opaque {};
+    const ASN1_STRING = opaque {};
+    const ASN1_INTEGER = ASN1_STRING;
+    const ASN1_BIT_STRING = ASN1_STRING;
+    const ASN1_TIME = ASN1_STRING;
+    const EVP_PKEY = opaque {};
+    const EVP_MD = opaque {};
+    const BIGNUM = opaque {};
+    const OPENSSL_STACK = opaque {};
+    const OCSP_RESPONSE = opaque {};
+    const OCSP_BASICRESP = opaque {};
+    const OCSP_SINGLERESP = opaque {};
+    const OSSL_LIB_CTX = opaque {};
+    const OSSL_PROVIDER = opaque {};
 
     const SSL_ERROR_NONE: c_int = 0;
     const SSL_ERROR_SSL: c_int = 1;
     const SSL_ERROR_WANT_READ: c_int = 2;
     const SSL_ERROR_WANT_WRITE: c_int = 3;
+    const SSL_ERROR_WANT_X509_LOOKUP: c_int = 4;
     const SSL_ERROR_SYSCALL: c_int = 5;
     const SSL_ERROR_ZERO_RETURN: c_int = 6;
+    const SSL_ERROR_WANT_CONNECT: c_int = 7;
+    const SSL_ERROR_WANT_ACCEPT: c_int = 8;
 
     const BIO_TYPE_MEM: c_int = 1 | 0x0400;
+    const BIO_CTRL_RESET: c_int = 1;
+    const BIO_CTRL_EOF: c_int = 2;
+    const BIO_CTRL_INFO: c_int = 3;
+    const BIO_CTRL_GET_CLOSE: c_int = 8;
+    const BIO_CTRL_SET_CLOSE: c_int = 9;
     const BIO_CTRL_FLUSH: c_int = 11;
+    const BIO_CTRL_DUP: c_int = 12;
     const BIO_FLAGS_READ: c_int = 0x01;
     const BIO_FLAGS_WRITE: c_int = 0x02;
+    const BIO_FLAGS_IO_SPECIAL: c_int = 0x04;
+    const BIO_FLAGS_RWS: c_int = BIO_FLAGS_READ | BIO_FLAGS_WRITE | BIO_FLAGS_IO_SPECIAL;
     const BIO_FLAGS_SHOULD_RETRY: c_int = 0x08;
 
     const SSL_VERIFY_NONE: c_int = 0x00;
     const SSL_VERIFY_PEER: c_int = 0x01;
+    const SSL_VERIFY_FAIL_IF_NO_PEER_CERT: c_int = 0x02;
     const X509_V_OK: c_long = 0;
+    const X509_V_FLAG_CRL_CHECK: c_ulong = 0x4;
+    const X509_V_FLAG_CRL_CHECK_ALL: c_ulong = 0x8;
+    const X509_V_FLAG_TRUSTED_FIRST: c_ulong = 0x8000;
+    const X509_V_FLAG_PARTIAL_CHAIN: c_ulong = 0x80000;
+
+    const SSL_FILETYPE_PEM: c_int = 1;
+    const SSL_FILETYPE_ASN1: c_int = 2;
+    const SSL_FILETYPE_ENGINE: c_int = 42;
+    const SSL_FILETYPE_PKCS12: c_int = 43;
+    const SSL_FILETYPE_PROVIDER: c_int = 44;
+
+    const SSL_SENT_SHUTDOWN: c_int = 1;
+    const SSL_RECEIVED_SHUTDOWN: c_int = 2;
+
+    const SSL_SESS_CACHE_OFF: c_long = 0x0000;
+    const SSL_SESS_CACHE_CLIENT: c_long = 0x0001;
+    const SSL_SESS_CACHE_NO_INTERNAL_LOOKUP: c_long = 0x0100;
+    const SSL_SESS_CACHE_NO_INTERNAL_STORE: c_long = 0x0200;
+    const SSL_SESS_CACHE_NO_INTERNAL: c_long = SSL_SESS_CACHE_NO_INTERNAL_LOOKUP | SSL_SESS_CACHE_NO_INTERNAL_STORE;
+
+    const SSL_CTRL_MODE: c_int = 33;
+    const SSL_CTRL_SET_READ_AHEAD: c_int = 41;
+    const SSL_CTRL_SET_SESS_CACHE_MODE: c_int = 44;
     const SSL_CTRL_SET_TLSEXT_HOSTNAME: c_int = 55;
+    const SSL_CTRL_SET_TLSEXT_STATUS_REQ_TYPE: c_int = 65;
+    const SSL_CTRL_GET_TLSEXT_STATUS_REQ_OCSP_RESP: c_int = 70;
+    const SSL_CTRL_CLEAR_CHAIN_CERTS: c_int = 83;
+    const SSL_CTRL_CHAIN_CERT: c_int = 89;
+    const SSL_CTRL_SET_GROUPS_LIST: c_int = 92;
+    const SSL_CTRL_SET_SIGALGS_LIST: c_int = 98;
+    const SSL_CTRL_SET_MIN_PROTO_VERSION: c_int = 123;
+    const SSL_CTRL_SET_MAX_PROTO_VERSION: c_int = 124;
+
     const TLSEXT_NAMETYPE_host_name: c_long = 0;
+    const TLSEXT_STATUSTYPE_ocsp: c_long = 1;
+
+    const TLS1_VERSION: c_long = 0x0301;
+    const TLS1_1_VERSION: c_long = 0x0302;
+    const TLS1_2_VERSION: c_long = 0x0303;
+    const TLS1_3_VERSION: c_long = 0x0304;
+
+    const SSL_OP_LEGACY_SERVER_CONNECT: u64 = 0x00000004;
+    const SSL_OP_NETSCAPE_REUSE_CIPHER_CHANGE_BUG: u64 = 0x00000008;
+    const SSL_OP_TLSEXT_PADDING: u64 = 0x00000010;
+    const SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS: u64 = 0x00000800;
+    const SSL_OP_NO_TICKET: u64 = 0x00004000;
+    const SSL_OP_NO_COMPRESSION: u64 = 0x00020000;
+    const SSL_OP_ALL: u64 = 0x80000054;
+    const SSL_MODE_RELEASE_BUFFERS: c_long = 0x00000010;
+
+    const NID_undef: c_int = 0;
+    const NID_md5: c_int = 4;
+    const NID_commonName: c_int = 13;
+    const NID_sha1: c_int = 64;
+    const NID_subject_alt_name: c_int = 85;
+
+    const GEN_OTHERNAME: c_int = 0;
+    const GEN_EMAIL: c_int = 1;
+    const GEN_DNS: c_int = 2;
+    const GEN_X400: c_int = 3;
+    const GEN_DIRNAME: c_int = 4;
+    const GEN_EDIPARTY: c_int = 5;
+    const GEN_URI: c_int = 6;
+    const GEN_IPADD: c_int = 7;
+    const GEN_RID: c_int = 8;
+
+    const V_ASN1_UTF8STRING: c_int = 12;
+    const V_ASN1_NEG_INTEGER: c_int = 0x0102;
+    const XN_FLAG_ONELINE: c_ulong = 0x0082001f;
+
+    const EVP_PKEY_RSA: c_int = 6;
+    const EVP_PKEY_DSA: c_int = 116;
+    const EVP_PKEY_DH: c_int = 28;
+
+    const OCSP_RESPONSE_STATUS_SUCCESSFUL: c_int = 0;
+    const V_OCSP_CERTSTATUS_GOOD: c_int = 0;
+    const V_OCSP_CERTSTATUS_REVOKED: c_int = 1;
+    const V_OCSP_CERTSTATUS_UNKNOWN: c_int = 2;
+
+    const ERR_LIB_PEM: c_ulong = 9;
+    const PEM_R_NO_START_LINE: c_ulong = 108;
+
+    const CURLE_SSL_ENGINE_NOTFOUND: CURLcode = 53;
+    const CURLE_SSL_ENGINE_SETFAILED: CURLcode = 54;
+    const CURLE_SSL_CACERT_BADFILE: CURLcode = 77;
+    const MAX_ALLOWED_CERT_AMOUNT: c_int = 100;
+
+    const GENERAL_NAME = extern struct {
+        type: c_int,
+        d: extern union {
+            ptr: ?*anyopaque,
+            dNSName: ?*ASN1_STRING,
+            iPAddress: ?*ASN1_STRING,
+            ia5: ?*ASN1_STRING,
+            ip: ?*ASN1_STRING,
+        },
+    };
+
+    const X509_INFO = extern struct {
+        x509: ?*X509,
+        crl: ?*X509_CRL,
+    };
+
+    pub const OsslProvider = extern struct {
+        engine: ?*anyopaque = null,
+        provider: ?*OSSL_PROVIDER = null,
+        baseprov: ?*OSSL_PROVIDER = null,
+        libctx: ?*OSSL_LIB_CTX = null,
+        propq: ?[*:0]u8 = null,
+        flags: c_uint = 0,
+
+        pub fn provider_loaded(self: *const OsslProvider) bool {
+            return (self.flags & 1) != 0;
+        }
+        pub fn set_provider_loaded(self: *OsslProvider, v: bool) void {
+            if (v) self.flags |= 1 else self.flags &= ~@as(c_uint, 1);
+        }
+    };
 
     pub const OsslCtx = extern struct {
-        ssl_ctx: ?*SSL_CTX,
-        ssl: ?*SSL,
-        bio_method: ?*BIO_METHOD,
-        io_result: CURLcode,
-        blocked_ssl_write_len: c_int,
-        flags: c_uint,
+        ssl_ctx: ?*SSL_CTX = null,
+        ssl: ?*SSL = null,
+        bio_method: ?*BIO_METHOD = null,
+        p: OsslProvider = .{},
+        io_result: CURLcode = CURLE_OK,
+        blocked_ssl_write_len: c_int = 0,
+        flags: c_uint = 0,
+
+        pub fn x509_store_setup(self: *const OsslCtx) bool {
+            return (self.flags & 1) != 0;
+        }
+        pub fn set_x509_store_setup(self: *OsslCtx, v: bool) void {
+            if (v) self.flags |= 1 else self.flags &= ~@as(c_uint, 1);
+        }
+        pub fn store_is_empty(self: *const OsslCtx) bool {
+            return (self.flags & 2) != 0;
+        }
+        pub fn set_store_is_empty(self: *OsslCtx, v: bool) void {
+            if (v) self.flags |= 2 else self.flags &= ~@as(c_uint, 2);
+        }
+        pub fn reused_session(self: *const OsslCtx) bool {
+            return (self.flags & 4) != 0;
+        }
+        pub fn set_reused_session(self: *OsslCtx, v: bool) void {
+            if (v) self.flags |= 4 else self.flags &= ~@as(c_uint, 4);
+        }
+        pub fn sectrust_verified(self: *const OsslCtx) bool {
+            return (self.flags & 8) != 0;
+        }
+        pub fn set_sectrust_verified(self: *OsslCtx, v: bool) void {
+            if (v) self.flags |= 8 else self.flags &= ~@as(c_uint, 8);
+        }
+        pub fn sectrust_session(self: *const OsslCtx) bool {
+            return (self.flags & 16) != 0;
+        }
+        pub fn set_sectrust_session(self: *OsslCtx, v: bool) void {
+            if (v) self.flags |= 16 else self.flags &= ~@as(c_uint, 16);
+        }
     };
+
+    const PemPasswordCb = *const fn ([*]u8, c_int, c_int, ?*anyopaque) callconv(.c) c_int;
+    const KeylogCb = *const fn (*const SSL, [*:0]const u8) callconv(.c) void;
+    const NewSessionCb = *const fn (*SSL, *SSL_SESSION) callconv(.c) c_int;
 
     const ossl_ext = struct {
         extern fn TLS_client_method() callconv(.c) ?*const SSL_METHOD;
         extern fn SSL_CTX_new(meth: ?*const SSL_METHOD) callconv(.c) ?*SSL_CTX;
+        extern fn SSL_CTX_new_ex(libctx: ?*OSSL_LIB_CTX, propq: ?[*:0]const u8, meth: ?*const SSL_METHOD) callconv(.c) ?*SSL_CTX;
         extern fn SSL_CTX_free(ctx: ?*SSL_CTX) callconv(.c) void;
+        extern fn SSL_CTX_set_options(ctx: *SSL_CTX, op: u64) callconv(.c) u64;
+        extern fn SSL_CTX_clear_options(ctx: *SSL_CTX, op: u64) callconv(.c) u64;
+        extern fn SSL_CTX_ctrl(ctx: *SSL_CTX, cmd: c_int, larg: c_long, parg: ?*anyopaque) callconv(.c) c_long;
         extern fn SSL_CTX_set_verify(ctx: *SSL_CTX, mode: c_int, callback: ?*const anyopaque) callconv(.c) void;
         extern fn SSL_CTX_set_default_verify_paths(ctx: *SSL_CTX) callconv(.c) c_int;
         extern fn SSL_CTX_load_verify_locations(ctx: *SSL_CTX, CAfile: ?[*:0]const u8, CApath: ?[*:0]const u8) callconv(.c) c_int;
         extern fn SSL_CTX_get_cert_store(ctx: *const SSL_CTX) callconv(.c) ?*X509_STORE;
+        extern fn SSL_CTX_set_cert_store(ctx: *SSL_CTX, store: *X509_STORE) callconv(.c) void;
+        extern fn SSL_CTX_set_cipher_list(ctx: *SSL_CTX, str: [*:0]const u8) callconv(.c) c_int;
+        extern fn SSL_CTX_set_ciphersuites(ctx: *SSL_CTX, str: [*:0]const u8) callconv(.c) c_int;
+        extern fn SSL_CTX_set_post_handshake_auth(ctx: *SSL_CTX, val: c_int) callconv(.c) void;
         extern fn SSL_CTX_set_alpn_protos(ctx: *SSL_CTX, protos: [*]const u8, protos_len: c_uint) callconv(.c) c_int;
+        extern fn SSL_CTX_set_keylog_callback(ctx: *SSL_CTX, cb: ?KeylogCb) callconv(.c) void;
+        extern fn SSL_CTX_set_default_passwd_cb(ctx: *SSL_CTX, cb: ?PemPasswordCb) callconv(.c) void;
+        extern fn SSL_CTX_set_default_passwd_cb_userdata(ctx: *SSL_CTX, u: ?*anyopaque) callconv(.c) void;
+        extern fn SSL_CTX_use_certificate(ctx: *SSL_CTX, x: *X509) callconv(.c) c_int;
+        extern fn SSL_CTX_use_certificate_file(ctx: *SSL_CTX, file: [*:0]const u8, type_: c_int) callconv(.c) c_int;
+        extern fn SSL_CTX_use_certificate_chain_file(ctx: *SSL_CTX, file: [*:0]const u8) callconv(.c) c_int;
+        extern fn SSL_CTX_use_PrivateKey(ctx: *SSL_CTX, pkey: *EVP_PKEY) callconv(.c) c_int;
+        extern fn SSL_CTX_use_PrivateKey_file(ctx: *SSL_CTX, file: [*:0]const u8, type_: c_int) callconv(.c) c_int;
+        extern fn SSL_CTX_check_private_key(ctx: *const SSL_CTX) callconv(.c) c_int;
+        extern fn SSL_CTX_sess_set_new_cb(ctx: *SSL_CTX, new_session_cb: ?NewSessionCb) callconv(.c) void;
+
         extern fn SSL_new(ctx: *SSL_CTX) callconv(.c) ?*SSL;
         extern fn SSL_free(ssl: ?*SSL) callconv(.c) void;
         extern fn SSL_set_bio(ssl: *SSL, rbio: ?*BIO, wbio: ?*BIO) callconv(.c) void;
+        extern fn SSL_get_rbio(ssl: *const SSL) callconv(.c) ?*BIO;
+        extern fn SSL_set_ex_data(ssl: *SSL, idx: c_int, data: ?*anyopaque) callconv(.c) c_int;
+        extern fn SSL_get_ex_data(ssl: *const SSL, idx: c_int) callconv(.c) ?*anyopaque;
         extern fn SSL_set_connect_state(ssl: *SSL) callconv(.c) void;
         extern fn SSL_connect(ssl: *SSL) callconv(.c) c_int;
         extern fn SSL_read(ssl: *SSL, buf: ?*anyopaque, num: c_int) callconv(.c) c_int;
@@ -3423,7 +3632,110 @@ const openssl_backend = struct {
         extern fn SSL_ctrl(ssl: *SSL, cmd: c_int, larg: c_long, parg: ?*anyopaque) callconv(.c) c_long;
         extern fn SSL_get0_alpn_selected(ssl: *const SSL, data: *?[*]const u8, len: *c_uint) callconv(.c) void;
         extern fn SSL_get_verify_result(ssl: *const SSL) callconv(.c) c_long;
+        extern fn SSL_get1_peer_certificate(ssl: *const SSL) callconv(.c) ?*X509;
+        const SSL_get_peer_certificate = SSL_get1_peer_certificate;
+        extern fn SSL_get_peer_cert_chain(ssl: *const SSL) callconv(.c) ?*OPENSSL_STACK;
+        extern fn SSL_session_reused(ssl: *const SSL) callconv(.c) c_int;
+        extern fn SSL_set_session(ssl: *SSL, session: ?*SSL_SESSION) callconv(.c) c_int;
+        extern fn SSL_version(ssl: *const SSL) callconv(.c) c_int;
+        extern fn SSL_SESSION_free(ses: ?*SSL_SESSION) callconv(.c) void;
+        extern fn SSL_SESSION_get_timeout(s: *const SSL_SESSION) callconv(.c) c_long;
+        extern fn i2d_SSL_SESSION(in: *SSL_SESSION, pp: ?*?[*]u8) callconv(.c) c_int;
+        extern fn d2i_SSL_SESSION(a: ?*?*SSL_SESSION, pp: *?[*]const u8, length: c_long) callconv(.c) ?*SSL_SESSION;
+
         extern fn X509_free(a: ?*X509) callconv(.c) void;
+        extern fn X509_INFO_free(a: ?*anyopaque) callconv(.c) void;
+        extern fn X509_get_ext_d2i(x: *const X509, nid: c_int, crit: ?*c_int, idx: ?*c_int) callconv(.c) ?*anyopaque;
+        extern fn GENERAL_NAMES_free(a: ?*OPENSSL_STACK) callconv(.c) void;
+        extern fn X509_get_subject_name(a: *const X509) callconv(.c) ?*X509_NAME;
+        extern fn X509_get_issuer_name(a: *const X509) callconv(.c) ?*X509_NAME;
+        extern fn X509_NAME_get_index_by_NID(name: *const X509_NAME, nid: c_int, lastpos: c_int) callconv(.c) c_int;
+        extern fn X509_NAME_get_entry(name: *const X509_NAME, loc: c_int) callconv(.c) ?*X509_NAME_ENTRY;
+        extern fn X509_NAME_ENTRY_get_data(ne: *const X509_NAME_ENTRY) callconv(.c) ?*ASN1_STRING;
+        extern fn X509_NAME_print_ex(out: *BIO, nm: *const X509_NAME, indent: c_int, flags: c_ulong) callconv(.c) c_int;
+        extern fn X509_get_version(x: *const X509) callconv(.c) c_long;
+        extern fn X509_get_serialNumber(x: *X509) callconv(.c) ?*ASN1_INTEGER;
+        extern fn X509_get0_signature(psig: *?*const ASN1_BIT_STRING, palg: *?*const X509_ALGOR, x: *const X509) callconv(.c) void;
+        extern fn X509_ALGOR_get0(paobj: *?*const ASN1_OBJECT, pptype: ?*c_int, ppval: ?*?*const anyopaque, algor: *const X509_ALGOR) callconv(.c) void;
+        extern fn X509_get_X509_PUBKEY(x: *const X509) callconv(.c) ?*const X509_PUBKEY;
+        extern fn X509_PUBKEY_get0_param(ppkalg: *?*ASN1_OBJECT, pk: ?*?*const u8, ppklen: ?*c_int, pa: ?*?*X509_ALGOR, pubkey: *const X509_PUBKEY) callconv(.c) c_int;
+        extern fn X509_get0_extensions(x: *const X509) callconv(.c) ?*const OPENSSL_STACK;
+        extern fn X509_EXTENSION_get_object(ex: *X509_EXTENSION) callconv(.c) ?*ASN1_OBJECT;
+        extern fn X509_EXTENSION_get_data(ne: *X509_EXTENSION) callconv(.c) ?*ASN1_STRING;
+        extern fn X509V3_EXT_print(out: *BIO, ext: *X509_EXTENSION, flag: c_ulong, indent: c_int) callconv(.c) c_int;
+        extern fn X509_get0_notBefore(x: *const X509) callconv(.c) ?*const ASN1_TIME;
+        extern fn X509_get0_notAfter(x: *const X509) callconv(.c) ?*const ASN1_TIME;
+        extern fn X509_get_pubkey(x: *X509) callconv(.c) ?*EVP_PKEY;
+        extern fn X509_verify_cert_error_string(n: c_long) callconv(.c) [*:0]const u8;
+        extern fn X509_check_issued(issuer: *X509, subject: *X509) callconv(.c) c_int;
+        extern fn X509_get_signature_nid(x: *const X509) callconv(.c) c_int;
+        extern fn X509_digest(data: *const X509, type_: *const EVP_MD, md: [*]u8, len: *c_uint) callconv(.c) c_int;
+        extern fn i2d_X509(a: *X509, ppOut: ?*?[*]u8) callconv(.c) c_int;
+        extern fn i2d_X509_PUBKEY(a: *const X509_PUBKEY, pp: ?*?[*]u8) callconv(.c) c_int;
+        extern fn d2i_X509_bio(bp: *BIO, x509: ?*?*X509) callconv(.c) ?*X509;
+        extern fn d2i_PrivateKey_bio(bp: *BIO, a: ?*?*EVP_PKEY) callconv(.c) ?*EVP_PKEY;
+
+        extern fn X509_STORE_add_cert(ctx: *X509_STORE, x: *X509) callconv(.c) c_int;
+        extern fn X509_STORE_add_crl(ctx: *X509_STORE, x: *X509_CRL) callconv(.c) c_int;
+        extern fn X509_STORE_set_flags(ctx: *X509_STORE, flags: c_ulong) callconv(.c) c_int;
+        extern fn X509_STORE_load_locations(ctx: *X509_STORE, file: ?[*:0]const u8, dir: ?[*:0]const u8) callconv(.c) c_int;
+        extern fn X509_STORE_up_ref(v: *X509_STORE) callconv(.c) c_int;
+        extern fn X509_STORE_free(v: ?*X509_STORE) callconv(.c) void;
+        extern fn X509_STORE_add_lookup(v: *X509_STORE, m: ?*const X509_LOOKUP_METHOD) callconv(.c) ?*X509_LOOKUP;
+        extern fn X509_LOOKUP_file() callconv(.c) ?*const X509_LOOKUP_METHOD;
+        extern fn X509_load_crl_file(ctx: *X509_LOOKUP, file: [*:0]const u8, type_: c_int) callconv(.c) c_int;
+
+        extern fn PEM_write_bio_X509(bp: *BIO, x: *X509) callconv(.c) c_int;
+        extern fn PEM_read_bio_X509(bp: *BIO, x: ?*?*X509, cb: ?PemPasswordCb, u: ?*anyopaque) callconv(.c) ?*X509;
+        extern fn PEM_read_bio_X509_AUX(bp: *BIO, x: ?*?*X509, cb: ?PemPasswordCb, u: ?*anyopaque) callconv(.c) ?*X509;
+        extern fn PEM_read_bio_PrivateKey(bp: *BIO, x: ?*?*EVP_PKEY, cb: ?PemPasswordCb, u: ?*anyopaque) callconv(.c) ?*EVP_PKEY;
+        extern fn PEM_X509_INFO_read_bio(bp: *BIO, sk: ?*OPENSSL_STACK, cb: ?PemPasswordCb, u: ?*anyopaque) callconv(.c) ?*OPENSSL_STACK;
+
+        extern fn OPENSSL_sk_num(st: ?*const OPENSSL_STACK) callconv(.c) c_int;
+        extern fn OPENSSL_sk_value(st: ?*const OPENSSL_STACK, i: c_int) callconv(.c) ?*anyopaque;
+        extern fn OPENSSL_sk_pop_free(st: ?*OPENSSL_STACK, func: *const fn (?*anyopaque) callconv(.c) void) callconv(.c) void;
+
+        extern fn ASN1_STRING_get0_data(x: *const ASN1_STRING) callconv(.c) ?[*]const u8;
+        extern fn ASN1_STRING_length(x: *const ASN1_STRING) callconv(.c) c_int;
+        extern fn ASN1_STRING_type(x: *const ASN1_STRING) callconv(.c) c_int;
+        extern fn ASN1_STRING_to_UTF8(out: *?[*:0]u8, in: *const ASN1_STRING) callconv(.c) c_int;
+        extern fn ASN1_STRING_print(bp: *BIO, v: *const ASN1_STRING) callconv(.c) c_int;
+        extern fn ASN1_TIME_print(bp: *BIO, tm: *const ASN1_TIME) callconv(.c) c_int;
+        extern fn i2a_ASN1_OBJECT(bp: *BIO, a: ?*const ASN1_OBJECT) callconv(.c) c_int;
+        extern fn i2t_ASN1_OBJECT(buf: [*]u8, buf_len: c_int, a: ?*const ASN1_OBJECT) callconv(.c) c_int;
+
+        extern fn EVP_PKEY_get_id(pkey: *const EVP_PKEY) callconv(.c) c_int;
+        extern fn EVP_PKEY_free(pkey: ?*EVP_PKEY) callconv(.c) void;
+        extern fn EVP_PKEY_get_bn_param(pkey: *const EVP_PKEY, key_name: [*:0]const u8, bn: *?*BIGNUM) callconv(.c) c_int;
+        extern fn BN_num_bits(a: *const BIGNUM) callconv(.c) c_int;
+        extern fn BN_print(fp: *BIO, a: *const BIGNUM) callconv(.c) c_int;
+        extern fn BN_clear_free(a: ?*BIGNUM) callconv(.c) void;
+        extern fn EVP_sha256() callconv(.c) *const EVP_MD;
+        extern fn EVP_get_digestbyname(name: ?[*:0]const u8) callconv(.c) ?*const EVP_MD;
+        extern fn OBJ_nid2sn(n: c_int) callconv(.c) ?[*:0]const u8;
+        extern fn OBJ_find_sigid_algs(signid: c_int, pdig_nid: *c_int, ppkey_nid: ?*c_int) callconv(.c) c_int;
+
+        extern fn d2i_OCSP_RESPONSE(a: ?*?*OCSP_RESPONSE, in: *?[*]const u8, len: c_long) callconv(.c) ?*OCSP_RESPONSE;
+        extern fn OCSP_RESPONSE_free(a: ?*OCSP_RESPONSE) callconv(.c) void;
+        extern fn OCSP_response_status(resp: *OCSP_RESPONSE) callconv(.c) c_int;
+        extern fn OCSP_response_status_str(s: c_long) callconv(.c) [*:0]const u8;
+        extern fn OCSP_response_get1_basic(resp: *OCSP_RESPONSE) callconv(.c) ?*OCSP_BASICRESP;
+        extern fn OCSP_BASICRESP_free(a: ?*OCSP_BASICRESP) callconv(.c) void;
+        extern fn OCSP_basic_verify(bs: *OCSP_BASICRESP, certs: ?*OPENSSL_STACK, st: ?*X509_STORE, flags: c_ulong) callconv(.c) c_int;
+        extern fn OCSP_resp_count(bs: *OCSP_BASICRESP) callconv(.c) c_int;
+        extern fn OCSP_resp_get0(bs: *OCSP_BASICRESP, idx: c_int) callconv(.c) ?*OCSP_SINGLERESP;
+        extern fn OCSP_single_get0_status(single: *OCSP_SINGLERESP, reason: *c_int, revtime: *?*ASN1_TIME, thisupd: *?*ASN1_TIME, nextupd: *?*ASN1_TIME) callconv(.c) c_int;
+        extern fn OCSP_check_validity(thisupd: ?*ASN1_TIME, nextupd: ?*ASN1_TIME, sec: c_long, maxsec: c_long) callconv(.c) c_int;
+        extern fn OCSP_cert_status_str(s: c_long) callconv(.c) [*:0]const u8;
+        extern fn OCSP_crl_reason_str(s: c_long) callconv(.c) [*:0]const u8;
+
+        extern fn OSSL_LIB_CTX_new() callconv(.c) ?*OSSL_LIB_CTX;
+        extern fn OSSL_LIB_CTX_free(ctx: ?*OSSL_LIB_CTX) callconv(.c) void;
+        extern fn OSSL_LIB_CTX_load_config(ctx: *OSSL_LIB_CTX, config_file: ?[*:0]const u8) callconv(.c) c_int;
+        extern fn OSSL_PROVIDER_available(libctx: ?*OSSL_LIB_CTX, name: [*:0]const u8) callconv(.c) c_int;
+        extern fn OSSL_PROVIDER_try_load(libctx: ?*OSSL_LIB_CTX, name: [*:0]const u8, retain_fallbacks: c_int) callconv(.c) ?*OSSL_PROVIDER;
+        extern fn OSSL_PROVIDER_unload(prov: *OSSL_PROVIDER) callconv(.c) c_int;
+
         extern fn BIO_meth_new(btype: c_int, name: [*:0]const u8) callconv(.c) ?*BIO_METHOD;
         extern fn BIO_meth_free(biom: ?*BIO_METHOD) callconv(.c) void;
         extern fn BIO_meth_set_write(biom: *BIO_METHOD, write_fn: *const fn (*BIO, ?[*]const u8, c_int) callconv(.c) c_int) callconv(.c) c_int;
@@ -3431,18 +3743,238 @@ const openssl_backend = struct {
         extern fn BIO_meth_set_ctrl(biom: *BIO_METHOD, ctrl_fn: *const fn (*BIO, c_int, c_long, ?*anyopaque) callconv(.c) c_long) callconv(.c) c_int;
         extern fn BIO_meth_set_create(biom: *BIO_METHOD, create_fn: *const fn (*BIO) callconv(.c) c_int) callconv(.c) c_int;
         extern fn BIO_meth_set_destroy(biom: *BIO_METHOD, destroy_fn: *const fn (*BIO) callconv(.c) c_int) callconv(.c) c_int;
+        extern fn BIO_s_mem() callconv(.c) *const BIO_METHOD;
         extern fn BIO_new(method: *const BIO_METHOD) callconv(.c) ?*BIO;
+        extern fn BIO_new_mem_buf(buf: ?*const anyopaque, len: c_int) callconv(.c) ?*BIO;
+        extern fn BIO_new_file(filename: [*:0]const u8, mode: [*:0]const u8) callconv(.c) ?*BIO;
+        extern fn BIO_free(a: ?*BIO) callconv(.c) c_int;
+        extern fn BIO_ctrl(bp: *BIO, cmd: c_int, larg: c_long, parg: ?*anyopaque) callconv(.c) c_long;
+        extern fn BIO_puts(bp: *BIO, buf: [*:0]const u8) callconv(.c) c_int;
+        extern fn BIO_printf(bio: *BIO, format: [*:0]const u8, ...) callconv(.c) c_int;
         extern fn BIO_set_data(a: *BIO, ptr: ?*anyopaque) callconv(.c) void;
         extern fn BIO_get_data(a: *BIO) callconv(.c) ?*anyopaque;
         extern fn BIO_set_init(a: *BIO, init: c_int) callconv(.c) void;
+        extern fn BIO_set_shutdown(a: *BIO, shut: c_int) callconv(.c) void;
+        extern fn BIO_get_shutdown(a: *BIO) callconv(.c) c_int;
         extern fn BIO_set_flags(b: *BIO, flags: c_int) callconv(.c) void;
         extern fn BIO_clear_flags(b: *BIO, flags: c_int) callconv(.c) void;
+
+        extern fn CRYPTO_free(ptr: ?*anyopaque, file: [*:0]const u8, line: c_int) callconv(.c) void;
+        extern fn ERR_get_error() callconv(.c) c_ulong;
+        extern fn ERR_peek_error() callconv(.c) c_ulong;
+        extern fn ERR_peek_last_error() callconv(.c) c_ulong;
         extern fn ERR_clear_error() callconv(.c) void;
+        extern fn ERR_error_string_n(e: c_ulong, buf: [*]u8, len: usize) callconv(.c) void;
+        extern fn RAND_status() callconv(.c) c_int;
         extern fn RAND_bytes(buf: [*]u8, num: c_int) callconv(.c) c_int;
         extern fn OpenSSL_version_num() callconv(.c) c_ulong;
+
+        extern fn Curl_vtls_apple_verify(
+            cf: *CurlCfilter,
+            data: ?*CurlEasy,
+            peer: *const SslPeer,
+            num_certs: usize,
+            der_cb: *const fn (*CurlCfilter, ?*CurlEasy, ?*anyopaque, usize, *?[*]u8, *usize) callconv(.c) CURLcode,
+            cb_user_data: ?*anyopaque,
+            ocsp_buf: ?[*]const u8,
+            ocsp_len: usize,
+            require_ocsp: bool,
+        ) callconv(.c) CURLcode;
+        extern fn Curl_vtls_apple_verifies_ocsp(cf: ?*CurlCfilter, data: ?*CurlEasy) callconv(.c) bool;
     };
 
+    fn osslStrerror(err: c_ulong, buf: [*]u8, size: usize) [*:0]const u8 {
+        if (size == 0) return "";
+        buf[0] = 0;
+        if (err == 0) {
+            const msg = "No error";
+            const n = @min(msg.len, size - 1);
+            @memcpy(buf[0..n], msg[0..n]);
+            buf[n] = 0;
+            return @ptrCast(buf);
+        }
+        ossl_ext.ERR_error_string_n(err, buf, size);
+        if (buf[0] == 0) {
+            const msg = "Unknown error";
+            const n = @min(msg.len, size - 1);
+            @memcpy(buf[0..n], msg[0..n]);
+            buf[n] = 0;
+        }
+        return @ptrCast(buf);
+    }
+
+    fn sslErrorToStr(err: c_int) [*:0]const u8 {
+        return switch (err) {
+            SSL_ERROR_NONE => "SSL_ERROR_NONE",
+            SSL_ERROR_SSL => "SSL_ERROR_SSL",
+            SSL_ERROR_WANT_READ => "SSL_ERROR_WANT_READ",
+            SSL_ERROR_WANT_WRITE => "SSL_ERROR_WANT_WRITE",
+            SSL_ERROR_WANT_X509_LOOKUP => "SSL_ERROR_WANT_X509_LOOKUP",
+            SSL_ERROR_SYSCALL => "SSL_ERROR_SYSCALL",
+            SSL_ERROR_ZERO_RETURN => "SSL_ERROR_ZERO_RETURN",
+            SSL_ERROR_WANT_CONNECT => "SSL_ERROR_WANT_CONNECT",
+            SSL_ERROR_WANT_ACCEPT => "SSL_ERROR_WANT_ACCEPT",
+            else => "SSL_ERROR unknown",
+        };
+    }
+
+    fn peerDispname(peer: *const SslPeer) [*:0]const u8 {
+        if (peer.origin) |orig| {
+            if (orig.user_hostname[0] != 0) {
+                return @ptrCast(&orig.user_hostname[0]);
+            }
+            return orig.hostname;
+        }
+        if (peer.sni) |sni| return sni;
+        return "";
+    }
+
+    fn peerHostname(peer: *const SslPeer) [*:0]const u8 {
+        if (peer.origin) |orig| return orig.hostname;
+        if (peer.sni) |sni| return sni;
+        return "";
+    }
+
+    // Pure helper for DNS SAN / CN matching with embedded-NUL rejection
+    pub fn matchDnsNameBytes(cert_name: ?[*]const u8, cert_len: usize, host: []const u8) bool {
+        const cn = cert_name orelse return false;
+        if (cert_len == 0 or host.len == 0) return false;
+        if (std.mem.indexOfScalar(u8, cn[0..cert_len], 0) != null) return false;
+        var host_buf: [256]u8 = undefined;
+        if (host.len >= host_buf.len) return false;
+        @memcpy(host_buf[0..host.len], host);
+        host_buf[host.len] = 0;
+        var pat_buf: [256]u8 = undefined;
+        if (cert_len >= pat_buf.len) return false;
+        @memcpy(pat_buf[0..cert_len], cn[0..cert_len]);
+        pat_buf[cert_len] = 0;
+        return vtls_core.Curl_cert_hostcheck(@ptrCast(&pat_buf), cert_len, @ptrCast(&host_buf), host.len);
+    }
+
+    // Pure helper for IP SAN matching using curlx_inet_pton
+    pub fn matchIpSanBytes(san_ip: ?[*]const u8, san_len: usize, peer_type: c_uint, hostname_cstr: [*:0]const u8) bool {
+        const ip_bytes = san_ip orelse return false;
+        var addr_buf: [16]u8 = @splat(0);
+        var addrlen: usize = 0;
+        if (peer_type == SSL_PEER_IPV4) {
+            if (curlx_time_net.curlx_inet_pton(curlx_time_net.AF_INET, hostname_cstr, &addr_buf) == 1) {
+                addrlen = 4;
+            }
+        } else if (peer_type == SSL_PEER_IPV6) {
+            if (curlx_time_net.curlx_inet_pton(AF_INET6_VAL, hostname_cstr, &addr_buf) == 1) {
+                addrlen = 16;
+            }
+        }
+        if (addrlen == 0 or san_len != addrlen) return false;
+        return std.mem.eql(u8, ip_bytes[0..san_len], addr_buf[0..addrlen]);
+    }
+
+    pub const SanEntry = struct {
+        san_type: c_int,
+        data: ?[*]const u8,
+        len: usize,
+    };
+
+    pub const HostVerifyOutcome = enum {
+        matched_dns_san,
+        matched_ip_san,
+        matched_cn,
+        san_mismatch,
+        no_san_for_ip,
+        cn_missing,
+        cn_embedded_nul,
+        cn_mismatch,
+    };
+
+    // Pure helper exercising the full RFC 2818 SAN + CN fallback verification flow
+    pub fn verifyHostSynthetic(
+        peer_type: c_uint,
+        hostname_cstr: [*:0]const u8,
+        sans: ?[]const SanEntry,
+        cn_bytes: ?[]const u8,
+    ) HostVerifyOutcome {
+        const host_len = std.mem.len(hostname_cstr);
+        const host_slice = hostname_cstr[0..host_len];
+
+        if (sans) |entries| {
+            for (entries) |entry| {
+                if (entry.san_type == GEN_DNS) {
+                    if (peer_type == SSL_PEER_DNS and matchDnsNameBytes(entry.data, entry.len, host_slice)) {
+                        return .matched_dns_san;
+                    }
+                } else if (entry.san_type == GEN_IPADD) {
+                    if (peer_type != SSL_PEER_DNS and matchIpSanBytes(entry.data, entry.len, peer_type, hostname_cstr)) {
+                        return .matched_ip_san;
+                    }
+                }
+            }
+            return .san_mismatch;
+        }
+
+        if (peer_type != SSL_PEER_DNS) {
+            return .no_san_for_ip;
+        }
+
+        const cn = cn_bytes orelse return .cn_missing;
+        if (cn.len == 0) return .cn_missing;
+        if (std.mem.indexOfScalar(u8, cn, 0) != null) return .cn_embedded_nul;
+        if (matchDnsNameBytes(cn.ptr, cn.len, host_slice)) {
+            return .matched_cn;
+        }
+        return .cn_mismatch;
+    }
+
+    pub const TlsVersionRange = struct {
+        min_ver: c_long,
+        max_ver: c_long,
+    };
+
+    pub fn mapTlsVersionMinMax(version: u8, version_max: u32) ?TlsVersionRange {
+        const min_ver: c_long = switch (version) {
+            CURL_SSLVERSION_DEFAULT, CURL_SSLVERSION_TLSv1, CURL_SSLVERSION_TLSv1_0 => TLS1_VERSION,
+            CURL_SSLVERSION_TLSv1_1 => TLS1_1_VERSION,
+            CURL_SSLVERSION_TLSv1_2 => TLS1_2_VERSION,
+            CURL_SSLVERSION_TLSv1_3 => TLS1_3_VERSION,
+            else => return null,
+        };
+        const max_code: u32 = version_max >> 16;
+        const max_ver: c_long = switch (max_code) {
+            0, CURL_SSLVERSION_TLSv1 => 0,
+            CURL_SSLVERSION_TLSv1_0 => TLS1_VERSION,
+            CURL_SSLVERSION_TLSv1_1 => TLS1_1_VERSION,
+            CURL_SSLVERSION_TLSv1_2 => TLS1_2_VERSION,
+            CURL_SSLVERSION_TLSv1_3 => TLS1_3_VERSION,
+            else => return null,
+        };
+        if (max_ver != 0 and min_ver > max_ver) return null;
+        return .{ .min_ver = min_ver, .max_ver = max_ver };
+    }
+
+    pub fn osslDoFileType(type_str: ?[*:0]const u8) c_int {
+        const t = type_str orelse return SSL_FILETYPE_PEM;
+        if (t[0] == 0) return SSL_FILETYPE_PEM;
+        if (primitives.curl_strequal(t, "PEM") != 0) return SSL_FILETYPE_PEM;
+        if (primitives.curl_strequal(t, "DER") != 0) return SSL_FILETYPE_ASN1;
+        if (primitives.curl_strequal(t, "PROV") != 0) return SSL_FILETYPE_PROVIDER;
+        if (primitives.curl_strequal(t, "ENG") != 0) return SSL_FILETYPE_ENGINE;
+        if (primitives.curl_strequal(t, "P12") != 0) return SSL_FILETYPE_PKCS12;
+        return -1;
+    }
+
+    pub fn passwdCallback(buf: [*]u8, num: c_int, encrypting: c_int, password_ptr: ?*anyopaque) callconv(.c) c_int {
+        if (encrypting == 0 and num >= 0 and password_ptr != null) {
+            const pw: [*:0]const u8 = @ptrCast(password_ptr.?);
+            const klen = std.mem.len(pw);
+            if (klen < @as(usize, @intCast(num))) {
+                @memcpy(buf[0 .. klen + 1], pw[0 .. klen + 1]);
+                return @intCast(klen);
+            }
+        }
+        return 0;
+    }
+
     fn osslBioCfCreate(bio: *BIO) callconv(.c) c_int {
+        ossl_ext.BIO_set_shutdown(bio, 1);
         ossl_ext.BIO_set_init(bio, 1);
         ossl_ext.BIO_set_data(bio, null);
         return 1;
@@ -3454,28 +3986,38 @@ const openssl_backend = struct {
     }
 
     fn osslBioCfCtrl(bio: *BIO, cmd: c_int, num: c_long, ptr: ?*anyopaque) callconv(.c) c_long {
-        _ = bio;
-        _ = num;
         _ = ptr;
-        if (cmd == BIO_CTRL_FLUSH) return 1;
-        return 0;
+        return switch (cmd) {
+            BIO_CTRL_GET_CLOSE => @intCast(ossl_ext.BIO_get_shutdown(bio)),
+            BIO_CTRL_SET_CLOSE => blk: {
+                ossl_ext.BIO_set_shutdown(bio, @intCast(num));
+                break :blk 1;
+            },
+            BIO_CTRL_FLUSH, BIO_CTRL_DUP => 1,
+            BIO_CTRL_EOF => blk: {
+                const cf: *CurlCfilter = @ptrCast(@alignCast(ossl_ext.BIO_get_data(bio) orelse break :blk 0));
+                const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse break :blk 0));
+                break :blk @intFromBool(connssl.peer_closed());
+            },
+            else => 0,
+        };
     }
 
     fn osslBioCfOutWrite(bio: *BIO, buf_opt: ?[*]const u8, blen: c_int) callconv(.c) c_int {
         const cf: *CurlCfilter = @ptrCast(@alignCast(ossl_ext.BIO_get_data(bio) orelse return -1));
         const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return -1));
         const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return -1));
-        ossl_ext.BIO_clear_flags(bio, BIO_FLAGS_READ | BIO_FLAGS_WRITE | BIO_FLAGS_SHOULD_RETRY);
+        const data = connssl.call_data;
+        if (blen < 0) return 0;
+
         var nwritten: usize = 0;
-        const result = if (blen >= 0)
-            c_ext.Curl_conn_cf_send(cf.next, null, buf_opt, @intCast(blen), false, &nwritten)
-        else
-            CURLE_BAD_FUNCTION_ARGUMENT;
+        const result = c_ext.Curl_conn_cf_send(cf.next, data, buf_opt, @intCast(blen), false, &nwritten);
+        ossl_ext.BIO_clear_flags(bio, BIO_FLAGS_RWS | BIO_FLAGS_SHOULD_RETRY);
         octx.io_result = result;
-        if (result == CURLE_AGAIN) {
-            ossl_ext.BIO_set_flags(bio, BIO_FLAGS_WRITE | BIO_FLAGS_SHOULD_RETRY);
-            return -1;
-        } else if (result != CURLE_OK) {
+        if (result != CURLE_OK) {
+            if (result == CURLE_AGAIN) {
+                ossl_ext.BIO_set_flags(bio, BIO_FLAGS_WRITE | BIO_FLAGS_SHOULD_RETRY);
+            }
             return -1;
         }
         return @intCast(nwritten);
@@ -3485,26 +4027,50 @@ const openssl_backend = struct {
         const cf: *CurlCfilter = @ptrCast(@alignCast(ossl_ext.BIO_get_data(bio) orelse return -1));
         const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return -1));
         const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return -1));
-        ossl_ext.BIO_clear_flags(bio, BIO_FLAGS_READ | BIO_FLAGS_WRITE | BIO_FLAGS_SHOULD_RETRY);
+        const data = connssl.call_data;
         const buf = buf_opt orelse return 0;
         if (blen <= 0) return 0;
+
         var nread: usize = 0;
-        const result = c_ext.Curl_conn_cf_recv(cf.next, null, buf, @intCast(blen), &nread);
+        const result = c_ext.Curl_conn_cf_recv(cf.next, data, buf, @intCast(blen), &nread);
+        ossl_ext.BIO_clear_flags(bio, BIO_FLAGS_RWS | BIO_FLAGS_SHOULD_RETRY);
         octx.io_result = result;
-        if (result == CURLE_AGAIN) {
-            ossl_ext.BIO_set_flags(bio, BIO_FLAGS_READ | BIO_FLAGS_SHOULD_RETRY);
-            return -1;
-        } else if (result != CURLE_OK) {
-            return -1;
+        if (result != CURLE_OK) {
+            if (result == CURLE_AGAIN) {
+                ossl_ext.BIO_set_flags(bio, BIO_FLAGS_READ | BIO_FLAGS_SHOULD_RETRY);
+            }
+        } else {
+            connssl.set_input_pending(true);
+            if (nread == 0) {
+                connssl.set_peer_closed(true);
+            }
         }
-        return @intCast(nread);
+
+        if (!octx.x509_store_setup()) {
+            const r2 = Curl_ossl_setup_x509_store(cf, data, octx);
+            if (r2 != CURLE_OK) {
+                ossl_ext.BIO_clear_flags(bio, BIO_FLAGS_RWS | BIO_FLAGS_SHOULD_RETRY);
+                octx.io_result = r2;
+                return -1;
+            }
+            octx.set_x509_store_setup(true);
+        }
+        return if (result != CURLE_OK) -1 else @intCast(nread);
+    }
+
+    fn osslKeylogCallback(ssl: *const SSL, line: [*:0]const u8) callconv(.c) void {
+        _ = ssl;
+        _ = vtls_core.Curl_tls_keylog_write_line(line);
     }
 
     pub fn Curl_ossl_init() callconv(.c) c_int {
+        vtls_core.Curl_tls_keylog_open();
         return 1;
     }
 
-    pub fn Curl_ossl_cleanup() callconv(.c) void {}
+    pub fn Curl_ossl_cleanup() callconv(.c) void {
+        vtls_core.Curl_tls_keylog_close();
+    }
 
     pub fn Curl_ossl_version(buffer: [*]u8, size: usize) callconv(.c) usize {
         const num = ossl_ext.OpenSSL_version_num();
@@ -3515,104 +4081,1261 @@ const openssl_backend = struct {
         return if (rc > 0) @intCast(rc) else 0;
     }
 
-    pub fn Curl_ossl_setup_x509_store(cf: *CurlCfilter, data: ?*CurlEasy, ssl_ctx_raw: ?*anyopaque) callconv(.c) CURLcode {
-        _ = data;
-        const ssl_ctx: *SSL_CTX = @ptrCast(@alignCast(ssl_ctx_raw orelse return CURLE_SSL_CONNECT_ERROR));
-        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
-        if (conn_config.CAfile != null or conn_config.CApath != null) {
-            if (ossl_ext.SSL_CTX_load_verify_locations(ssl_ctx, conn_config.CAfile, conn_config.CApath) != 1) {
-                if (conn_config.verifypeer()) return CURLE_SSL_CACERT_BADFILE;
+    fn osslProviderCleanup(octx: *OsslCtx) void {
+        if (octx.p.baseprov) |bp| {
+            _ = ossl_ext.OSSL_PROVIDER_unload(bp);
+            octx.p.baseprov = null;
+        }
+        if (octx.p.provider) |prov| {
+            _ = ossl_ext.OSSL_PROVIDER_unload(prov);
+            octx.p.provider = null;
+        }
+        if (octx.p.libctx) |lctx| {
+            ossl_ext.OSSL_LIB_CTX_free(lctx);
+            octx.p.libctx = null;
+        }
+        if (octx.p.propq) |pq| {
+            mem.free(pq);
+            octx.p.propq = null;
+        }
+        octx.p.set_provider_loaded(false);
+    }
+
+    fn osslSetProvider(data: ?*CurlEasy, octx: *OsslCtx, iname_opt: ?[*:0]const u8) CURLcode {
+        const iname = iname_opt orelse {
+            osslProviderCleanup(octx);
+            return CURLE_OK;
+        };
+        const full = iname[0..std.mem.len(iname)];
+        const colon_idx = std.mem.indexOfScalar(u8, full, ':');
+        const prov_len = colon_idx orelse full.len;
+        if (prov_len == 0 or prov_len > 128) return CURLE_BAD_FUNCTION_ARGUMENT;
+
+        var name_buf: [129]u8 = @splat(0);
+        @memcpy(name_buf[0..prov_len], full[0..prov_len]);
+        name_buf[prov_len] = 0;
+
+        const propq_cstr: ?[*:0]const u8 = if (colon_idx) |ci| @ptrCast(iname + ci + 1) else null;
+
+        if (octx.p.libctx == null) {
+            const libctx = ossl_ext.OSSL_LIB_CTX_new() orelse return CURLE_OUT_OF_MEMORY;
+            if (propq_cstr) |pq| {
+                const dup_pq = mem.strdup(pq) orelse {
+                    ossl_ext.OSSL_LIB_CTX_free(libctx);
+                    return CURLE_OUT_OF_MEMORY;
+                };
+                octx.p.propq = dup_pq;
             }
-        } else {
+            octx.p.libctx = libctx;
+        }
+
+        _ = ossl_ext.OSSL_LIB_CTX_load_config(octx.p.libctx.?, null);
+
+        if (ossl_ext.OSSL_PROVIDER_available(octx.p.libctx, @ptrCast(&name_buf)) != 0) {
+            octx.p.set_provider_loaded(true);
+            return CURLE_OK;
+        }
+
+        octx.p.provider = ossl_ext.OSSL_PROVIDER_try_load(octx.p.libctx, @ptrCast(&name_buf), 1);
+        if (octx.p.provider == null) {
+            var err_buf: [256]u8 = @splat(0);
+            c_ext.Curl_failf(data, "Failed to initialize provider: %s", osslStrerror(ossl_ext.ERR_get_error(), &err_buf, err_buf.len));
+            osslProviderCleanup(octx);
+            return CURLE_SSL_ENGINE_NOTFOUND;
+        }
+
+        octx.p.baseprov = ossl_ext.OSSL_PROVIDER_try_load(octx.p.libctx, "base", 1);
+        if (octx.p.baseprov == null) {
+            osslProviderCleanup(octx);
+            c_ext.Curl_failf(data, "Failed to load base");
+            return CURLE_SSL_ENGINE_NOTFOUND;
+        }
+        octx.p.set_provider_loaded(true);
+        return CURLE_OK;
+    }
+
+    fn resolveOsslCtxAndSslCtx(cf: *CurlCfilter, arg: ?*anyopaque) struct { octx: ?*OsslCtx, ssl_ctx: ?*SSL_CTX } {
+        var octx: ?*OsslCtx = null;
+        if (cf.ctx) |ctx_raw| {
+            const connssl: *SslConnectData = @ptrCast(@alignCast(ctx_raw));
+            if (connssl.backend) |b_raw| {
+                octx = @ptrCast(@alignCast(b_raw));
+            }
+        }
+        if (octx) |oc| {
+            if (arg == null or arg == @as(?*anyopaque, @ptrCast(oc))) {
+                return .{ .octx = oc, .ssl_ctx = oc.ssl_ctx };
+            }
+            return .{ .octx = oc, .ssl_ctx = @ptrCast(@alignCast(arg.?)) };
+        }
+        if (arg) |a| {
+            const oc: *OsslCtx = @ptrCast(@alignCast(a));
+            return .{ .octx = oc, .ssl_ctx = oc.ssl_ctx };
+        }
+        return .{ .octx = null, .ssl_ctx = null };
+    }
+
+    pub fn Curl_ossl_setup_x509_store(cf: *CurlCfilter, data: ?*CurlEasy, octx_or_ctx_raw: ?*anyopaque) callconv(.c) CURLcode {
+        const resolved = resolveOsslCtxAndSslCtx(cf, octx_or_ctx_raw);
+        const octx = resolved.octx;
+        const ssl_ctx = resolved.ssl_ctx orelse return CURLE_SSL_CONNECT_ERROR;
+
+        if (octx != null and octx.?.x509_store_setup()) {
+            return CURLE_OK;
+        }
+
+        const store = ossl_ext.SSL_CTX_get_cert_store(ssl_ctx) orelse return CURLE_SSL_CONNECT_ERROR;
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf);
+        const is_proxy = vtls_impl.Curl_ssl_cf_is_proxy(cf);
+
+        const verifypeer = if (conn_config) |cc| cc.verifypeer() else true;
+        const native_ca_store = if (conn_config) |cc| cc.native_ca_store() else false;
+        const no_partialchain = if (conn_config) |cc| cc.no_partialchain() else false;
+
+        const ca_info_blob: ?*const CurlBlob = if (conn_config != null and conn_config.?.ca_info_blob != null)
+            conn_config.?.ca_info_blob
+        else
+            c_ext.Curl_vtls_acc_ssl_ca_info_blob(data, is_proxy);
+
+        const ssl_cafile: ?[*:0]const u8 = if (conn_config != null and conn_config.?.CAfile != null)
+            conn_config.?.CAfile
+        else
+            c_ext.Curl_vtls_acc_ssl_cainfo(data, is_proxy);
+
+        const ssl_capath: ?[*:0]const u8 = if (conn_config != null and conn_config.?.CApath != null)
+            conn_config.?.CApath
+        else
+            c_ext.Curl_vtls_acc_ssl_capath(data, is_proxy);
+
+        const ssl_crlfile: ?[*:0]const u8 = if (conn_config != null and conn_config.?.CRLfile != null)
+            conn_config.?.CRLfile
+        else
+            c_ext.Curl_vtls_acc_ssl_crlfile(data, is_proxy);
+
+        var imported_ca_info_blob = false;
+        var imported_ca = false;
+
+        if (ca_info_blob) |blob| {
+            if (blob.data != null and blob.len > 0) {
+                const bio = ossl_ext.BIO_new_mem_buf(blob.data, @intCast(blob.len)) orelse return CURLE_OUT_OF_MEMORY;
+                defer _ = ossl_ext.BIO_free(bio);
+
+                const inf = ossl_ext.PEM_X509_INFO_read_bio(bio, null, null, null) orelse {
+                    if (!verifypeer) {
+                        ossl_ext.ERR_clear_error();
+                    } else {
+                        c_ext.Curl_failf(data, "error reading ca cert file from memory blob");
+                        return CURLE_SSL_CACERT_BADFILE;
+                    }
+                    return CURLE_OK;
+                };
+                defer ossl_ext.OPENSSL_sk_pop_free(inf, &ossl_ext.X509_INFO_free);
+
+                const count = ossl_ext.OPENSSL_sk_num(inf);
+                var i: c_int = 0;
+                while (i < count) : (i += 1) {
+                    const it: *const X509_INFO = @ptrCast(@alignCast(ossl_ext.OPENSSL_sk_value(inf, i) orelse continue));
+                    if (it.x509) |x| {
+                        if (ossl_ext.X509_STORE_add_cert(store, x) == 0) {
+                            if (verifypeer) {
+                                c_ext.Curl_failf(data, "error adding ca cert from memory blob");
+                                return CURLE_SSL_CACERT_BADFILE;
+                            }
+                            ossl_ext.ERR_clear_error();
+                        }
+                    }
+                    if (it.crl) |crl| {
+                        if (ossl_ext.X509_STORE_add_crl(store, crl) == 0) {
+                            if (verifypeer) {
+                                c_ext.Curl_failf(data, "error adding crl from memory blob");
+                                return CURLE_SSL_CACERT_BADFILE;
+                            }
+                            ossl_ext.ERR_clear_error();
+                        }
+                    }
+                }
+                ossl_ext.ERR_clear_error();
+                imported_ca_info_blob = true;
+            }
+        }
+
+        const load_file: ?[*:0]const u8 = if (!imported_ca_info_blob) ssl_cafile else null;
+        if (load_file != null or ssl_capath != null) {
+            if (ossl_ext.SSL_CTX_load_verify_locations(ssl_ctx, load_file, ssl_capath) != 1) {
+                if (verifypeer and !native_ca_store and !imported_ca_info_blob) {
+                    c_ext.Curl_failf(
+                        data,
+                        "error setting certificate verify locations:  CAfile: %s CApath: %s",
+                        load_file orelse "none",
+                        ssl_capath orelse "none",
+                    );
+                    return CURLE_SSL_CACERT_BADFILE;
+                }
+                ossl_ext.ERR_clear_error();
+            } else {
+                imported_ca = true;
+            }
+        }
+
+        if ((backend_options.ca_fallback or (load_file == null and ssl_capath == null)) and
+            !imported_ca and !imported_ca_info_blob)
+        {
             _ = ossl_ext.SSL_CTX_set_default_verify_paths(ssl_ctx);
+        }
+
+        if (ssl_crlfile) |crlfile| {
+            if (builtin.os.tag.isDarwin() and native_ca_store) {
+                c_ext.Curl_failf(data, "Darwin native CA store does not support CRLfile");
+                return CURLE_NOT_BUILT_IN;
+            }
+            const lookup = ossl_ext.X509_STORE_add_lookup(store, ossl_ext.X509_LOOKUP_file());
+            if (lookup == null or ossl_ext.X509_load_crl_file(lookup.?, crlfile, SSL_FILETYPE_PEM) == 0) {
+                c_ext.Curl_failf(data, "error loading CRL file: %s", crlfile);
+                return CURLE_SSL_CRL_BADFILE;
+            }
+            _ = ossl_ext.X509_STORE_set_flags(store, X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL);
+        }
+
+        if (verifypeer) {
+            _ = ossl_ext.X509_STORE_set_flags(store, X509_V_FLAG_TRUSTED_FIRST);
+            if (!no_partialchain) {
+                _ = ossl_ext.X509_STORE_set_flags(store, X509_V_FLAG_PARTIAL_CHAIN);
+            }
+        }
+
+        if (octx) |oc| {
+            oc.set_store_is_empty(!imported_ca and !imported_ca_info_blob and ssl_crlfile == null);
+            oc.set_x509_store_setup(true);
         }
         return CURLE_OK;
     }
 
-    const CURLE_SSL_CACERT_BADFILE: CURLcode = 77;
+    pub fn Curl_ossl_verifyhost(data: ?*CurlEasy, conn: ?*ConnectData, peer: *SslPeer, server_cert_raw: ?*anyopaque) callconv(.c) CURLcode {
+        if (conn) |c| {
+            if (c_ext.Curl_vtls_acc_conn_ssl_filter_config(c, false)) |cfg| {
+                if (!cfg.verifyhost()) return CURLE_OK;
+            }
+        }
+        const server_cert: *X509 = @ptrCast(@alignCast(server_cert_raw orelse return CURLE_PEER_FAILED_VERIFICATION));
+        const dispname = peerDispname(peer);
+        const hostname_cstr = peerHostname(peer);
+        const host_len = std.mem.len(hostname_cstr);
+        const host_slice = hostname_cstr[0..host_len];
 
-    pub fn Curl_ossl_verifyhost(data: ?*CurlEasy, conn: ?*ConnectData, peer: *SslPeer, server_cert: ?*anyopaque) callconv(.c) CURLcode {
-        _ = data;
-        _ = conn;
-        _ = peer;
-        _ = server_cert;
+        const altnames_raw = ossl_ext.X509_get_ext_d2i(server_cert, NID_subject_alt_name, null, null);
+        if (altnames_raw) |raw_sk| {
+            const altnames: *OPENSSL_STACK = @ptrCast(@alignCast(raw_sk));
+            defer ossl_ext.GENERAL_NAMES_free(altnames);
+
+            const numalts = ossl_ext.OPENSSL_sk_num(altnames);
+            var dnsmatched = false;
+            var ipmatched = false;
+
+            var i: c_int = 0;
+            while (i < numalts and !dnsmatched and !ipmatched) : (i += 1) {
+                const check: *const GENERAL_NAME = @ptrCast(@alignCast(ossl_ext.OPENSSL_sk_value(altnames, i) orelse continue));
+                if (check.type == GEN_DNS and peer.type == SSL_PEER_DNS) {
+                    const dns_str = check.d.ia5 orelse continue;
+                    const altptr = ossl_ext.ASN1_STRING_get0_data(dns_str);
+                    const altlen_int = ossl_ext.ASN1_STRING_length(dns_str);
+                    const altlen: usize = if (altlen_int >= 0) @intCast(altlen_int) else 0;
+                    if (matchDnsNameBytes(altptr, altlen, host_slice)) {
+                        dnsmatched = true;
+                        c_ext.Curl_infof(data, "  subjectAltName: host \"%s\" matched cert's \"%s\"", dispname, altptr.?);
+                    }
+                } else if (check.type == GEN_IPADD and peer.type != SSL_PEER_DNS) {
+                    const ip_str = check.d.ip orelse continue;
+                    const altptr = ossl_ext.ASN1_STRING_get0_data(ip_str);
+                    const altlen_int = ossl_ext.ASN1_STRING_length(ip_str);
+                    const altlen: usize = if (altlen_int >= 0) @intCast(altlen_int) else 0;
+                    if (matchIpSanBytes(altptr, altlen, peer.type, hostname_cstr)) {
+                        ipmatched = true;
+                        c_ext.Curl_infof(data, "  subjectAltName: host \"%s\" matched cert's IP address!", dispname);
+                    }
+                }
+            }
+
+            if (!dnsmatched and !ipmatched) {
+                c_ext.Curl_failf(data, "SSL: no alternative certificate subject name matches target host name '%s'", dispname);
+                return CURLE_PEER_FAILED_VERIFICATION;
+            }
+            return CURLE_OK;
+        }
+
+        if (peer.type != SSL_PEER_DNS) {
+            c_ext.Curl_failf(data, "SSL: no alternative certificate subject name matches target IP address '%s'", dispname);
+            return CURLE_PEER_FAILED_VERIFICATION;
+        }
+
+        var peer_cn: ?[*:0]u8 = null;
+        var cn_size: c_int = -1;
+        if (ossl_ext.X509_get_subject_name(server_cert)) |name| {
+            var i: c_int = -1;
+            var j: c_int = -1;
+            while (true) {
+                j = i;
+                i = ossl_ext.X509_NAME_get_index_by_NID(name, NID_commonName, i);
+                if (i < 0) break;
+            }
+            if (j >= 0) {
+                if (ossl_ext.X509_NAME_get_entry(name, j)) |entry| {
+                    if (ossl_ext.X509_NAME_ENTRY_get_data(entry)) |tmp| {
+                        cn_size = ossl_ext.ASN1_STRING_to_UTF8(&peer_cn, tmp);
+                    }
+                }
+            }
+        }
+        defer if (peer_cn) |cn| ossl_ext.CRYPTO_free(cn, "", 0);
+
+        if (peer_cn == null or cn_size < 0) {
+            if (cn_size == 0) {
+                c_ext.Curl_failf(data, "SSL: unable to obtain common name from peer certificate");
+                return CURLE_PEER_FAILED_VERIFICATION;
+            }
+            c_ext.Curl_failf(data, "SSL: unable to obtain common name from peer certificate");
+            return CURLE_PEER_FAILED_VERIFICATION;
+        }
+
+        const cn_ptr = peer_cn.?;
+        const cn_len: usize = @intCast(cn_size);
+        if (cn_len != std.mem.len(cn_ptr) or std.mem.indexOfScalar(u8, cn_ptr[0..cn_len], 0) != null) {
+            c_ext.Curl_failf(data, "SSL: illegal cert name field");
+            return CURLE_PEER_FAILED_VERIFICATION;
+        }
+
+        if (!matchDnsNameBytes(cn_ptr, cn_len, host_slice)) {
+            c_ext.Curl_failf(data, "SSL: certificate subject name '%s' does not match target host name '%s'", cn_ptr, dispname);
+            return CURLE_PEER_FAILED_VERIFICATION;
+        }
+
+        c_ext.Curl_infof(data, "  common name: %s (matched)", cn_ptr);
         return CURLE_OK;
     }
 
-    pub fn Curl_ossl_certchain(data: ?*CurlEasy, ssl: ?*anyopaque) callconv(.c) CURLcode {
-        _ = data;
-        _ = ssl;
+    fn pushCertinfo(data: ?*CurlEasy, mem_bio: *BIO, label: [*:0]const u8, num: c_int) CURLcode {
+        var ptr: ?[*]const u8 = null;
+        const len = ossl_ext.BIO_ctrl(mem_bio, BIO_CTRL_INFO, 0, @ptrCast(&ptr));
+        const res = if (ptr != null and len >= 0)
+            vtls_impl.Curl_ssl_push_certinfo_len(data, num, label, ptr.?, @intCast(len))
+        else
+            CURLE_OK;
+        _ = ossl_ext.BIO_ctrl(mem_bio, BIO_CTRL_RESET, 0, null);
+        return res;
+    }
+
+    fn pubkeyShow(data: ?*CurlEasy, mem_bio: *BIO, num: c_int, key_type: [*:0]const u8, name: [*:0]const u8, bn: ?*const BIGNUM) CURLcode {
+        var namebuf: [32]u8 = @splat(0);
+        _ = c_ext.curl_msnprintf(&namebuf, namebuf.len, "%s(%s)", key_type, name);
+        if (bn) |b| {
+            _ = ossl_ext.BN_print(mem_bio, b);
+        }
+        return pushCertinfo(data, mem_bio, @ptrCast(&namebuf), num);
+    }
+
+    fn dumpX509V3Ext(data: ?*CurlEasy, certnum: c_int, exts_opt: ?*const OPENSSL_STACK) CURLcode {
+        const exts = exts_opt orelse return CURLE_OK;
+        const count = ossl_ext.OPENSSL_sk_num(exts);
+        if (count <= 0) return CURLE_OK;
+
+        var i: c_int = 0;
+        while (i < count) : (i += 1) {
+            const ext: *X509_EXTENSION = @ptrCast(@alignCast(ossl_ext.OPENSSL_sk_value(exts, i) orelse continue));
+            const bio_out = ossl_ext.BIO_new(ossl_ext.BIO_s_mem()) orelse return CURLE_OUT_OF_MEMORY;
+            defer _ = ossl_ext.BIO_free(bio_out);
+
+            var namebuf: [128]u8 = @splat(0);
+            if (ossl_ext.X509_EXTENSION_get_object(ext)) |obj| {
+                const n = ossl_ext.i2t_ASN1_OBJECT(&namebuf, @intCast(namebuf.len), obj);
+                if (n >= @as(c_int, @intCast(namebuf.len))) {
+                    namebuf[namebuf.len - 1] = 0;
+                }
+            }
+
+            if (ossl_ext.X509V3_EXT_print(bio_out, ext, 0, 0) == 0) {
+                if (ossl_ext.X509_EXTENSION_get_data(ext)) |ext_data| {
+                    _ = ossl_ext.ASN1_STRING_print(bio_out, ext_data);
+                }
+            }
+
+            var ptr: ?[*]const u8 = null;
+            const len = ossl_ext.BIO_ctrl(bio_out, BIO_CTRL_INFO, 0, @ptrCast(&ptr));
+            if (ptr != null and len >= 0) {
+                const rc = vtls_impl.Curl_ssl_push_certinfo_len(data, certnum, @ptrCast(&namebuf), ptr.?, @intCast(len));
+                if (rc != CURLE_OK) return rc;
+            }
+        }
         return CURLE_OK;
+    }
+
+    fn getPkeyRsa(data: ?*CurlEasy, pubkey: *EVP_PKEY, mem_bio: *BIO, i: c_int) CURLcode {
+        var n: ?*BIGNUM = null;
+        var e: ?*BIGNUM = null;
+        defer ossl_ext.BN_clear_free(n);
+        defer ossl_ext.BN_clear_free(e);
+
+        _ = ossl_ext.EVP_PKEY_get_bn_param(pubkey, "n", &n);
+        _ = ossl_ext.EVP_PKEY_get_bn_param(pubkey, "e", &e);
+        const bits: c_int = if (n) |bn_n| ossl_ext.BN_num_bits(bn_n) else 0;
+        _ = ossl_ext.BIO_printf(mem_bio, "%d", bits);
+        var result = pushCertinfo(data, mem_bio, "RSA Public Key", i);
+        if (result == CURLE_OK) {
+            result = pubkeyShow(data, mem_bio, i, "rsa", "n", n);
+            if (result == CURLE_OK) {
+                result = pubkeyShow(data, mem_bio, i, "rsa", "e", e);
+            }
+        }
+        return result;
+    }
+
+    fn getPkeyDsaOrDh(data: ?*CurlEasy, pubkey: *EVP_PKEY, mem_bio: *BIO, i: c_int, label: [*:0]const u8) CURLcode {
+        var p: ?*BIGNUM = null;
+        var q: ?*BIGNUM = null;
+        var g: ?*BIGNUM = null;
+        var pub_key: ?*BIGNUM = null;
+        defer ossl_ext.BN_clear_free(p);
+        defer ossl_ext.BN_clear_free(q);
+        defer ossl_ext.BN_clear_free(g);
+        defer ossl_ext.BN_clear_free(pub_key);
+
+        _ = ossl_ext.EVP_PKEY_get_bn_param(pubkey, "p", &p);
+        _ = ossl_ext.EVP_PKEY_get_bn_param(pubkey, "q", &q);
+        _ = ossl_ext.EVP_PKEY_get_bn_param(pubkey, "g", &g);
+        _ = ossl_ext.EVP_PKEY_get_bn_param(pubkey, "pub", &pub_key);
+
+        var result = pubkeyShow(data, mem_bio, i, label, "p", p);
+        if (result == CURLE_OK) result = pubkeyShow(data, mem_bio, i, label, "q", q);
+        if (result == CURLE_OK) result = pubkeyShow(data, mem_bio, i, label, "g", g);
+        if (result == CURLE_OK) result = pubkeyShow(data, mem_bio, i, label, "pub_key", pub_key);
+        return result;
+    }
+
+    pub fn Curl_ossl_certchain(data: ?*CurlEasy, ssl_raw: ?*anyopaque) callconv(.c) CURLcode {
+        const ssl: *SSL = @ptrCast(@alignCast(ssl_raw orelse return CURLE_SSL_CONNECT_ERROR));
+        const sk = ossl_ext.SSL_get_peer_cert_chain(ssl) orelse return CURLE_SSL_CONNECT_ERROR;
+        const numcerts = ossl_ext.OPENSSL_sk_num(sk);
+        if (numcerts <= 0) return CURLE_SSL_CONNECT_ERROR;
+        if (numcerts > MAX_ALLOWED_CERT_AMOUNT) {
+            c_ext.Curl_failf(data, "%d certificates is more than allowed (%d)", numcerts, MAX_ALLOWED_CERT_AMOUNT);
+            return CURLE_SSL_CONNECT_ERROR;
+        }
+
+        var result = vtls_impl.Curl_ssl_init_certinfo(data, numcerts);
+        if (result != CURLE_OK) return result;
+
+        const mem_bio = ossl_ext.BIO_new(ossl_ext.BIO_s_mem()) orelse {
+            vtls_impl.Curl_ssl_free_certinfo(data);
+            return CURLE_OUT_OF_MEMORY;
+        };
+        defer _ = ossl_ext.BIO_free(mem_bio);
+
+        var i: c_int = 0;
+        while (result == CURLE_OK and i < numcerts) : (i += 1) {
+            const x: *X509 = @ptrCast(@alignCast(ossl_ext.OPENSSL_sk_value(sk, i) orelse continue));
+
+            if (ossl_ext.X509_get_subject_name(x)) |subj| {
+                _ = ossl_ext.X509_NAME_print_ex(mem_bio, subj, 0, XN_FLAG_ONELINE);
+            }
+            result = pushCertinfo(data, mem_bio, "Subject", i);
+            if (result != CURLE_OK) break;
+
+            if (ossl_ext.X509_get_issuer_name(x)) |iss| {
+                _ = ossl_ext.X509_NAME_print_ex(mem_bio, iss, 0, XN_FLAG_ONELINE);
+            }
+            result = pushCertinfo(data, mem_bio, "Issuer", i);
+            if (result != CURLE_OK) break;
+
+            _ = ossl_ext.BIO_printf(mem_bio, "%lx", @as(c_ulong, @intCast(ossl_ext.X509_get_version(x))));
+            result = pushCertinfo(data, mem_bio, "Version", i);
+            if (result != CURLE_OK) break;
+
+            if (ossl_ext.X509_get_serialNumber(x)) |num| {
+                const numdata = ossl_ext.ASN1_STRING_get0_data(num);
+                const numlen_int = ossl_ext.ASN1_STRING_length(num);
+                const numlen: usize = if (numlen_int >= 0) @intCast(numlen_int) else 0;
+                if (ossl_ext.ASN1_STRING_type(num) == V_ASN1_NEG_INTEGER) {
+                    _ = ossl_ext.BIO_puts(mem_bio, "-");
+                }
+                if (numdata) |nd| {
+                    for (0..numlen) |j| {
+                        _ = ossl_ext.BIO_printf(mem_bio, "%02x", @as(c_uint, nd[j]));
+                    }
+                }
+            }
+            result = pushCertinfo(data, mem_bio, "Serial Number", i);
+            if (result != CURLE_OK) break;
+
+            var psig: ?*const ASN1_BIT_STRING = null;
+            var sigalg: ?*const X509_ALGOR = null;
+            ossl_ext.X509_get0_signature(&psig, &sigalg, x);
+            if (sigalg) |sa| {
+                var sigalgoid: ?*const ASN1_OBJECT = null;
+                ossl_ext.X509_ALGOR_get0(&sigalgoid, null, null, sa);
+                if (sigalgoid) |oid| {
+                    _ = ossl_ext.i2a_ASN1_OBJECT(mem_bio, oid);
+                    result = pushCertinfo(data, mem_bio, "Signature Algorithm", i);
+                    if (result != CURLE_OK) break;
+                }
+            }
+
+            if (ossl_ext.X509_get_X509_PUBKEY(x)) |xpubkey| {
+                var pubkeyoid: ?*ASN1_OBJECT = null;
+                _ = ossl_ext.X509_PUBKEY_get0_param(&pubkeyoid, null, null, null, xpubkey);
+                if (pubkeyoid) |oid| {
+                    _ = ossl_ext.i2a_ASN1_OBJECT(mem_bio, oid);
+                    result = pushCertinfo(data, mem_bio, "Public Key Algorithm", i);
+                    if (result != CURLE_OK) break;
+                }
+            }
+
+            result = dumpX509V3Ext(data, i, ossl_ext.X509_get0_extensions(x));
+            if (result != CURLE_OK) break;
+
+            if (ossl_ext.X509_get0_notBefore(x)) |nb| {
+                _ = ossl_ext.ASN1_TIME_print(mem_bio, nb);
+            }
+            result = pushCertinfo(data, mem_bio, "Start date", i);
+            if (result != CURLE_OK) break;
+
+            if (ossl_ext.X509_get0_notAfter(x)) |na| {
+                _ = ossl_ext.ASN1_TIME_print(mem_bio, na);
+            }
+            result = pushCertinfo(data, mem_bio, "Expire date", i);
+            if (result != CURLE_OK) break;
+
+            const pubkey = ossl_ext.X509_get_pubkey(x);
+            if (pubkey == null) {
+                c_ext.Curl_infof(data, "   Unable to load public key");
+            } else {
+                defer ossl_ext.EVP_PKEY_free(pubkey);
+                switch (ossl_ext.EVP_PKEY_get_id(pubkey.?)) {
+                    EVP_PKEY_RSA => result = getPkeyRsa(data, pubkey.?, mem_bio, i),
+                    EVP_PKEY_DSA => result = getPkeyDsaOrDh(data, pubkey.?, mem_bio, i, "dsa"),
+                    EVP_PKEY_DH => result = getPkeyDsaOrDh(data, pubkey.?, mem_bio, i, "dh"),
+                    else => {},
+                }
+                if (result != CURLE_OK) break;
+            }
+
+            if (psig) |sig| {
+                const psigdata = ossl_ext.ASN1_STRING_get0_data(sig);
+                const psiglen_int = ossl_ext.ASN1_STRING_length(sig);
+                const psiglen: usize = if (psiglen_int >= 0) @intCast(psiglen_int) else 0;
+                if (psigdata) |sd| {
+                    for (0..psiglen) |j| {
+                        _ = ossl_ext.BIO_printf(mem_bio, "%02x:", @as(c_uint, sd[j]));
+                    }
+                }
+                result = pushCertinfo(data, mem_bio, "Signature", i);
+                if (result != CURLE_OK) break;
+            }
+
+            _ = ossl_ext.PEM_write_bio_X509(mem_bio, x);
+            result = pushCertinfo(data, mem_bio, "Cert", i);
+            if (result != CURLE_OK) break;
+        }
+
+        if (result != CURLE_OK) {
+            vtls_impl.Curl_ssl_free_certinfo(data);
+        }
+        return result;
+    }
+
+    const OsslCertsDer = struct {
+        sk: *OPENSSL_STACK,
+        buf: ?[*]u8 = null,
+        buf_max: usize = 0,
+    };
+
+    fn osslCertDerCb(
+        cf: *CurlCfilter,
+        data: ?*CurlEasy,
+        cb_user_data: ?*anyopaque,
+        cert_idx: usize,
+        pder: *?[*]u8,
+        pder_len: *usize,
+    ) callconv(.c) CURLcode {
+        _ = cf;
+        _ = data;
+        const cder: *OsslCertsDer = @ptrCast(@alignCast(cb_user_data orelse return CURLE_BAD_FUNCTION_ARGUMENT));
+        pder.* = null;
+        pder_len.* = 0;
+
+        const x: *X509 = @ptrCast(@alignCast(ossl_ext.OPENSSL_sk_value(cder.sk, @intCast(cert_idx)) orelse return CURLE_BAD_FUNCTION_ARGUMENT));
+        const der_len_int = ossl_ext.i2d_X509(x, null);
+        if (der_len_int <= 0) return CURLE_SSL_CERTPROBLEM;
+        const der_len: usize = @intCast(der_len_int);
+
+        if (der_len > cder.buf_max) {
+            if (cder.buf) |old| {
+                mem.free(old);
+                cder.buf = null;
+                cder.buf_max = 0;
+            }
+            const new_buf: [*]u8 = @ptrCast(mem.calloc(1, der_len) orelse return CURLE_OUT_OF_MEMORY);
+            cder.buf = new_buf;
+            cder.buf_max = der_len;
+        }
+
+        var p: ?[*]u8 = cder.buf orelse return CURLE_OUT_OF_MEMORY;
+        if (ossl_ext.i2d_X509(x, &p) != der_len_int) {
+            return CURLE_SSL_CERTPROBLEM;
+        }
+        pder.* = cder.buf;
+        pder_len.* = der_len;
+        return CURLE_OK;
+    }
+
+    fn osslAppleVerify(cf: *CurlCfilter, data: ?*CurlEasy, octx: *OsslCtx, peer: *const SslPeer) CURLcode {
+        const ssl = octx.ssl orelse return CURLE_SSL_CONNECT_ERROR;
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+        const sk = ossl_ext.SSL_get_peer_cert_chain(ssl) orelse return CURLE_PEER_FAILED_VERIFICATION;
+        const num_certs = ossl_ext.OPENSSL_sk_num(sk);
+        if (num_certs <= 0) return CURLE_PEER_FAILED_VERIFICATION;
+
+        var cder = OsslCertsDer{ .sk = sk };
+        defer if (cder.buf) |b| mem.free(b);
+
+        var ocsp_buf: ?[*]const u8 = null;
+        var ocsp_len: usize = 0;
+        if (conn_config.verifystatus()) {
+            const len = ossl_ext.SSL_ctrl(ssl, SSL_CTRL_GET_TLSEXT_STATUS_REQ_OCSP_RESP, 0, @ptrCast(&ocsp_buf));
+            if (ocsp_buf != null and len > 0) {
+                ocsp_len = @intCast(len);
+            }
+        }
+
+        return ossl_ext.Curl_vtls_apple_verify(
+            cf,
+            data,
+            peer,
+            @intCast(num_certs),
+            &osslCertDerCb,
+            &cder,
+            ocsp_buf,
+            ocsp_len,
+            conn_config.verifystatus(),
+        );
+    }
+
+    fn osslVerifyStatus(cf: *CurlCfilter, data: ?*CurlEasy, octx: *OsslCtx) CURLcode {
+        _ = cf;
+        const ssl = octx.ssl orelse return CURLE_SSL_INVALIDCERTSTATUS;
+        const ssl_ctx = octx.ssl_ctx orelse return CURLE_SSL_INVALIDCERTSTATUS;
+
+        var p: ?[*]const u8 = null;
+        const len = ossl_ext.SSL_ctrl(ssl, SSL_CTRL_GET_TLSEXT_STATUS_REQ_OCSP_RESP, 0, @ptrCast(&p));
+        if (p == null or len <= 0) {
+            c_ext.Curl_failf(data, "No OCSP response received");
+            return CURLE_SSL_INVALIDCERTSTATUS;
+        }
+
+        const rsp = ossl_ext.d2i_OCSP_RESPONSE(null, &p, len) orelse {
+            c_ext.Curl_failf(data, "Invalid OCSP response");
+            return CURLE_SSL_INVALIDCERTSTATUS;
+        };
+        defer ossl_ext.OCSP_RESPONSE_free(rsp);
+
+        const ostatus = ossl_ext.OCSP_response_status(rsp);
+        if (ostatus != OCSP_RESPONSE_STATUS_SUCCESSFUL) {
+            c_ext.Curl_failf(data, "Invalid OCSP response status: %s (%d)", ossl_ext.OCSP_response_status_str(ostatus), ostatus);
+            return CURLE_SSL_INVALIDCERTSTATUS;
+        }
+
+        const br = ossl_ext.OCSP_response_get1_basic(rsp) orelse {
+            c_ext.Curl_failf(data, "Invalid OCSP response");
+            return CURLE_SSL_INVALIDCERTSTATUS;
+        };
+        defer ossl_ext.OCSP_BASICRESP_free(br);
+
+        const ch = ossl_ext.SSL_get_peer_cert_chain(ssl);
+        const st = ossl_ext.SSL_CTX_get_cert_store(ssl_ctx);
+
+        if (ossl_ext.OCSP_basic_verify(br, ch, st, 0) <= 0) {
+            var err_buf: [256]u8 = @splat(0);
+            c_ext.Curl_failf(data, "OCSP response verification failed: %s", osslStrerror(ossl_ext.ERR_get_error(), &err_buf, err_buf.len));
+            return CURLE_SSL_INVALIDCERTSTATUS;
+        }
+
+        const resp_count = ossl_ext.OCSP_resp_count(br);
+        var i: c_int = 0;
+        while (i < resp_count) : (i += 1) {
+            const single = ossl_ext.OCSP_resp_get0(br, i) orelse continue;
+            var crl_reason: c_int = -1;
+            var revtime: ?*ASN1_TIME = null;
+            var thisupd: ?*ASN1_TIME = null;
+            var nextupd: ?*ASN1_TIME = null;
+
+            const cert_status = ossl_ext.OCSP_single_get0_status(single, &crl_reason, &revtime, &thisupd, &nextupd);
+            if (ossl_ext.OCSP_check_validity(thisupd, nextupd, 300, -1) == 0) {
+                c_ext.Curl_failf(data, "OCSP response has expired");
+                return CURLE_SSL_INVALIDCERTSTATUS;
+            }
+
+            c_ext.Curl_infof(data, "SSL certificate status: %s (%d)", ossl_ext.OCSP_cert_status_str(cert_status), cert_status);
+            switch (cert_status) {
+                V_OCSP_CERTSTATUS_GOOD => {},
+                V_OCSP_CERTSTATUS_REVOKED => {
+                    if (crl_reason != -1) {
+                        c_ext.Curl_failf(data, "SSL certificate revocation reason: %s (%d)", ossl_ext.OCSP_crl_reason_str(crl_reason), crl_reason);
+                    }
+                    return CURLE_SSL_INVALIDCERTSTATUS;
+                },
+                else => return CURLE_SSL_INVALIDCERTSTATUS,
+            }
+        }
+        return CURLE_OK;
+    }
+
+    fn osslCheckIssuer(cf: *CurlCfilter, data: ?*CurlEasy, server_cert: *X509) CURLcode {
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf);
+        const is_proxy = vtls_impl.Curl_ssl_cf_is_proxy(cf);
+
+        const issuer_blob: ?*const CurlBlob = if (conn_config != null and conn_config.?.issuercert_blob != null)
+            conn_config.?.issuercert_blob
+        else
+            c_ext.Curl_vtls_acc_ssl_issuercert_blob(data, is_proxy);
+
+        const issuer_file: ?[*:0]const u8 = if (conn_config != null and conn_config.?.issuercert != null)
+            conn_config.?.issuercert
+        else
+            c_ext.Curl_vtls_acc_ssl_issuercert(data, is_proxy);
+
+        if (issuer_blob == null and issuer_file == null) return CURLE_OK;
+
+        const fp: *BIO = if (issuer_blob) |blob|
+            ossl_ext.BIO_new_mem_buf(blob.data, @intCast(blob.len)) orelse return CURLE_OUT_OF_MEMORY
+        else
+            ossl_ext.BIO_new_file(issuer_file.?, "r") orelse {
+                c_ext.Curl_failf(data, "SSL: Unable to open issuer cert (%s)", issuer_file.?);
+                return CURLE_SSL_ISSUER_ERROR;
+            };
+        defer _ = ossl_ext.BIO_free(fp);
+
+        const issuer = ossl_ext.PEM_read_bio_X509(fp, null, null, null) orelse {
+            c_ext.Curl_failf(data, "SSL: Unable to read issuer cert (%s)", issuer_file orelse "blob");
+            return CURLE_SSL_ISSUER_ERROR;
+        };
+        defer ossl_ext.X509_free(issuer);
+
+        if (ossl_ext.X509_check_issued(issuer, server_cert) != X509_V_OK) {
+            c_ext.Curl_failf(data, "SSL: Certificate issuer check failed (%s)", issuer_file orelse "blob");
+            return CURLE_SSL_ISSUER_ERROR;
+        }
+
+        c_ext.Curl_infof(data, " SSL certificate issuer check ok (%s)", issuer_file orelse "blob");
+        return CURLE_OK;
+    }
+
+    fn osslCheckPinnedKey(cf: *CurlCfilter, data: ?*CurlEasy, server_cert: *X509) CURLcode {
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf);
+        const is_proxy = vtls_impl.Curl_ssl_cf_is_proxy(cf);
+        const pinned_key: ?[*:0]const u8 = if (conn_config != null and conn_config.?.pinned_key != null)
+            conn_config.?.pinned_key
+        else
+            c_ext.Curl_vtls_acc_pinned_pubkey(data, is_proxy);
+
+        const pinned = pinned_key orelse return CURLE_OK;
+
+        const xpubkey = ossl_ext.X509_get_X509_PUBKEY(server_cert) orelse {
+            c_ext.Curl_failf(data, "SSL: failed retrieving public key from server certificate");
+            return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
+        };
+        const len_int = ossl_ext.i2d_X509_PUBKEY(xpubkey, null);
+        if (len_int <= 0 or len_int > @as(c_int, @intCast(MAX_PINNED_PUBKEY_SIZE))) {
+            c_ext.Curl_failf(data, "SSL: failed retrieving public key from server certificate");
+            return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
+        }
+        const len: usize = @intCast(len_int);
+        const buff1_raw = mem.malloc(len) orelse return CURLE_OUT_OF_MEMORY;
+        defer mem.free(buff1_raw);
+
+        var temp: ?[*]u8 = @ptrCast(buff1_raw);
+        const enc_len = ossl_ext.i2d_X509_PUBKEY(xpubkey, &temp);
+        if (enc_len != len_int) {
+            c_ext.Curl_failf(data, "SSL: failed retrieving public key from server certificate");
+            return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
+        }
+        return vtls_impl.Curl_pin_peer_pubkey(data, pinned, @ptrCast(buff1_raw), len);
     }
 
     pub fn Curl_ossl_check_peer_cert(cf: *CurlCfilter, data: ?*CurlEasy, octx: *OsslCtx, peer: *SslPeer) callconv(.c) CURLcode {
-        _ = peer;
         const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+        const ssl_config = vtls_impl.Curl_ssl_cf_get_easy_config(cf, data);
         const ssl = octx.ssl orelse return CURLE_SSL_CONNECT_ERROR;
-        const vres = ossl_ext.SSL_get_verify_result(ssl);
-        if (vtls_impl.Curl_ssl_cf_get_easy_config(cf, data)) |ec| {
-            ec.certverifyresult = @intCast(vres);
-        }
-        if (vres != X509_V_OK and conn_config.verifypeer()) {
+
+        const server_cert = ossl_ext.SSL_get1_peer_certificate(ssl) orelse {
+            if (!conn_config.verifypeer() and !conn_config.verifyhost()) return CURLE_OK;
+            c_ext.Curl_failf(data, "SSL: couldn't get peer certificate!");
             return CURLE_PEER_FAILED_VERIFICATION;
+        };
+        defer ossl_ext.X509_free(server_cert);
+
+        var verified = false;
+        if (builtin.os.tag.isDarwin()) {
+            verified = octx.sectrust_session();
+        }
+
+        if (c_ext.Curl_vtls_acc_ssl_certinfo(data) and !octx.reused_session()) {
+            const rc = Curl_ossl_certchain(data, ssl);
+            if (rc != CURLE_OK) return rc;
+        }
+
+        if (conn_config.verifyhost()) {
+            const rc = Curl_ossl_verifyhost(data, cf.conn, peer, server_cert);
+            if (rc != CURLE_OK) return rc;
+        }
+
+        var result: CURLcode = CURLE_OK;
+        var ossl_verify: c_long = 0;
+
+        if (!verified and !octx.store_is_empty()) {
+            ossl_verify = ossl_ext.SSL_get_verify_result(ssl);
+            if (ssl_config) |sc| {
+                sc.certverifyresult = ossl_verify;
+            }
+            if (ossl_verify == X509_V_OK) {
+                verified = true;
+                c_ext.Curl_infof(data, " SSL certificate verify ok.");
+            }
+        }
+
+        if (builtin.os.tag.isDarwin()) {
+            if (conn_config.verifypeer() and conn_config.native_ca_store() and !verified) {
+                result = osslAppleVerify(cf, data, octx, peer);
+                if (result != CURLE_OK) return result;
+                octx.set_sectrust_verified(true);
+                verified = true;
+            }
+        }
+
+        if (!verified) {
+            if (ossl_verify == X509_V_OK) {
+                ossl_verify = ossl_ext.SSL_get_verify_result(ssl);
+                if (ssl_config) |sc| {
+                    sc.certverifyresult = ossl_verify;
+                }
+            }
+            const reason = ossl_ext.X509_verify_cert_error_string(ossl_verify);
+            if (conn_config.verifypeer()) {
+                c_ext.Curl_failf(data, "SSL certificate problem: %s", reason);
+                return CURLE_PEER_FAILED_VERIFICATION;
+            } else {
+                c_ext.Curl_infof(data, " SSL certificate verify result: %s (%ld), continuing anyway.", reason, ossl_verify);
+            }
+        }
+
+        if (conn_config.verifystatus() and !octx.reused_session()) {
+            const apple_verified_ocsp = if (builtin.os.tag.isDarwin())
+                (octx.sectrust_verified() and ossl_ext.Curl_vtls_apple_verifies_ocsp(cf, data))
+            else
+                false;
+            if (!apple_verified_ocsp) {
+                result = osslVerifyStatus(cf, data, octx);
+                if (result != CURLE_OK) return result;
+            }
+        }
+
+        result = osslCheckIssuer(cf, data, server_cert);
+        if (result != CURLE_OK) return result;
+
+        result = osslCheckPinnedKey(cf, data, server_cert);
+        if (result != CURLE_OK) return result;
+
+        return CURLE_OK;
+    }
+
+    fn useCertificateBlob(ctx: *SSL_CTX, blob: *const CurlBlob, file_type: c_int, key_passwd: ?[*:0]const u8) c_int {
+        const in = ossl_ext.BIO_new_mem_buf(blob.data, @intCast(blob.len)) orelse return 0;
+        defer _ = ossl_ext.BIO_free(in);
+
+        const x: ?*X509 = switch (file_type) {
+            SSL_FILETYPE_ASN1 => ossl_ext.d2i_X509_bio(in, null),
+            SSL_FILETYPE_PEM => ossl_ext.PEM_read_bio_X509(in, null, &passwdCallback, @ptrCast(@constCast(key_passwd))),
+            else => null,
+        };
+        const cert = x orelse return 0;
+        defer ossl_ext.X509_free(cert);
+        return ossl_ext.SSL_CTX_use_certificate(ctx, cert);
+    }
+
+    fn usePrivateKeyBlob(ctx: *SSL_CTX, blob: *const CurlBlob, file_type: c_int, key_passwd: ?[*:0]const u8) c_int {
+        const in = ossl_ext.BIO_new_mem_buf(blob.data, @intCast(blob.len)) orelse return 0;
+        defer _ = ossl_ext.BIO_free(in);
+
+        const pkey: ?*EVP_PKEY = switch (file_type) {
+            SSL_FILETYPE_PEM => ossl_ext.PEM_read_bio_PrivateKey(in, null, &passwdCallback, @ptrCast(@constCast(key_passwd))),
+            SSL_FILETYPE_ASN1 => ossl_ext.d2i_PrivateKey_bio(in, null),
+            else => null,
+        };
+        const pk = pkey orelse return 0;
+        defer ossl_ext.EVP_PKEY_free(pk);
+        return ossl_ext.SSL_CTX_use_PrivateKey(ctx, pk);
+    }
+
+    fn useCertificateChainBlob(ctx: *SSL_CTX, blob: *const CurlBlob, key_passwd: ?[*:0]const u8) c_int {
+        const in = ossl_ext.BIO_new_mem_buf(blob.data, @intCast(blob.len)) orelse return 0;
+        defer _ = ossl_ext.BIO_free(in);
+
+        ossl_ext.ERR_clear_error();
+        const x = ossl_ext.PEM_read_bio_X509_AUX(in, null, &passwdCallback, @ptrCast(@constCast(key_passwd))) orelse return 0;
+        defer ossl_ext.X509_free(x);
+
+        var ret = ossl_ext.SSL_CTX_use_certificate(ctx, x);
+        if (ossl_ext.ERR_peek_error() != 0) ret = 0;
+
+        if (ret != 0) {
+            if (ossl_ext.SSL_CTX_ctrl(ctx, SSL_CTRL_CLEAR_CHAIN_CERTS, 0, null) == 0) {
+                return 0;
+            }
+            while (ossl_ext.PEM_read_bio_X509(in, null, &passwdCallback, @ptrCast(@constCast(key_passwd)))) |ca| {
+                if (ossl_ext.SSL_CTX_ctrl(ctx, SSL_CTRL_CHAIN_CERT, 0, ca) == 0) {
+                    ossl_ext.X509_free(ca);
+                    return 0;
+                }
+            }
+            const err = ossl_ext.ERR_peek_last_error();
+            const lib_id = (err >> 23) & 0xFF;
+            const reason = err & 0x7FFFFF;
+            if ((lib_id == ERR_LIB_PEM or ((err >> 24) & 0xFF) == ERR_LIB_PEM) and reason == PEM_R_NO_START_LINE) {
+                ossl_ext.ERR_clear_error();
+            } else if (err != 0) {
+                ossl_ext.ERR_clear_error();
+            }
+        }
+        return ret;
+    }
+
+    fn configureClientCertAndKey(
+        cf: *CurlCfilter,
+        data: ?*CurlEasy,
+        ctx: *SSL_CTX,
+        conn_config: *const SslFilterConfig,
+    ) CURLcode {
+        const is_proxy = vtls_impl.Curl_ssl_cf_is_proxy(cf);
+        const cert_file: ?[*:0]const u8 = if (conn_config.clientcert) |p| p else c_ext.Curl_vtls_acc_ssl_cert(data, is_proxy);
+        const cert_blob: ?*const CurlBlob = if (conn_config.cert_blob) |b| b else c_ext.Curl_vtls_acc_ssl_cert_blob(data, is_proxy);
+        const cert_type_str: ?[*:0]const u8 = if (conn_config.cert_type) |t| t else c_ext.Curl_vtls_acc_ssl_cert_type(data, is_proxy);
+        var key_file: ?[*:0]const u8 = if (conn_config.key) |k| k else c_ext.Curl_vtls_acc_ssl_key(data, is_proxy);
+        var key_blob: ?*const CurlBlob = conn_config.key_blob;
+        const key_type_str: ?[*:0]const u8 = if (conn_config.key_type) |kt| kt else c_ext.Curl_vtls_acc_ssl_key_type(data, is_proxy);
+        const key_passwd: ?[*:0]const u8 = if (conn_config.key_passwd) |kp| kp else c_ext.Curl_vtls_acc_ssl_key_passwd(data, is_proxy);
+
+        if (cert_file == null and cert_blob == null and key_file == null and key_blob == null) {
+            return CURLE_OK;
+        }
+
+        if (key_passwd) |pw| {
+            ossl_ext.SSL_CTX_set_default_passwd_cb_userdata(ctx, @ptrCast(@constCast(pw)));
+            ossl_ext.SSL_CTX_set_default_passwd_cb(ctx, &passwdCallback);
+        }
+
+        const cert_file_type = osslDoFileType(cert_type_str);
+        if (cert_file != null or cert_blob != null) {
+            switch (cert_file_type) {
+                SSL_FILETYPE_PEM => {
+                    const ok = if (cert_blob) |cb|
+                        useCertificateChainBlob(ctx, cb, key_passwd) == 1
+                    else
+                        ossl_ext.SSL_CTX_use_certificate_chain_file(ctx, cert_file.?) == 1;
+                    if (!ok) {
+                        var err_buf: [256]u8 = @splat(0);
+                        c_ext.Curl_failf(data, "could not load PEM client certificate: %s", osslStrerror(ossl_ext.ERR_get_error(), &err_buf, err_buf.len));
+                        return CURLE_SSL_CERTPROBLEM;
+                    }
+                },
+                SSL_FILETYPE_ASN1 => {
+                    const ok = if (cert_blob) |cb|
+                        useCertificateBlob(ctx, cb, cert_file_type, key_passwd) == 1
+                    else
+                        ossl_ext.SSL_CTX_use_certificate_file(ctx, cert_file.?, cert_file_type) == 1;
+                    if (!ok) {
+                        var err_buf: [256]u8 = @splat(0);
+                        c_ext.Curl_failf(data, "could not load ASN1 client certificate: %s", osslStrerror(ossl_ext.ERR_get_error(), &err_buf, err_buf.len));
+                        return CURLE_SSL_CERTPROBLEM;
+                    }
+                },
+                else => {
+                    c_ext.Curl_failf(data, "not supported file type '%s' for certificate", cert_type_str orelse "");
+                    return CURLE_SSL_CERTPROBLEM;
+                },
+            }
+        }
+
+        if (key_file == null and key_blob == null and cert_file_type != SSL_FILETYPE_PKCS12) {
+            key_file = cert_file;
+            key_blob = cert_blob;
+        }
+
+        if (key_file != null or key_blob != null) {
+            const key_file_type = osslDoFileType(key_type_str);
+            switch (key_file_type) {
+                SSL_FILETYPE_PEM, SSL_FILETYPE_ASN1 => {
+                    const ok = if (key_blob) |kb|
+                        usePrivateKeyBlob(ctx, kb, key_file_type, key_passwd) == 1
+                    else
+                        ossl_ext.SSL_CTX_use_PrivateKey_file(ctx, key_file.?, key_file_type) == 1;
+                    if (!ok) {
+                        var err_buf: [256]u8 = @splat(0);
+                        c_ext.Curl_failf(data, "unable to set private key: %s", osslStrerror(ossl_ext.ERR_get_error(), &err_buf, err_buf.len));
+                        return CURLE_SSL_CERTPROBLEM;
+                    }
+                },
+                else => {
+                    c_ext.Curl_failf(data, "not supported file type for private key");
+                    return CURLE_SSL_CERTPROBLEM;
+                },
+            }
+
+            if (ossl_ext.SSL_CTX_check_private_key(ctx) == 0) {
+                c_ext.Curl_failf(data, "Private key does not match the certificate public key");
+                return CURLE_SSL_CERTPROBLEM;
+            }
         }
         return CURLE_OK;
+    }
+
+    fn osslNewSessionCb(ssl: *SSL, ssl_sessionid: *SSL_SESSION) callconv(.c) c_int {
+        const cf_raw = ossl_ext.SSL_get_ex_data(ssl, 0) orelse blk: {
+            const rbio = ossl_ext.SSL_get_rbio(ssl) orelse return 0;
+            break :blk ossl_ext.BIO_get_data(rbio) orelse return 0;
+        };
+        const cf: *CurlCfilter = @ptrCast(@alignCast(cf_raw));
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return 0));
+        const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return 0));
+        const data = connssl.call_data orelse return 0;
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return 0;
+        if (!conn_config.primary_cache_session()) return 0;
+        const peer_key = connssl.peer.scache_key orelse return 0;
+
+        const sess_len = ossl_ext.i2d_SSL_SESSION(ssl_sessionid, null);
+        if (sess_len <= 0) return 0;
+        const sess_buf_raw = mem.calloc(1, @intCast(sess_len)) orelse return 0;
+        var sess_ptr: ?[*]u8 = @ptrCast(sess_buf_raw);
+        const enc_len = ossl_ext.i2d_SSL_SESSION(ssl_sessionid, &sess_ptr);
+        if (enc_len <= 0 or enc_len > sess_len) {
+            mem.free(sess_buf_raw);
+            return 0;
+        }
+
+        const timeout = ossl_ext.SSL_SESSION_get_timeout(ssl_sessionid);
+        const valid_until = if (timeout > 0) c_ext.Curl_pgrs_now(data).tv_sec + @as(i64, @intCast(timeout)) else 0;
+        const ietf_tls_id = ossl_ext.SSL_version(ssl);
+        var sc_session: ?*CurlSslSession = null;
+        const res = vtls_scache_asn1.Curl_ssl_session_create2(
+            @ptrCast(sess_buf_raw),
+            @intCast(enc_len),
+            ietf_tls_id,
+            connssl.negotiated_alpn,
+            valid_until,
+            0,
+            null,
+            0,
+            &sc_session,
+        );
+        if (res != CURLE_OK or sc_session == null) return 0;
+        if (builtin.os.tag.isDarwin() and octx.sectrust_verified()) {
+            sc_session.?.setSectrustVerified(true);
+        }
+
+        var scache: ?*CurlSslScache = null;
+        var has_share_scache = false;
+        var trc_feat: ?*CurlTrcFeat = null;
+        c_ext.Curl_vtls_acc_scache_params(data, &scache, &has_share_scache, &trc_feat);
+        _ = vtls_scache_asn1.Curl_ssl_scache_put_zig(
+            cf,
+            data,
+            scache,
+            has_share_scache,
+            @ptrCast(conn_config),
+            trc_feat,
+            peer_key,
+            sc_session.?,
+        );
+        return 0;
     }
 
     fn osslConnectStep1(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
         const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
         const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
         const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+        const is_proxy = vtls_impl.Curl_ssl_cf_is_proxy(cf);
+
+        if (ossl_ext.RAND_status() == 0) {
+            c_ext.Curl_failf(data, "Insufficient randomness");
+            return CURLE_SSL_CONNECT_ERROR;
+        }
+
+        if (c_ext.Curl_vtls_acc_ssl_engine(data)) |eng_name| {
+            const prov_rc = osslSetProvider(data, octx, eng_name);
+            if (prov_rc != CURLE_OK) return prov_rc;
+        }
+
+        const ver_range = mapTlsVersionMinMax(conn_config.version, conn_config.version_max) orelse {
+            c_ext.Curl_failf(data, "OpenSSL: unsupported SSL version range");
+            return CURLE_NOT_BUILT_IN;
+        };
 
         const method = ossl_ext.TLS_client_method() orelse return CURLE_SSL_CONNECT_ERROR;
         if (octx.ssl_ctx) |old| ossl_ext.SSL_CTX_free(old);
-        octx.ssl_ctx = ossl_ext.SSL_CTX_new(method) orelse return CURLE_OUT_OF_MEMORY;
+        octx.set_x509_store_setup(false);
+        octx.ssl_ctx = if (octx.p.libctx != null)
+            ossl_ext.SSL_CTX_new_ex(octx.p.libctx, octx.p.propq, method)
+        else
+            ossl_ext.SSL_CTX_new(method);
+        const ssl_ctx = octx.ssl_ctx orelse return CURLE_OUT_OF_MEMORY;
+
+        _ = ossl_ext.SSL_CTX_ctrl(ssl_ctx, SSL_CTRL_MODE, SSL_MODE_RELEASE_BUFFERS, null);
+
+        var ctx_options: u64 = SSL_OP_ALL | SSL_OP_NO_TICKET | SSL_OP_NO_COMPRESSION;
+        _ = ossl_ext.SSL_CTX_set_options(ssl_ctx, ctx_options);
+        ctx_options = SSL_OP_NETSCAPE_REUSE_CIPHER_CHANGE_BUG;
+        if (conn_config.enable_beast()) {
+            ctx_options |= SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS;
+        }
+        _ = ossl_ext.SSL_CTX_clear_options(ssl_ctx, ctx_options);
+
+        if (ossl_ext.SSL_CTX_ctrl(ssl_ctx, SSL_CTRL_SET_MIN_PROTO_VERSION, ver_range.min_ver, null) == 0) {
+            return CURLE_SSL_CONNECT_ERROR;
+        }
+        if (ver_range.max_ver != 0) {
+            if (ossl_ext.SSL_CTX_ctrl(ssl_ctx, SSL_CTRL_SET_MAX_PROTO_VERSION, ver_range.max_ver, null) == 0) {
+                return CURLE_SSL_CONNECT_ERROR;
+            }
+        }
+
+        const ciphers: ?[*:0]const u8 = if (conn_config.cipher_list) |c| c else c_ext.Curl_vtls_acc_ssl_cipher_list(data, is_proxy);
+        if (ciphers) |c_str| {
+            if (ossl_ext.SSL_CTX_set_cipher_list(ssl_ctx, c_str) == 0) {
+                c_ext.Curl_failf(data, "failed setting cipher list: %s", c_str);
+                return CURLE_SSL_CIPHER;
+            }
+        }
+
+        const ciphers13: ?[*:0]const u8 = if (conn_config.cipher_list13) |c| c else c_ext.Curl_vtls_acc_ssl_cipher13_list(data, is_proxy);
+        if (ciphers13) |c13_str| {
+            if (ossl_ext.SSL_CTX_set_ciphersuites(ssl_ctx, c13_str) == 0) {
+                c_ext.Curl_failf(data, "failed setting TLS 1.3 cipher suite: %s", c13_str);
+                return CURLE_SSL_CIPHER;
+            }
+        }
+
+        ossl_ext.SSL_CTX_set_post_handshake_auth(ssl_ctx, 1);
+
+        const curves: ?[*:0]const u8 = if (conn_config.curves) |c| c else c_ext.Curl_vtls_acc_ssl_ec_curves(data);
+        if (curves) |curves_str| {
+            if (ossl_ext.SSL_CTX_ctrl(ssl_ctx, SSL_CTRL_SET_GROUPS_LIST, 0, @ptrCast(@constCast(curves_str))) == 0) {
+                c_ext.Curl_failf(data, "failed setting curves list: '%s'", curves_str);
+                return CURLE_SSL_CIPHER;
+            }
+        }
+
+        const sigalgs: ?[*:0]const u8 = if (conn_config.signature_algorithms) |s| s else c_ext.Curl_vtls_acc_ssl_signature_algorithms(data);
+        if (sigalgs) |sigalgs_str| {
+            if (ossl_ext.SSL_CTX_ctrl(ssl_ctx, SSL_CTRL_SET_SIGALGS_LIST, 0, @ptrCast(@constCast(sigalgs_str))) == 0) {
+                c_ext.Curl_failf(data, "failed setting signature algorithms list: '%s'", sigalgs_str);
+                return CURLE_SSL_CIPHER;
+            }
+        }
+
+        vtls_core.Curl_tls_keylog_open();
+        if (vtls_core.Curl_tls_keylog_enabled()) {
+            ossl_ext.SSL_CTX_set_keylog_callback(ssl_ctx, &osslKeylogCallback);
+        }
+
+        const cert_rc = configureClientCertAndKey(cf, data, ssl_ctx, conn_config);
+        if (cert_rc != CURLE_OK) return cert_rc;
 
         if (connssl.alpn) |alpn| {
             var proto: AlpnProtoBuf = undefined;
             if (alpnToProtoBuf(&proto, alpn) == CURLE_OK and proto.len > 0) {
-                _ = ossl_ext.SSL_CTX_set_alpn_protos(octx.ssl_ctx.?, &proto.data, @intCast(proto.len));
+                _ = ossl_ext.SSL_CTX_set_alpn_protos(ssl_ctx, &proto.data, @intCast(proto.len));
             }
         }
 
-        ossl_ext.SSL_CTX_set_verify(
-            octx.ssl_ctx.?,
-            if (conn_config.verifypeer()) SSL_VERIFY_PEER else SSL_VERIFY_NONE,
-            null,
-        );
+        ossl_ext.SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_NONE, null);
+
+        _ = ossl_ext.SSL_CTX_ctrl(ssl_ctx, SSL_CTRL_SET_SESS_CACHE_MODE, SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_NO_INTERNAL, null);
+        ossl_ext.SSL_CTX_sess_set_new_cb(ssl_ctx, &osslNewSessionCb);
 
         var fsslctx: ?*const anyopaque = null;
         var fsslctxp: ?*anyopaque = null;
         if (c_ext.Curl_vtls_acc_ssl_fsslctx(data, &fsslctx, &fsslctxp)) {
+            const store_rc = Curl_ossl_setup_x509_store(cf, data, octx);
+            if (store_rc != CURLE_OK) return store_rc;
             const cb: *const fn (?*CurlEasy, ?*anyopaque, ?*anyopaque) callconv(.c) CURLcode = @ptrCast(@alignCast(fsslctx.?));
-            const rc = cb(data, octx.ssl_ctx, fsslctxp);
-            if (rc != CURLE_OK) return rc;
+            const rc = cb(data, ssl_ctx, fsslctxp);
+            if (rc != CURLE_OK) {
+                c_ext.Curl_failf(data, "error signaled by ssl ctx callback");
+                return rc;
+            }
         }
 
-        const store_rc = Curl_ossl_setup_x509_store(cf, data, octx.ssl_ctx);
-        if (store_rc != CURLE_OK) return store_rc;
-
         if (octx.ssl) |old| ossl_ext.SSL_free(old);
-        octx.ssl = ossl_ext.SSL_new(octx.ssl_ctx.?) orelse return CURLE_OUT_OF_MEMORY;
-        ossl_ext.SSL_set_connect_state(octx.ssl.?);
+        const ssl = ossl_ext.SSL_new(ssl_ctx) orelse return CURLE_OUT_OF_MEMORY;
+        octx.ssl = ssl;
+        _ = ossl_ext.SSL_set_ex_data(ssl, 0, cf);
+        ossl_ext.SSL_set_connect_state(ssl);
 
         if (connssl.peer.sni) |sni| {
-            _ = ossl_ext.SSL_ctrl(octx.ssl.?, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name, @ptrCast(@constCast(sni)));
+            _ = ossl_ext.SSL_ctrl(ssl, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name, @ptrCast(@constCast(sni)));
+        }
+
+        if (conn_config.verifystatus()) {
+            if (ossl_ext.SSL_ctrl(ssl, SSL_CTRL_SET_TLSEXT_STATUS_REQ_TYPE, TLSEXT_STATUSTYPE_ocsp, null) == 0) {
+                return CURLE_SSL_CONNECT_ERROR;
+            }
+        }
+
+        if (conn_config.primary_cache_session()) {
+            if (connssl.peer.scache_key) |peer_key| {
+                var scache: ?*CurlSslScache = null;
+                var has_share_scache = false;
+                var trc_feat: ?*CurlTrcFeat = null;
+                c_ext.Curl_vtls_acc_scache_params(data, &scache, &has_share_scache, &trc_feat);
+                var sc_session: ?*CurlSslSession = null;
+                _ = vtls_scache_asn1.Curl_ssl_scache_take_zig(
+                    cf,
+                    data,
+                    scache,
+                    has_share_scache,
+                    @ptrCast(conn_config),
+                    trc_feat,
+                    peer_key,
+                    &sc_session,
+                );
+                if (sc_session) |scs| {
+                    defer vtls_scache_asn1.Curl_ssl_session_destroy(scs);
+                    if (scs.sdata != null and scs.sdata_len > 0) {
+                        var sdata_ptr: ?[*]const u8 = scs.sdata;
+                        if (ossl_ext.d2i_SSL_SESSION(null, &sdata_ptr, @intCast(scs.sdata_len))) |sess| {
+                            defer ossl_ext.SSL_SESSION_free(sess);
+                            if (ossl_ext.SSL_set_session(ssl, sess) == 1) {
+                                if (builtin.os.tag.isDarwin()) {
+                                    octx.set_sectrust_session(scs.isSectrustVerified());
+                                    octx.set_sectrust_verified(scs.isSectrustVerified());
+                                }
+                            } else {
+                                ossl_ext.ERR_clear_error();
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         if (octx.bio_method == null) {
-            const bm = ossl_ext.BIO_meth_new(BIO_TYPE_MEM, "cfilter") orelse return CURLE_OUT_OF_MEMORY;
-            _ = ossl_ext.BIO_meth_set_write(bm, osslBioCfOutWrite);
-            _ = ossl_ext.BIO_meth_set_read(bm, osslBioCfInRead);
-            _ = ossl_ext.BIO_meth_set_ctrl(bm, osslBioCfCtrl);
-            _ = ossl_ext.BIO_meth_set_create(bm, osslBioCfCreate);
-            _ = ossl_ext.BIO_meth_set_destroy(bm, osslBioCfDestroy);
+            const bm = ossl_ext.BIO_meth_new(BIO_TYPE_MEM, "OpenSSL CF BIO") orelse return CURLE_OUT_OF_MEMORY;
+            _ = ossl_ext.BIO_meth_set_write(bm, &osslBioCfOutWrite);
+            _ = ossl_ext.BIO_meth_set_read(bm, &osslBioCfInRead);
+            _ = ossl_ext.BIO_meth_set_ctrl(bm, &osslBioCfCtrl);
+            _ = ossl_ext.BIO_meth_set_create(bm, &osslBioCfCreate);
+            _ = ossl_ext.BIO_meth_set_destroy(bm, &osslBioCfDestroy);
             octx.bio_method = bm;
         }
 
         const bio = ossl_ext.BIO_new(octx.bio_method.?) orelse return CURLE_OUT_OF_MEMORY;
         ossl_ext.BIO_set_data(bio, cf);
-        ossl_ext.SSL_set_bio(octx.ssl.?, bio, bio);
+        ossl_ext.SSL_set_bio(ssl, bio, bio);
 
         connssl.connecting_state = ssl_connect_2;
         return CURLE_OK;
@@ -3622,6 +5345,11 @@ const openssl_backend = struct {
         const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
         const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
         const ssl = octx.ssl orelse return CURLE_SSL_CONNECT_ERROR;
+
+        if (!octx.x509_store_setup()) {
+            const store_rc = Curl_ossl_setup_x509_store(cf, data, octx);
+            if (store_rc != CURLE_OK) return store_rc;
+        }
 
         ossl_ext.ERR_clear_error();
         const ret = ossl_ext.SSL_connect(ssl);
@@ -3634,10 +5362,25 @@ const openssl_backend = struct {
                 connssl.io_need = CURL_SSL_IO_NEED_SEND;
                 return CURLE_OK;
             }
+            if (octx.io_result != CURLE_OK and octx.io_result != CURLE_AGAIN) {
+                return octx.io_result;
+            }
+            var err_buf: [256]u8 = @splat(0);
+            const ssl_err = ossl_ext.ERR_get_error();
+            if (ssl_err != 0) {
+                c_ext.Curl_failf(data, "OpenSSL SSL_connect: %s in connection to %s", osslStrerror(ssl_err, &err_buf, err_buf.len), peerDispname(&connssl.peer));
+            }
             return CURLE_SSL_CONNECT_ERROR;
         }
 
         connssl.connecting_state = ssl_connect_3;
+        if (ossl_ext.SSL_session_reused(ssl) != 0) {
+            octx.set_reused_session(true);
+            c_ext.Curl_infof(data, "SSL reusing session ID");
+        } else {
+            octx.set_reused_session(false);
+        }
+
         if (connssl.alpn != null) {
             var next_proto: ?[*]const u8 = null;
             var next_proto_len: c_uint = 0;
@@ -3658,6 +5401,8 @@ const openssl_backend = struct {
         }
         done.* = false;
         connssl.io_need = CURL_SSL_IO_NEED_NONE;
+        connssl.call_data = data;
+        defer connssl.call_data = null;
 
         if (connssl.connecting_state == ssl_connect_1) {
             const rc = osslConnectStep1(cf, data);
@@ -3696,7 +5441,6 @@ const openssl_backend = struct {
         len: usize,
         pnwritten: *usize,
     ) callconv(.c) CURLcode {
-        _ = data;
         const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SEND_ERROR));
         const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SEND_ERROR));
         const ssl = octx.ssl orelse return CURLE_SEND_ERROR;
@@ -3704,8 +5448,15 @@ const openssl_backend = struct {
         pnwritten.* = 0;
         ossl_ext.ERR_clear_error();
         connssl.io_need = CURL_SSL_IO_NEED_NONE;
+        connssl.call_data = data;
+        defer connssl.call_data = null;
 
-        const memlen: c_int = if (len > std.math.maxInt(c_int)) std.math.maxInt(c_int) else @intCast(len);
+        var memlen: c_int = if (len > std.math.maxInt(c_int)) std.math.maxInt(c_int) else @intCast(len);
+        if (octx.blocked_ssl_write_len > 0 and octx.blocked_ssl_write_len < memlen) {
+            memlen = octx.blocked_ssl_write_len;
+        }
+        octx.blocked_ssl_write_len = 0;
+
         const nwritten = ossl_ext.SSL_write(ssl, mem_ptr, memlen);
         if (nwritten > 0) {
             pnwritten.* = @intCast(nwritten);
@@ -3715,13 +5466,18 @@ const openssl_backend = struct {
         return switch (err) {
             SSL_ERROR_WANT_READ => blk: {
                 connssl.io_need = CURL_SSL_IO_NEED_RECV;
+                octx.blocked_ssl_write_len = memlen;
                 break :blk CURLE_AGAIN;
             },
             SSL_ERROR_WANT_WRITE => blk: {
                 connssl.io_need = CURL_SSL_IO_NEED_SEND;
+                octx.blocked_ssl_write_len = memlen;
                 break :blk CURLE_AGAIN;
             },
-            SSL_ERROR_SYSCALL => if (octx.io_result == CURLE_AGAIN) CURLE_AGAIN else CURLE_SEND_ERROR,
+            SSL_ERROR_SYSCALL => if (octx.io_result == CURLE_AGAIN) blk: {
+                octx.blocked_ssl_write_len = memlen;
+                break :blk CURLE_AGAIN;
+            } else CURLE_SEND_ERROR,
             else => CURLE_SEND_ERROR,
         };
     }
@@ -3733,7 +5489,6 @@ const openssl_backend = struct {
         buffersize: usize,
         pnread: *usize,
     ) callconv(.c) CURLcode {
-        _ = data;
         const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_RECV_ERROR));
         const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return CURLE_RECV_ERROR));
         const ssl = octx.ssl orelse return CURLE_RECV_ERROR;
@@ -3741,6 +5496,8 @@ const openssl_backend = struct {
         pnread.* = 0;
         ossl_ext.ERR_clear_error();
         connssl.io_need = CURL_SSL_IO_NEED_NONE;
+        connssl.call_data = data;
+        defer connssl.call_data = null;
 
         const buffsize: c_int = if (buffersize > std.math.maxInt(c_int)) std.math.maxInt(c_int) else @intCast(buffersize);
         const nread = ossl_ext.SSL_read(ssl, buf, buffsize);
@@ -3750,7 +5507,10 @@ const openssl_backend = struct {
         }
         const err = ossl_ext.SSL_get_error(ssl, nread);
         return switch (err) {
-            SSL_ERROR_NONE, SSL_ERROR_ZERO_RETURN => CURLE_OK,
+            SSL_ERROR_NONE, SSL_ERROR_ZERO_RETURN => blk: {
+                connssl.set_input_pending(false);
+                break :blk CURLE_OK;
+            },
             SSL_ERROR_WANT_READ => blk: {
                 connssl.io_need = CURL_SSL_IO_NEED_RECV;
                 break :blk CURLE_AGAIN;
@@ -3759,21 +5519,109 @@ const openssl_backend = struct {
                 connssl.io_need = CURL_SSL_IO_NEED_SEND;
                 break :blk CURLE_AGAIN;
             },
-            SSL_ERROR_SYSCALL => if (octx.io_result == CURLE_AGAIN) CURLE_AGAIN else CURLE_RECV_ERROR,
+            SSL_ERROR_SYSCALL => if (octx.io_result == CURLE_AGAIN) CURLE_AGAIN else if (connssl.peer_closed() and ossl_ext.ERR_peek_error() == 0) CURLE_OK else CURLE_RECV_ERROR,
             else => CURLE_RECV_ERROR,
         };
     }
 
     fn osslShutdown(cf: *CurlCfilter, data: ?*CurlEasy, send_shutdown: bool, done: *bool) callconv(.c) CURLcode {
-        _ = data;
-        _ = send_shutdown;
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_OK));
-        const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return CURLE_OK));
-        if (octx.ssl) |ssl| {
-            _ = ossl_ext.SSL_shutdown(ssl);
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse {
+            done.* = true;
+            return CURLE_OK;
+        }));
+        const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse {
+            done.* = true;
+            return CURLE_OK;
+        }));
+        const ssl = octx.ssl orelse {
+            done.* = true;
+            cf.setShutdown(true);
+            return CURLE_OK;
+        };
+        if (cf.isShutdown()) {
+            done.* = true;
+            return CURLE_OK;
         }
-        done.* = true;
-        return CURLE_OK;
+
+        connssl.io_need = CURL_SSL_IO_NEED_NONE;
+        connssl.call_data = data;
+        defer connssl.call_data = null;
+        done.* = false;
+
+        var buf: [1024]u8 = undefined;
+        var nread: c_int = -1;
+        var err: c_int = SSL_ERROR_NONE;
+        var result: CURLcode = CURLE_OK;
+
+        if ((ossl_ext.SSL_get_shutdown(ssl) & SSL_SENT_SHUTDOWN) == 0) {
+            ossl_ext.ERR_clear_error();
+            for (0..10) |_| {
+                nread = ossl_ext.SSL_read(ssl, &buf, @intCast(buf.len));
+                if (nread <= 0) break;
+            }
+            err = ossl_ext.SSL_get_error(ssl, nread);
+            if (nread == 0 and err == SSL_ERROR_ZERO_RETURN) {
+                var input_pending = false;
+                if (!send_shutdown) {
+                    done.* = true;
+                    cf.setShutdown(true);
+                    connssl.set_input_pending(false);
+                    return CURLE_OK;
+                } else if (cf.next != null and !cf.next.?.cft.is_alive(cf.next.?, data, &input_pending)) {
+                    connssl.set_peer_closed(true);
+                    done.* = true;
+                    cf.setShutdown(true);
+                    connssl.set_input_pending(false);
+                    return CURLE_OK;
+                }
+            }
+        }
+
+        if (send_shutdown and (ossl_ext.SSL_get_shutdown(ssl) & SSL_SENT_SHUTDOWN) == 0) {
+            ossl_ext.ERR_clear_error();
+            const rc = ossl_ext.SSL_shutdown(ssl);
+            if (rc == 1) {
+                done.* = true;
+                cf.setShutdown(true);
+                connssl.set_input_pending(false);
+                return CURLE_OK;
+            }
+            if (ossl_ext.SSL_get_error(ssl, rc) == SSL_ERROR_WANT_WRITE) {
+                connssl.io_need = CURL_SSL_IO_NEED_SEND;
+                connssl.set_input_pending(false);
+                return CURLE_OK;
+            }
+        }
+
+        for (0..10) |_| {
+            ossl_ext.ERR_clear_error();
+            nread = ossl_ext.SSL_read(ssl, &buf, @intCast(buf.len));
+            if (nread <= 0) break;
+        }
+        err = ossl_ext.SSL_get_error(ssl, nread);
+        switch (err) {
+            SSL_ERROR_ZERO_RETURN => {
+                _ = ossl_ext.SSL_shutdown(ssl);
+                done.* = true;
+            },
+            SSL_ERROR_NONE, SSL_ERROR_WANT_READ => {
+                connssl.io_need = CURL_SSL_IO_NEED_RECV;
+            },
+            SSL_ERROR_WANT_WRITE => {
+                connssl.io_need = CURL_SSL_IO_NEED_SEND;
+            },
+            else => {
+                _ = sslErrorToStr(err);
+                done.* = true;
+                result = CURLE_OK;
+            },
+        }
+
+        cf.setShutdown(result != CURLE_OK or done.*);
+        if (cf.isShutdown() or connssl.io_need != CURL_SSL_IO_NEED_NONE) {
+            connssl.set_input_pending(false);
+        }
+        return result;
     }
 
     fn osslClose(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) void {
@@ -3787,11 +5635,17 @@ const openssl_backend = struct {
         if (octx.ssl_ctx) |ctx| {
             ossl_ext.SSL_CTX_free(ctx);
             octx.ssl_ctx = null;
+            octx.set_x509_store_setup(false);
         }
         if (octx.bio_method) |bm| {
             ossl_ext.BIO_meth_free(bm);
             octx.bio_method = null;
         }
+        osslProviderCleanup(octx);
+    }
+
+    fn osslCloseAll(data: ?*CurlEasy) callconv(.c) void {
+        _ = data;
     }
 
     fn osslGetInternals(connssl: *SslConnectData, info: c_uint) callconv(.c) ?*anyopaque {
@@ -3818,6 +5672,45 @@ const openssl_backend = struct {
         return true;
     }
 
+    fn osslGetChannelBinding(data: ?*CurlEasy, sockindex: i8, binding: *DynBuf) callconv(.c) CURLcode {
+        const conn = c_ext.Curl_vtls_acc_data_conn(data) orelse return CURLE_OK;
+        var cf = c_ext.Curl_vtls_acc_conn_cfilter(conn, sockindex);
+        while (cf) |cur| : (cf = cur.next) {
+            if (cur.cft == &vtls_impl.Curl_cft_ssl) {
+                const connssl: *SslConnectData = @ptrCast(@alignCast(cur.ctx orelse return CURLE_OK));
+                const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return CURLE_OK));
+                const ssl = octx.ssl orelse return CURLE_OK;
+                const server_cert = ossl_ext.SSL_get1_peer_certificate(ssl) orelse return CURLE_OK;
+                defer ossl_ext.X509_free(server_cert);
+
+                const sig_nid = ossl_ext.X509_get_signature_nid(server_cert);
+                var digest_nid: c_int = NID_undef;
+                var digest_algo: *const EVP_MD = ossl_ext.EVP_sha256();
+                if (ossl_ext.OBJ_find_sigid_algs(sig_nid, &digest_nid, null) != 0 and
+                    digest_nid != NID_md5 and digest_nid != NID_sha1 and digest_nid != NID_undef)
+                {
+                    if (ossl_ext.OBJ_nid2sn(digest_nid)) |sn| {
+                        if (ossl_ext.EVP_get_digestbyname(sn)) |md| {
+                            digest_algo = md;
+                        }
+                    }
+                }
+
+                const prefix = "tls-server-end-point:";
+                const rc = containers.curlx_dyn_addn(binding, prefix.ptr, prefix.len);
+                if (rc != CURLE_OK) return rc;
+
+                var hash_buf: [64]u8 = @splat(0);
+                var hash_len: c_uint = 0;
+                if (ossl_ext.X509_digest(server_cert, digest_algo, &hash_buf, &hash_len) == 0 or hash_len == 0) {
+                    return CURLE_SSL_CONNECT_ERROR;
+                }
+                return containers.curlx_dyn_addn(binding, &hash_buf, hash_len);
+            }
+        }
+        return CURLE_OK;
+    }
+
     pub const Curl_ssl_openssl = CurlSsl{
         .info = .{ .id = CURLSSLBACKEND_OPENSSL, .name = "openssl" },
         .supports = SSLSUPP_CA_PATH | SSLSUPP_CERTINFO | SSLSUPP_PINNEDPUBKEY | SSLSUPP_SSL_CTX | SSLSUPP_HTTPS_PROXY | SSLSUPP_TLS13_CIPHERSUITES | SSLSUPP_CAINFO_BLOB | SSLSUPP_CIPHER_LIST | SSLSUPP_CA_CACHE | SSLSUPP_CRLFILE | SSLSUPP_ISSUERCERT | SSLSUPP_ISSUERCERT_BLOB | SSLSUPP_SSL_EC_CURVES | SSLSUPP_SIGNATURE_ALGORITHMS,
@@ -3833,14 +5726,92 @@ const openssl_backend = struct {
         .adjust_pollset = vtls_impl.Curl_ssl_adjust_pollset,
         .get_internals = osslGetInternals,
         .close = osslClose,
-        .close_all = null,
+        .close_all = osslCloseAll,
         .engines_list = null,
         .sha256sum = osslSha256sum,
         .recv_plain = osslRecv,
         .send_plain = osslSend,
-        .get_channel_binding = null,
+        .get_channel_binding = osslGetChannelBinding,
     };
+
+    test "openssl_backend DNS SAN, wildcard SAN, embedded NUL, IPv4/IPv6 SAN, and CN fallback" {
+        const exact_dns = "example.com";
+        const wildcard_dns = "*.example.com";
+        const embedded_nul_dns = "example.com\x00.evil.com";
+
+        // Exact & wildcard DNS matching
+        try std.testing.expect(matchDnsNameBytes(exact_dns.ptr, exact_dns.len, "example.com"));
+        try std.testing.expect(!matchDnsNameBytes(exact_dns.ptr, exact_dns.len, "sub.example.com"));
+        try std.testing.expect(matchDnsNameBytes(wildcard_dns.ptr, wildcard_dns.len, "sub.example.com"));
+        try std.testing.expect(!matchDnsNameBytes(wildcard_dns.ptr, wildcard_dns.len, "a.b.example.com"));
+
+        // Embedded NUL rejection in DNS SAN
+        try std.testing.expect(!matchDnsNameBytes(embedded_nul_dns.ptr, embedded_nul_dns.len, "example.com"));
+
+        // IPv4 and IPv6 SAN matching
+        const ipv4_bytes = [_]u8{ 192, 0, 2, 1 };
+        try std.testing.expect(matchIpSanBytes(&ipv4_bytes, ipv4_bytes.len, SSL_PEER_IPV4, "192.0.2.1"));
+        try std.testing.expect(!matchIpSanBytes(&ipv4_bytes, ipv4_bytes.len, SSL_PEER_IPV4, "192.0.2.2"));
+        try std.testing.expect(!matchIpSanBytes(&ipv4_bytes, ipv4_bytes.len, SSL_PEER_IPV6, "192.0.2.1"));
+
+        const ipv6_bytes = [_]u8{
+            0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0,
+            0,    0,    0,    0,    0, 0, 0, 1,
+        };
+        try std.testing.expect(matchIpSanBytes(&ipv6_bytes, ipv6_bytes.len, SSL_PEER_IPV6, "2001:db8::1"));
+        try std.testing.expect(!matchIpSanBytes(&ipv6_bytes, ipv6_bytes.len, SSL_PEER_IPV6, "2001:db8::2"));
+
+        // Synthetic RFC 2818 SAN + CN fallback flow:
+        // 1. Matching wildcard DNS SAN
+        const san_list = [_]SanEntry{
+            .{ .san_type = GEN_DNS, .data = wildcard_dns.ptr, .len = wildcard_dns.len },
+            .{ .san_type = GEN_IPADD, .data = &ipv4_bytes, .len = ipv4_bytes.len },
+        };
+        try std.testing.expectEqual(HostVerifyOutcome.matched_dns_san, verifyHostSynthetic(SSL_PEER_DNS, "api.example.com", &san_list, "ignored.example.com"));
+        try std.testing.expectEqual(HostVerifyOutcome.matched_ip_san, verifyHostSynthetic(SSL_PEER_IPV4, "192.0.2.1", &san_list, null));
+
+        // 2. When SANs exist but do not match, must NOT fall back to matching CN!
+        try std.testing.expectEqual(HostVerifyOutcome.san_mismatch, verifyHostSynthetic(SSL_PEER_DNS, "other.org", &san_list, "other.org"));
+
+        // 3. When no SANs exist: IP peer fails, DNS peer falls back to CN (and rejects embedded NUL in CN)
+        try std.testing.expectEqual(HostVerifyOutcome.no_san_for_ip, verifyHostSynthetic(SSL_PEER_IPV4, "192.0.2.1", null, "192.0.2.1"));
+        try std.testing.expectEqual(HostVerifyOutcome.matched_cn, verifyHostSynthetic(SSL_PEER_DNS, "example.com", null, "example.com"));
+        try std.testing.expectEqual(HostVerifyOutcome.cn_embedded_nul, verifyHostSynthetic(SSL_PEER_DNS, "example.com", null, embedded_nul_dns));
+        try std.testing.expectEqual(HostVerifyOutcome.cn_mismatch, verifyHostSynthetic(SSL_PEER_DNS, "example.com", null, "wrong.example.com"));
+        try std.testing.expectEqual(HostVerifyOutcome.cn_missing, verifyHostSynthetic(SSL_PEER_DNS, "example.com", null, null));
+    }
+
+    test "openssl_backend TLS version range, file type, password cb, and SHA-256 helpers" {
+        const def_range = mapTlsVersionMinMax(CURL_SSLVERSION_DEFAULT, CURL_SSLVERSION_MAX_DEFAULT).?;
+        try std.testing.expectEqual(TLS1_VERSION, def_range.min_ver);
+        try std.testing.expectEqual(@as(c_long, 0), def_range.max_ver);
+
+        const v12_v13 = mapTlsVersionMinMax(CURL_SSLVERSION_TLSv1_2, CURL_SSLVERSION_MAX_TLSv1_3).?;
+        try std.testing.expectEqual(TLS1_2_VERSION, v12_v13.min_ver);
+        try std.testing.expectEqual(TLS1_3_VERSION, v12_v13.max_ver);
+
+        try std.testing.expect(mapTlsVersionMinMax(CURL_SSLVERSION_SSLv3, CURL_SSLVERSION_MAX_DEFAULT) == null);
+        try std.testing.expect(mapTlsVersionMinMax(CURL_SSLVERSION_TLSv1_3, @as(u32, CURL_SSLVERSION_TLSv1_2) << 16) == null);
+
+        try std.testing.expectEqual(SSL_FILETYPE_PEM, osslDoFileType(null));
+        try std.testing.expectEqual(SSL_FILETYPE_PEM, osslDoFileType("PEM"));
+        try std.testing.expectEqual(SSL_FILETYPE_ASN1, osslDoFileType("DER"));
+        try std.testing.expectEqual(SSL_FILETYPE_PKCS12, osslDoFileType("P12"));
+        try std.testing.expectEqual(@as(c_int, -1), osslDoFileType("UNKNOWN"));
+
+        var pw_buf: [16]u8 = @splat(0);
+        const secret: [*:0]const u8 = "s3cr3t";
+        try std.testing.expectEqual(@as(c_int, 6), passwdCallback(&pw_buf, pw_buf.len, 0, @ptrCast(@constCast(secret))));
+        try std.testing.expectEqualStrings("s3cr3t", pw_buf[0..6]);
+
+        var sha_out: [32]u8 = undefined;
+        try std.testing.expectEqual(CURLE_OK, osslSha256sum("abc", 3, &sha_out, sha_out.len));
+        try std.testing.expectEqual(@as(u8, 0xba), sha_out[0]);
+    }
 };
+comptime {
+    _ = openssl_backend;
+}
 
 // ============================================================================
 // 4. lib/vtls/mbedtls.c — mbedTLS Backend
