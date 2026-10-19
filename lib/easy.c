@@ -74,6 +74,7 @@
 #include "bufref.h"
 #include "altsvc.h"
 #include "hsts.h"
+#include "socks.h"
 #include "curl_sspi.h" /* Curl_sspi_global_init()/Curl_sspi_global_cleanup() */
 #include "curlx/timeval.h" /* for curlx_now_init() */
 #include "curlx/version_win32.h" /* for curlx_verify_windows_init() */
@@ -1477,4 +1478,230 @@ void *Curl_meta_get(struct Curl_easy *data, const char *key)
 void Curl_meta_reset(struct Curl_easy *data)
 {
   Curl_hash_clean(&data->meta_hash);
+}
+
+/* Accessor helpers for Zig-ported tftp, socks, and telnet modules */
+struct connectdata *Curl_easy_get_conn(struct Curl_easy *data);
+curl_socket_t Curl_conn_get_sock(const struct connectdata *conn,
+                                 int sockindex);
+bool Curl_easy_get_verbose(const struct Curl_easy *data);
+
+bool Curl_tftp_is_upload(const struct Curl_easy *data);
+bool Curl_tftp_prefer_ascii(const struct Curl_easy *data);
+void Curl_tftp_set_prefer_ascii(struct Curl_easy *data, bool val);
+curl_off_t Curl_tftp_infilesize(const struct Curl_easy *data);
+char *Curl_tftp_up_path(struct Curl_easy *data);
+bool Curl_tftp_no_options(const struct Curl_easy *data);
+unsigned int Curl_tftp_blksize(const struct Curl_easy *data);
+curl_off_t Curl_tftp_add_writebytecount(struct Curl_easy *data, size_t nbytes);
+bool Curl_conn_is_bound(const struct connectdata *conn);
+void Curl_conn_set_bound(struct connectdata *conn, bool val);
+void Curl_conn_set_transport_wanted(struct connectdata *conn,
+                                    uint8_t transport);
+
+uint8_t Curl_socks_get_socks5auth(const struct Curl_easy *data);
+bool Curl_socks_is_auth_only(const struct Curl_easy *data);
+uint8_t Curl_socks_get_ipver(const struct Curl_easy *data);
+void Curl_socks_set_pxcode(struct Curl_easy *data, uint8_t pxcode);
+void Curl_conn_set_socks5_authenticated(struct connectdata *conn, bool val);
+bool Curl_socks5_has_gssapi(void);
+CURLcode Curl_socks5_gssapi_negotiate(struct Curl_cfilter *cf,
+                                      struct Curl_easy *data,
+                                      struct Curl_creds *creds);
+bool Curl_conn_socks5_gssapi_enctype(const struct connectdata *conn);
+
+bool Curl_telnet_has_creds(const struct Curl_easy *data);
+const char *Curl_telnet_creds_user(const struct Curl_easy *data);
+struct curl_slist *Curl_telnet_get_options(const struct Curl_easy *data);
+bool Curl_telnet_is_fread_set(const struct Curl_easy *data);
+size_t Curl_telnet_invoke_fread(struct Curl_easy *data,
+                                char *buf, size_t size);
+int Curl_telnet_get_in_fd(const struct Curl_easy *data);
+
+struct connectdata *Curl_easy_get_conn(struct Curl_easy *data)
+{
+  return data->conn;
+}
+
+curl_socket_t Curl_conn_get_sock(const struct connectdata *conn,
+                                 int sockindex)
+{
+  return conn->sock[sockindex];
+}
+
+bool Curl_easy_get_verbose(const struct Curl_easy *data)
+{
+  return data->set.verbose;
+}
+
+bool Curl_tftp_is_upload(const struct Curl_easy *data)
+{
+  return data->state.upload;
+}
+
+bool Curl_tftp_prefer_ascii(const struct Curl_easy *data)
+{
+  return data->state.prefer_ascii;
+}
+
+void Curl_tftp_set_prefer_ascii(struct Curl_easy *data, bool val)
+{
+  data->state.prefer_ascii = val;
+}
+
+curl_off_t Curl_tftp_infilesize(const struct Curl_easy *data)
+{
+  return data->state.infilesize;
+}
+
+char *Curl_tftp_up_path(struct Curl_easy *data)
+{
+  return data->state.up.path;
+}
+
+bool Curl_tftp_no_options(const struct Curl_easy *data)
+{
+  return data->set.tftp_no_options;
+}
+
+unsigned int Curl_tftp_blksize(const struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_TFTP
+  return data->set.tftp_blksize;
+#else
+  (void)data;
+  return 0;
+#endif
+}
+
+curl_off_t Curl_tftp_add_writebytecount(struct Curl_easy *data, size_t nbytes)
+{
+  data->req.writebytecount += nbytes;
+  return data->req.writebytecount;
+}
+
+bool Curl_conn_is_bound(const struct connectdata *conn)
+{
+  return conn->bits.bound;
+}
+
+void Curl_conn_set_bound(struct connectdata *conn, bool val)
+{
+  conn->bits.bound = val;
+}
+
+void Curl_conn_set_transport_wanted(struct connectdata *conn,
+                                    uint8_t transport)
+{
+  conn->transport_wanted = transport;
+}
+
+uint8_t Curl_socks_get_socks5auth(const struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_PROXY
+  return data->set.socks5auth;
+#else
+  (void)data;
+  return 0;
+#endif
+}
+
+bool Curl_socks_is_auth_only(const struct Curl_easy *data)
+{
+  return data->set.socks5_auth_only;
+}
+
+uint8_t Curl_socks_get_ipver(const struct Curl_easy *data)
+{
+  return data->set.ipver;
+}
+
+void Curl_socks_set_pxcode(struct Curl_easy *data, uint8_t pxcode)
+{
+  data->info.pxcode = pxcode;
+}
+
+void Curl_conn_set_socks5_authenticated(struct connectdata *conn, bool val)
+{
+#ifndef CURL_DISABLE_PROXY
+  conn->bits.socks5_authenticated = val;
+#else
+  (void)conn;
+  (void)val;
+#endif
+}
+
+bool Curl_socks5_has_gssapi(void)
+{
+#if defined(HAVE_GSSAPI) || defined(USE_WINDOWS_SSPI)
+  return TRUE;
+#else
+  return FALSE;
+#endif
+}
+
+CURLcode Curl_socks5_gssapi_negotiate(struct Curl_cfilter *cf,
+                                      struct Curl_easy *data,
+                                      struct Curl_creds *creds)
+{
+#if !defined(CURL_DISABLE_PROXY) && \
+  (defined(HAVE_GSSAPI) || defined(USE_WINDOWS_SSPI))
+  return Curl_SOCKS5_gssapi_negotiate(cf, data, creds);
+#else
+  (void)cf;
+  (void)data;
+  (void)creds;
+  return CURLE_NOT_BUILT_IN;
+#endif
+}
+
+bool Curl_conn_socks5_gssapi_enctype(const struct connectdata *conn)
+{
+#if defined(HAVE_GSSAPI) || defined(USE_WINDOWS_SSPI)
+  return conn->socks5_gssapi_enctype != 0;
+#else
+  (void)conn;
+  return FALSE;
+#endif
+}
+
+bool Curl_telnet_has_creds(const struct Curl_easy *data)
+{
+  return data->state.creds != NULL;
+}
+
+const char *Curl_telnet_creds_user(const struct Curl_easy *data)
+{
+  return Curl_creds_user(data->conn->creds);
+}
+
+struct curl_slist *Curl_telnet_get_options(const struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_TELNET
+  return data->set.telnet_options;
+#else
+  (void)data;
+  return NULL;
+#endif
+}
+
+bool Curl_telnet_is_fread_set(const struct Curl_easy *data)
+{
+  return data->set.is_fread_set;
+}
+
+size_t Curl_telnet_invoke_fread(struct Curl_easy *data,
+                                char *buf, size_t size)
+{
+  return data->state.fread_func(buf, 1, size, data->state.in);
+}
+
+int Curl_telnet_get_in_fd(const struct Curl_easy *data)
+{
+#ifndef USE_WINSOCK
+  return fileno((FILE *)data->state.in);
+#else
+  (void)data;
+  return -1;
+#endif
 }
