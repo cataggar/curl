@@ -137,39 +137,47 @@ bool Curl_eapi_enter(struct Curl_eapi_guard *guard,
 struct Curl_getinfo_ctx {
   struct PureInfo *info;
   struct curl_tlssessioninfo *tsi;
-  const char *url;
-  const char *customrequest;
-  const char *referer;
+  const char *url_str;
+  const char *referer_str;
+  const char *custom_request;
   const char *ftp_entrypath;
-  const char *most_recent_ftp_entrypath;
+  const char *rtsp_session_id;
+  const char *cainfo_default;
+  const char *capath_default;
+  void *private_data;
+  int64_t xfer_id;
+  int64_t last_conn_id;
+  int64_t deliver;
+  int64_t earlydata_sent;
+  int64_t ul_total_size;
+  int64_t ul_cur_size;
+  int64_t ul_speed;
+  int64_t dl_total_size;
+  int64_t dl_cur_size;
+  int64_t dl_speed;
   int64_t spent_us;
-  int64_t ns_us;
+  int64_t queued_us;
+  int64_t nslookup_us;
   int64_t connect_us;
   int64_t appconnect_us;
   int64_t pretransfer_us;
-  int64_t posttransfer_us;
   int64_t starttransfer_us;
-  int64_t redirect_us;
-  int64_t queue_us;
-  int64_t earlydata_sent;
-  int64_t ul_cur_size;
-  int64_t dl_cur_size;
-  int64_t dl_speed;
-  int64_t ul_speed;
-  int64_t dl_total_size;
-  int64_t ul_total_size;
-  long rtsp_client_cseq;
-  long rtsp_server_cseq;
-  long rtsp_cseq_recv;
-  uint32_t redirects;
-  unsigned char httpreq;
-  unsigned char path_as_is;
-  unsigned char prefer_ascii;
-  unsigned char timecond;
-  unsigned char used_proxy;
-  unsigned char dl_size_known;
-  unsigned char ul_size_known;
-  unsigned char _pad;
+  int64_t posttransfer_us;
+  int64_t startredirect_us;
+  long ssl_verifyresult;
+  long proxy_ssl_verifyresult;
+  uint32_t rtsp_next_client_CSeq;
+  uint32_t rtsp_next_server_CSeq;
+  uint32_t rtsp_CSeq_recv;
+  int os_errno;
+  uint16_t followlocation;
+  uint8_t httpreq;
+  uint8_t path_as_is;
+  uint8_t opt_no_body;
+  uint8_t timecond;
+  uint8_t used_proxy;
+  uint8_t ul_size_known;
+  uint8_t dl_size_known;
 };
 
 void Curl_initinfo_zig(struct Curl_easy *data,
@@ -204,45 +212,73 @@ CURLcode Curl_getinfo(struct Curl_easy *data, CURLINFO info, ...)
   va_end(arg);
   ctx.info = &data->info;
   ctx.tsi = &data->tsi;
-  ctx.url = Curl_bufref_ptr(&data->state.url);
-  ctx.customrequest = CURL_EASY_STR(data, STRING_CUSTOMREQUEST);
-  ctx.referer = Curl_bufref_ptr(&data->state.referer);
-  ctx.ftp_entrypath = NULL;
-  ctx.most_recent_ftp_entrypath = data->state.most_recent_ftp_entrypath;
+  ctx.url_str = Curl_bufref_ptr(&data->state.url);
+  ctx.referer_str = Curl_bufref_ptr(&data->state.referer);
+  ctx.custom_request = CURL_EASY_STR(data, STRING_CUSTOMREQUEST);
+  ctx.ftp_entrypath = data->state.most_recent_ftp_entrypath;
+#ifndef CURL_DISABLE_RTSP
+  ctx.rtsp_session_id = CURL_EASY_STR(data, STRING_RTSP_SESSION_ID);
+#else
+  ctx.rtsp_session_id = NULL;
+#endif
+#ifdef CURL_CA_BUNDLE
+  ctx.cainfo_default = CURL_CA_BUNDLE;
+#else
+  ctx.cainfo_default = NULL;
+#endif
+#ifdef CURL_CA_PATH
+  ctx.capath_default = CURL_CA_PATH;
+#else
+  ctx.capath_default = NULL;
+#endif
+  ctx.private_data = data->set.private_data;
+  ctx.xfer_id = data->id;
+  ctx.last_conn_id = data->state.last_conn_id;
+  ctx.deliver = data->progress.deliver;
+  ctx.earlydata_sent = data->progress.earlydata_sent;
+  ctx.ul_total_size = data->progress.ul.total_size;
+  ctx.ul_cur_size = data->progress.ul.cur_size;
+  ctx.ul_speed = data->progress.ul.speed;
+  ctx.dl_total_size = data->progress.dl.total_size;
+  ctx.dl_cur_size = data->progress.dl.cur_size;
+  ctx.dl_speed = data->progress.dl.speed;
   ctx.spent_us = data->progress.total.spent_us;
-  ctx.ns_us = data->progress.total.nslookup_us;
+  ctx.queued_us = data->progress.total.queued_us;
+  ctx.nslookup_us = data->progress.total.nslookup_us;
   ctx.connect_us = data->progress.total.connect_us;
   ctx.appconnect_us = data->progress.total.appconnect_us;
   ctx.pretransfer_us = data->progress.total.pretransfer_us;
-  ctx.posttransfer_us = data->progress.total.posttransfer_us;
   ctx.starttransfer_us = data->progress.total.starttransfer_us;
-  ctx.redirect_us = data->progress.delta.startredirect_us;
-  ctx.queue_us = data->progress.total.queued_us;
-  ctx.earlydata_sent = data->progress.earlydata_sent;
-  ctx.ul_cur_size = data->progress.ul.cur_size;
-  ctx.dl_cur_size = data->progress.dl.cur_size;
-  ctx.dl_speed = data->progress.dl.speed;
-  ctx.ul_speed = data->progress.ul.speed;
-  ctx.dl_total_size = data->progress.dl.total_size;
-  ctx.ul_total_size = data->progress.ul.total_size;
-#ifndef CURL_DISABLE_RTSP
-  ctx.rtsp_client_cseq = data->state.rtsp_next_client_CSeq;
-  ctx.rtsp_server_cseq = data->state.rtsp_next_server_CSeq;
-  ctx.rtsp_cseq_recv = data->state.rtsp_CSeq_recv;
+  ctx.posttransfer_us = data->progress.total.posttransfer_us;
+  ctx.startredirect_us = data->progress.delta.startredirect_us;
+  ctx.ssl_verifyresult = data->set.ssl.certverifyresult;
+#ifndef CURL_DISABLE_PROXY
+  ctx.proxy_ssl_verifyresult = data->set.proxy_ssl.certverifyresult;
 #else
-  ctx.rtsp_client_cseq = 0;
-  ctx.rtsp_server_cseq = 0;
-  ctx.rtsp_cseq_recv = 0;
+  ctx.proxy_ssl_verifyresult = 0;
 #endif
-  ctx.redirects = data->state.followlocation;
+#ifndef CURL_DISABLE_RTSP
+  ctx.rtsp_next_client_CSeq = data->state.rtsp_next_client_CSeq;
+  ctx.rtsp_next_server_CSeq = data->state.rtsp_next_server_CSeq;
+  ctx.rtsp_CSeq_recv = data->state.rtsp_CSeq_recv;
+#else
+  ctx.rtsp_next_client_CSeq = 0;
+  ctx.rtsp_next_server_CSeq = 0;
+  ctx.rtsp_CSeq_recv = 0;
+#endif
+  ctx.os_errno = data->state.os_errno;
+  ctx.followlocation = data->state.followlocation;
   ctx.httpreq = data->state.httpreq;
   ctx.path_as_is = data->set.path_as_is ? 1 : 0;
-  ctx.prefer_ascii = data->state.prefer_ascii ? 1 : 0;
+  ctx.opt_no_body = data->set.opt_no_body ? 1 : 0;
   ctx.timecond = data->info.timecond ? 1 : 0;
+#ifndef CURL_DISABLE_PROXY
   ctx.used_proxy = data->info.used_proxy ? 1 : 0;
-  ctx.dl_size_known = data->progress.dl_size_known ? 1 : 0;
+#else
+  ctx.used_proxy = 0;
+#endif
   ctx.ul_size_known = data->progress.ul_size_known ? 1 : 0;
-  ctx._pad = 0;
+  ctx.dl_size_known = data->progress.dl_size_known ? 1 : 0;
   return Curl_getinfo_zig(data, &ctx, info, paramp);
 }
 
