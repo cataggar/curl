@@ -1257,3 +1257,176 @@ CURLcode config2setopts(struct OperationConfig *config,
 
   return result;
 }
+
+#include "slist_wc.h"
+#include "tool_easysrc.h"
+#include "tool_main.h"
+
+#if !defined(_WIN32) && !(defined(__AMIGA__) && !defined(__amigaos4__))
+#ifdef HAVE_TERMIOS_H
+#include <termios.h>
+#elif defined(HAVE_TERMIO_H)
+#include <termio.h>
+#endif
+#endif
+
+extern CURLcode Curl_zig_easysrc_add_formatted(struct slist_wc **pplist,
+                                               char *ret);
+
+CURLcode easysrc_addf(struct slist_wc **plist, const char *fmt, ...)
+{
+  char *bufp;
+  va_list ap;
+  va_start(ap, fmt);
+  bufp = curl_mvaprintf(fmt, ap);
+  va_end(ap);
+  return Curl_zig_easysrc_add_formatted(plist, bufp);
+}
+
+#ifndef _WIN32
+bool Curl_zig_ttyecho(bool enable, int fd)
+{
+#ifdef HAVE_TERMIOS_H
+  static struct termios withecho;
+  static struct termios noecho;
+  if(!enable) {
+    tcgetattr(fd, &withecho);
+    noecho = withecho;
+    noecho.c_lflag &= ~(tcflag_t)ECHO;
+    tcsetattr(fd, TCSANOW, &noecho);
+    return TRUE;
+  }
+  tcsetattr(fd, TCSAFLUSH, &withecho);
+  return TRUE;
+#elif defined(HAVE_TERMIO_H)
+  static struct termio withecho;
+  static struct termio noecho;
+  if(!enable) {
+    ioctl(fd, TCGETA, &withecho);
+    noecho = withecho;
+    noecho.c_lflag &= ~(tcflag_t)ECHO;
+    ioctl(fd, TCSETA, &noecho);
+    return TRUE;
+  }
+  ioctl(fd, TCSETA, &withecho);
+  return TRUE;
+#else
+  (void)enable;
+  (void)fd;
+  return FALSE;
+#endif
+}
+#endif
+
+CURLcode Curl_zig_ssls_setopt(struct OperationConfig *config,
+                              CURLSH *share, CURL *easy)
+{
+  CURLcode result = curl_easy_setopt(easy, CURLOPT_SHARE, share);
+  if(!result && (global->tracetype != TRACE_NONE)) {
+    result = my_setopt_ptr(easy, CURLOPT_DEBUGFUNCTION, tool_debug_cb);
+    if(!result)
+      result = my_setopt_ptr(easy, CURLOPT_DEBUGDATA, config);
+    my_setopt_long(easy, CURLOPT_VERBOSE, 1L);
+  }
+  return result;
+}
+
+FILE *Curl_zig_stdout(void)
+{
+  return stdout;
+}
+
+const char *Curl_zig_global_get_libcurl(void)
+{
+  return global->libcurl;
+}
+
+bool Curl_zig_stdin_regular_size(curl_off_t *porigin, curl_off_t *psize)
+{
+  int fd = fileno(stdin);
+  curl_off_t origin;
+  curlx_struct_stat sbuf;
+
+  CURL_BINMODE(stdin);
+  origin = ftell(stdin);
+  *porigin = origin;
+  if(fd >= 0 && origin >= 0 && !curlx_fstat(fd, &sbuf) &&
+     S_ISREG(sbuf.st_mode)) {
+    curl_off_t size = sbuf.st_size - origin;
+    if(size < 0)
+      size = 0;
+    *psize = size;
+    return TRUE;
+  }
+  return FALSE;
+}
+
+int Curl_zig_fseek(FILE *stream, curl_off_t offset, int whence)
+{
+  return curlx_fseek(stream, offset, whence);
+}
+
+size_t Curl_zig_sizeof_operation_config(void)
+{
+  return sizeof(struct OperationConfig);
+}
+
+size_t Curl_zig_sizeof_getout(void)
+{
+  return sizeof(struct getout);
+}
+
+void Curl_zig_config_init_bits(struct OperationConfig *config)
+{
+  config->use_httpget = FALSE;
+  config->create_dirs = FALSE;
+  config->proto_present = FALSE;
+  config->proto_redir_present = FALSE;
+  config->tcp_nodelay = TRUE;
+  config->http09_allowed = FALSE;
+  config->ftp_skip_ip = TRUE;
+}
+
+static struct GlobalConfig globalconf_storage;
+
+struct GlobalConfig *Curl_zig_global_init_storage(
+  struct OperationConfig *first)
+{
+  memset(&globalconf_storage, 0, sizeof(globalconf_storage));
+  globalconf_storage.showerror = FALSE;
+  globalconf_storage.styled_output = TRUE;
+  globalconf_storage.parallel_max = PARALLEL_DEFAULT;
+  globalconf_storage.first = first;
+  globalconf_storage.last = first;
+  return &globalconf_storage;
+}
+
+struct OperationConfig *Curl_zig_global_free_fields(struct GlobalConfig *g)
+{
+  struct OperationConfig *last;
+  curlx_safefree(g->trace_dump);
+  if(g->trace_fopened && g->trace_stream)
+    curlx_fclose(g->trace_stream);
+  g->trace_stream = NULL;
+  curlx_safefree(g->ssl_sessions);
+  curlx_safefree(g->libcurl);
+#ifdef _WIN32
+  curlx_free(g->term.buf);
+#endif
+  last = g->last;
+  g->first = NULL;
+  g->last = NULL;
+  return last;
+}
+
+void Curl_zig_getout_init_bits(struct OperationConfig *config,
+                               struct getout *node, curl_off_t num)
+{
+  node->useremote = config->remote_name_all;
+  node->num = num;
+}
+
+bool Curl_zig_config_is_jsoned(struct OperationConfig *config)
+{
+  return config->jsoned ? TRUE : FALSE;
+}

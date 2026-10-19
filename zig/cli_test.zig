@@ -267,3 +267,157 @@ test "curl debug trace, progress bar, stderr redirection, and file upload callba
     defer gpa.free(err_file_data);
     try std.testing.expect(std.mem.find(u8, err_file_data, "curl: (") != null);
 }
+
+test "cli_help_params: --help, --help category, --help http, and --help all" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+
+    const help_res = try std.process.run(gpa, io, .{
+        .argv = &.{ build_options.curl_exe_path, "--help" },
+    });
+    defer gpa.free(help_res.stdout);
+    defer gpa.free(help_res.stderr);
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, help_res.term);
+    try std.testing.expect(std.mem.find(u8, help_res.stdout, "Usage: curl [options...] <url>") != null);
+    try std.testing.expect(std.mem.find(u8, help_res.stdout, "--help category") != null);
+
+    const cat_res = try std.process.run(gpa, io, .{
+        .argv = &.{ build_options.curl_exe_path, "--help", "category" },
+    });
+    defer gpa.free(cat_res.stdout);
+    defer gpa.free(cat_res.stderr);
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, cat_res.term);
+    try std.testing.expect(std.mem.find(u8, cat_res.stdout, "http") != null);
+    try std.testing.expect(std.mem.find(u8, cat_res.stdout, "tls") != null);
+
+    const http_res = try std.process.run(gpa, io, .{
+        .argv = &.{ build_options.curl_exe_path, "--help", "http" },
+    });
+    defer gpa.free(http_res.stdout);
+    defer gpa.free(http_res.stderr);
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, http_res.term);
+    try std.testing.expect(std.mem.find(u8, http_res.stdout, "--header") != null);
+
+    const all_res = try std.process.run(gpa, io, .{
+        .argv = &.{ build_options.curl_exe_path, "--help", "all" },
+    });
+    defer gpa.free(all_res.stdout);
+    defer gpa.free(all_res.stderr);
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, all_res.term);
+    try std.testing.expect(std.mem.find(u8, all_res.stdout, "--libcurl") != null);
+}
+
+test "cli_help_params: --libcurl codegen, -F formparse, -O remote-name, and param helpers" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const payload = "remote-name and libcurl test payload\n";
+    try tmp.dir.writeFile(io, .{ .sub_path = "remote_item.txt", .data = payload });
+    try tmp.dir.writeFile(io, .{ .sub_path = "hdrs.txt", .data = "X-Form-File-Hdr: from-file\r\n" });
+
+    const dir_path = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir_path);
+
+    const base_url = try makeFileUrl(gpa, dir_path);
+    defer gpa.free(base_url);
+
+    const file_url = try std.fmt.allocPrint(gpa, "{s}/remote_item.txt?ignored_query=1", .{base_url});
+    defer gpa.free(file_url);
+
+    const libcurl_c_path = try std.fmt.allocPrint(gpa, "{s}/generated_client.c", .{dir_path});
+    defer gpa.free(libcurl_c_path);
+
+    const hdr_file_arg = try std.fmt.allocPrint(
+        gpa,
+        "meta=value1;type=text/plain;headers=X-Inline: 1;headers=@{s}/hdrs.txt",
+        .{dir_path},
+    );
+    defer gpa.free(hdr_file_arg);
+
+    const result = try std.process.run(gpa, io, .{
+        .argv = &.{
+            build_options.curl_exe_path,
+            "-s",
+            "--output-dir",
+            dir_path,
+            "-O",
+            file_url,
+            "--libcurl",
+            libcurl_c_path,
+            "--connect-timeout",
+            "2.5",
+            "--max-redirs",
+            "5",
+            "--proto",
+            "=file,http",
+            "-F",
+            hdr_file_arg,
+            "-F",
+            "nested=(;type=multipart/alternative",
+            "-F",
+            "inner=hello world;encoder=8bit",
+            "-F",
+            "=)",
+        },
+    });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, result.term);
+
+    const saved_remote = try tmp.dir.readFileAlloc(io, "remote_item.txt", gpa, .limited(256));
+    defer gpa.free(saved_remote);
+    try std.testing.expectEqualStrings(payload, saved_remote);
+
+    const gen_c = try tmp.dir.readFileAlloc(io, "generated_client.c", gpa, .limited(16384));
+    defer gpa.free(gen_c);
+    try std.testing.expect(std.mem.find(u8, gen_c, "#include <curl/curl.h>") != null);
+    try std.testing.expect(std.mem.find(u8, gen_c, "curl_mime_init(") != null);
+    try std.testing.expect(std.mem.find(u8, gen_c, "curl_mime_subparts(") != null);
+    try std.testing.expect(std.mem.find(u8, gen_c, "X-Form-File-Hdr: from-file") != null);
+    try std.testing.expect(std.mem.find(u8, gen_c, "CURLOPT_CONNECTTIMEOUT_MS") != null);
+    try std.testing.expect(std.mem.find(u8, gen_c, "curl_easy_perform(curl)") != null);
+}
+
+test "cli_help_params: ipfs_gateway URL rewrite with --ipfs-gateway" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir_path);
+
+    const libcurl_c_path = try std.fmt.allocPrint(gpa, "{s}/ipfs_client.c", .{dir_path});
+    defer gpa.free(libcurl_c_path);
+
+    const result = try std.process.run(gpa, io, .{
+        .argv = &.{
+            build_options.curl_exe_path,
+            "-s",
+            "--ipfs-gateway",
+            "http://127.0.0.1:1/",
+            "--connect-timeout",
+            "0.05",
+            "--libcurl",
+            libcurl_c_path,
+            "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi/hello.txt",
+        },
+    });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    const gen_c = try tmp.dir.readFileAlloc(io, "ipfs_client.c", gpa, .limited(16384));
+    defer gpa.free(gen_c);
+    try std.testing.expect(
+        std.mem.find(
+            u8,
+            gen_c,
+            "\"http://127.0.0.1:1/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi/hello.txt\"",
+        ) != null,
+    );
+}
