@@ -465,11 +465,11 @@ const loopback_tls = struct {
         const MBEDTLS_ERR_SSL_WANT_READ: c_int = -0x6900;
         const MBEDTLS_ERR_SSL_WANT_WRITE: c_int = -0x6880;
 
-        const SslContext = extern struct { data: [128]u64 = @splat(0) };
-        const SslConfig = extern struct { data: [64]u64 = @splat(0) };
+        const SslContext = extern struct { data: [144]u64 = @splat(0) };
+        const SslConfig = extern struct { data: [80]u64 = @splat(0) };
         const X509Crt = extern struct { data: [128]u64 = @splat(0) };
         const PkContext = extern struct { data: [16]u64 = @splat(0) };
-        const EntropyContext = extern struct { data: [128]u64 = @splat(0) };
+        const EntropyContext = extern struct { data: [4800]u64 = @splat(0) };
         const CtrDrbgContext = extern struct { data: [64]u64 = @splat(0) };
 
         extern fn psa_crypto_init() callconv(.c) c_int;

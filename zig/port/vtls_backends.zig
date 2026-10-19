@@ -7382,11 +7382,11 @@ const mbedtls_backend = struct {
         sig_pk: c_int = 0,
         sig_opts: ?*anyopaque = null,
         next: ?*mbedtls_x509_crt = null,
-        _extra_pad: [64]u8 = @splat(0),
+        _extra_pad: [256]u8 = @splat(0),
     };
 
     pub const mbedtls_x509_crl = extern struct {
-        _data: [64]u64 = @splat(0),
+        _data: [128]u64 = @splat(0),
     };
 
     pub const mbedtls_ssl_config = extern struct {
@@ -7397,7 +7397,7 @@ const mbedtls_backend = struct {
         authmode: u8 = 0,
         allow_legacy_renegotiation: u8 = 0,
         _pad0: u32 = 0,
-        _data: [64]u64 = @splat(0),
+        _data: [80]u64 = @splat(0),
     };
 
     pub const mbedtls_ssl_context = extern struct {
@@ -7410,15 +7410,15 @@ const mbedtls_backend = struct {
     };
 
     pub const mbedtls_ssl_session = extern struct {
-        _data: [72]u64 = @splat(0),
+        _data: [80]u64 = @splat(0),
     };
 
     pub const mbedtls_entropy_context = extern struct {
-        _data: [128]u64 = @splat(0),
+        _data: [4800]u64 = @splat(0),
     };
 
     pub const mbedtls_ctr_drbg_context = extern struct {
-        _data: [56]u64 = @splat(0),
+        _data: [64]u64 = @splat(0),
     };
 
     pub const MbedSslBackendData = extern struct {
@@ -7463,9 +7463,25 @@ const mbedtls_backend = struct {
         extern fn mbedtls_ssl_conf_ciphersuites(conf: *mbedtls_ssl_config, ciphersuites: [*]const c_int) callconv(.c) void;
         extern fn mbedtls_ssl_conf_alpn_protocols(conf: *mbedtls_ssl_config, protos: [*]?[*:0]const u8) callconv(.c) c_int;
         fn mbedtls_ssl_conf_min_tls_version(conf: *mbedtls_ssl_config, min_tls_version: c_int) void {
+            if (comptime use_mbedtls) {
+                if (mbedtls_version_get_number() < 0x03000000) {
+                    const bytes: [*]u8 = @ptrCast(conf);
+                    bytes[2] = @intCast((min_tls_version >> 8) & 0xFF);
+                    bytes[3] = @intCast(min_tls_version & 0xFF);
+                    return;
+                }
+            }
             conf.min_tls_version = min_tls_version;
         }
         fn mbedtls_ssl_conf_max_tls_version(conf: *mbedtls_ssl_config, max_tls_version: c_int) void {
+            if (comptime use_mbedtls) {
+                if (mbedtls_version_get_number() < 0x03000000) {
+                    const bytes: [*]u8 = @ptrCast(conf);
+                    bytes[0] = @intCast((max_tls_version >> 8) & 0xFF);
+                    bytes[1] = @intCast(@min(max_tls_version & 0xFF, 3));
+                    return;
+                }
+            }
             conf.max_tls_version = max_tls_version;
         }
 
@@ -7758,10 +7774,30 @@ const mbedtls_backend = struct {
         _ = crt;
     }
 
+    fn crtNext(crt: *const mbedtls_x509_crt) ?*const mbedtls_x509_crt {
+        if (comptime use_mbedtls) {
+            if (mbed_ext.mbedtls_version_get_number() < 0x03000000) {
+                const base: [*]const u8 = @ptrCast(crt);
+                const next_ptr: *align(8) const ?*const mbedtls_x509_crt = @ptrCast(@alignCast(base + 608));
+                return next_ptr.*;
+            }
+        }
+        return crt.next;
+    }
+
+    fn sslTlsVersion(ssl: *const mbedtls_ssl_context) c_int {
+        if (comptime use_mbedtls) {
+            if (mbed_ext.mbedtls_version_get_number() < 0x03000000) {
+                return MBEDTLS_SSL_VERSION_TLS1_2;
+            }
+        }
+        return ssl.tls_version;
+    }
+
     fn mbed_extract_certinfo(data: ?*CurlEasy, crt_opt: ?*const mbedtls_x509_crt) void {
         var cur = crt_opt;
         var cert_count: c_int = 0;
-        while (cur != null and cert_count <= MAX_ALLOWED_CERT_AMOUNT) : (cur = cur.?.next) {
+        while (cur != null and cert_count <= MAX_ALLOWED_CERT_AMOUNT) : (cur = crtNext(cur.?)) {
             cert_count += 1;
         }
         if (cert_count == 0) return;
@@ -7775,7 +7811,7 @@ const mbedtls_backend = struct {
         cur = crt_opt;
         while (result == CURLE_OK and cur != null) : ({
             i += 1;
-            cur = cur.?.next;
+            cur = crtNext(cur.?);
         }) {
             if (cur.?.raw.p) |raw_p| {
                 result = vtls_scache_asn1.Curl_extract_certinfo_zig(
@@ -8112,7 +8148,7 @@ const mbedtls_backend = struct {
             return CURLE_OK;
         }
 
-        const ietf_tls_id = backend.ssl.tls_version;
+        const ietf_tls_id = sslTlsVersion(&backend.ssl);
         var sc_session: ?*CurlSslSession = null;
         var result = vtls_scache_asn1.Curl_ssl_session_create(
             sdata,
@@ -8150,6 +8186,11 @@ const mbedtls_backend = struct {
             c_ext.Curl_infof(data, "mbedTLS: Connecting to %s:%d", orig.hostname, @as(c_int, orig.port));
         }
 
+        var result = mbed_set_ssl_version_min_max(data, backend, conn_config);
+        if (result != CURLE_OK) return result;
+        const ver_min = backend.config.min_tls_version;
+        const ver_max = backend.config.max_tls_version;
+
         mbed_ext.mbedtls_ssl_config_init(&backend.config);
         var ret = mbed_ext.mbedtls_ssl_config_defaults(
             &backend.config,
@@ -8168,11 +8209,8 @@ const mbedtls_backend = struct {
         mbed_ext.mbedtls_ssl_init(&backend.ssl);
         backend.flags.initialized = true;
 
-        var result = mbed_set_ssl_version_min_max(data, backend, conn_config);
-        if (result != CURLE_OK) return result;
-
-        mbed_ext.mbedtls_ssl_conf_min_tls_version(&backend.config, backend.config.min_tls_version);
-        mbed_ext.mbedtls_ssl_conf_max_tls_version(&backend.config, backend.config.max_tls_version);
+        mbed_ext.mbedtls_ssl_conf_min_tls_version(&backend.config, ver_min);
+        mbed_ext.mbedtls_ssl_conf_max_tls_version(&backend.config, ver_max);
 
         mbed_ext.mbedtls_ssl_conf_rng(&backend.config, mbed_ext.mbedtls_ctr_drbg_random, &backend.ctr_drbg);
 
@@ -8509,7 +8547,7 @@ const mbedtls_backend = struct {
 
         if (connssl.connecting_state == ssl_connect_3) {
             const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
-            if (backend.ssl.tls_version <= MBEDTLS_SSL_VERSION_TLS1_2) {
+            if (sslTlsVersion(&backend.ssl) <= MBEDTLS_SSL_VERSION_TLS1_2) {
                 const result = mbed_new_session(cf, data);
                 if (result != CURLE_OK) return result;
             }
@@ -8925,10 +8963,16 @@ const mbedtls_backend = struct {
         );
         try std.testing.expect(backend.ciphersuites != null);
         const cs = backend.ciphersuites.?;
-        try std.testing.expectEqual(@as(c_int, 0x1301), cs[0]);
-        try std.testing.expectEqual(@as(c_int, 0xC02F), cs[1]);
-        try std.testing.expectEqual(@as(c_int, 0xC02B), cs[2]);
-        try std.testing.expectEqual(@as(c_int, 0), cs[3]);
+        if (validateCiphersuiteId(0x1301)) {
+            try std.testing.expectEqual(@as(c_int, 0x1301), cs[0]);
+            try std.testing.expectEqual(@as(c_int, 0xC02F), cs[1]);
+            try std.testing.expectEqual(@as(c_int, 0xC02B), cs[2]);
+            try std.testing.expectEqual(@as(c_int, 0), cs[3]);
+        } else {
+            try std.testing.expectEqual(@as(c_int, 0xC02F), cs[0]);
+            try std.testing.expectEqual(@as(c_int, 0xC02B), cs[1]);
+            try std.testing.expectEqual(@as(c_int, 0), cs[2]);
+        }
 
         // All invalid cipher names -> CURLE_SSL_CIPHER
         try std.testing.expectEqual(
