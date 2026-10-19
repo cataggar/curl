@@ -1,11 +1,7 @@
 const std = @import("std");
 const libcurl = @import("libcurl.zig");
 
-pub const c_sources = [_][]const u8{
-    "src/config2setopts.c",
-    "src/tool_main.c",
-    "src/tool_operate.c",
-};
+pub const c_sources = [_][]const u8{};
 
 pub const curlx_c_sources = [_][]const u8{};
 

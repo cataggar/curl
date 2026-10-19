@@ -502,3 +502,71 @@ test "cli_getparam_setopt: --libcurl generates C source and parse_args handles -
     try std.testing.expect(std.mem.find(u8, generated, "CURLOPT_HTTPHEADER, slist1") != null);
     try std.testing.expect(std.mem.find(u8, generated, "CURLOPT_MAXFILESIZE_LARGE, (curl_off_t)10240") != null);
 }
+
+test "cli_main_operate: parallel transfers (-Z), --parallel-max, and config2setopts" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(io, .{ .sub_path = "p1.txt", .data = "parallel-one\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "p2.txt", .data = "parallel-two\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "p3.txt", .data = "parallel-three\n" });
+
+    const dir_path = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir_path);
+
+    const base_url = try makeFileUrl(gpa, dir_path);
+    defer gpa.free(base_url);
+
+    const url1 = try std.fmt.allocPrint(gpa, "{s}/p1.txt", .{base_url});
+    defer gpa.free(url1);
+    const url2 = try std.fmt.allocPrint(gpa, "{s}/p2.txt", .{base_url});
+    defer gpa.free(url2);
+    const url3 = try std.fmt.allocPrint(gpa, "{s}/p3.txt", .{base_url});
+    defer gpa.free(url3);
+
+    const out1 = try std.fmt.allocPrint(gpa, "{s}/out1.txt", .{dir_path});
+    defer gpa.free(out1);
+    const out2 = try std.fmt.allocPrint(gpa, "{s}/out2.txt", .{dir_path});
+    defer gpa.free(out2);
+    const out3 = try std.fmt.allocPrint(gpa, "{s}/out3.txt", .{dir_path});
+    defer gpa.free(out3);
+
+    const result = try std.process.run(gpa, io, .{
+        .argv = &.{
+            build_options.curl_exe_path,
+            "-sS",
+            "--parallel",
+            "--parallel-max",
+            "2",
+            "--parallel-immediate",
+            url1,
+            "-o",
+            out1,
+            url2,
+            "-o",
+            out2,
+            url3,
+            "-o",
+            out3,
+        },
+    });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, result.term);
+
+    const d1 = try tmp.dir.readFileAlloc(io, "out1.txt", gpa, .limited(256));
+    defer gpa.free(d1);
+    try std.testing.expectEqualStrings("parallel-one\n", d1);
+
+    const d2 = try tmp.dir.readFileAlloc(io, "out2.txt", gpa, .limited(256));
+    defer gpa.free(d2);
+    try std.testing.expectEqualStrings("parallel-two\n", d2);
+
+    const d3 = try tmp.dir.readFileAlloc(io, "out3.txt", gpa, .limited(256));
+    defer gpa.free(d3);
+    try std.testing.expectEqualStrings("parallel-three\n", d3);
+}

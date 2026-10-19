@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const backend_options = @import("backend_options");
 const mem = @import("mem.zig");
 const primitives = @import("primitives.zig");
 const containers = @import("containers.zig");
@@ -2581,7 +2582,7 @@ const schannel_verify = struct {
 };
 
 comptime {
-    if (builtin.os.tag == .windows) {
+    if (builtin.os.tag == .windows and backend_options.ssl == .schannel) {
         @export(&schannel_verify.Curl_verify_host, .{ .name = "Curl_verify_host" });
         @export(&schannel_verify.Curl_verify_certificate, .{ .name = "Curl_verify_certificate" });
     }
