@@ -35,6 +35,9 @@ jobs:
       - name: Build and test (zero-dep default)
         run: zig build test --summary all
 
+      - name: Run tests (ReleaseSafe)
+        run: zig build test -Doptimize=ReleaseSafe --summary all
+
       - name: Build and test (-Dzstd=true)
         run: zig build test -Dzstd=true --summary all
 

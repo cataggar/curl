@@ -9,8 +9,16 @@ pub const Options = struct {
 
 pub const c_flags = [_][]const u8{
     "-std=gnu11",
-    "-fno-sanitize=undefined",
     "-Wno-unused-parameter",
+};
+
+pub const c_flags_posix = c_flags ++ [_][]const u8{
+    "-fstack-protector-strong",
+};
+
+pub const c_flags_fortify = c_flags_posix ++ [_][]const u8{
+    "-U_FORTIFY_SOURCE",
+    "-D_FORTIFY_SOURCE=2",
 };
 
 pub const c_sources = [_][]const u8{
@@ -290,9 +298,23 @@ pub fn addLibcurl(b: *std.Build, options: Options) *std.Build.Step.Compile {
         },
     }
 
+    if (os_tag != .windows) {
+        mod.pic = true;
+        if (options.optimize != .debug) {
+            mod.stack_protector = true;
+        }
+    }
+
+    const use_fortify = options.optimize != .debug and os_tag == .linux and options.target.result.abi.isGnu();
+    const flags = if (use_fortify)
+        &c_flags_fortify
+    else if (os_tag != .windows)
+        &c_flags_posix
+    else
+        &c_flags;
     mod.addCSourceFiles(.{
         .files = &c_sources,
-        .flags = &c_flags,
+        .flags = flags,
     });
 
     const lib = b.addLibrary(.{
@@ -300,6 +322,11 @@ pub fn addLibcurl(b: *std.Build, options: Options) *std.Build.Step.Compile {
         .linkage = options.linkage,
         .root_module = mod,
     });
+
+    if (os_tag == .linux) {
+        lib.link_z_relro = true;
+        lib.link_z_lazy = false;
+    }
 
     lib.installHeadersDirectory(b.path("include/curl"), "curl", .{});
 

@@ -23,14 +23,35 @@ pub fn addCurlExe(
         }),
     });
 
+    const os_tag = target.result.os.tag;
+    if (os_tag != .windows) {
+        exe.pie = true;
+        exe.root_module.pic = true;
+        if (optimize != .debug) {
+            exe.root_module.stack_protector = true;
+        }
+    }
+    if (os_tag == .linux) {
+        exe.link_z_relro = true;
+        exe.link_z_lazy = false;
+    }
+
+    const use_fortify = optimize != .debug and os_tag == .linux and target.result.abi.isGnu();
+    const flags = if (use_fortify)
+        &libcurl.c_flags_fortify
+    else if (os_tag != .windows)
+        &libcurl.c_flags_posix
+    else
+        &libcurl.c_flags;
+
     exe.root_module.addCSourceFiles(.{
         .files = &c_sources,
-        .flags = &libcurl.c_flags,
+        .flags = flags,
     });
     if (!is_static_libcurl) {
         exe.root_module.addCSourceFiles(.{
             .files = &curlx_c_sources,
-            .flags = &libcurl.c_flags,
+            .flags = flags,
         });
     }
 
