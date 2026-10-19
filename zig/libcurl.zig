@@ -18,7 +18,6 @@ pub const c_sources = [_][]const u8{
     "lib/ftp.c",
     "lib/http.c",
     "lib/multi.c",
-    "lib/sendf.c",
     "lib/url.c",
 };
 

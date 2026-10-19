@@ -42,6 +42,7 @@ pub const cfsocket_transfer = @import("cfsocket_transfer.zig");
 pub const http2_h2proxy = @import("http2_h2proxy.zig");
 pub const setopt = @import("setopt.zig");
 pub const vtls_backends = @import("vtls_backends.zig");
+pub const sendf = @import("sendf.zig");
 
 // C executables (such as src/tool_main.c) provide their own C main().
 pub extern fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int;
@@ -90,6 +91,7 @@ comptime {
     _ = http2_h2proxy;
     _ = setopt;
     _ = vtls_backends;
+    _ = sendf;
 }
 
 test {
