@@ -1931,11 +1931,9 @@ const schannel_verify = struct {
     extern "c" fn Curl_failf(data: ?*anyopaque, fmt: [*:0]const u8, ...) void;
     extern "c" fn Curl_infof(data: ?*anyopaque, fmt: [*:0]const u8, ...) void;
 
-    extern "c" fn ftell(stream: *anyopaque) c_long;
-    extern "c" fn fread(ptr: [*]u8, size: usize, nmemb: usize, stream: *anyopaque) usize;
-    extern "c" fn ferror(stream: *anyopaque) c_int;
+    extern "c" fn _fileno(stream: ?*anyopaque) c_int;
+    extern "c" fn _get_osfhandle(fd: c_int) isize;
     extern "c" fn fclose(stream: *anyopaque) c_int;
-    extern "c" fn curlx_fseek(stream: ?*anyopaque, offset: i64, whence: c_int) c_int;
     extern "c" fn curlx_winapi_strerror(err: DWORD, buf: [*]u8, buflen: usize) [*:0]const u8;
     extern "c" fn curlx_verify_windows_version(
         majorVersion: c_uint,
@@ -1947,6 +1945,14 @@ const schannel_verify = struct {
 
     extern "kernel32" fn GetLastError() callconv(.winapi) DWORD;
     extern "kernel32" fn LocalFree(hMem: HLOCAL) callconv(.winapi) HLOCAL;
+    extern "kernel32" fn GetFileSizeEx(hFile: ?*anyopaque, lpFileSize: *i64) callconv(.winapi) BOOL;
+    extern "kernel32" fn ReadFile(
+        hFile: ?*anyopaque,
+        lpBuffer: [*]u8,
+        nNumberOfBytesToRead: DWORD,
+        lpNumberOfBytesRead: *DWORD,
+        lpOverlapped: ?*anyopaque,
+    ) callconv(.winapi) BOOL;
 
     extern "crypt32" fn CryptQueryObject(
         dwObjectType: DWORD,
@@ -2147,61 +2153,89 @@ const schannel_verify = struct {
         data: ?*anyopaque,
     ) c_uint {
         const fname = ca_file orelse return CURLE_SSL_CACERT_BADFILE;
-        const ca_file_handle = curlx_win32_fopen(fname, "rb") orelse {
-            Curl_failf(data, "schannel: failed to open CA file '%s'", fname);
+        const f = curlx_win32_fopen(fname, "rb") orelse {
+            var buffer: [WINAPI_ERROR_LEN]u8 = undefined;
+            Curl_failf(
+                data,
+                "schannel: failed to open CA file '%s': %s",
+                fname,
+                curlx_winapi_strerror(GetLastError(), &buffer, buffer.len),
+            );
             return CURLE_SSL_CACERT_BADFILE;
         };
-        defer _ = fclose(ca_file_handle);
+        defer _ = fclose(f);
 
-        if (curlx_fseek(ca_file_handle, 0, SEEK_END) != 0) {
-            Curl_failf(data, "schannel: failed seeking to end of CA file '%s'", fname);
+        const handle_val = _get_osfhandle(_fileno(f));
+        const ca_file_handle: ?*anyopaque = if (handle_val == -1) null else @ptrFromInt(@as(usize, @bitCast(handle_val)));
+
+        var file_size: i64 = 0;
+        if (GetFileSizeEx(ca_file_handle, &file_size) == 0) {
+            var buffer: [WINAPI_ERROR_LEN]u8 = undefined;
+            Curl_failf(
+                data,
+                "schannel: failed to determine size of CA file '%s': %s",
+                fname,
+                curlx_winapi_strerror(GetLastError(), &buffer, buffer.len),
+            );
             return CURLE_SSL_CACERT_BADFILE;
         }
 
-        var ca_file_bufsize = ftell(ca_file_handle);
-
-        if (curlx_fseek(ca_file_handle, 0, SEEK_SET) != 0) {
-            Curl_failf(data, "schannel: failed seeking to beginning of CA file '%s'", fname);
+        if (file_size < 0 or file_size > MAX_CAFILE_SIZE) {
+            Curl_failf(data, "schannel: CA file exceeds max size of %u bytes", @as(c_uint, MAX_CAFILE_SIZE));
             return CURLE_SSL_CACERT_BADFILE;
         }
 
-        if (ca_file_bufsize < 0) {
-            Curl_failf(data, "schannel: failed to get length of CA file '%s'", fname);
-            return CURLE_SSL_CACERT_BADFILE;
-        }
-
-        if (ca_file_bufsize > MAX_CAFILE_SIZE) {
-            Curl_failf(data, "schannel: CA file exceeds max size of %d bytes", @as(c_int, MAX_CAFILE_SIZE));
-            return CURLE_SSL_CACERT_BADFILE;
-        }
-
-        const buf_alloc = mem.malloc(@intCast(ca_file_bufsize + 1)) orelse return CURLE_OUT_OF_MEMORY;
+        var ca_file_bufsize: usize = @intCast(file_size);
+        const buf_alloc = mem.malloc(ca_file_bufsize + 1) orelse return CURLE_OUT_OF_MEMORY;
         defer mem.free(buf_alloc);
         const ca_file_buffer: [*]u8 = @ptrCast(buf_alloc);
 
-        var total_bytes_read: c_long = 0;
+        var total_bytes_read: usize = 0;
         while (total_bytes_read < ca_file_bufsize) {
-            const nread = fread(
-                ca_file_buffer + @as(usize, @intCast(total_bytes_read)),
-                1,
-                @intCast(ca_file_bufsize - total_bytes_read),
+            const bytes_to_read: DWORD = @intCast(ca_file_bufsize - total_bytes_read);
+            var bytes_read: DWORD = 0;
+
+            if (ReadFile(
                 ca_file_handle,
-            );
-            if (ferror(ca_file_handle) != 0) {
-                Curl_failf(data, "schannel: failed to read from CA file '%s'", fname);
+                ca_file_buffer + total_bytes_read,
+                bytes_to_read,
+                &bytes_read,
+                null,
+            ) == 0) {
+                var buffer: [WINAPI_ERROR_LEN]u8 = undefined;
+                Curl_failf(
+                    data,
+                    "schannel: failed to read from CA file '%s': %s",
+                    fname,
+                    curlx_winapi_strerror(GetLastError(), &buffer, buffer.len),
+                );
                 return CURLE_SSL_CACERT_BADFILE;
             }
-            if (nread == 0) {
+            if (bytes_read == 0) {
                 ca_file_bufsize = total_bytes_read;
             } else {
-                total_bytes_read += @intCast(nread);
+                total_bytes_read += @intCast(bytes_read);
             }
         }
 
-        const final_size: usize = @intCast(ca_file_bufsize);
-        ca_file_buffer[final_size] = 0;
+        ca_file_buffer[ca_file_bufsize] = 0;
 
-        return add_certs_data_to_store(trust_store, ca_file_buffer, final_size, fname, data);
+        return add_certs_data_to_store(trust_store, ca_file_buffer, ca_file_bufsize, fname, data);
+    }
+
+    fn schannel_cert_hostcheck(match_pattern: [*:0]const u8, hostname: [*:0]const u8) bool {
+        if (match_pattern[0] == 0 or hostname[0] == 0)
+            return false;
+
+        if (primitives.curl_strequal(match_pattern, hostname) != 0)
+            return true;
+
+        return Curl_cert_hostcheck(
+            match_pattern,
+            std.mem.len(match_pattern),
+            hostname,
+            std.mem.len(hostname),
+        );
     }
 
     fn cert_get_name_string(
@@ -2337,7 +2371,6 @@ const schannel_verify = struct {
         var cert_hostname_buff: ?[*]u8 = null;
         var cert_hostname_buff_index: usize = 0;
         const conn_hostname = connssl.peer.origin.hostname;
-        const hostlen = std.mem.len(conn_hostname);
         var len: DWORD = 0;
         var actual_len: DWORD = 0;
         var alt_name_info: ?*CERT_ALT_NAME_INFO = null;
@@ -2440,8 +2473,7 @@ const schannel_verify = struct {
                     result = CURLE_OUT_OF_MEMORY;
                 } else {
                     const chost = cert_hostname.?;
-                    const chost_len = std.mem.len(chost);
-                    if (Curl_cert_hostcheck(chost, chost_len, conn_hostname, hostlen)) {
+                    if (schannel_cert_hostcheck(chost, conn_hostname)) {
                         Curl_infof(
                             data,
                             "schannel: connection hostname (%s) validated against certificate name (%s)",
