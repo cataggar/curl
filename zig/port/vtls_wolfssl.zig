@@ -1970,3 +1970,51 @@ comptime {
         @export(&Curl_wssl_setup_x509_store, .{ .name = "Curl_wssl_setup_x509_store" });
     }
 }
+
+test "wolfSSL helpers, flags, and crypto callbacks" {
+    try std.testing.expectEqual(SSL_FILETYPE_PEM, do_file_type(null));
+    try std.testing.expectEqual(SSL_FILETYPE_PEM, do_file_type(""));
+    try std.testing.expectEqual(SSL_FILETYPE_PEM, do_file_type("PEM"));
+    try std.testing.expectEqual(SSL_FILETYPE_PEM, do_file_type("pem"));
+    try std.testing.expectEqual(SSL_FILETYPE_ASN1, do_file_type("DER"));
+    try std.testing.expectEqual(SSL_FILETYPE_ASN1, do_file_type("der"));
+    try std.testing.expectEqual(@as(c_int, -1), do_file_type("P12"));
+
+    var bdata = WsslSslBackendData{};
+    try std.testing.expect(!bdata.x509_store_setup());
+    try std.testing.expect(!bdata.shutting_down());
+    bdata.set_x509_store_setup(true);
+    try std.testing.expect(bdata.x509_store_setup());
+    bdata.set_shutting_down(true);
+    try std.testing.expect(bdata.shutting_down());
+    bdata.set_x509_store_setup(false);
+    try std.testing.expect(!bdata.x509_store_setup());
+    try std.testing.expect(bdata.shutting_down());
+
+    var pw_buf: [16]u8 = @splat(0);
+    const pw: [*:0]const u8 = "secret";
+    try std.testing.expectEqual(@as(c_int, 6), wsslPasswdCallback(&pw_buf, pw_buf.len, 0, @ptrCast(@constCast(pw))));
+    try std.testing.expectEqualStrings("secret", pw_buf[0..6]);
+    try std.testing.expectEqual(@as(c_int, 0), wsslPasswdCallback(&pw_buf, 4, 0, @ptrCast(@constCast(pw))));
+
+    if (comptime use_wolfssl) {
+        var ver_buf: [64]u8 = @splat(0);
+        const ver_len = wsslVersion(&ver_buf, ver_buf.len);
+        try std.testing.expect(ver_len > "wolfSSL/".len);
+        try std.testing.expect(std.mem.startsWith(u8, ver_buf[0..ver_len], "wolfSSL/"));
+
+        var sha_out: [32]u8 = undefined;
+        const msg = "abc";
+        try std.testing.expectEqual(CURLE_OK, wsslSha256sum(msg.ptr, msg.len, &sha_out, sha_out.len));
+        const expected_abc = [_]u8{
+            0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea,
+            0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
+            0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c,
+            0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad,
+        };
+        try std.testing.expectEqualSlices(u8, &expected_abc, &sha_out);
+
+        var rand_buf: [16]u8 = @splat(0);
+        try std.testing.expectEqual(CURLE_OK, wsslRandom(null, &rand_buf, rand_buf.len));
+    }
+}

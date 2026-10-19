@@ -9485,7 +9485,8 @@ test "VTLS backend dispatch and non-SSL fallbacks" {
         try std.testing.expectEqual(CURLE_NOT_BUILT_IN, Curl_cf_ssl_proxy_insert_after(&dummy_cf, null, null));
     } else {
         try std.testing.expect(Curl_ssl_backend() != CURLSSLBACKEND_NONE);
-        try std.testing.expect(Curl_ssl_supports(null, SSLSUPP_CERTINFO));
+        try std.testing.expect(Curl_ssl_supports(null, SSLSUPP_CAINFO_BLOB));
+        try std.testing.expectEqual(backend_options.ssl != .wolfssl, Curl_ssl_supports(null, SSLSUPP_CERTINFO));
     }
 }
 
