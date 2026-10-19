@@ -41,7 +41,7 @@ pub const curl_blob = extern struct {
 
 const use_ssl = switch (backend_options.ssl) {
     .openssl, .mbedtls, .schannel => true,
-    .none, .sectransport => false,
+    .none => false,
 };
 const use_openssl = backend_options.ssl == .openssl;
 const use_windows_sspi = backend_options.ssl == .schannel;

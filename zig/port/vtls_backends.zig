@@ -14,8 +14,9 @@ const cfilters_progress = @import("cfilters_progress.zig");
 const is_windows = builtin.os.tag == .windows;
 pub const use_ssl = switch (backend_options.ssl) {
     .openssl, .mbedtls, .schannel => true,
-    .none, .sectransport => false,
+    .none => false,
 };
+pub const use_apple_sectrust = backend_options.apple_sectrust orelse (backend_options.ssl == .openssl and builtin.os.tag.isDarwin());
 
 // ============================================================================
 // Constants & Error Codes
@@ -68,13 +69,13 @@ pub const SSLSUPP_HTTPS_PROXY: c_uint = 1 << 4;
 pub const SSLSUPP_TLS13_CIPHERSUITES: c_uint = 1 << 5;
 pub const SSLSUPP_CAINFO_BLOB: c_uint = 1 << 6;
 pub const SSLSUPP_ECH: c_uint = 1 << 7;
-pub const SSLSUPP_CIPHER_LIST: c_uint = 1 << 8;
-pub const SSLSUPP_CA_CACHE: c_uint = 1 << 9;
-pub const SSLSUPP_CRLFILE: c_uint = 1 << 10;
+pub const SSLSUPP_CA_CACHE: c_uint = 1 << 8;
+pub const SSLSUPP_CIPHER_LIST: c_uint = 1 << 9;
+pub const SSLSUPP_SIGNATURE_ALGORITHMS: c_uint = 1 << 10;
 pub const SSLSUPP_ISSUERCERT: c_uint = 1 << 11;
-pub const SSLSUPP_ISSUERCERT_BLOB: c_uint = 1 << 12;
-pub const SSLSUPP_SSL_EC_CURVES: c_uint = 1 << 13;
-pub const SSLSUPP_SIGNATURE_ALGORITHMS: c_uint = 1 << 14;
+pub const SSLSUPP_SSL_EC_CURVES: c_uint = 1 << 12;
+pub const SSLSUPP_CRLFILE: c_uint = 1 << 13;
+pub const SSLSUPP_ISSUERCERT_BLOB: c_uint = 1 << 14;
 
 pub const CURL_SSLVERSION_DEFAULT: u8 = 0;
 pub const CURL_SSLVERSION_TLSv1: u8 = 1;
@@ -1076,8 +1077,19 @@ const vtls_impl = struct {
     }
 
     pub fn Curl_ssl_get_x509_store(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) ?*anyopaque {
-        _ = cf;
-        _ = data;
+        if (comptime backend_options.ssl == .openssl) {
+            if (@hasDecl(openssl_backend, "Curl_ossl_get_x509_store")) {
+                return openssl_backend.Curl_ossl_get_x509_store(cf, data);
+            }
+            if (@hasDecl(openssl_backend, "Curl_ssl_get_x509_store")) {
+                return openssl_backend.Curl_ssl_get_x509_store(cf, data);
+            }
+            const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return null));
+            const octx: *openssl_backend.OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return null));
+            if (octx.ssl_ctx) |ctx| {
+                return openssl_backend.ossl_ext.SSL_CTX_get_cert_store(ctx);
+            }
+        }
         return null;
     }
 
@@ -4070,4 +4082,22 @@ test "VTLS backend dispatch and non-SSL fallbacks" {
         try std.testing.expect(Curl_ssl_backend() != CURLSSLBACKEND_NONE);
         try std.testing.expect(Curl_ssl_supports(null, SSLSUPP_CERTINFO));
     }
+}
+
+test "SSLSUPP_* bit constants match lib/vtls/vtls.h" {
+    try std.testing.expectEqual(@as(c_uint, 1 << 0), SSLSUPP_CA_PATH);
+    try std.testing.expectEqual(@as(c_uint, 1 << 1), SSLSUPP_CERTINFO);
+    try std.testing.expectEqual(@as(c_uint, 1 << 2), SSLSUPP_PINNEDPUBKEY);
+    try std.testing.expectEqual(@as(c_uint, 1 << 3), SSLSUPP_SSL_CTX);
+    try std.testing.expectEqual(@as(c_uint, 1 << 4), SSLSUPP_HTTPS_PROXY);
+    try std.testing.expectEqual(@as(c_uint, 1 << 5), SSLSUPP_TLS13_CIPHERSUITES);
+    try std.testing.expectEqual(@as(c_uint, 1 << 6), SSLSUPP_CAINFO_BLOB);
+    try std.testing.expectEqual(@as(c_uint, 1 << 7), SSLSUPP_ECH);
+    try std.testing.expectEqual(@as(c_uint, 1 << 8), SSLSUPP_CA_CACHE);
+    try std.testing.expectEqual(@as(c_uint, 1 << 9), SSLSUPP_CIPHER_LIST);
+    try std.testing.expectEqual(@as(c_uint, 1 << 10), SSLSUPP_SIGNATURE_ALGORITHMS);
+    try std.testing.expectEqual(@as(c_uint, 1 << 11), SSLSUPP_ISSUERCERT);
+    try std.testing.expectEqual(@as(c_uint, 1 << 12), SSLSUPP_SSL_EC_CURVES);
+    try std.testing.expectEqual(@as(c_uint, 1 << 13), SSLSUPP_CRLFILE);
+    try std.testing.expectEqual(@as(c_uint, 1 << 14), SSLSUPP_ISSUERCERT_BLOB);
 }

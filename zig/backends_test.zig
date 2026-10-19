@@ -1,6 +1,8 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const backend_options = @import("backend_options");
+const backends = @import("backends.zig");
 
 const c = struct {
     pub const CURLversion = c_uint;
@@ -89,4 +91,43 @@ test "curl_version_info feature bits match backend_options" {
         try testing.expect(info.*.nghttp2_version != null);
         try testing.expect(info.*.nghttp2_ver_num != 0);
     }
+
+    const expect_apple_sectrust = backend_options.apple_sectrust orelse
+        (backend_options.ssl == .openssl and builtin.os.tag.isDarwin());
+    var found_apple_sectrust = false;
+    if (info.*.feature_names) |names| {
+        var idx: usize = 0;
+        while (names[idx]) |feat_name| : (idx += 1) {
+            if (std.mem.eql(u8, std.mem.span(feat_name), "AppleSecTrust")) {
+                found_apple_sectrust = true;
+            }
+        }
+    }
+    try testing.expectEqual(backend_options.ssl != .none and expect_apple_sectrust, found_apple_sectrust);
+}
+
+test "SslBackend and Apple SecTrust target validation" {
+    try testing.expectEqual(@as(usize, 4), std.enums.values(backends.SslBackend).len);
+
+    const default_openssl = backends.Options{ .ssl = .openssl };
+    try testing.expect(default_openssl.useAppleSectrust(.macos));
+    try testing.expect(!default_openssl.useAppleSectrust(.linux));
+    try testing.expect(default_openssl.isValidForTarget(.macos));
+    try testing.expect(default_openssl.isValidForTarget(.linux));
+
+    const disabled_sectrust = backends.Options{ .ssl = .openssl, .apple_sectrust = false };
+    try testing.expect(!disabled_sectrust.useAppleSectrust(.macos));
+    try testing.expect(disabled_sectrust.isValidForTarget(.macos));
+
+    const invalid_sectrust_os = backends.Options{ .ssl = .openssl, .apple_sectrust = true };
+    try testing.expect(invalid_sectrust_os.isValidForTarget(.macos));
+    try testing.expect(!invalid_sectrust_os.isValidForTarget(.linux));
+
+    const invalid_sectrust_backend = backends.Options{ .ssl = .mbedtls, .apple_sectrust = true };
+    try testing.expect(!invalid_sectrust_backend.isValidForTarget(.macos));
+
+    const schannel_opts = backends.Options{ .ssl = .schannel };
+    try testing.expect(schannel_opts.isValidForTarget(.windows));
+    try testing.expect(!schannel_opts.isValidForTarget(.linux));
+    try testing.expect(!schannel_opts.isValidForTarget(.macos));
 }

@@ -38,10 +38,8 @@ extern fn Curl_slist_append_nodup(list: ?*curl_slist, data: [*:0]u8) callconv(.c
 extern fn curlx_strerror(err: c_int, buf: [*]u8, buflen: usize) callconv(.c) [*:0]const u8;
 
 const is_windows = builtin.os.tag == .windows;
-const use_ssl = switch (backend_options.ssl) {
-    .openssl, .mbedtls, .schannel => true,
-    .none, .sectransport => false,
-};
+const use_ssl = backend_options.ssl != .none;
+const use_apple_sectrust = backend_options.apple_sectrust orelse (backend_options.ssl == .openssl and builtin.os.tag.isDarwin());
 
 // ============================================================================
 // 1. lib/protocol.c + lib/protocol.h
@@ -828,7 +826,7 @@ const features_table = blk: {
         list[n] = .{ .name = "libz", .bitmask = CURL_VERSION_LIBZ };
         n += 1;
     }
-    if (backend_options.ssl == .sectransport) {
+    if (use_ssl and use_apple_sectrust) {
         list[n] = .{ .name = "AppleSecTrust", .bitmask = 0 };
         n += 1;
     }
