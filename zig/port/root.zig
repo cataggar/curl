@@ -35,6 +35,7 @@ pub const proxies_encoding = @import("proxies_encoding.zig");
 pub const cf_connect_happy = @import("cf_connect_happy.zig");
 pub const tftp_socks_telnet = @import("tftp_socks_telnet.zig");
 pub const optional_backends = @import("optional_backends.zig");
+pub const imap_ws = @import("imap_ws.zig");
 
 // C executables (such as src/tool_main.c) provide their own C main().
 pub extern fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int;
@@ -76,6 +77,7 @@ comptime {
     _ = cf_connect_happy;
     _ = tftp_socks_telnet;
     _ = optional_backends;
+    _ = imap_ws;
 }
 
 test {

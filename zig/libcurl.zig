@@ -21,7 +21,6 @@ pub const c_sources = [_][]const u8{
     "lib/ftp.c",
     "lib/http.c",
     "lib/http2.c",
-    "lib/imap.c",
     "lib/multi.c",
     "lib/pop3.c",
     "lib/sendf.c",
@@ -29,7 +28,6 @@ pub const c_sources = [_][]const u8{
     "lib/smtp.c",
     "lib/transfer.c",
     "lib/url.c",
-    "lib/ws.c",
     // LIB_VDNS_CFILES
     "lib/vdns/doh.c",
     "lib/vdns/hostip.c",

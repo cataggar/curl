@@ -6,6 +6,7 @@ const primitives = @import("primitives.zig");
 const os_leaf = @import("os_leaf.zig");
 const io_buffers = @import("io_buffers.zig");
 const small_protocols = @import("small_protocols.zig");
+const imap_ws = @import("imap_ws.zig");
 
 pub const CURLcode = c_uint;
 pub const CURLE_OK: CURLcode = 0;
@@ -131,7 +132,6 @@ extern const Curl_protocol_ftp: Curl_protocol_opaque;
 const Curl_protocol_gopher = small_protocols.Curl_protocol_gopher;
 const Curl_protocol_gophers = small_protocols.Curl_protocol_gophers;
 extern const Curl_protocol_http: Curl_protocol_opaque;
-extern const Curl_protocol_imap: Curl_protocol_opaque;
 const Curl_protocol_mqtt = small_protocols.Curl_protocol_mqtt;
 const Curl_protocol_mqtts = small_protocols.Curl_protocol_mqtts;
 extern const Curl_protocol_pop3: Curl_protocol_opaque;
@@ -139,7 +139,6 @@ extern const Curl_protocol_rtsp: Curl_protocol_opaque;
 extern const Curl_protocol_smtp: Curl_protocol_opaque;
 extern const Curl_protocol_telnet: Curl_protocol_opaque;
 extern const Curl_protocol_tftp: Curl_protocol_opaque;
-extern const Curl_protocol_ws: Curl_protocol_opaque;
 
 pub export const Curl_scheme_dict: Curl_scheme = .{
     .name = "dict",
@@ -223,7 +222,7 @@ pub export const Curl_scheme_https: Curl_scheme = .{
 
 pub export const Curl_scheme_imap: Curl_scheme = .{
     .name = "imap",
-    .run = @ptrCast(&Curl_protocol_imap),
+    .run = @ptrCast(&imap_ws.Curl_protocol_imap),
     .protocol = CURLPROTO_IMAP,
     .family = CURLPROTO_IMAP,
     .flags = PROTOPT_CLOSEACTION |
@@ -234,7 +233,7 @@ pub export const Curl_scheme_imap: Curl_scheme = .{
 
 pub export const Curl_scheme_imaps: Curl_scheme = .{
     .name = "imaps",
-    .run = if (use_ssl) @ptrCast(&Curl_protocol_imap) else null,
+    .run = if (use_ssl) @ptrCast(&imap_ws.Curl_protocol_imap) else null,
     .protocol = CURLPROTO_IMAPS,
     .family = CURLPROTO_IMAP,
     .flags = PROTOPT_CLOSEACTION | PROTOPT_SSL |
@@ -412,7 +411,7 @@ pub export const Curl_scheme_tftp: Curl_scheme = .{
 
 pub export const Curl_scheme_ws: Curl_scheme = .{
     .name = "ws",
-    .run = @ptrCast(&Curl_protocol_ws),
+    .run = @ptrCast(&imap_ws.Curl_protocol_ws),
     .protocol = CURLPROTO_WS,
     .family = CURLPROTO_HTTP,
     .flags = PROTOPT_CREDSPERREQUEST |
@@ -422,7 +421,7 @@ pub export const Curl_scheme_ws: Curl_scheme = .{
 
 pub export const Curl_scheme_wss: Curl_scheme = .{
     .name = "wss",
-    .run = if (use_ssl) @ptrCast(&Curl_protocol_ws) else null,
+    .run = if (use_ssl) @ptrCast(&imap_ws.Curl_protocol_ws) else null,
     .protocol = CURLPROTO_WSS,
     .family = CURLPROTO_HTTP,
     .flags = PROTOPT_SSL | PROTOPT_CREDSPERREQUEST |
