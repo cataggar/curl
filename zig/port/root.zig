@@ -23,6 +23,7 @@ pub const vauth_sspi = @import("vauth_sspi.zig");
 pub const vauth_digest_gssapi = @import("vauth_digest_gssapi.zig");
 pub const protocol_version_mime = @import("protocol_version_mime.zig");
 pub const altsvc_hsts_peer = @import("altsvc_hsts_peer.zig");
+pub const api_getinfo_request = @import("api_getinfo_request.zig");
 pub const http_auth_chunks = @import("http_auth_chunks.zig");
 pub const aws_sigv4_share_headers = @import("aws_sigv4_share_headers.zig");
 pub const cookie_getinfo_trc = @import("cookie_getinfo_trc.zig");
@@ -62,6 +63,7 @@ comptime {
     _ = vauth_digest_gssapi;
     _ = protocol_version_mime;
     _ = altsvc_hsts_peer;
+    _ = api_getinfo_request;
     _ = http_auth_chunks;
     _ = aws_sigv4_share_headers;
     _ = cookie_getinfo_trc;
