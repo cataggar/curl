@@ -1760,9 +1760,9 @@ const CURL_META_PROTO_WS_CONN = "meta:proto:ws:conn";
 const CURL_CW_CONTENT_DECODE: c_uint = 4;
 const CURL_CR_CONTENT_ENCODE: c_uint = 3;
 
-const CURL_EAPI_FN_ws_recv: c_uint = 14;
-const CURL_EAPI_FN_ws_send: c_uint = 15;
-const CURL_EAPI_FN_ws_start_frame: c_uint = 16;
+const CURL_EAPI_FN_ws_recv: c_uint = 15;
+const CURL_EAPI_FN_ws_send: c_uint = 16;
+const CURL_EAPI_FN_ws_start_frame: c_uint = 17;
 
 const Curl_eapi_guard = extern struct {
     data: ?*Curl_easy = null,

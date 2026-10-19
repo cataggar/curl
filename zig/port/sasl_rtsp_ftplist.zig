@@ -206,15 +206,13 @@ const krb5_ext = struct {
 // ============================================================================
 
 pub const Curl_mapi_guard = extern struct {
-    easy: ?*Curl_easy = null,
     multi: ?*Curl_multi = null,
-    outer_easy: ?*Curl_mapi_guard = null,
-    outer_multi: ?*Curl_mapi_guard = null,
-    fn_id: u16 = 0,
+    depth: u8 = 0,
 };
 
-pub const CURL_CBAPI_FN_easy_fnmatch_data: c_uint = 3;
-pub const CURL_CBAPI_FN_easy_fwrite_rtp: c_uint = 12;
+pub const CURL_CBAPI_FN_START: c_uint = 128;
+pub const CURL_CBAPI_FN_easy_fnmatch_data: c_uint = CURL_CBAPI_FN_START + 7;
+pub const CURL_CBAPI_FN_easy_fwrite_rtp: c_uint = CURL_CBAPI_FN_START + 14;
 
 pub const curl_fnmatch_callback = *const fn (
     ptr: ?*anyopaque,

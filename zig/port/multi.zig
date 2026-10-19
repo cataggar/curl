@@ -2022,7 +2022,7 @@ fn multistate_performing(
         }
         multi_posttransfer(data);
         _ = multi_done(data, result, true);
-    } else if (Curl_zig_easy_req_done(data) and !Curl_cwriter_is_paused(data)) {
+    } else if ((Curl_zig_easy_req_done(data) and !Curl_cwriter_is_paused(data)) or retry) {
         const handler = if (data.conn) |conn| Curl_zig_conn_scheme(conn) else null;
 
         multi_posttransfer(data);
@@ -2037,7 +2037,7 @@ fn multistate_performing(
             } else {
                 follow = FOLLOW_RETRY;
             }
-            _ = multi_done(data, CURLE_OK, false);
+            _ = multi_done(data, CURLE_OK, retry);
             result = multi_follow(data, handler, newurl, follow);
             if (result == CURLE_OK) {
                 mstate(data, MSTATE_SETUP);
@@ -3772,9 +3772,11 @@ pub export fn Curl_multi_get_easy(
     multi: *CurlMultiPrefix,
     mid: u32,
 ) callconv(.c) ?*CurlEasyPrefix {
+    if (!goodMultiHandle(multi))
+        return null;
     const raw = containers.Curl_uint32_tbl_get(&multi.xfers, mid) orelse return null;
     const data: *CurlEasyPrefix = @ptrCast(@alignCast(raw));
-    if (goodEasyHandle(data))
+    if (goodEasyHandle(data) and data.multi == multi and data.mid == mid)
         return data;
     containers.Curl_uint32_tbl_remove(&multi.xfers, mid);
     return null;
@@ -3784,6 +3786,10 @@ pub export fn Curl_multi_knows_easy(
     multi: *CurlMultiPrefix,
     data: *CurlEasyPrefix,
 ) callconv(.c) bool {
+    if (!goodMultiHandle(multi) or !goodEasyHandle(data))
+        return false;
+    if (data.multi != multi or data.mid == std.math.maxInt(u32))
+        return false;
     const raw = containers.Curl_uint32_tbl_get(&multi.xfers, data.mid);
     return raw == @as(?*anyopaque, @ptrCast(data));
 }
@@ -3865,4 +3871,59 @@ test "curlx_sltouz signed long to usize conversion" {
     try std.testing.expectEqual(@as(usize, 0), out);
     try std.testing.expect(curlx_sltouz(12345, &out));
     try std.testing.expectEqual(@as(usize, 12345), out);
+}
+
+test "Curl_multi_get_easy rejects corrupted magic or mismatched multi/mid and EAPI/MAPI guards block recursion" {
+    var multi: CurlMultiPrefix = std.mem.zeroes(CurlMultiPrefix);
+    multi.magic = CURL_MULTI_HANDLE;
+    containers.Curl_uint32_tbl_init(&multi.xfers, null);
+    defer containers.Curl_uint32_tbl_destroy(&multi.xfers);
+    try std.testing.expectEqual(CURLE_OK, containers.Curl_uint32_tbl_resize(&multi.xfers, 8));
+
+    var easy: CurlEasyPrefix = std.mem.zeroes(CurlEasyPrefix);
+    easy.magic = api_mod.CURLEASY_MAGIC_NUMBER;
+    easy.multi = &multi;
+    easy.mid = std.math.maxInt(u32);
+
+    try std.testing.expect(containers.Curl_uint32_tbl_add(&multi.xfers, &easy, &easy.mid));
+    const mid = easy.mid;
+    try std.testing.expectEqual(@as(?*CurlEasyPrefix, &easy), Curl_multi_get_easy(&multi, mid));
+    try std.testing.expect(Curl_multi_knows_easy(&multi, &easy));
+
+    // Mismatched multi pointer must be rejected and evicted
+    easy.multi = null;
+    try std.testing.expectEqual(@as(?*CurlEasyPrefix, null), Curl_multi_get_easy(&multi, mid));
+    try std.testing.expectEqual(@as(?*anyopaque, null), containers.Curl_uint32_tbl_get(&multi.xfers, mid));
+
+    // Re-insert and corrupt magic number (simulating use-after-free/scrubbed handle)
+    easy.multi = &multi;
+    try std.testing.expect(containers.Curl_uint32_tbl_add(&multi.xfers, &easy, &easy.mid));
+    const mid2 = easy.mid;
+    easy.magic = 0;
+    try std.testing.expectEqual(@as(?*CurlEasyPrefix, null), Curl_multi_get_easy(&multi, mid2));
+    try std.testing.expectEqual(@as(?*anyopaque, null), containers.Curl_uint32_tbl_get(&multi.xfers, mid2));
+
+    // Restore valid magic, re-add to multi.xfers, and verify MAPI/EAPI recursion guards
+    easy.magic = api_mod.CURLEASY_MAGIC_NUMBER;
+    try std.testing.expect(containers.Curl_uint32_tbl_add(&multi.xfers, &easy, &easy.mid));
+    var mresult: CURLMcode = CURLM_OK;
+    var mguard1: CurlMapiGuard = undefined;
+    try std.testing.expect(api_mod.Curl_mapi_enter(&mguard1, &multi, CURL_MAPI_FN_multi_perform, &mresult));
+    try std.testing.expectEqual(CURLM_OK, mresult);
+
+    var mguard2: CurlMapiGuard = undefined;
+    try std.testing.expect(!api_mod.Curl_mapi_enter(&mguard2, &multi, CURL_MAPI_FN_multi_cleanup, &mresult));
+    try std.testing.expectEqual(CURLM_RECURSIVE_API_CALL, mresult);
+    api_mod.Curl_mapi_leave(&mguard2);
+
+    var cb_guard: CurlMapiGuard = undefined;
+    api_mod.Curl_cbapi_enter(&cb_guard, &easy, &multi, CURL_CBAPI_FN_multi_socket_cb);
+    var eresult: CURLcode = CURLE_OK;
+    var eguard: api_mod.CurlEapiGuard = undefined;
+    try std.testing.expect(!api_mod.Curl_eapi_enter_zig(&eguard, &easy, false, api_mod.CURL_EAPI_FN_easy_cleanup, &eresult));
+    try std.testing.expectEqual(api_mod.CURLE_RECURSIVE_API_CALL, eresult);
+    api_mod.Curl_eapi_leave(&eguard);
+    api_mod.Curl_cbapi_leave(&cb_guard);
+
+    api_mod.Curl_mapi_leave(&mguard1);
 }
