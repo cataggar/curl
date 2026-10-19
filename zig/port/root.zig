@@ -45,6 +45,7 @@ pub const vtls_backends = @import("vtls_backends.zig");
 pub const sendf = @import("sendf.zig");
 pub const ftp = @import("ftp.zig");
 pub const url = @import("url.zig");
+pub const multi = @import("multi.zig");
 
 // C executables (such as src/tool_main.c) provide their own C main().
 pub extern fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int;
@@ -96,6 +97,7 @@ comptime {
     _ = sendf;
     _ = ftp;
     _ = url;
+    _ = multi;
 }
 
 test {
