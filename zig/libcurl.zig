@@ -17,7 +17,6 @@ pub const c_sources = [_][]const u8{
     // LIB_CFILES
     "lib/cf-h2-proxy.c",
     "lib/cf-socket.c",
-    "lib/easy.c",
     "lib/ftp.c",
     "lib/http.c",
     "lib/http2.c",
@@ -26,9 +25,6 @@ pub const c_sources = [_][]const u8{
     "lib/setopt.c",
     "lib/transfer.c",
     "lib/url.c",
-    // LIB_VDNS_CFILES
-    "lib/vdns/doh.c",
-    "lib/vdns/hostip.c",
     // LIB_VTLS_CFILES
     "lib/vtls/mbedtls.c",
     "lib/vtls/openssl.c",

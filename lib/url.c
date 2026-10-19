@@ -3125,3 +3125,1073 @@ bool Curl_imap_ws_good_easy_handle(const struct Curl_easy *data)
   return GOOD_EASY_HANDLE(data);
 }
 
+#include "sigpipe.h"
+#include "vdns/dnscache.h"
+#include "vdns/doh.h"
+#include "vdns/hostip.h"
+
+/* Thin accessors for zig/port/vdns_core.zig */
+struct Curl_peer *Curl_vdns_data_conn_origin(const struct Curl_easy *data);
+bool Curl_vdns_trc_is_verbose(const struct Curl_easy *data);
+bool Curl_vdns_trc_dns_is_verbose(const struct Curl_easy *data);
+struct connectdata *Curl_vdns_data_conn(const struct Curl_easy *data);
+struct Curl_cfilter *Curl_vdns_conn_cfilter(const struct connectdata *conn,
+                                            int8_t sockindex);
+uint8_t Curl_vdns_conn_transport_wanted(const struct connectdata *conn);
+void Curl_vdns_conn_set_dns_resolved(struct connectdata *conn);
+bool Curl_vdns_conn_is_proxy_peer(const struct connectdata *conn,
+                                  const struct Curl_peer *peer);
+struct Curl_dnscache *Curl_vdns_dnscache_get(const struct Curl_easy *data);
+void Curl_vdns_dnscache_lock(struct Curl_easy *data,
+                             struct Curl_dnscache *dnscache);
+void Curl_vdns_dnscache_unlock(struct Curl_easy *data,
+                               struct Curl_dnscache *dnscache);
+timediff_t Curl_vdns_data_dns_cache_timeout_ms(const struct Curl_easy *data);
+bool Curl_vdns_data_get_wildcard_resolve(const struct Curl_easy *data);
+void Curl_vdns_data_set_wildcard_resolve(struct Curl_easy *data, bool val);
+bool Curl_vdns_data_dns_shuffle_addresses(const struct Curl_easy *data);
+struct curl_slist *Curl_vdns_data_get_resolve(const struct Curl_easy *data);
+void Curl_vdns_data_clear_resolve(struct Curl_easy *data);
+
+struct Curl_peer *Curl_vdns_data_conn_origin(const struct Curl_easy *data)
+{
+  return (data && data->conn) ? data->conn->origin : NULL;
+}
+
+bool Curl_vdns_trc_is_verbose(const struct Curl_easy *data)
+{
+  return Curl_trc_is_verbose(data);
+}
+
+bool Curl_vdns_trc_dns_is_verbose(const struct Curl_easy *data)
+{
+  return CURL_TRC_DNS_is_verbose(data);
+}
+
+struct connectdata *Curl_vdns_data_conn(const struct Curl_easy *data)
+{
+  return data ? data->conn : NULL;
+}
+
+struct Curl_cfilter *Curl_vdns_conn_cfilter(const struct connectdata *conn,
+                                            int8_t sockindex)
+{
+  return conn ? conn->cfilter[sockindex] : NULL;
+}
+
+uint8_t Curl_vdns_conn_transport_wanted(const struct connectdata *conn)
+{
+  return conn ? conn->transport_wanted : 0;
+}
+
+void Curl_vdns_conn_set_dns_resolved(struct connectdata *conn)
+{
+  if(conn)
+    conn->bits.dns_resolved = TRUE;
+}
+
+bool Curl_vdns_conn_is_proxy_peer(const struct connectdata *conn,
+                                  const struct Curl_peer *peer)
+{
+#ifndef CURL_DISABLE_PROXY
+  return conn &&
+    ((peer == conn->socks_proxy.peer) || (peer == conn->http_proxy.peer));
+#else
+  (void)conn;
+  (void)peer;
+  return FALSE;
+#endif
+}
+
+struct Curl_dnscache *Curl_vdns_dnscache_get(const struct Curl_easy *data)
+{
+  if(!data)
+    return NULL;
+  if(data->share && (data->share->specifier & (1 << CURL_LOCK_DATA_DNS)))
+    return &data->share->dnscache;
+  if(data->multi)
+    return &data->multi->dnscache;
+  return NULL;
+}
+
+void Curl_vdns_dnscache_lock(struct Curl_easy *data,
+                             struct Curl_dnscache *dnscache)
+{
+  if(data && data->share && (dnscache == &data->share->dnscache))
+    Curl_share_lock(data, CURL_LOCK_DATA_DNS, CURL_LOCK_ACCESS_SINGLE);
+}
+
+void Curl_vdns_dnscache_unlock(struct Curl_easy *data,
+                               struct Curl_dnscache *dnscache)
+{
+  if(data && data->share && (dnscache == &data->share->dnscache))
+    Curl_share_unlock(data, CURL_LOCK_DATA_DNS);
+}
+
+timediff_t Curl_vdns_data_dns_cache_timeout_ms(const struct Curl_easy *data)
+{
+  return data ? data->set.dns_cache_timeout_ms : 0;
+}
+
+bool Curl_vdns_data_get_wildcard_resolve(const struct Curl_easy *data)
+{
+  return data ? (bool)data->state.wildcard_resolve : FALSE;
+}
+
+void Curl_vdns_data_set_wildcard_resolve(struct Curl_easy *data, bool val)
+{
+  if(data)
+    data->state.wildcard_resolve = val;
+}
+
+bool Curl_vdns_data_dns_shuffle_addresses(const struct Curl_easy *data)
+{
+  return data ? (bool)data->set.dns_shuffle_addresses : FALSE;
+}
+
+struct curl_slist *Curl_vdns_data_get_resolve(const struct Curl_easy *data)
+{
+  return data ? data->state.resolve : NULL;
+}
+
+void Curl_vdns_data_clear_resolve(struct Curl_easy *data)
+{
+  if(data)
+    data->state.resolve = NULL;
+}
+
+/* Thin accessors for zig/port/doh_hostip_easy.zig */
+const char *Curl_easy_str_doh(const struct Curl_easy *data);
+const char *Curl_easy_str_ssl_cafile(const struct Curl_easy *data);
+const char *Curl_easy_str_ssl_capath(const struct Curl_easy *data);
+const char *Curl_easy_str_ssl_crlfile(const struct Curl_easy *data);
+const char *Curl_easy_str_ssl_ec_curves(const struct Curl_easy *data);
+const char *Curl_easy_str_altsvc(const struct Curl_easy *data);
+const char *Curl_easy_str_hsts(const struct Curl_easy *data);
+struct curl_blob *Curl_easy_blob_cainfo(const struct Curl_easy *data);
+struct Curl_multi *Curl_easy_get_multi(const struct Curl_easy *data);
+struct Curl_multi *Curl_easy_get_multi_easy(const struct Curl_easy *data);
+void Curl_easy_set_multi_easy(struct Curl_easy *data,
+                              struct Curl_multi *multi);
+uint32_t Curl_easy_get_mid(const struct Curl_easy *data);
+int Curl_easy_get_httpcode(const struct Curl_easy *data);
+struct Curl_share *Curl_easy_get_share(const struct Curl_easy *data);
+FILE *Curl_doh_data_custom_stderr(const struct Curl_easy *data);
+bool Curl_easy_get_no_signal(const struct Curl_easy *data);
+void *Curl_doh_data_fdebug(const struct Curl_easy *data);
+void *Curl_doh_data_debugdata(const struct Curl_easy *data);
+bool Curl_doh_data_verifyhost(const struct Curl_easy *data);
+bool Curl_doh_data_verifypeer(const struct Curl_easy *data);
+bool Curl_doh_data_verifystatus(const struct Curl_easy *data);
+void Curl_doh_copy_ssl_custom_flags(struct Curl_easy *doh,
+                                    const struct Curl_easy *data);
+bool Curl_doh_data_ssl_certinfo(const struct Curl_easy *data);
+void *Curl_doh_data_ssl_fsslctx(const struct Curl_easy *data);
+void *Curl_doh_data_ssl_fsslctxp(const struct Curl_easy *data);
+uint8_t Curl_doh_data_ssl_options(const struct Curl_easy *data);
+void Curl_doh_set_feat(struct Curl_easy *doh);
+void Curl_doh_init_probe_state(struct Curl_easy *doh,
+                               const struct Curl_easy *data,
+                               multi_sub_xfer_done_cb *cb);
+void Curl_doh_clear_sub_xfer_done(struct Curl_easy *probe_data);
+void Curl_multi_set_ipv6_works(struct Curl_multi *multi, bool works);
+bool Curl_easy_ipv6_works(const struct Curl_easy *data);
+curl_resolver_start_callback
+Curl_easy_get_resolver_start(const struct Curl_easy *data);
+void *Curl_easy_get_resolver_start_client(const struct Curl_easy *data);
+uint32_t Curl_multi_next_resolv_id(struct Curl_multi *multi);
+bool Curl_easy_get_doh(const struct Curl_easy *data);
+struct Curl_resolv_async *
+Curl_easy_get_async_head(const struct Curl_easy *data);
+void Curl_easy_set_async_head(struct Curl_easy *data,
+                              struct Curl_resolv_async *async);
+const struct Curl_scheme *
+Curl_easy_get_conn_scheme(const struct Curl_easy *data);
+void Curl_easy_sigpipe_ignore(struct Curl_easy *data, void *ctx_buf);
+void Curl_easy_sigpipe_restore(void *ctx_buf);
+void Curl_easy_clear_error_and_errno(struct Curl_easy *data);
+uint32_t Curl_easy_get_maxconnects(const struct Curl_easy *data);
+bool Curl_easy_get_quick_exit(const struct Curl_easy *data);
+size_t Curl_easy_sizeof(void);
+void Curl_easy_dupset_init(struct Curl_easy *dst,
+                           const struct Curl_easy *src);
+struct u8_strset *Curl_easy_get_strings(struct Curl_easy *data);
+unsigned int Curl_easy_blob_count(void);
+struct curl_blob **Curl_easy_get_blob_slot(struct Curl_easy *data,
+                                           unsigned int idx);
+struct curl_blob *Curl_easy_get_blob_at(const struct Curl_easy *data,
+                                        unsigned int idx);
+char *Curl_easy_get_copypostfields(const struct Curl_easy *data);
+curl_off_t Curl_easy_get_postfieldsize(const struct Curl_easy *data);
+void Curl_easy_set_copypostfields(struct Curl_easy *data, char *p);
+struct curl_mimepart *Curl_easy_get_mimepostp(const struct Curl_easy *data);
+size_t Curl_easy_mimepart_sizeof(void);
+void Curl_easy_set_mimepostp(struct Curl_easy *data,
+                             struct curl_mimepart *p);
+void Curl_easy_sync_state_resolve(struct Curl_easy *dst,
+                                  const struct Curl_easy *src);
+void Curl_easy_dup_copy_buffer_size(struct Curl_easy *outcurl,
+                                    const struct Curl_easy *data);
+struct Curl_hash *Curl_easy_get_meta_hash(struct Curl_easy *data);
+struct dynbuf *Curl_easy_get_headerb(struct Curl_easy *data);
+struct bufref *Curl_easy_get_state_url(struct Curl_easy *data);
+struct bufref *Curl_easy_get_state_referer(struct Curl_easy *data);
+struct store_netrc *Curl_easy_get_state_netrc(struct Curl_easy *data);
+struct Curl_llist *Curl_easy_get_state_httphdrs(struct Curl_easy *data);
+void Curl_easy_dup_init_ids(struct Curl_easy *outcurl);
+void Curl_easy_dup_copy_progress(struct Curl_easy *outcurl,
+                                 const struct Curl_easy *data);
+bool Curl_easy_has_cookie_engine(const struct Curl_easy *data);
+struct CookieInfo *Curl_easy_get_cookies(const struct Curl_easy *data);
+void Curl_easy_set_cookies_enabled(struct Curl_easy *data,
+                                   struct CookieInfo *ci);
+struct curl_slist *Curl_easy_get_state_cookielist(const struct Curl_easy *data);
+void Curl_easy_set_state_cookielist(struct Curl_easy *data,
+                                    struct curl_slist *list);
+struct altsvcinfo *Curl_easy_get_asi(const struct Curl_easy *data);
+struct altsvcinfo **Curl_easy_get_asi_slot(struct Curl_easy *data);
+struct hsts *Curl_easy_get_hsts(const struct Curl_easy *data);
+struct hsts **Curl_easy_get_hsts_slot(struct Curl_easy *data);
+CURLcode Curl_easy_hsts_loadcb(struct Curl_easy *data, struct hsts *h);
+void Curl_easy_set_magic(struct Curl_easy *data, uint32_t magic);
+void Curl_easy_reset_conn_ids(struct Curl_easy *data);
+void Curl_easy_req_hard_reset(struct Curl_easy *data);
+void Curl_easy_zero_set(struct Curl_easy *data);
+void Curl_easy_zero_progress(struct Curl_easy *data);
+void Curl_easy_reset_post_initinfo(struct Curl_easy *data);
+void Curl_easy_clear_keeps_speed_sec(struct Curl_easy *data);
+bool Curl_easy_get_state_done(const struct Curl_easy *data);
+uint8_t Curl_easy_get_connect_only(const struct Curl_easy *data);
+curl_off_t Curl_easy_get_last_conn_id(const struct Curl_easy *data);
+
+const char *Curl_easy_str_doh(const struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_DOH
+  return data ? CURL_EASY_STR((struct Curl_easy *)data, STRING_DOH) : NULL;
+#else
+  (void)data;
+  return NULL;
+#endif
+}
+
+const char *Curl_easy_str_ssl_cafile(const struct Curl_easy *data)
+{
+  return data ?
+    CURL_EASY_STR((struct Curl_easy *)data, STRING_SSL_CAFILE) : NULL;
+}
+
+const char *Curl_easy_str_ssl_capath(const struct Curl_easy *data)
+{
+  return data ?
+    CURL_EASY_STR((struct Curl_easy *)data, STRING_SSL_CAPATH) : NULL;
+}
+
+const char *Curl_easy_str_ssl_crlfile(const struct Curl_easy *data)
+{
+  return data ?
+    CURL_EASY_STR((struct Curl_easy *)data, STRING_SSL_CRLFILE) : NULL;
+}
+
+const char *Curl_easy_str_ssl_ec_curves(const struct Curl_easy *data)
+{
+  return data ?
+    CURL_EASY_STR((struct Curl_easy *)data, STRING_SSL_EC_CURVES) : NULL;
+}
+
+const char *Curl_easy_str_altsvc(const struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_ALTSVC
+  return data ? CURL_EASY_STR((struct Curl_easy *)data, STRING_ALTSVC) : NULL;
+#else
+  (void)data;
+  return NULL;
+#endif
+}
+
+const char *Curl_easy_str_hsts(const struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_HSTS
+  return data ? CURL_EASY_STR((struct Curl_easy *)data, STRING_HSTS) : NULL;
+#else
+  (void)data;
+  return NULL;
+#endif
+}
+
+struct curl_blob *Curl_easy_blob_cainfo(const struct Curl_easy *data)
+{
+  return data ? data->set.blobs[BLOB_CAINFO] : NULL;
+}
+
+struct Curl_multi *Curl_easy_get_multi(const struct Curl_easy *data)
+{
+  return data ? data->multi : NULL;
+}
+
+struct Curl_multi *Curl_easy_get_multi_easy(const struct Curl_easy *data)
+{
+  return data ? data->multi_easy : NULL;
+}
+
+void Curl_easy_set_multi_easy(struct Curl_easy *data, struct Curl_multi *multi)
+{
+  if(data)
+    data->multi_easy = multi;
+}
+
+uint32_t Curl_easy_get_mid(const struct Curl_easy *data)
+{
+  return data ? data->mid : UINT32_MAX;
+}
+
+int Curl_easy_get_httpcode(const struct Curl_easy *data)
+{
+  return data ? data->info.httpcode : 0;
+}
+
+struct Curl_share *Curl_easy_get_share(const struct Curl_easy *data)
+{
+  return data ? data->share : NULL;
+}
+
+FILE *Curl_doh_data_custom_stderr(const struct Curl_easy *data)
+{
+  return (data && data->set.err && data->set.err != stderr) ?
+    data->set.err : NULL;
+}
+
+bool Curl_easy_get_no_signal(const struct Curl_easy *data)
+{
+  return data ? (bool)data->set.no_signal : FALSE;
+}
+
+void *Curl_doh_data_fdebug(const struct Curl_easy *data)
+{
+  return data ? (void *)data->set.fdebug : NULL;
+}
+
+void *Curl_doh_data_debugdata(const struct Curl_easy *data)
+{
+  return data ? data->set.debugdata : NULL;
+}
+
+bool Curl_doh_data_verifyhost(const struct Curl_easy *data)
+{
+  return data ? (bool)data->set.doh_verifyhost : FALSE;
+}
+
+bool Curl_doh_data_verifypeer(const struct Curl_easy *data)
+{
+  return data ? (bool)data->set.doh_verifypeer : FALSE;
+}
+
+bool Curl_doh_data_verifystatus(const struct Curl_easy *data)
+{
+  return data ? (bool)data->set.doh_verifystatus : FALSE;
+}
+
+void Curl_doh_copy_ssl_custom_flags(struct Curl_easy *doh,
+                                    const struct Curl_easy *data)
+{
+  if(doh && data) {
+    doh->set.ssl.custom_cafile = data->set.ssl.custom_cafile;
+    doh->set.ssl.custom_capath = data->set.ssl.custom_capath;
+    doh->set.ssl.custom_cablob = data->set.ssl.custom_cablob;
+  }
+}
+
+bool Curl_doh_data_ssl_certinfo(const struct Curl_easy *data)
+{
+  return data ? (bool)data->set.ssl.certinfo : FALSE;
+}
+
+void *Curl_doh_data_ssl_fsslctx(const struct Curl_easy *data)
+{
+  return data ? (void *)data->set.ssl_fsslctx : NULL;
+}
+
+void *Curl_doh_data_ssl_fsslctxp(const struct Curl_easy *data)
+{
+  return data ? data->set.ssl_fsslctxp : NULL;
+}
+
+uint8_t Curl_doh_data_ssl_options(const struct Curl_easy *data)
+{
+  return data ? data->set.ssl.ssl_options : 0;
+}
+
+void Curl_doh_set_feat(struct Curl_easy *doh)
+{
+#ifdef CURLVERBOSE
+  if(doh)
+    doh->state.feat = &Curl_trc_feat_doh;
+#else
+  (void)doh;
+#endif
+}
+
+void Curl_doh_init_probe_state(struct Curl_easy *doh,
+                               const struct Curl_easy *data,
+                               multi_sub_xfer_done_cb *cb)
+{
+  if(doh && data) {
+    doh->state.internal = TRUE;
+    doh->master_mid = data->mid;
+    doh->sub_xfer_done = cb;
+  }
+}
+
+void Curl_doh_clear_sub_xfer_done(struct Curl_easy *probe_data)
+{
+  if(probe_data)
+    probe_data->sub_xfer_done = NULL;
+}
+
+void Curl_multi_set_ipv6_works(struct Curl_multi *multi, bool works)
+{
+  if(multi)
+    multi->ipv6_works = works;
+}
+
+bool Curl_easy_ipv6_works(const struct Curl_easy *data)
+{
+  return (data && data->multi) ? (bool)data->multi->ipv6_works : FALSE;
+}
+
+curl_resolver_start_callback
+Curl_easy_get_resolver_start(const struct Curl_easy *data)
+{
+  return data ? data->set.resolver_start : NULL;
+}
+
+void *Curl_easy_get_resolver_start_client(const struct Curl_easy *data)
+{
+  return data ? data->set.resolver_start_client : NULL;
+}
+
+uint32_t Curl_multi_next_resolv_id(struct Curl_multi *multi)
+{
+  if(!multi)
+    return 0;
+  if(multi->last_resolv_id == UINT32_MAX)
+    multi->last_resolv_id = 1;
+  else
+    multi->last_resolv_id++;
+  return multi->last_resolv_id;
+}
+
+bool Curl_easy_get_doh(const struct Curl_easy *data)
+{
+  return data ? (bool)data->set.doh : FALSE;
+}
+
+struct Curl_resolv_async *
+Curl_easy_get_async_head(const struct Curl_easy *data)
+{
+  return data ? data->state.async : NULL;
+}
+
+void Curl_easy_set_async_head(struct Curl_easy *data,
+                              struct Curl_resolv_async *async)
+{
+  if(data)
+    data->state.async = async;
+}
+
+const struct Curl_scheme *
+Curl_easy_get_conn_scheme(const struct Curl_easy *data)
+{
+  return (data && data->conn) ? data->conn->scheme : NULL;
+}
+
+void Curl_easy_sigpipe_ignore(struct Curl_easy *data, void *ctx_buf)
+{
+  struct Curl_sigpipe_ctx *ig = (struct Curl_sigpipe_ctx *)ctx_buf;
+  DEBUGASSERT(sizeof(struct Curl_sigpipe_ctx) <= 256);
+  sigpipe_init(ig);
+  sigpipe_ignore(data, ig);
+}
+
+void Curl_easy_sigpipe_restore(void *ctx_buf)
+{
+  struct Curl_sigpipe_ctx *ig = (struct Curl_sigpipe_ctx *)ctx_buf;
+  sigpipe_restore(ig);
+}
+
+void Curl_easy_clear_error_and_errno(struct Curl_easy *data)
+{
+  if(data) {
+    if(data->set.errorbuffer)
+      data->set.errorbuffer[0] = 0;
+    data->state.os_errno = 0;
+  }
+}
+
+uint32_t Curl_easy_get_maxconnects(const struct Curl_easy *data)
+{
+  return data ? data->set.maxconnects : 0;
+}
+
+bool Curl_easy_get_quick_exit(const struct Curl_easy *data)
+{
+  return data ? (bool)data->set.quick_exit : FALSE;
+}
+
+size_t Curl_easy_sizeof(void)
+{
+  return sizeof(struct Curl_easy);
+}
+
+void Curl_easy_dupset_init(struct Curl_easy *dst,
+                           const struct Curl_easy *src)
+{
+  dst->set = src->set;
+#if !defined(CURL_DISABLE_MIME) || !defined(CURL_DISABLE_FORM_API)
+  dst->set.mimepostp = NULL;
+#endif
+  dst->set.str_copypostfields = NULL;
+  memset(dst->set.blobs, 0, BLOB_LAST * sizeof(struct curl_blob *));
+}
+
+struct u8_strset *Curl_easy_get_strings(struct Curl_easy *data)
+{
+  return data ? &data->set.strings : NULL;
+}
+
+unsigned int Curl_easy_blob_count(void)
+{
+  return (unsigned int)BLOB_LAST;
+}
+
+struct curl_blob **Curl_easy_get_blob_slot(struct Curl_easy *data,
+                                           unsigned int idx)
+{
+  return (data && idx < BLOB_LAST) ? &data->set.blobs[idx] : NULL;
+}
+
+struct curl_blob *Curl_easy_get_blob_at(const struct Curl_easy *data,
+                                        unsigned int idx)
+{
+  return (data && idx < BLOB_LAST) ? data->set.blobs[idx] : NULL;
+}
+
+char *Curl_easy_get_copypostfields(const struct Curl_easy *data)
+{
+  return data ? data->set.str_copypostfields : NULL;
+}
+
+curl_off_t Curl_easy_get_postfieldsize(const struct Curl_easy *data)
+{
+  return data ? data->set.postfieldsize : 0;
+}
+
+void Curl_easy_set_copypostfields(struct Curl_easy *data, char *p)
+{
+  if(data) {
+    data->set.str_copypostfields = p;
+    data->set.postfields = p;
+  }
+}
+
+struct curl_mimepart *Curl_easy_get_mimepostp(const struct Curl_easy *data)
+{
+#if !defined(CURL_DISABLE_MIME) || !defined(CURL_DISABLE_FORM_API)
+  return data ? data->set.mimepostp : NULL;
+#else
+  (void)data;
+  return NULL;
+#endif
+}
+
+size_t Curl_easy_mimepart_sizeof(void)
+{
+#if !defined(CURL_DISABLE_MIME) || !defined(CURL_DISABLE_FORM_API)
+  return sizeof(struct curl_mimepart);
+#else
+  return 0;
+#endif
+}
+
+void Curl_easy_set_mimepostp(struct Curl_easy *data,
+                             struct curl_mimepart *p)
+{
+#if !defined(CURL_DISABLE_MIME) || !defined(CURL_DISABLE_FORM_API)
+  if(data)
+    data->set.mimepostp = p;
+#else
+  (void)data;
+  (void)p;
+#endif
+}
+
+void Curl_easy_sync_state_resolve(struct Curl_easy *dst,
+                                  const struct Curl_easy *src)
+{
+  if(dst && src && src->set.resolve)
+    dst->state.resolve = dst->set.resolve;
+}
+
+void Curl_easy_dup_copy_buffer_size(struct Curl_easy *outcurl,
+                                    const struct Curl_easy *data)
+{
+  outcurl->set.buffer_size = data->set.buffer_size;
+}
+
+struct Curl_hash *Curl_easy_get_meta_hash(struct Curl_easy *data)
+{
+  return data ? &data->meta_hash : NULL;
+}
+
+struct dynbuf *Curl_easy_get_headerb(struct Curl_easy *data)
+{
+  return data ? &data->state.headerb : NULL;
+}
+
+struct bufref *Curl_easy_get_state_url(struct Curl_easy *data)
+{
+  return data ? &data->state.url : NULL;
+}
+
+struct bufref *Curl_easy_get_state_referer(struct Curl_easy *data)
+{
+  return data ? &data->state.referer : NULL;
+}
+
+struct store_netrc *Curl_easy_get_state_netrc(struct Curl_easy *data)
+{
+  return data ? &data->state.netrc : NULL;
+}
+
+struct Curl_llist *Curl_easy_get_state_httphdrs(struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_HTTP
+  return data ? &data->state.httphdrs : NULL;
+#else
+  (void)data;
+  return NULL;
+#endif
+}
+
+void Curl_easy_dup_init_ids(struct Curl_easy *outcurl)
+{
+  outcurl->state.last_conn_id = -1;
+  outcurl->state.last_cpid = UINT32_MAX;
+  outcurl->id = -1;
+  outcurl->mid = UINT32_MAX;
+  outcurl->master_mid = UINT32_MAX;
+}
+
+void Curl_easy_dup_copy_progress(struct Curl_easy *outcurl,
+                                 const struct Curl_easy *data)
+{
+  outcurl->progress.hide = data->progress.hide;
+  outcurl->progress.callback = data->progress.callback;
+#ifndef CURL_DISABLE_COOKIES
+  outcurl->state.cookielist = NULL;
+#endif
+}
+
+bool Curl_easy_has_cookie_engine(const struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_COOKIES
+  return data ? (bool)(data->cookies && data->state.cookie_engine) : FALSE;
+#else
+  (void)data;
+  return FALSE;
+#endif
+}
+
+struct CookieInfo *Curl_easy_get_cookies(const struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_COOKIES
+  return data ? data->cookies : NULL;
+#else
+  (void)data;
+  return NULL;
+#endif
+}
+
+void Curl_easy_set_cookies_enabled(struct Curl_easy *data,
+                                   struct CookieInfo *ci)
+{
+#ifndef CURL_DISABLE_COOKIES
+  if(data) {
+    data->cookies = ci;
+    data->state.cookie_engine = TRUE;
+  }
+#else
+  (void)data;
+  (void)ci;
+#endif
+}
+
+struct curl_slist *Curl_easy_get_state_cookielist(const struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_COOKIES
+  return data ? data->state.cookielist : NULL;
+#else
+  (void)data;
+  return NULL;
+#endif
+}
+
+void Curl_easy_set_state_cookielist(struct Curl_easy *data,
+                                    struct curl_slist *list)
+{
+#ifndef CURL_DISABLE_COOKIES
+  if(data)
+    data->state.cookielist = list;
+#else
+  (void)data;
+  (void)list;
+#endif
+}
+
+struct altsvcinfo *Curl_easy_get_asi(const struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_ALTSVC
+  return data ? data->asi : NULL;
+#else
+  (void)data;
+  return NULL;
+#endif
+}
+
+struct altsvcinfo **Curl_easy_get_asi_slot(struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_ALTSVC
+  return data ? &data->asi : NULL;
+#else
+  static struct altsvcinfo *dummy_asi = NULL;
+  (void)data;
+  dummy_asi = NULL;
+  return &dummy_asi;
+#endif
+}
+
+struct hsts *Curl_easy_get_hsts(const struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_HSTS
+  return data ? data->hsts : NULL;
+#else
+  (void)data;
+  return NULL;
+#endif
+}
+
+struct hsts **Curl_easy_get_hsts_slot(struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_HSTS
+  return data ? &data->hsts : NULL;
+#else
+  static struct hsts *dummy_hsts = NULL;
+  (void)data;
+  dummy_hsts = NULL;
+  return &dummy_hsts;
+#endif
+}
+
+CURLcode Curl_easy_hsts_loadcb(struct Curl_easy *data, struct hsts *h)
+{
+#ifndef CURL_DISABLE_HSTS
+  return Curl_hsts_loadcb(data, h);
+#else
+  (void)data;
+  (void)h;
+  return CURLE_OK;
+#endif
+}
+
+void Curl_easy_set_magic(struct Curl_easy *data, uint32_t magic)
+{
+  if(data)
+    data->magic = magic;
+}
+
+void Curl_easy_reset_conn_ids(struct Curl_easy *data)
+{
+  if(data) {
+    data->state.last_conn_id = -1;
+    data->state.last_cpid = UINT32_MAX;
+  }
+}
+
+void Curl_easy_req_hard_reset(struct Curl_easy *data)
+{
+  if(data)
+    Curl_req_hard_reset(&data->req, data);
+}
+
+void Curl_easy_zero_set(struct Curl_easy *data)
+{
+  if(data)
+    memset(&data->set, 0, sizeof(struct UserDefined));
+}
+
+void Curl_easy_zero_progress(struct Curl_easy *data)
+{
+  if(data)
+    memset(&data->progress, 0, sizeof(struct Progress));
+}
+
+void Curl_easy_reset_post_initinfo(struct Curl_easy *data)
+{
+  if(data) {
+    data->progress.hide = TRUE;
+    memset(&data->state.authhost, 0, sizeof(struct auth));
+    memset(&data->state.authproxy, 0, sizeof(struct auth));
+    data->master_mid = UINT32_MAX;
+#if !defined(CURL_DISABLE_HTTP) && !defined(CURL_DISABLE_DIGEST_AUTH)
+    Curl_http_auth_cleanup_digest(data);
+#endif
+  }
+}
+
+void Curl_easy_clear_keeps_speed_sec(struct Curl_easy *data)
+{
+  if(data)
+    data->state.keeps_speed.tv_sec = 0;
+}
+
+bool Curl_easy_get_state_done(const struct Curl_easy *data)
+{
+  return data ? (bool)data->state.done : FALSE;
+}
+
+uint8_t Curl_easy_get_connect_only(const struct Curl_easy *data)
+{
+  return data ? data->set.connect_only : 0;
+}
+
+curl_off_t Curl_easy_get_last_conn_id(const struct Curl_easy *data)
+{
+  return data ? data->state.last_conn_id : -1;
+}
+
+#include "socks.h"
+
+/* Accessor helpers for Zig-ported tftp, socks, and telnet modules */
+struct connectdata *Curl_easy_get_conn(struct Curl_easy *data);
+curl_socket_t Curl_conn_get_sock(const struct connectdata *conn,
+                                 int sockindex);
+bool Curl_easy_get_verbose(const struct Curl_easy *data);
+
+bool Curl_tftp_is_upload(const struct Curl_easy *data);
+bool Curl_tftp_prefer_ascii(const struct Curl_easy *data);
+void Curl_tftp_set_prefer_ascii(struct Curl_easy *data, bool val);
+curl_off_t Curl_tftp_infilesize(const struct Curl_easy *data);
+char *Curl_tftp_up_path(struct Curl_easy *data);
+bool Curl_tftp_no_options(const struct Curl_easy *data);
+unsigned int Curl_tftp_blksize(const struct Curl_easy *data);
+curl_off_t Curl_tftp_add_writebytecount(struct Curl_easy *data, size_t nbytes);
+bool Curl_conn_is_bound(const struct connectdata *conn);
+void Curl_conn_set_bound(struct connectdata *conn, bool val);
+void Curl_conn_set_transport_wanted(struct connectdata *conn,
+                                    uint8_t transport);
+
+uint8_t Curl_socks_get_socks5auth(const struct Curl_easy *data);
+bool Curl_socks_is_auth_only(const struct Curl_easy *data);
+uint8_t Curl_socks_get_ipver(const struct Curl_easy *data);
+void Curl_socks_set_pxcode(struct Curl_easy *data, uint8_t pxcode);
+void Curl_conn_set_socks5_authenticated(struct connectdata *conn, bool val);
+bool Curl_socks5_has_gssapi(void);
+CURLcode Curl_socks5_gssapi_negotiate(struct Curl_cfilter *cf,
+                                      struct Curl_easy *data,
+                                      struct Curl_creds *creds);
+bool Curl_conn_socks5_gssapi_enctype(const struct connectdata *conn);
+
+bool Curl_telnet_has_creds(const struct Curl_easy *data);
+const char *Curl_telnet_creds_user(const struct Curl_easy *data);
+struct curl_slist *Curl_telnet_get_options(const struct Curl_easy *data);
+bool Curl_telnet_is_fread_set(const struct Curl_easy *data);
+size_t Curl_telnet_invoke_fread(struct Curl_easy *data,
+                                char *buf, size_t size);
+int Curl_telnet_get_in_fd(const struct Curl_easy *data);
+
+struct connectdata *Curl_easy_get_conn(struct Curl_easy *data)
+{
+  return data->conn;
+}
+
+curl_socket_t Curl_conn_get_sock(const struct connectdata *conn,
+                                 int sockindex)
+{
+  return conn->sock[sockindex];
+}
+
+bool Curl_easy_get_verbose(const struct Curl_easy *data)
+{
+  return data->set.verbose;
+}
+
+bool Curl_tftp_is_upload(const struct Curl_easy *data)
+{
+  return data->state.upload;
+}
+
+bool Curl_tftp_prefer_ascii(const struct Curl_easy *data)
+{
+  return data->state.prefer_ascii;
+}
+
+void Curl_tftp_set_prefer_ascii(struct Curl_easy *data, bool val)
+{
+  data->state.prefer_ascii = val;
+}
+
+curl_off_t Curl_tftp_infilesize(const struct Curl_easy *data)
+{
+  return data->state.infilesize;
+}
+
+char *Curl_tftp_up_path(struct Curl_easy *data)
+{
+  return data->state.up.path;
+}
+
+bool Curl_tftp_no_options(const struct Curl_easy *data)
+{
+  return data->set.tftp_no_options;
+}
+
+unsigned int Curl_tftp_blksize(const struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_TFTP
+  return data->set.tftp_blksize;
+#else
+  (void)data;
+  return 0;
+#endif
+}
+
+curl_off_t Curl_tftp_add_writebytecount(struct Curl_easy *data, size_t nbytes)
+{
+  data->req.writebytecount += nbytes;
+  return data->req.writebytecount;
+}
+
+bool Curl_conn_is_bound(const struct connectdata *conn)
+{
+  return conn->bits.bound;
+}
+
+void Curl_conn_set_bound(struct connectdata *conn, bool val)
+{
+  conn->bits.bound = val;
+}
+
+void Curl_conn_set_transport_wanted(struct connectdata *conn,
+                                    uint8_t transport)
+{
+  conn->transport_wanted = transport;
+}
+
+uint8_t Curl_socks_get_socks5auth(const struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_PROXY
+  return data->set.socks5auth;
+#else
+  (void)data;
+  return 0;
+#endif
+}
+
+bool Curl_socks_is_auth_only(const struct Curl_easy *data)
+{
+  return data->set.socks5_auth_only;
+}
+
+uint8_t Curl_socks_get_ipver(const struct Curl_easy *data)
+{
+  return data->set.ipver;
+}
+
+void Curl_socks_set_pxcode(struct Curl_easy *data, uint8_t pxcode)
+{
+  data->info.pxcode = pxcode;
+}
+
+void Curl_conn_set_socks5_authenticated(struct connectdata *conn, bool val)
+{
+#ifndef CURL_DISABLE_PROXY
+  conn->bits.socks5_authenticated = val;
+#else
+  (void)conn;
+  (void)val;
+#endif
+}
+
+bool Curl_socks5_has_gssapi(void)
+{
+#if defined(HAVE_GSSAPI) || defined(USE_WINDOWS_SSPI)
+  return TRUE;
+#else
+  return FALSE;
+#endif
+}
+
+CURLcode Curl_socks5_gssapi_negotiate(struct Curl_cfilter *cf,
+                                      struct Curl_easy *data,
+                                      struct Curl_creds *creds)
+{
+#if !defined(CURL_DISABLE_PROXY) && \
+  (defined(HAVE_GSSAPI) || defined(USE_WINDOWS_SSPI))
+  return Curl_SOCKS5_gssapi_negotiate(cf, data, creds);
+#else
+  (void)cf;
+  (void)data;
+  (void)creds;
+  return CURLE_NOT_BUILT_IN;
+#endif
+}
+
+bool Curl_conn_socks5_gssapi_enctype(const struct connectdata *conn)
+{
+#if defined(HAVE_GSSAPI) || defined(USE_WINDOWS_SSPI)
+  return conn->socks5_gssapi_enctype != 0;
+#else
+  (void)conn;
+  return FALSE;
+#endif
+}
+
+bool Curl_telnet_has_creds(const struct Curl_easy *data)
+{
+  return data->state.creds != NULL;
+}
+
+const char *Curl_telnet_creds_user(const struct Curl_easy *data)
+{
+  return Curl_creds_user(data->conn->creds);
+}
+
+struct curl_slist *Curl_telnet_get_options(const struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_TELNET
+  return data->set.telnet_options;
+#else
+  (void)data;
+  return NULL;
+#endif
+}
+
+bool Curl_telnet_is_fread_set(const struct Curl_easy *data)
+{
+  return data->set.is_fread_set;
+}
+
+size_t Curl_telnet_invoke_fread(struct Curl_easy *data,
+                                char *buf, size_t size)
+{
+  return data->state.fread_func(buf, 1, size, data->state.in);
+}
+
+int Curl_telnet_get_in_fd(const struct Curl_easy *data)
+{
+#ifndef USE_WINSOCK
+  return fileno((FILE *)data->state.in);
+#else
+  (void)data;
+  return -1;
+#endif
+}
