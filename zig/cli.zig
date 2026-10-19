@@ -3,14 +3,6 @@ const libcurl = @import("libcurl.zig");
 
 pub const c_sources = [_][]const u8{
     "src/config2setopts.c",
-    "src/terminal.c",
-    "src/tool_cb_dbg.c",
-    "src/tool_cb_hdr.c",
-    "src/tool_cb_prg.c",
-    "src/tool_cb_rea.c",
-    "src/tool_cb_see.c",
-    "src/tool_cb_soc.c",
-    "src/tool_cb_wrt.c",
     "src/tool_cfgable.c",
     "src/tool_easysrc.c",
     "src/tool_formparse.c",
@@ -22,16 +14,11 @@ pub const c_sources = [_][]const u8{
     "src/tool_libinfo.c",
     "src/tool_listhelp.c",
     "src/tool_main.c",
-    "src/tool_msgs.c",
     "src/tool_operate.c",
     "src/tool_operhlp.c",
     "src/tool_paramhlp.c",
-    "src/tool_progress.c",
     "src/tool_setopt.c",
     "src/tool_ssls.c",
-    "src/tool_stderr.c",
-    "src/tool_writeout.c",
-    "src/tool_writeout_json.c",
 };
 
 pub const curlx_c_sources = [_][]const u8{};

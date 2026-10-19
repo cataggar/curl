@@ -145,3 +145,125 @@ test "cli_utils: variable expansion, config file parsing, create-dirs, and remot
     defer gpa.free(written);
     try std.testing.expectEqualStrings(payload, written);
 }
+
+test "curl --write-out formats variables and %{json}" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const payload = "writeout test payload 12345\n";
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "writeout.txt",
+        .data = payload,
+    });
+
+    const abs_path = try tmp.dir.realPathFileAlloc(io, "writeout.txt", gpa);
+    defer gpa.free(abs_path);
+    const url = try makeFileUrl(gpa, abs_path);
+    defer gpa.free(url);
+
+    const out_path = try std.fmt.allocPrint(gpa, "{s}.out", .{abs_path});
+    defer gpa.free(out_path);
+
+    const result = try std.process.run(gpa, io, .{
+        .argv = &.{
+            build_options.curl_exe_path,
+            "-s",
+            "-o",
+            out_path,
+            "-w",
+            "size=%{size_download} code=%{exitcode} scheme=%{scheme} idx=%{urlnum}\\n%{json}",
+            url,
+        },
+    });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, result.term);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "size=28 code=0 scheme=file idx=0\n") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "\"size_download\":28") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "\"exitcode\":0") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "\"scheme\":\"file\"") != null);
+}
+
+test "curl debug trace, progress bar, stderr redirection, and file upload callbacks" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const payload = "callback test data\r\nsecond line\r\n";
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "input.txt",
+        .data = payload,
+    });
+
+    const abs_in = try tmp.dir.realPathFileAlloc(io, "input.txt", gpa);
+    defer gpa.free(abs_in);
+    const in_url = try makeFileUrl(gpa, abs_in);
+    defer gpa.free(in_url);
+
+    // Test --trace-ascii - --trace-time --trace-ids (tool_debug_cb)
+    const trace_res = try std.process.run(gpa, io, .{
+        .argv = &.{
+            build_options.curl_exe_path,
+            "-s",
+            "--trace-ascii",
+            "-",
+            "--trace-time",
+            "--trace-ids",
+            in_url,
+        },
+    });
+    defer gpa.free(trace_res.stdout);
+    defer gpa.free(trace_res.stderr);
+
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, trace_res.term);
+    try std.testing.expect(std.mem.find(u8, trace_res.stdout, "[0-0] <= Recv data") != null);
+    try std.testing.expect(std.mem.find(u8, trace_res.stdout, "0000: callback test data") != null);
+
+    // Test -T upload (tool_read_cb / tool_seek_cb) and -# progress bar (tool_progress_cb)
+    const abs_uploaded = try std.fmt.allocPrint(gpa, "{s}.uploaded", .{abs_in});
+    defer gpa.free(abs_uploaded);
+    const upload_url = try makeFileUrl(gpa, abs_uploaded);
+    defer gpa.free(upload_url);
+
+    const upload_res = try std.process.run(gpa, io, .{
+        .argv = &.{
+            build_options.curl_exe_path,
+            "-#",
+            "-T",
+            abs_in,
+            upload_url,
+        },
+    });
+    defer gpa.free(upload_res.stdout);
+    defer gpa.free(upload_res.stderr);
+
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, upload_res.term);
+
+    // Verify --stderr redirection and errorf/warnf formatting
+    const err_path = try std.fmt.allocPrint(gpa, "{s}.stderr", .{abs_in});
+    defer gpa.free(err_path);
+    const missing_url = try std.fmt.allocPrint(gpa, "{s}.nonexistent", .{in_url});
+    defer gpa.free(missing_url);
+
+    const err_res = try std.process.run(gpa, io, .{
+        .argv = &.{
+            build_options.curl_exe_path,
+            "--stderr",
+            err_path,
+            missing_url,
+        },
+    });
+    defer gpa.free(err_res.stdout);
+    defer gpa.free(err_res.stderr);
+
+    try std.testing.expect(err_res.term != .exited or err_res.term.exited != 0);
+    const err_file_data = try tmp.dir.readFileAlloc(io, "input.txt.stderr", gpa, .limited(4096));
+    defer gpa.free(err_file_data);
+    try std.testing.expect(std.mem.find(u8, err_file_data, "curl: (") != null);
+}
