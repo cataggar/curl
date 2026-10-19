@@ -209,6 +209,40 @@ pub const SslFilterConfig = extern struct {
             self.flags &= ~mask;
         }
     }
+
+    pub inline fn verifypeer(self: *const SslFilterConfig) bool {
+        return self.getFlag(BIT_VERIFYPEER);
+    }
+    pub inline fn verifyhost(self: *const SslFilterConfig) bool {
+        return self.getFlag(BIT_VERIFYHOST);
+    }
+    pub inline fn verifystatus(self: *const SslFilterConfig) bool {
+        return self.getFlag(BIT_VERIFYSTATUS);
+    }
+    pub inline fn native_ca_store(self: *const SslFilterConfig) bool {
+        return self.getFlag(BIT_NATIVE_CA_STORE);
+    }
+    pub inline fn primary_cache_session(self: *const SslFilterConfig) bool {
+        return self.getFlag(BIT_CACHE_SESSION);
+    }
+    pub inline fn earlydata(self: *const SslFilterConfig) bool {
+        return self.getFlag(BIT_EARLYDATA);
+    }
+    pub inline fn auto_client_cert(self: *const SslFilterConfig) bool {
+        return self.getFlag(BIT_AUTO_CLIENT_CERT);
+    }
+    pub inline fn enable_beast(self: *const SslFilterConfig) bool {
+        return self.getFlag(BIT_ENABLE_BEAST);
+    }
+    pub inline fn no_partialchain(self: *const SslFilterConfig) bool {
+        return self.getFlag(BIT_NO_PARTIALCHAIN);
+    }
+    pub inline fn no_revoke(self: *const SslFilterConfig) bool {
+        return self.getFlag(BIT_NO_REVOKE);
+    }
+    pub inline fn revoke_best_effort(self: *const SslFilterConfig) bool {
+        return self.getFlag(BIT_REVOKE_BEST_EFFORT);
+    }
 };
 
 pub const SslEasyConfig = extern struct {
@@ -660,23 +694,23 @@ pub const CurlScheme = extern struct {
 
 pub const CurlPeer = extern struct {
     scheme: *const CurlScheme,
-    name: ?[*:0]u8,
     hostname: [*:0]const u8,
-    dispname: ?[*:0]const u8,
-    socks_GW_name: ?[*:0]u8,
-    port: c_int,
+    zoneid: ?[*:0]u8 = null,
+    refcount: u32 = 1,
+    scopeid: u32 = 0,
+    port: u16,
+    _win_pad: if (builtin.os.tag == .windows) [2]u8 else [0]u8 = if (builtin.os.tag == .windows) .{ 0, 0 } else .{},
+    flags: if (builtin.os.tag == .windows) u32 else u8 = 0,
+    user_hostname: [1]u8 = .{0},
 };
 
 pub const SslPeer = extern struct {
-    origin: *const CurlPeer,
-    peer: ?*const CurlPeer,
-    scache_key: ?[*:0]u8,
+    origin: ?*CurlPeer,
+    peer: ?*CurlPeer,
     sni: ?[*:0]u8,
-    dispname: ?[*:0]u8,
-    peer_type: c_uint,
+    scache_key: ?[*:0]u8,
+    type: c_uint,
     transport: u8,
-    _win_pad: if (builtin.os.tag == .windows) [3]u8 else [0]u8 = if (builtin.os.tag == .windows) .{ 0, 0, 0 } else .{},
-    flags: if (builtin.os.tag == .windows) u32 else u8,
 };
 
 pub const CurlSslScacheObjDtor = *const fn (sobj: ?*anyopaque) callconv(.c) void;
@@ -898,6 +932,7 @@ pub export fn Curl_ssl_peer_key_make(
     var is_local: bool = false;
     var result: CURLcode = CURLE_OK;
 
+    const orig = peer.origin orelse return CURLE_FAILED_INIT;
     ppeer_key.* = null;
     containers.curlx_dyn_init(&buf, 10 * 1024);
     defer containers.curlx_dyn_free(&buf);
@@ -905,9 +940,9 @@ pub export fn Curl_ssl_peer_key_make(
     result = curlx_dyn_addf(
         &buf,
         "%s:%s:%d:KEY-V3",
-        peer.origin.scheme.name,
-        peer.origin.hostname,
-        peer.origin.port,
+        orig.scheme.name,
+        orig.hostname,
+        @as(c_int, orig.port),
     );
     if (result != CURLE_OK) return result;
 
@@ -3138,23 +3173,18 @@ test "SslFilterConfig cloning, matching, and peer key generation (unit3303 & uni
     try std.testing.expect(Curl_ssl_conn_config_match_zig(&ssl_cfg, &cloned_cfg, null, false));
 
     const scheme = CurlScheme{ .name = "https" };
-    const origin = CurlPeer{
+    var origin = CurlPeer{
         .scheme = &scheme,
-        .name = null,
         .hostname = "example.com",
-        .dispname = null,
-        .socks_GW_name = null,
         .port = 443,
     };
     const peer = SslPeer{
         .origin = &origin,
         .peer = null,
-        .scache_key = null,
         .sni = null,
-        .dispname = null,
-        .peer_type = 0,
+        .scache_key = null,
+        .type = 0,
         .transport = TRNSPRT_TCP,
-        .flags = 0,
     };
 
     var key1: ?[*:0]u8 = null;
