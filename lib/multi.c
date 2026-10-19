@@ -4642,3 +4642,859 @@ struct curl_slist *Curl_getinfo_cookie_list(struct Curl_easy *data)
   return NULL;
 #endif
 }
+
+/* -------------------------------------------------------------------------
+ * Phase 8 Session 42: setopt.zig C struct-field accessors & va_list shim
+ * ------------------------------------------------------------------------- */
+#include "setopt.h"
+
+void *Curl_easy_strset_ptr(struct Curl_easy *data)
+{
+  return &data->set.strings;
+}
+
+struct curl_blob **Curl_easy_blob_ptr(struct Curl_easy *data, unsigned int idx)
+{
+  return &data->set.blobs[idx];
+}
+
+void *Curl_setopt_default_stderr(void)
+{
+  return (void *)stderr;
+}
+
+#if defined(__clang__) && __clang_major__ >= 16
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-function-type-strict"
+#endif
+void *Curl_setopt_default_fwrite(void)
+{
+  return (void *)(curl_write_callback)fwrite;
+}
+
+void *Curl_setopt_default_fread(void)
+{
+  return (void *)(curl_read_callback)fread;
+}
+#if defined(__clang__) && __clang_major__ >= 16
+#pragma clang diagnostic pop
+#endif
+
+bool Curl_setopt_trc_bind_is_verbose(struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_VERBOSE_STRINGS
+  return Curl_trc_is_verbose(data);
+#else
+  (void)data;
+  return FALSE;
+#endif
+}
+
+bool Curl_setopt_get_bit(struct Curl_easy *data, int bit_id)
+{
+  struct UserDefined *s = &data->set;
+  switch(bit_id) {
+  case 1: return s->reuse_forbid;
+  case 2: return s->reuse_fresh;
+  case 3: return s->verbose;
+  case 4: return s->include_header;
+  case 5: return data->progress.hide;
+  case 6: return s->opt_no_body;
+  case 7: return s->http_fail_on_error;
+  case 8: return s->http_keep_sending_on_error;
+  case 9: return s->get_filetime;
+#ifndef CURL_DISABLE_HTTP
+  case 10: return s->http09_allowed;
+#ifndef CURL_DISABLE_COOKIES
+  case 11: return s->cookiesession;
+#endif
+  case 12: return s->http_auto_referer;
+  case 13: return s->http_transfer_encoding;
+  case 14: return s->allow_auth_to_other_hosts;
+  case 15: return s->http_te_skip;
+  case 16: return s->http_ce_skip;
+#endif
+#ifndef CURL_DISABLE_PROXY
+  case 17: return s->tunnel_thru_httpproxy;
+  case 18: return s->haproxyprotocol;
+  case 19: return s->proxy_ssl.verifypeer;
+  case 20: return s->proxy_ssl.verifyhost;
+  case 21: return s->proxy_transfer_mode;
+#endif
+#if defined(HAVE_GSSAPI) || defined(USE_WINDOWS_SSPI)
+  case 22: return s->socks5_gssapi_nec;
+#endif
+#ifdef CURL_LIST_ONLY_PROTOCOL
+  case 23: return s->list_only;
+#endif
+  case 24: return s->remote_append;
+#ifndef CURL_DISABLE_FTP
+  case 25: return s->ftp_use_eprt;
+  case 26: return s->ftp_use_epsv;
+  case 27: return s->ftp_use_pret;
+  case 28: return s->ftp_skip_ip;
+  case 29: return s->wildcard_enabled;
+#endif
+  case 30: return s->crlf;
+#ifndef CURL_DISABLE_TFTP
+  case 31: return s->tftp_no_options;
+#endif
+  case 32: return s->prefer_ascii;
+  case 33: return s->ssl.verifypeer;
+#ifndef CURL_DISABLE_DOH
+  case 34: return s->doh_verifypeer;
+  case 35: return s->doh_verifyhost;
+  case 36: return s->doh_verifystatus;
+#endif
+  case 37: return s->ssl.verifyhost;
+  case 38: return s->ssl.verifystatus;
+#ifdef USE_SSL
+  case 39: return s->ssl.certinfo;
+#endif
+  case 40: return s->no_signal;
+  case 41: return s->tcp_nodelay;
+  case 42: return s->ignorecl;
+  case 43: return s->ssl.cache_session;
+#ifndef CURL_DISABLE_PROXY
+  case 44: return s->proxy_ssl.cache_session;
+#endif
+#ifdef USE_SSH
+  case 45: return s->ssh_compression;
+#endif
+#ifndef CURL_DISABLE_SMTP
+  case 46: return s->mail_rcpt_allowfails;
+#endif
+  case 47: return s->sasl_ir;
+  case 48: return s->tcp_keepalive;
+  case 49: return s->tcp_fastopen;
+  case 50: return s->ssl_enable_alpn;
+  case 51: return s->path_as_is;
+  case 52: return s->pipewait;
+  case 53: return s->suppress_connect_headers;
+#ifndef CURL_DISABLE_SHUFFLE_DNS
+  case 54: return s->dns_shuffle_addresses;
+#endif
+  case 55: return s->disallow_username_in_url;
+  case 56: return s->quick_exit;
+  case 57: return s->connect_only;
+  case 58: return s->connect_only_ws;
+#ifdef USE_OPENSSL
+  case 59: return s->engine_default;
+#endif
+#ifndef CURL_DISABLE_PROXY
+  case 60: return s->socks5_auth_only;
+#endif
+#ifndef CURL_DISABLE_HTTP
+  case 61: return s->post301;
+  case 62: return s->post302;
+  case 63: return s->post303;
+  case 64: return s->sep_headers;
+#endif
+#ifndef CURL_DISABLE_WEBSOCKETS
+  case 65: return s->ws_raw_mode;
+  case 66: return s->ws_no_auto_pong;
+#endif
+#ifndef CURL_DISABLE_MIME
+  case 67: return s->mime_formescape;
+#endif
+#if !defined(CURL_DISABLE_HTTP) && !defined(CURL_DISABLE_COOKIES)
+  case 68: return data->state.cookie_engine;
+#endif
+#ifndef CURL_DISABLE_PROXY
+  case 69: return s->proxy_ssl.custom_cafile;
+  case 70: return s->proxy_ssl.custom_capath;
+#endif
+  case 71: return s->ssl.custom_cafile;
+  case 72: return s->ssl.custom_capath;
+#ifndef CURL_DISABLE_FTP
+  case 73: return s->ftp_use_port;
+#endif
+#ifdef USE_UNIX_SOCKETS
+  case 74: return s->abstract_unix_socket;
+#endif
+#ifndef CURL_DISABLE_DOH
+  case 75: return s->doh;
+#endif
+  case 76: return data->progress.callback;
+  case 77: return s->is_fread_set;
+#ifndef CURL_DISABLE_PROXY
+  case 78: return s->proxy_ssl.custom_cablob;
+#endif
+  case 79: return s->ssl.custom_cablob;
+  default: return FALSE;
+  }
+}
+
+void Curl_setopt_set_bit(struct Curl_easy *data, int bit_id, bool val)
+{
+  struct UserDefined *s = &data->set;
+  switch(bit_id) {
+  case 1: s->reuse_forbid = val; break;
+  case 2: s->reuse_fresh = val; break;
+  case 3: s->verbose = val; break;
+  case 4: s->include_header = val; break;
+  case 5: data->progress.hide = val; break;
+  case 6: s->opt_no_body = val; break;
+  case 7: s->http_fail_on_error = val; break;
+  case 8: s->http_keep_sending_on_error = val; break;
+  case 9: s->get_filetime = val; break;
+#ifndef CURL_DISABLE_HTTP
+  case 10: s->http09_allowed = val; break;
+#ifndef CURL_DISABLE_COOKIES
+  case 11: s->cookiesession = val; break;
+#endif
+  case 12: s->http_auto_referer = val; break;
+  case 13: s->http_transfer_encoding = val; break;
+  case 14: s->allow_auth_to_other_hosts = val; break;
+  case 15: s->http_te_skip = val; break;
+  case 16: s->http_ce_skip = val; break;
+#endif
+#ifndef CURL_DISABLE_PROXY
+  case 17: s->tunnel_thru_httpproxy = val; break;
+  case 18: s->haproxyprotocol = val; break;
+  case 19: s->proxy_ssl.verifypeer = val; break;
+  case 20: s->proxy_ssl.verifyhost = val; break;
+  case 21: s->proxy_transfer_mode = val; break;
+#endif
+#if defined(HAVE_GSSAPI) || defined(USE_WINDOWS_SSPI)
+  case 22: s->socks5_gssapi_nec = val; break;
+#endif
+#ifdef CURL_LIST_ONLY_PROTOCOL
+  case 23: s->list_only = val; break;
+#endif
+  case 24: s->remote_append = val; break;
+#ifndef CURL_DISABLE_FTP
+  case 25: s->ftp_use_eprt = val; break;
+  case 26: s->ftp_use_epsv = val; break;
+  case 27: s->ftp_use_pret = val; break;
+  case 28: s->ftp_skip_ip = val; break;
+  case 29: s->wildcard_enabled = val; break;
+#endif
+  case 30: s->crlf = val; break;
+#ifndef CURL_DISABLE_TFTP
+  case 31: s->tftp_no_options = val; break;
+#endif
+  case 32: s->prefer_ascii = val; break;
+  case 33: s->ssl.verifypeer = val; break;
+#ifndef CURL_DISABLE_DOH
+  case 34: s->doh_verifypeer = val; break;
+  case 35: s->doh_verifyhost = val; break;
+  case 36: s->doh_verifystatus = val; break;
+#endif
+  case 37: s->ssl.verifyhost = val; break;
+  case 38: s->ssl.verifystatus = val; break;
+#ifdef USE_SSL
+  case 39: s->ssl.certinfo = val; break;
+#endif
+  case 40: s->no_signal = val; break;
+  case 41: s->tcp_nodelay = val; break;
+  case 42: s->ignorecl = val; break;
+  case 43: s->ssl.cache_session = val; break;
+#ifndef CURL_DISABLE_PROXY
+  case 44: s->proxy_ssl.cache_session = val; break;
+#endif
+#ifdef USE_SSH
+  case 45: s->ssh_compression = val; break;
+#endif
+#ifndef CURL_DISABLE_SMTP
+  case 46: s->mail_rcpt_allowfails = val; break;
+#endif
+  case 47: s->sasl_ir = val; break;
+  case 48: s->tcp_keepalive = val; break;
+  case 49: s->tcp_fastopen = val; break;
+  case 50: s->ssl_enable_alpn = val; break;
+  case 51: s->path_as_is = val; break;
+  case 52: s->pipewait = val; break;
+  case 53: s->suppress_connect_headers = val; break;
+#ifndef CURL_DISABLE_SHUFFLE_DNS
+  case 54: s->dns_shuffle_addresses = val; break;
+#endif
+  case 55: s->disallow_username_in_url = val; break;
+  case 56: s->quick_exit = val; break;
+  case 57: s->connect_only = val; break;
+  case 58: s->connect_only_ws = val; break;
+#ifdef USE_OPENSSL
+  case 59: s->engine_default = val; break;
+#endif
+#ifndef CURL_DISABLE_PROXY
+  case 60: s->socks5_auth_only = val; break;
+#endif
+#ifndef CURL_DISABLE_HTTP
+  case 61: s->post301 = val; break;
+  case 62: s->post302 = val; break;
+  case 63: s->post303 = val; break;
+  case 64: s->sep_headers = val; break;
+#endif
+#ifndef CURL_DISABLE_WEBSOCKETS
+  case 65: s->ws_raw_mode = val; break;
+  case 66: s->ws_no_auto_pong = val; break;
+#endif
+#ifndef CURL_DISABLE_MIME
+  case 67: s->mime_formescape = val; break;
+#endif
+#if !defined(CURL_DISABLE_HTTP) && !defined(CURL_DISABLE_COOKIES)
+  case 68: data->state.cookie_engine = val; break;
+#endif
+#ifndef CURL_DISABLE_PROXY
+  case 69: s->proxy_ssl.custom_cafile = val; break;
+  case 70: s->proxy_ssl.custom_capath = val; break;
+#endif
+  case 71: s->ssl.custom_cafile = val; break;
+  case 72: s->ssl.custom_capath = val; break;
+#ifndef CURL_DISABLE_FTP
+  case 73: s->ftp_use_port = val; break;
+#endif
+#ifdef USE_UNIX_SOCKETS
+  case 74: s->abstract_unix_socket = val; break;
+#endif
+#ifndef CURL_DISABLE_DOH
+  case 75: s->doh = val; break;
+#endif
+  case 76: data->progress.callback = val; break;
+  case 77: s->is_fread_set = val; break;
+#ifndef CURL_DISABLE_PROXY
+  case 78: s->proxy_ssl.custom_cablob = val; break;
+#endif
+  case 79: s->ssl.custom_cablob = val; break;
+  default: break;
+  }
+}
+
+int64_t Curl_setopt_get_i64(struct Curl_easy *data, int field_id)
+{
+  struct UserDefined *s = &data->set;
+  switch(field_id) {
+  case 1: return (int64_t)s->httpauth;
+#ifndef CURL_DISABLE_PROXY
+  case 2: return (int64_t)s->proxyauth;
+#endif
+  case 3: return (int64_t)s->httpwant;
+#ifdef USE_SSL
+  case 4: return (int64_t)s->ssl.version;
+  case 5: return (int64_t)s->ssl.version_max;
+#ifndef CURL_DISABLE_PROXY
+  case 6: return (int64_t)s->proxy_ssl.version;
+  case 7: return (int64_t)s->proxy_ssl.version_max;
+#endif
+#endif
+#ifndef CURL_DISABLE_RTSP
+  case 8: return (int64_t)s->rtspreq;
+#endif
+  case 9: return (int64_t)s->method;
+  case 10: return (int64_t)s->dns_cache_timeout_ms;
+  case 11: return (int64_t)s->maxconnects;
+  case 12: return (int64_t)s->server_response_timeout;
+  case 13: return (int64_t)s->low_speed_limit;
+  case 14: return (int64_t)s->low_speed_time;
+  case 15: return (int64_t)s->use_port;
+  case 16: return (int64_t)s->timeout;
+  case 17: return (int64_t)s->connecttimeout;
+#ifndef CURL_DISABLE_BINDLOCAL
+  case 18: return (int64_t)s->localport;
+  case 19: return (int64_t)s->localportrange;
+#endif
+  case 20: return (int64_t)s->buffer_size;
+  case 21: return (int64_t)s->upload_buffer_size;
+  case 22: return (int64_t)s->max_filesize;
+  case 23: return (int64_t)s->ipver;
+#ifdef USE_IPV6
+  case 24: return (int64_t)s->scope_id;
+#endif
+  case 25: return (int64_t)s->tcp_keepidle;
+  case 26: return (int64_t)s->tcp_keepintvl;
+  case 27: return (int64_t)s->tcp_keepcnt;
+  case 28: return (int64_t)s->happy_eyeballs_timeout;
+  case 29: return (int64_t)s->upkeep_interval_ms;
+  case 30: return (int64_t)s->conn_max_idle_ms;
+  case 31: return (int64_t)s->conn_max_age_ms;
+#ifdef USE_SSL
+  case 32: return (int64_t)s->ssl_ca_cache_timeout;
+#endif
+  case 33: return (int64_t)s->use_ssl;
+  case 34: return (int64_t)s->ssl.ssl_options;
+#ifndef CURL_DISABLE_PROXY
+  case 35: return (int64_t)s->proxy_ssl.ssl_options;
+  case 36: return (int64_t)s->proxyport;
+  case 37: return (int64_t)s->proxytype;
+  case 38: return (int64_t)s->socks5auth;
+#endif
+#ifndef CURL_DISABLE_HTTP
+  case 39: return (int64_t)s->http_follow_mode;
+  case 40: return (int64_t)s->maxredirs;
+  case 41: return (int64_t)s->expect_100_timeout;
+#if defined(USE_HTTP2) || defined(USE_HTTP3)
+  case 42: return (int64_t)s->weight;
+#endif
+#ifndef CURL_DISABLE_HTTPSIG
+  case 43: return (int64_t)s->httpsig_algorithm;
+#endif
+#endif
+#ifndef CURL_DISABLE_TFTP
+  case 44: return (int64_t)s->tftp_blksize;
+#endif
+#ifndef CURL_DISABLE_NETRC
+  case 45: return (int64_t)s->use_netrc;
+#endif
+#ifndef CURL_DISABLE_FTP
+  case 46: return (int64_t)s->ftp_filemethod;
+  case 47: return (int64_t)s->ftp_ccc;
+  case 48: return (int64_t)s->ftpsslauth;
+  case 49: return (int64_t)s->accepttimeout;
+#endif
+#if !defined(CURL_DISABLE_FTP) || defined(USE_SSH)
+  case 50: return (int64_t)s->ftp_create_missing_dirs;
+  case 51: return (int64_t)s->new_file_perms;
+#endif
+#ifndef CURL_DISABLE_RTSP
+  case 52: return (int64_t)data->state.rtsp_next_client_CSeq;
+  case 53: return (int64_t)data->state.rtsp_next_server_CSeq;
+#endif
+#ifdef USE_SSH
+  case 54: return (int64_t)s->ssh_auth_types;
+  case 55: return (int64_t)s->new_directory_perms;
+#endif
+  case 56: return (int64_t)s->allowed_protocols;
+  case 57: return (int64_t)s->redir_protocols;
+  case 58: return (int64_t)s->timecondition;
+  case 59: return (int64_t)s->timevalue;
+  case 60: return (int64_t)s->postfieldsize;
+  case 61: return (int64_t)s->filesize;
+  case 62: return (int64_t)s->set_resume_from;
+  case 63: return (int64_t)s->upload_flags;
+#if defined(HAVE_GSSAPI) || defined(USE_WINDOWS_SSPI)
+  case 64: return (int64_t)s->gssapi_delegation;
+#endif
+  case 65: return (int64_t)s->max_send_speed;
+  case 66: return (int64_t)s->max_recv_speed;
+  default: return 0;
+  }
+}
+
+void Curl_setopt_set_i64(struct Curl_easy *data, int field_id, int64_t val)
+{
+  struct UserDefined *s = &data->set;
+  switch(field_id) {
+  case 1: s->httpauth = (uint32_t)val; break;
+#ifndef CURL_DISABLE_PROXY
+  case 2: s->proxyauth = (uint32_t)val; break;
+#endif
+  case 3: s->httpwant = (unsigned char)val; break;
+#ifdef USE_SSL
+  case 4: s->ssl.version = (unsigned char)val; break;
+  case 5: s->ssl.version_max = (unsigned int)val; break;
+#ifndef CURL_DISABLE_PROXY
+  case 6: s->proxy_ssl.version = (unsigned char)val; break;
+  case 7: s->proxy_ssl.version_max = (unsigned int)val; break;
+#endif
+#endif
+#ifndef CURL_DISABLE_RTSP
+  case 8: s->rtspreq = (unsigned char)val; break;
+#endif
+  case 9: s->method = (Curl_HttpReq)val; break;
+  case 10: s->dns_cache_timeout_ms = (timediff_t)val; break;
+  case 11: s->maxconnects = (uint32_t)val; break;
+  case 12: s->server_response_timeout = (timediff_t)val; break;
+  case 13: s->low_speed_limit = (long)val; break;
+  case 14: s->low_speed_time = (uint16_t)val; break;
+  case 15: s->use_port = (unsigned short)val; break;
+  case 16: s->timeout = (timediff_t)val; break;
+  case 17: s->connecttimeout = (timediff_t)val; break;
+#ifndef CURL_DISABLE_BINDLOCAL
+  case 18: s->localport = (unsigned short)val; break;
+  case 19: s->localportrange = (unsigned short)val; break;
+#endif
+  case 20: s->buffer_size = (unsigned int)val; break;
+  case 21: s->upload_buffer_size = (unsigned int)val; break;
+  case 22: s->max_filesize = (curl_off_t)val; break;
+  case 23: s->ipver = (unsigned char)val; break;
+#ifdef USE_IPV6
+  case 24: s->scope_id = (unsigned int)val; break;
+#endif
+  case 25: s->tcp_keepidle = (int)val; break;
+  case 26: s->tcp_keepintvl = (int)val; break;
+  case 27: s->tcp_keepcnt = (int)val; break;
+  case 28: s->happy_eyeballs_timeout = (timediff_t)val; break;
+  case 29: s->upkeep_interval_ms = (timediff_t)val; break;
+  case 30: s->conn_max_idle_ms = (timediff_t)val; break;
+  case 31: s->conn_max_age_ms = (timediff_t)val; break;
+#ifdef USE_SSL
+  case 32: s->ssl_ca_cache_timeout = (int)val; break;
+#endif
+  case 33: s->use_ssl = (unsigned char)val; break;
+  case 34: s->ssl.ssl_options = (unsigned char)val; break;
+#ifndef CURL_DISABLE_PROXY
+  case 35: s->proxy_ssl.ssl_options = (unsigned char)val; break;
+  case 36: s->proxyport = (uint16_t)val; break;
+  case 37: s->proxytype = (unsigned char)val; break;
+  case 38: s->socks5auth = (unsigned char)val; break;
+#endif
+#ifndef CURL_DISABLE_HTTP
+  case 39: s->http_follow_mode = (unsigned char)val; break;
+  case 40: s->maxredirs = (short)val; break;
+  case 41: s->expect_100_timeout = (unsigned short)val; break;
+#if defined(USE_HTTP2) || defined(USE_HTTP3)
+  case 42: s->weight = (int)val; break;
+#endif
+#ifndef CURL_DISABLE_HTTPSIG
+  case 43: s->httpsig_algorithm = (uint8_t)val; break;
+#endif
+#endif
+#ifndef CURL_DISABLE_TFTP
+  case 44: s->tftp_blksize = (unsigned short)val; break;
+#endif
+#ifndef CURL_DISABLE_NETRC
+  case 45: s->use_netrc = (unsigned char)val; break;
+#endif
+#ifndef CURL_DISABLE_FTP
+  case 46: s->ftp_filemethod = (unsigned char)val; break;
+  case 47: s->ftp_ccc = (unsigned char)val; break;
+  case 48: s->ftpsslauth = (unsigned char)val; break;
+  case 49: s->accepttimeout = (timediff_t)val; break;
+#endif
+#if !defined(CURL_DISABLE_FTP) || defined(USE_SSH)
+  case 50: s->ftp_create_missing_dirs = (unsigned char)val; break;
+  case 51: s->new_file_perms = (unsigned int)val; break;
+#endif
+#ifndef CURL_DISABLE_RTSP
+  case 52: data->state.rtsp_next_client_CSeq = (uint32_t)val; break;
+  case 53: data->state.rtsp_next_server_CSeq = (uint32_t)val; break;
+#endif
+#ifdef USE_SSH
+  case 54: s->ssh_auth_types = (uint32_t)val; break;
+  case 55: s->new_directory_perms = (unsigned int)val; break;
+#endif
+  case 56: s->allowed_protocols = (curl_prot_t)val; break;
+  case 57: s->redir_protocols = (curl_prot_t)val; break;
+  case 58: s->timecondition = (unsigned char)val; break;
+  case 59: s->timevalue = (time_t)val; break;
+  case 60: s->postfieldsize = (curl_off_t)val; break;
+  case 61: s->filesize = (curl_off_t)val; break;
+  case 62: s->set_resume_from = (curl_off_t)val; break;
+  case 63: s->upload_flags = (unsigned char)val; break;
+#if defined(HAVE_GSSAPI) || defined(USE_WINDOWS_SSPI)
+  case 64: s->gssapi_delegation = (unsigned char)val; break;
+#endif
+  case 65: s->max_send_speed = (curl_off_t)val; break;
+  case 66: s->max_recv_speed = (curl_off_t)val; break;
+  default: break;
+  }
+}
+
+void *Curl_setopt_get_ptr(struct Curl_easy *data, int ptr_id)
+{
+  struct UserDefined *s = &data->set;
+  switch(ptr_id) {
+  case 1: return s->str_copypostfields;
+  case 2: return s->postfields;
+#ifndef CURL_DISABLE_HSTS
+  case 3: return data->hsts;
+#endif
+  case 4: return data->share;
+#ifndef CURL_DISABLE_HSTS
+  case 5: return data->share ? data->share->hsts : NULL;
+  case 6: return data->state.hstslist;
+#endif
+#ifndef CURL_DISABLE_PROXY
+  case 7: return s->proxyheaders;
+#endif
+#ifndef CURL_DISABLE_HTTP
+  case 8: return s->http200aliases;
+#endif
+#if !defined(CURL_DISABLE_FTP) || defined(USE_SSH)
+  case 9: return s->postquote;
+  case 10: return s->prequote;
+  case 11: return s->quote;
+#endif
+  case 12: return s->resolve;
+  case 13: return data->state.resolve;
+#if !defined(CURL_DISABLE_HTTP) || !defined(CURL_DISABLE_MIME)
+  case 14: return s->headers;
+#endif
+#ifndef CURL_DISABLE_TELNET
+  case 15: return s->telnet_options;
+#endif
+#ifndef CURL_DISABLE_SMTP
+  case 16: return s->mail_rcpt;
+#endif
+  case 17: return s->connect_to;
+#ifndef CURL_DISABLE_MIME
+  case 18: return s->mimepostp;
+  case 19: return data->state.formp;
+  case 20: return data->state.mimepost;
+#endif
+  case 21: return data->conn;
+  case 22: return s->uh;
+#ifndef CURL_DISABLE_FORM_API
+  case 23: return s->httppost;
+#endif
+  case 24: return s->err;
+#if !defined(CURL_DISABLE_HTTP) && !defined(CURL_DISABLE_COOKIES)
+  case 25: return data->cookies;
+  case 26: return data->state.cookielist;
+  case 27: return data->share ? data->share->cookies : NULL;
+#endif
+#ifdef USE_SSL
+  case 28: return s->ssl_fsslctxp;
+#endif
+#ifndef CURL_DISABLE_HTTP
+  case 29: return s->trailer_data;
+#endif
+#ifndef CURL_DISABLE_FTP
+  case 30: return s->wildcardptr;
+  case 31: return s->fnmatch_data;
+#endif
+  case 32: return s->writeheader;
+  case 33: return s->in_set;
+  case 34: return s->out;
+  case 35: return s->debugdata;
+  case 36: return s->progress_client;
+  case 37: return s->seek_client;
+  case 38: return s->ioctl_client;
+  case 39: return s->sockopt_client;
+  case 40: return s->opensocket_client;
+  case 41: return s->resolver_start_client;
+  case 42: return s->closesocket_client;
+  case 43: return s->prereq_userp;
+  case 44: return s->errorbuffer;
+  case 45: return s->private_data;
+#ifndef CURL_DISABLE_RTSP
+  case 46: return s->rtp_out;
+#endif
+#ifndef CURL_DISABLE_HSTS
+  case 47: return s->hsts_read_userp;
+  case 48: return s->hsts_write_userp;
+#endif
+#ifndef CURL_DISABLE_ALTSVC
+  case 49: return data->asi;
+#endif
+  case 50: return (void *)(uintptr_t)s->fprogress;
+  case 51: return (void *)(uintptr_t)s->fxferinfo;
+  case 52: return (void *)(uintptr_t)s->fdebug;
+  case 53: return (void *)(uintptr_t)s->fwrite_header;
+  case 54: return (void *)(uintptr_t)s->fwrite_func;
+  case 55: return (void *)(uintptr_t)s->fread_func_set;
+  case 56: return (void *)(uintptr_t)s->seek_func;
+  case 57: return (void *)(uintptr_t)s->ioctl_func;
+#ifdef USE_SSL
+  case 58: return (void *)(uintptr_t)s->ssl_fsslctx;
+#endif
+  case 59: return (void *)(uintptr_t)s->fsockopt;
+  case 60: return (void *)(uintptr_t)s->fopensocket;
+  case 61: return (void *)(uintptr_t)s->fclosesocket;
+  case 62: return (void *)(uintptr_t)s->resolver_start;
+#ifndef CURL_DISABLE_RTSP
+  case 63: return (void *)(uintptr_t)s->fwrite_rtp;
+#endif
+#ifndef CURL_DISABLE_FTP
+  case 64: return (void *)(uintptr_t)s->chunk_bgn;
+  case 65: return (void *)(uintptr_t)s->chunk_end;
+  case 66: return (void *)(uintptr_t)s->fnmatch;
+#endif
+#ifndef CURL_DISABLE_HTTP
+  case 67: return (void *)(uintptr_t)s->trailer_callback;
+#endif
+#ifndef CURL_DISABLE_HSTS
+  case 68: return (void *)(uintptr_t)s->hsts_read;
+  case 69: return (void *)(uintptr_t)s->hsts_write;
+#endif
+  case 70: return (void *)(uintptr_t)s->fprereq;
+  default: return NULL;
+  }
+}
+
+void Curl_setopt_set_ptr(struct Curl_easy *data, int ptr_id, void *val)
+{
+  struct UserDefined *s = &data->set;
+  switch(ptr_id) {
+  case 1: s->str_copypostfields = (char *)val; break;
+  case 2: s->postfields = val; break;
+#ifndef CURL_DISABLE_HSTS
+  case 3: data->hsts = (struct hsts *)val; break;
+#endif
+  case 4: data->share = (struct Curl_share *)val; break;
+#ifndef CURL_DISABLE_HSTS
+  case 6: data->state.hstslist = (struct curl_slist *)val; break;
+#endif
+#ifndef CURL_DISABLE_PROXY
+  case 7: s->proxyheaders = (struct curl_slist *)val; break;
+#endif
+#ifndef CURL_DISABLE_HTTP
+  case 8: s->http200aliases = (struct curl_slist *)val; break;
+#endif
+#if !defined(CURL_DISABLE_FTP) || defined(USE_SSH)
+  case 9: s->postquote = (struct curl_slist *)val; break;
+  case 10: s->prequote = (struct curl_slist *)val; break;
+  case 11: s->quote = (struct curl_slist *)val; break;
+#endif
+  case 12: s->resolve = (struct curl_slist *)val; break;
+  case 13: data->state.resolve = (struct curl_slist *)val; break;
+#if !defined(CURL_DISABLE_HTTP) || !defined(CURL_DISABLE_MIME)
+  case 14: s->headers = (struct curl_slist *)val; break;
+#endif
+#ifndef CURL_DISABLE_TELNET
+  case 15: s->telnet_options = (struct curl_slist *)val; break;
+#endif
+#ifndef CURL_DISABLE_SMTP
+  case 16: s->mail_rcpt = (struct curl_slist *)val; break;
+#endif
+  case 17: s->connect_to = (struct curl_slist *)val; break;
+#ifndef CURL_DISABLE_MIME
+  case 18: s->mimepostp = (curl_mimepart *)val; break;
+  case 19: data->state.formp = (curl_mimepart *)val; break;
+  case 20: data->state.mimepost = (curl_mimepart *)val; break;
+#endif
+  case 22: s->uh = (CURLU *)val; break;
+#ifndef CURL_DISABLE_FORM_API
+  case 23: s->httppost = (struct curl_httppost *)val; break;
+#endif
+  case 24: s->err = (FILE *)val; break;
+#if !defined(CURL_DISABLE_HTTP) && !defined(CURL_DISABLE_COOKIES)
+  case 25: data->cookies = (struct CookieInfo *)val; break;
+  case 26: data->state.cookielist = (struct curl_slist *)val; break;
+#endif
+#ifdef USE_SSL
+  case 28: s->ssl_fsslctxp = val; break;
+#endif
+#ifndef CURL_DISABLE_HTTP
+  case 29: s->trailer_data = val; break;
+#endif
+#ifndef CURL_DISABLE_FTP
+  case 30: s->wildcardptr = val; break;
+  case 31: s->fnmatch_data = val; break;
+#endif
+  case 32: s->writeheader = val; break;
+  case 33: s->in_set = val; break;
+  case 34: s->out = val; break;
+  case 35: s->debugdata = val; break;
+  case 36: s->progress_client = val; break;
+  case 37: s->seek_client = val; break;
+  case 38: s->ioctl_client = val; break;
+  case 39: s->sockopt_client = val; break;
+  case 40: s->opensocket_client = val; break;
+  case 41: s->resolver_start_client = val; break;
+  case 42: s->closesocket_client = val; break;
+  case 43: s->prereq_userp = val; break;
+  case 44: s->errorbuffer = (char *)val; break;
+  case 45: s->private_data = val; break;
+#ifndef CURL_DISABLE_RTSP
+  case 46: s->rtp_out = val; break;
+#endif
+#ifndef CURL_DISABLE_HSTS
+  case 47: s->hsts_read_userp = val; break;
+  case 48: s->hsts_write_userp = val; break;
+#endif
+#ifndef CURL_DISABLE_ALTSVC
+  case 49: data->asi = (struct altsvcinfo *)val; break;
+#endif
+  case 50: s->fprogress = (curl_progress_callback)(uintptr_t)val; break;
+  case 51: s->fxferinfo = (curl_xferinfo_callback)(uintptr_t)val; break;
+  case 52: s->fdebug = (curl_debug_callback)(uintptr_t)val; break;
+  case 53: s->fwrite_header = (curl_write_callback)(uintptr_t)val; break;
+  case 54: s->fwrite_func = (curl_write_callback)(uintptr_t)val; break;
+  case 55: s->fread_func_set = (curl_read_callback)(uintptr_t)val; break;
+  case 56: s->seek_func = (curl_seek_callback)(uintptr_t)val; break;
+  case 57: s->ioctl_func = (curl_ioctl_callback)(uintptr_t)val; break;
+#ifdef USE_SSL
+  case 58: s->ssl_fsslctx = (curl_ssl_ctx_callback)(uintptr_t)val; break;
+#endif
+  case 59: s->fsockopt = (curl_sockopt_callback)(uintptr_t)val; break;
+  case 60: s->fopensocket = (curl_opensocket_callback)(uintptr_t)val; break;
+  case 61: s->fclosesocket = (curl_closesocket_callback)(uintptr_t)val; break;
+  case 62: s->resolver_start = (curl_resolver_start_callback)(uintptr_t)val; break;
+#ifndef CURL_DISABLE_RTSP
+  case 63: s->fwrite_rtp = (curl_write_callback)(uintptr_t)val; break;
+#endif
+#ifndef CURL_DISABLE_FTP
+  case 64: s->chunk_bgn = (curl_chunk_bgn_callback)(uintptr_t)val; break;
+  case 65: s->chunk_end = (curl_chunk_end_callback)(uintptr_t)val; break;
+  case 66: s->fnmatch = (curl_fnmatch_callback)(uintptr_t)val; break;
+#endif
+#ifndef CURL_DISABLE_HTTP
+  case 67: s->trailer_callback = (curl_trailer_callback)(uintptr_t)val; break;
+#endif
+#ifndef CURL_DISABLE_HSTS
+  case 68: s->hsts_read = (curl_hstsread_callback)(uintptr_t)val; break;
+  case 69: s->hsts_write = (curl_hstswrite_callback)(uintptr_t)val; break;
+#endif
+  case 70: s->fprereq = (curl_prereq_callback)(uintptr_t)val; break;
+  default: break;
+  }
+}
+
+void *Curl_setopt_get_ptr_ref(struct Curl_easy *data, int ref_id)
+{
+  switch(ref_id) {
+#ifndef CURL_DISABLE_PROXY
+  case 1: return &data->state.proxydigest;
+  case 2: return &data->state.authproxy;
+#endif
+#ifndef CURL_DISABLE_HSTS
+  case 3: return &data->hsts;
+#endif
+#ifndef CURL_DISABLE_ALTSVC
+  case 4: return &data->asi;
+#endif
+  case 5: return &data->state.url;
+#if !defined(CURL_DISABLE_HTTP) && !defined(CURL_DISABLE_COOKIES)
+  case 6: return &data->cookies;
+  case 7: return &data->req.setcookies;
+#endif
+#ifndef CURL_DISABLE_HTTP
+  case 8: return &data->state.referer;
+#endif
+#ifndef CURL_DISABLE_RTSP
+  case 9: return &data->state.rtsp_session_origin;
+#endif
+  case 10: return &data->progress.ul.rlimit;
+  case 11: return &data->progress.dl.rlimit;
+  case 12: return &data->set.ssl;
+#ifndef CURL_DISABLE_PROXY
+  case 13: return &data->set.proxy_ssl;
+#endif
+  case 14: return data->conn ? &data->conn->ssl_config : NULL;
+#ifndef CURL_DISABLE_PROXY
+  case 15: return data->conn ? &data->conn->proxy_ssl_config : NULL;
+#endif
+  default: return NULL;
+  }
+}
+
+CURLcode Curl_vsetopt_zig(struct Curl_easy *data, CURLoption option,
+                          long larg, void *parg, curl_off_t oarg);
+
+CURLcode Curl_vsetopt(struct Curl_easy *data, CURLoption option, va_list param)
+{
+  if(option < CURLOPTTYPE_OBJECTPOINT)
+    return Curl_vsetopt_zig(data, option, va_arg(param, long), NULL, 0);
+  else if(option < CURLOPTTYPE_OFF_T) {
+    if(option == CURLOPT_STREAM_DEPENDS || option == CURLOPT_STREAM_DEPENDS_E)
+      return CURLE_OK;
+    return Curl_vsetopt_zig(data, option, 0, va_arg(param, void *), 0);
+  }
+  else if(option < CURLOPTTYPE_BLOB)
+    return Curl_vsetopt_zig(data, option, 0, NULL, va_arg(param, curl_off_t));
+  return Curl_vsetopt_zig(data, option, 0, va_arg(param, void *), 0);
+}
+
+#undef curl_easy_setopt
+CURLcode curl_easy_setopt(CURL *curl, CURLoption option, ...)
+{
+  struct Curl_eapi_guard guard;
+  CURLcode result;
+
+  if(CURL_EAPI_ENTER(&guard, curl, easy_setopt, &result)) {
+    struct Curl_easy *data = curl;
+    va_list arg;
+
+    va_start(arg, option);
+
+    result = Curl_vsetopt(data, option, arg);
+
+    va_end(arg);
+    if(result == CURLE_BAD_FUNCTION_ARGUMENT)
+      failf(data, "setopt 0x%x got bad argument", (unsigned int)option);
+  }
+  CURL_EAPI_LEAVE(&guard);
+  return result;
+}
+

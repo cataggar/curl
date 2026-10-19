@@ -793,7 +793,7 @@ pub export fn Curl_u8_strset_get(set: *u8_strset, id: u8) callconv(.c) ?[*:0]con
     return null;
 }
 
-export fn Curl_u8_strset_setn(set: *u8_strset, id: u8, str: ?[*:0]u8) callconv(.c) CURLcode {
+pub export fn Curl_u8_strset_setn(set: *u8_strset, id: u8, str: ?[*:0]u8) callconv(.c) CURLcode {
     const val = str orelse {
         Curl_u8_strset_unset(set, id);
         return CURLE_OK;
@@ -815,7 +815,7 @@ export fn Curl_u8_strset_setn(set: *u8_strset, id: u8, str: ?[*:0]u8) callconv(.
     return CURLE_OK;
 }
 
-export fn Curl_u8_strset_setx(set: *u8_strset, id: u8, str: ?[*]const u8, slen: usize) callconv(.c) CURLcode {
+pub export fn Curl_u8_strset_setx(set: *u8_strset, id: u8, str: ?[*]const u8, slen: usize) callconv(.c) CURLcode {
     const s = str orelse {
         Curl_u8_strset_unset(set, id);
         return CURLE_OK;
@@ -868,11 +868,11 @@ fn u8_strset_unset_impl(set: *u8_strset, id: u8, zero: bool) void {
     }
 }
 
-export fn Curl_u8_strset_unset(set: *u8_strset, id: u8) callconv(.c) void {
+pub export fn Curl_u8_strset_unset(set: *u8_strset, id: u8) callconv(.c) void {
     u8_strset_unset_impl(set, id, false);
 }
 
-export fn Curl_u8_strset_unset0(set: *u8_strset, id: u8) callconv(.c) void {
+pub export fn Curl_u8_strset_unset0(set: *u8_strset, id: u8) callconv(.c) void {
     u8_strset_unset_impl(set, id, true);
 }
 
