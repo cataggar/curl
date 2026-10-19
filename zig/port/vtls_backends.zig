@@ -3847,25 +3847,1214 @@ const openssl_backend = struct {
 // ============================================================================
 
 const mbedtls_backend = struct {
+    const use_mbedtls = backend_options.ssl == .mbedtls;
+    pub const CURLE_SSL_CACERT_BADFILE: CURLcode = 77;
+    pub const MBED_SSLVERSION_MAX_TLSv1_2: u32 = @as(u32, CURL_SSLVERSION_TLSv1_2) << 16;
+
+    pub const MBEDTLS_ERR_SSL_WANT_READ: c_int = -0x6900;
+    pub const MBEDTLS_ERR_SSL_WANT_WRITE: c_int = -0x6880;
+    pub const MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY: c_int = -0x7880;
+    pub const MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET: c_int = -0x7B00;
+    pub const MBEDTLS_ERR_SSL_BAD_INPUT_DATA: c_int = -0x7100;
+    pub const MBEDTLS_ERR_SSL_ALLOC_FAILED: c_int = -0x7F00;
+    pub const MBEDTLS_ERR_X509_CERT_VERIFY_FAILED: c_int = -0x2700;
+    pub const MBEDTLS_ERR_PK_KEY_INVALID_FORMAT: c_int = -0x3D00;
+    pub const MBEDTLS_ERR_PK_TYPE_MISMATCH: c_int = -0x3F00;
+
+    pub const MBEDTLS_SSL_VERSION_TLS1_2: c_int = 0x0303;
+    pub const MBEDTLS_SSL_VERSION_TLS1_3: c_int = 0x0304;
+
+    pub const MBEDTLS_SSL_IS_CLIENT: c_int = 0;
+    pub const MBEDTLS_SSL_TRANSPORT_STREAM: c_int = 0;
+    pub const MBEDTLS_SSL_PRESET_DEFAULT: c_int = 0;
+
+    pub const MBEDTLS_SSL_VERIFY_NONE: c_int = 0;
+    pub const MBEDTLS_SSL_VERIFY_OPTIONAL: c_int = 1;
+    pub const MBEDTLS_SSL_VERIFY_REQUIRED: c_int = 2;
+
+    pub const MBEDTLS_X509_BADCERT_EXPIRED: u32 = 0x01;
+    pub const MBEDTLS_X509_BADCERT_REVOKED: u32 = 0x02;
+    pub const MBEDTLS_X509_BADCERT_CN_MISMATCH: u32 = 0x04;
+    pub const MBEDTLS_X509_BADCERT_NOT_TRUSTED: u32 = 0x08;
+    pub const MBEDTLS_X509_BADCRL_NOT_TRUSTED: u32 = 0x10;
+    pub const MBEDTLS_X509_BADCRL_EXPIRED: u32 = 0x20;
+
+    pub const MBEDTLS_PK_RSA: c_int = 1;
+    pub const MBEDTLS_PK_ECKEY: c_int = 2;
+    pub const MBEDTLS_PK_ECDSA: c_int = 4;
+
+    pub const MBEDTLS_TLS_ECJPAKE_WITH_AES_128_CCM_8: u16 = 0xC0FF;
+    const PUB_DER_MAX_BYTES: usize = 38 + (2 * 1024);
+    const MAX_ALLOWED_CERT_AMOUNT: c_int = 100;
+
+    pub const mbedtls_asn1_buf = extern struct {
+        tag: c_int = 0,
+        len: usize = 0,
+        p: ?[*]u8 = null,
+    };
+    pub const mbedtls_x509_buf = mbedtls_asn1_buf;
+
+    pub const mbedtls_asn1_bitstring = extern struct {
+        len: usize = 0,
+        unused_bits: u8 = 0,
+        p: ?[*]u8 = null,
+    };
+    pub const mbedtls_x509_bitstring = mbedtls_asn1_bitstring;
+
+    pub const mbedtls_asn1_sequence = extern struct {
+        buf: mbedtls_asn1_buf = .{},
+        next: ?*mbedtls_asn1_sequence = null,
+    };
+    pub const mbedtls_x509_sequence = mbedtls_asn1_sequence;
+
+    pub const mbedtls_asn1_named_data = extern struct {
+        oid: mbedtls_asn1_buf = .{},
+        val: mbedtls_asn1_buf = .{},
+        next: ?*mbedtls_asn1_named_data = null,
+        next_merged: u8 = 0,
+    };
+    pub const mbedtls_x509_name = mbedtls_asn1_named_data;
+
+    pub const mbedtls_x509_time = extern struct {
+        year: c_int = 0,
+        mon: c_int = 0,
+        day: c_int = 0,
+        hour: c_int = 0,
+        min: c_int = 0,
+        sec: c_int = 0,
+    };
+
+    pub const mbedtls_x509_authority = extern struct {
+        keyIdentifier: mbedtls_x509_buf = .{},
+        authorityCertIssuer: mbedtls_x509_sequence = .{},
+        authorityCertSerialNumber: mbedtls_x509_buf = .{},
+        raw: mbedtls_x509_buf = .{},
+    };
+
+    pub const mbedtls_pk_context = extern struct {
+        pk_info: ?*const anyopaque = null,
+        pk_ctx: ?*anyopaque = null,
+    };
+
+    pub const mbedtls_x509_crt = extern struct {
+        own_buffer: c_int = 0,
+        raw: mbedtls_x509_buf = .{},
+        tbs: mbedtls_x509_buf = .{},
+        version: c_int = 0,
+        serial: mbedtls_x509_buf = .{},
+        sig_oid: mbedtls_x509_buf = .{},
+        issuer_raw: mbedtls_x509_buf = .{},
+        subject_raw: mbedtls_x509_buf = .{},
+        issuer: mbedtls_x509_name = .{},
+        subject: mbedtls_x509_name = .{},
+        valid_from: mbedtls_x509_time = .{},
+        valid_to: mbedtls_x509_time = .{},
+        pk_raw: mbedtls_x509_buf = .{},
+        pk: mbedtls_pk_context = .{},
+        issuer_id: mbedtls_x509_bitstring = .{},
+        subject_id: mbedtls_x509_bitstring = .{},
+        v3_ext: mbedtls_x509_buf = .{},
+        subject_alt_names: mbedtls_x509_sequence = .{},
+        subject_key_id: mbedtls_x509_buf = .{},
+        authority_key_id: mbedtls_x509_authority = .{},
+        certificate_policies: mbedtls_x509_sequence = .{},
+        ext_types: c_int = 0,
+        ca_istrue: c_int = 0,
+        max_pathlen: c_int = 0,
+        key_usage: c_uint = 0,
+        ext_key_usage: mbedtls_x509_sequence = .{},
+        ns_cert_type: u8 = 0,
+        sig: mbedtls_x509_buf = .{},
+        sig_md: c_int = 0,
+        sig_pk: c_int = 0,
+        sig_opts: ?*anyopaque = null,
+        next: ?*mbedtls_x509_crt = null,
+        _extra_pad: [64]u8 = @splat(0),
+    };
+
+    pub const mbedtls_x509_crl = extern struct {
+        _data: [64]u64 = @splat(0),
+    };
+
+    pub const mbedtls_ssl_config = extern struct {
+        max_tls_version: c_int = 0,
+        min_tls_version: c_int = 0,
+        endpoint: u8 = 0,
+        transport: u8 = 0,
+        authmode: u8 = 0,
+        allow_legacy_renegotiation: u8 = 0,
+        _pad0: u32 = 0,
+        _data: [64]u64 = @splat(0),
+    };
+
+    pub const mbedtls_ssl_context = extern struct {
+        conf: ?*const mbedtls_ssl_config = null,
+        state: c_int = 0,
+        renego_status: c_int = 0,
+        renego_records_seen: c_int = 0,
+        tls_version: c_int = 0,
+        _data: [80]u64 = @splat(0),
+    };
+
+    pub const mbedtls_ssl_session = extern struct {
+        _data: [72]u64 = @splat(0),
+    };
+
+    pub const mbedtls_entropy_context = extern struct {
+        _data: [128]u64 = @splat(0),
+    };
+
+    pub const mbedtls_ctr_drbg_context = extern struct {
+        _data: [56]u64 = @splat(0),
+    };
+
     pub const MbedSslBackendData = extern struct {
-        ssl_buf: [2048]u8,
-        protocols: [ALPN_ENTRIES_MAX + 1]?[*:0]const u8,
-        send_blocked_len: c_int,
-        flags: c_uint,
+        ctr_drbg: mbedtls_ctr_drbg_context,
+        entropy: mbedtls_entropy_context,
+        ssl: mbedtls_ssl_context,
+        cacert: mbedtls_x509_crt,
+        clicert: mbedtls_x509_crt,
+        crl: mbedtls_x509_crl,
+        pk: mbedtls_pk_context,
+        _pk_pad: [64]u8,
+        config: mbedtls_ssl_config,
+        protocols: [5]?[*:0]const u8,
+        ciphersuites: ?[*]c_int,
+        send_blocked_len: usize,
+        flags: packed struct(u8) {
+            initialized: bool = false,
+            sent_shutdown: bool = false,
+            pkt_enc_key_set: bool = false,
+            send_blocked: bool = false,
+            _pad: u4 = 0,
+        },
     };
 
     const mbed_ext = struct {
+        extern fn psa_crypto_init() callconv(.c) c_int;
         extern fn mbedtls_version_get_number() callconv(.c) c_uint;
+        extern fn mbedtls_strerror(ret: c_int, buf: [*]u8, buflen: usize) callconv(.c) void;
+
+        extern fn mbedtls_ssl_init(ssl: *mbedtls_ssl_context) callconv(.c) void;
+        extern fn mbedtls_ssl_free(ssl: *mbedtls_ssl_context) callconv(.c) void;
+        extern fn mbedtls_ssl_setup(ssl: *mbedtls_ssl_context, conf: *const mbedtls_ssl_config) callconv(.c) c_int;
+        extern fn mbedtls_ssl_config_init(conf: *mbedtls_ssl_config) callconv(.c) void;
+        extern fn mbedtls_ssl_config_free(conf: *mbedtls_ssl_config) callconv(.c) void;
+        extern fn mbedtls_ssl_config_defaults(conf: *mbedtls_ssl_config, endpoint: c_int, transport: c_int, preset: c_int) callconv(.c) c_int;
+
+        extern fn mbedtls_ssl_conf_rng(conf: *mbedtls_ssl_config, f_rng: ?*const fn (?*anyopaque, [*]u8, usize) callconv(.c) c_int, p_rng: ?*anyopaque) callconv(.c) void;
+        extern fn mbedtls_ssl_conf_authmode(conf: *mbedtls_ssl_config, authmode: c_int) callconv(.c) void;
+        extern fn mbedtls_ssl_conf_ca_chain(conf: *mbedtls_ssl_config, ca_chain: ?*mbedtls_x509_crt, ca_crl: ?*mbedtls_x509_crl) callconv(.c) void;
+        extern fn mbedtls_ssl_conf_own_cert(conf: *mbedtls_ssl_config, own_cert: *mbedtls_x509_crt, pk_key: *mbedtls_pk_context) callconv(.c) c_int;
+        extern fn mbedtls_ssl_conf_verify(conf: *mbedtls_ssl_config, f_vrfy: ?*const fn (?*anyopaque, *mbedtls_x509_crt, c_int, *u32) callconv(.c) c_int, p_vrfy: ?*anyopaque) callconv(.c) void;
+        extern fn mbedtls_ssl_conf_ciphersuites(conf: *mbedtls_ssl_config, ciphersuites: [*]const c_int) callconv(.c) void;
+        extern fn mbedtls_ssl_conf_alpn_protocols(conf: *mbedtls_ssl_config, protos: [*]?[*:0]const u8) callconv(.c) c_int;
+        extern fn mbedtls_ssl_conf_min_tls_version(conf: *mbedtls_ssl_config, min_tls_version: c_int) callconv(.c) void;
+        extern fn mbedtls_ssl_conf_max_tls_version(conf: *mbedtls_ssl_config, max_tls_version: c_int) callconv(.c) void;
+
+        extern fn mbedtls_ssl_set_bio(
+            ssl: *mbedtls_ssl_context,
+            p_bio: ?*anyopaque,
+            f_send: ?*const fn (?*anyopaque, [*]const u8, usize) callconv(.c) c_int,
+            f_recv: ?*const fn (?*anyopaque, ?[*]u8, usize) callconv(.c) c_int,
+            f_recv_timeout: ?*const anyopaque,
+        ) callconv(.c) void;
+        extern fn mbedtls_ssl_set_hostname(ssl: *mbedtls_ssl_context, hostname: ?[*:0]const u8) callconv(.c) c_int;
+        extern fn mbedtls_ssl_handshake(ssl: *mbedtls_ssl_context) callconv(.c) c_int;
+        extern fn mbedtls_ssl_read(ssl: *mbedtls_ssl_context, buf: [*]u8, len: usize) callconv(.c) c_int;
+        extern fn mbedtls_ssl_write(ssl: *mbedtls_ssl_context, buf: [*]const u8, len: usize) callconv(.c) c_int;
+        extern fn mbedtls_ssl_close_notify(ssl: *mbedtls_ssl_context) callconv(.c) c_int;
+        extern fn mbedtls_ssl_get_bytes_avail(ssl: *const mbedtls_ssl_context) callconv(.c) usize;
+        extern fn mbedtls_ssl_get_verify_result(ssl: *const mbedtls_ssl_context) callconv(.c) u32;
+        extern fn mbedtls_ssl_get_alpn_protocol(ssl: *const mbedtls_ssl_context) callconv(.c) ?[*:0]const u8;
+        extern fn mbedtls_ssl_get_version(ssl: *const mbedtls_ssl_context) callconv(.c) ?[*:0]const u8;
+        extern fn mbedtls_ssl_get_ciphersuite(ssl: *const mbedtls_ssl_context) callconv(.c) ?[*:0]const u8;
+        extern fn mbedtls_ssl_get_peer_cert(ssl: *const mbedtls_ssl_context) callconv(.c) ?*const mbedtls_x509_crt;
+        extern fn mbedtls_ssl_ciphersuite_from_id(ciphersuite_id: c_int) callconv(.c) ?*const anyopaque;
+
+        extern fn mbedtls_ssl_session_init(session: *mbedtls_ssl_session) callconv(.c) void;
+        extern fn mbedtls_ssl_session_free(session: *mbedtls_ssl_session) callconv(.c) void;
+        extern fn mbedtls_ssl_get_session(ssl: *const mbedtls_ssl_context, session: *mbedtls_ssl_session) callconv(.c) c_int;
+        extern fn mbedtls_ssl_set_session(ssl: *mbedtls_ssl_context, session: *const mbedtls_ssl_session) callconv(.c) c_int;
+        extern fn mbedtls_ssl_session_load(session: *mbedtls_ssl_session, buf: [*]const u8, len: usize) callconv(.c) c_int;
+        extern fn mbedtls_ssl_session_save(session: *const mbedtls_ssl_session, buf: ?[*]u8, buf_len: usize, olen: *usize) callconv(.c) c_int;
+
+        extern fn mbedtls_x509_crt_init(crt: *mbedtls_x509_crt) callconv(.c) void;
+        extern fn mbedtls_x509_crt_free(crt: *mbedtls_x509_crt) callconv(.c) void;
+        extern fn mbedtls_x509_crt_parse(chain: *mbedtls_x509_crt, buf: [*]const u8, buflen: usize) callconv(.c) c_int;
+        extern fn mbedtls_x509_crt_parse_der(chain: *mbedtls_x509_crt, buf: [*]const u8, buflen: usize) callconv(.c) c_int;
+        extern fn mbedtls_x509_crt_parse_file(chain: *mbedtls_x509_crt, path: [*:0]const u8) callconv(.c) c_int;
+        extern fn mbedtls_x509_crt_parse_path(chain: *mbedtls_x509_crt, path: [*:0]const u8) callconv(.c) c_int;
+        extern fn mbedtls_x509_crt_verify_info(buf: [*]u8, size: usize, prefix: [*:0]const u8, flags: u32) callconv(.c) c_int;
+
+        extern fn mbedtls_x509_crl_init(crl: *mbedtls_x509_crl) callconv(.c) void;
+        extern fn mbedtls_x509_crl_free(crl: *mbedtls_x509_crl) callconv(.c) void;
+        extern fn mbedtls_x509_crl_parse_file(chain: *mbedtls_x509_crl, path: [*:0]const u8) callconv(.c) c_int;
+
+        extern fn mbedtls_pk_init(ctx: *mbedtls_pk_context) callconv(.c) void;
+        extern fn mbedtls_pk_free(ctx: *mbedtls_pk_context) callconv(.c) void;
+        extern fn mbedtls_pk_can_do(ctx: *const mbedtls_pk_context, pk_type: c_int) callconv(.c) c_int;
+        extern fn mbedtls_pk_parse_key(
+            ctx: *mbedtls_pk_context,
+            key: [*]const u8,
+            keylen: usize,
+            pwd: ?[*]const u8,
+            pwdlen: usize,
+            f_rng: ?*const fn (?*anyopaque, [*]u8, usize) callconv(.c) c_int,
+            p_rng: ?*anyopaque,
+        ) callconv(.c) c_int;
+        extern fn mbedtls_pk_parse_keyfile(
+            ctx: *mbedtls_pk_context,
+            path: [*:0]const u8,
+            password: ?[*:0]const u8,
+            f_rng: ?*const fn (?*anyopaque, [*]u8, usize) callconv(.c) c_int,
+            p_rng: ?*anyopaque,
+        ) callconv(.c) c_int;
+        extern fn mbedtls_pk_write_pubkey_der(ctx: *mbedtls_pk_context, buf: [*]u8, size: usize) callconv(.c) c_int;
+
+        extern fn mbedtls_entropy_init(ctx: *mbedtls_entropy_context) callconv(.c) void;
+        extern fn mbedtls_entropy_free(ctx: *mbedtls_entropy_context) callconv(.c) void;
+        extern fn mbedtls_entropy_func(data: ?*anyopaque, output: [*]u8, len: usize) callconv(.c) c_int;
+
+        extern fn mbedtls_ctr_drbg_init(ctx: *mbedtls_ctr_drbg_context) callconv(.c) void;
+        extern fn mbedtls_ctr_drbg_free(ctx: *mbedtls_ctr_drbg_context) callconv(.c) void;
+        extern fn mbedtls_ctr_drbg_seed(
+            ctx: *mbedtls_ctr_drbg_context,
+            f_entropy: ?*const fn (?*anyopaque, [*]u8, usize) callconv(.c) c_int,
+            p_entropy: ?*anyopaque,
+            custom: ?[*]const u8,
+            len: usize,
+        ) callconv(.c) c_int;
+        extern fn mbedtls_ctr_drbg_random(p_rng: ?*anyopaque, output: [*]u8, output_len: usize) callconv(.c) c_int;
+
+        extern fn mbedtls_sha256(input: [*]const u8, ilen: usize, output: [*]u8, is224: c_int) callconv(.c) c_int;
     };
 
+    fn error_strerror(err: c_int, buf: []u8) [*:0]const u8 {
+        if (buf.len == 0) return "";
+        buf[0] = 0;
+        if (comptime use_mbedtls) {
+            mbed_ext.mbedtls_strerror(err, buf.ptr, buf.len);
+        }
+        return @ptrCast(buf.ptr);
+    }
+
+    pub fn mapBioWriteResult(result: CURLcode, nwritten: usize) c_int {
+        if (result == CURLE_AGAIN) return MBEDTLS_ERR_SSL_WANT_WRITE;
+        return if (result != CURLE_OK) -1 else @intCast(nwritten);
+    }
+
+    pub fn mapBioReadResult(result: CURLcode, nread: usize) c_int {
+        if (result == CURLE_AGAIN) return MBEDTLS_ERR_SSL_WANT_READ;
+        return if (result != CURLE_OK) -1 else @intCast(nread);
+    }
+
+    pub fn mbedtls_bio_cf_write(bio: ?*anyopaque, buf: [*]const u8, blen: usize) callconv(.c) c_int {
+        const cf: *CurlCfilter = @ptrCast(@alignCast(bio orelse return 0));
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return 0));
+        const data = connssl.call_data orelse return 0;
+        var nwritten: usize = 0;
+        const result = c_ext.Curl_conn_cf_send(cf.next, data, buf, blen, false, &nwritten);
+        c_ext.Curl_trc_cf_infof(data, cf, "mbedtls_bio_cf_out_write(len=%zu) -> %d, %zu", blen, result, nwritten);
+        return mapBioWriteResult(result, nwritten);
+    }
+
+    pub fn mbedtls_bio_cf_read(bio: ?*anyopaque, buf: ?[*]u8, blen: usize) callconv(.c) c_int {
+        const cf: *CurlCfilter = @ptrCast(@alignCast(bio orelse return 0));
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return 0));
+        const data = connssl.call_data orelse return 0;
+        const out_buf = buf orelse return 0;
+        var nread: usize = 0;
+        const result = c_ext.Curl_conn_cf_recv(cf.next, data, out_buf, blen, &nread);
+        c_ext.Curl_trc_cf_infof(data, cf, "mbedtls_bio_cf_in_read(len=%zu) -> %d, %zu", blen, result, nread);
+        return mapBioReadResult(result, nread);
+    }
+
+    pub fn mbed_set_ssl_version_min_max(
+        data: ?*CurlEasy,
+        backend: *MbedSslBackendData,
+        conn_config: *const SslFilterConfig,
+    ) CURLcode {
+        var ver_min: c_int = MBEDTLS_SSL_VERSION_TLS1_2;
+        var ver_max: c_int = MBEDTLS_SSL_VERSION_TLS1_3;
+
+        switch (conn_config.version) {
+            CURL_SSLVERSION_DEFAULT,
+            CURL_SSLVERSION_TLSv1,
+            CURL_SSLVERSION_TLSv1_0,
+            CURL_SSLVERSION_TLSv1_1,
+            CURL_SSLVERSION_TLSv1_2,
+            => {
+                ver_min = MBEDTLS_SSL_VERSION_TLS1_2;
+            },
+            CURL_SSLVERSION_TLSv1_3 => {
+                ver_min = MBEDTLS_SSL_VERSION_TLS1_3;
+            },
+            CURL_SSLVERSION_SSLv2, CURL_SSLVERSION_SSLv3 => {
+                if (data) |d| c_ext.Curl_failf(d, "Not supported SSL version");
+                return CURLE_NOT_BUILT_IN;
+            },
+            else => {
+                if (data) |d| c_ext.Curl_failf(d, "mbedTLS: unsupported minimum TLS version value: %x", @as(c_uint, conn_config.version));
+                return CURLE_SSL_CONNECT_ERROR;
+            },
+        }
+
+        switch (conn_config.version_max) {
+            CURL_SSLVERSION_MAX_DEFAULT,
+            CURL_SSLVERSION_MAX_NONE,
+            CURL_SSLVERSION_MAX_TLSv1_3,
+            => {
+                ver_max = MBEDTLS_SSL_VERSION_TLS1_3;
+            },
+            MBED_SSLVERSION_MAX_TLSv1_2 => {
+                ver_max = MBEDTLS_SSL_VERSION_TLS1_2;
+            },
+            CURL_SSLVERSION_MAX_TLSv1_1,
+            CURL_SSLVERSION_MAX_TLSv1_0,
+            => {
+                if (data) |d| c_ext.Curl_failf(d, "mbedTLS: unsupported maximum TLS version value");
+                return CURLE_SSL_CONNECT_ERROR;
+            },
+            else => {
+                if (data) |d| c_ext.Curl_failf(d, "mbedTLS: unsupported maximum TLS version value");
+                return CURLE_SSL_CONNECT_ERROR;
+            },
+        }
+
+        if (ver_min > ver_max) {
+            if (data) |d| c_ext.Curl_failf(d, "mbedTLS: minimum TLS version exceeds maximum TLS version");
+            return CURLE_SSL_CONNECT_ERROR;
+        }
+
+        backend.config.min_tls_version = ver_min;
+        backend.config.max_tls_version = ver_max;
+        return CURLE_OK;
+    }
+
+    fn mbed_cipher_suite_walk_str(str: *?[*:0]const u8, end: *?[*:0]const u8) u16 {
+        var id = vtls_core.Curl_cipher_suite_walk_str(str, end);
+        if (id == 0) {
+            if (str.*) |s| {
+                if (end.*) |e| {
+                    const len = @intFromPtr(e) - @intFromPtr(s);
+                    const ecjpake = "TLS_ECJPAKE_WITH_AES_128_CCM_8";
+                    if (len == ecjpake.len and primitives.curl_strnequal(ecjpake, s, len) != 0) {
+                        id = MBEDTLS_TLS_ECJPAKE_WITH_AES_128_CCM_8;
+                    }
+                }
+            }
+        }
+        return id;
+    }
+
+    fn validateCiphersuiteId(id: c_int) bool {
+        if (comptime use_mbedtls) {
+            return mbed_ext.mbedtls_ssl_ciphersuite_from_id(id) != null;
+        }
+        return id != 0;
+    }
+
+    fn configureCiphersuites(conf: *mbedtls_ssl_config, ciphersuites: [*]const c_int) void {
+        if (comptime use_mbedtls) {
+            mbed_ext.mbedtls_ssl_conf_ciphersuites(conf, ciphersuites);
+        }
+    }
+
+    fn countCipherTokens(ciphers: [*:0]const u8) usize {
+        var count: usize = 1;
+        var i: usize = 0;
+        while (ciphers[i] != 0) : (i += 1) {
+            switch (ciphers[i]) {
+                ',', ':', ';', ' ', '\t' => count += 1,
+                else => {},
+            }
+        }
+        return count;
+    }
+
+    pub fn mbed_set_selected_ciphers(
+        data: ?*CurlEasy,
+        backend: *MbedSslBackendData,
+        ciphers12: ?[*:0]const u8,
+        ciphers13: ?[*:0]const u8,
+    ) CURLcode {
+        if (ciphers12 == null and ciphers13 == null) return CURLE_OK;
+
+        const max_entries = (if (ciphers13) |c13| countCipherTokens(c13) else 0) +
+            (if (ciphers12) |c12| countCipherTokens(c12) else 0);
+
+        const raw = mem.calloc(max_entries + 1, @sizeOf(c_int)) orelse return CURLE_OUT_OF_MEMORY;
+        const selected: [*]c_int = @ptrCast(@alignCast(raw));
+        var count: usize = 0;
+
+        const lists = [2]?[*:0]const u8{ ciphers13, ciphers12 };
+        for (lists) |maybe_list| {
+            const list = maybe_list orelse continue;
+            var ptr: ?[*:0]const u8 = list;
+            var end: ?[*:0]const u8 = null;
+
+            while (ptr != null and ptr.?[0] != 0) : (ptr = end) {
+                var id = mbed_cipher_suite_walk_str(&ptr, &end);
+                if (id != 0 and !validateCiphersuiteId(@intCast(id))) {
+                    id = 0;
+                }
+                if (id == 0) {
+                    if (ptr != null and ptr.?[0] != 0 and data != null) {
+                        const tok_len: c_int = if (end) |e| @intCast(@intFromPtr(e) - @intFromPtr(ptr.?)) else 0;
+                        c_ext.Curl_infof(data, "mbedTLS: unknown cipher in list: \"%.*s\"", tok_len, ptr.?);
+                    }
+                    continue;
+                }
+
+                var dup = false;
+                for (0..count) |i| {
+                    if (selected[i] == @as(c_int, id)) {
+                        dup = true;
+                        break;
+                    }
+                }
+                if (dup) continue;
+
+                selected[count] = @intCast(id);
+                count += 1;
+            }
+        }
+
+        selected[count] = 0;
+        if (count == 0) {
+            mem.free(raw);
+            if (data) |d| c_ext.Curl_failf(d, "mbedTLS: no supported cipher in list");
+            return CURLE_SSL_CIPHER;
+        }
+
+        if (backend.ciphersuites) |old| {
+            mem.free(old);
+        }
+        backend.ciphersuites = selected;
+        configureCiphersuites(&backend.config, selected);
+        return CURLE_OK;
+    }
+
+    fn mbed_dump_cert_info(data: ?*CurlEasy, crt: *const mbedtls_x509_crt) void {
+        _ = data;
+        _ = crt;
+    }
+
+    fn mbed_extract_certinfo(data: ?*CurlEasy, crt_opt: ?*const mbedtls_x509_crt) void {
+        var cur = crt_opt;
+        var cert_count: c_int = 0;
+        while (cur != null and cert_count <= MAX_ALLOWED_CERT_AMOUNT) : (cur = cur.?.next) {
+            cert_count += 1;
+        }
+        if (cert_count == 0) return;
+        if (cert_count > MAX_ALLOWED_CERT_AMOUNT) {
+            c_ext.Curl_infof(data, "More certificates than allowed (%d), skipping certinfo", MAX_ALLOWED_CERT_AMOUNT);
+            return;
+        }
+
+        var result = vtls_impl.Curl_ssl_init_certinfo(data, cert_count);
+        var i: c_int = 0;
+        cur = crt_opt;
+        while (result == CURLE_OK and cur != null) : ({
+            i += 1;
+            cur = cur.?.next;
+        }) {
+            if (cur.?.raw.p) |raw_p| {
+                result = vtls_scache_asn1.Curl_extract_certinfo_zig(
+                    data,
+                    i,
+                    raw_p,
+                    raw_p + cur.?.raw.len,
+                    true,
+                    @ptrCast(&vtls_impl.Curl_ssl_push_certinfo_len),
+                );
+            }
+        }
+    }
+
+    fn mbed_verify_cb(ptr: ?*anyopaque, crt: *mbedtls_x509_crt, depth: c_int, flags: *u32) callconv(.c) c_int {
+        const cf: *CurlCfilter = @ptrCast(@alignCast(ptr orelse return 0));
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return 0;
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return 0));
+        const data = connssl.call_data;
+
+        if (depth == 0) {
+            if (c_ext.Curl_trc_is_verbose_fn(data)) {
+                mbed_dump_cert_info(data, crt);
+            }
+            if (c_ext.Curl_vtls_acc_ssl_certinfo(data)) {
+                mbed_extract_certinfo(data, crt);
+            }
+        }
+
+        if (!conn_config.verifypeer()) {
+            flags.* &= MBEDTLS_X509_BADCERT_CN_MISMATCH;
+        }
+        if (!conn_config.verifyhost()) {
+            flags.* &= ~MBEDTLS_X509_BADCERT_CN_MISMATCH;
+        }
+
+        if (flags.* != 0) {
+            var buf: [128]u8 = @splat(0);
+            _ = mbed_ext.mbedtls_x509_crt_verify_info(&buf, buf.len, "", flags.*);
+            c_ext.Curl_failf(data, "mbedTLS: %s", @as([*:0]const u8, @ptrCast(&buf)));
+        }
+
+        return 0;
+    }
+
+    fn dupNullTerminatedBlob(blob_data: [*]const u8, len: usize) ?[*]u8 {
+        const buf = mem.malloc(len + 1) orelse return null;
+        if (len > 0) {
+            @memcpy(buf[0..len], blob_data[0..len]);
+        }
+        buf[len] = 0;
+        return buf;
+    }
+
+    fn mbed_load_cacert(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
+        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+        const ca_info_blob = conn_config.ca_info_blob;
+        const ssl_cafile: ?[*:0]const u8 = if (ca_info_blob != null) null else conn_config.CAfile;
+        const verifypeer = conn_config.verifypeer();
+        const ssl_capath: ?[*:0]const u8 = conn_config.CApath;
+        const ssl_cert_type: ?[*:0]const u8 = conn_config.cert_type;
+        var errorbuf: [128]u8 = @splat(0);
+
+        mbed_ext.mbedtls_x509_crt_init(&backend.cacert);
+
+        if (ca_info_blob != null and verifypeer) {
+            const blob = ca_info_blob.?;
+            const blob_ptr: [*]const u8 = @ptrCast(blob.data orelse return CURLE_SSL_CERTPROBLEM);
+            var ret: c_int = -1;
+            const is_der = ssl_cert_type != null and primitives.curl_strequal(ssl_cert_type, "DER") != 0;
+            if (is_der or (blob.len > 0 and blob_ptr[blob.len - 1] == 0)) {
+                ret = mbed_ext.mbedtls_x509_crt_parse(&backend.cacert, blob_ptr, blob.len);
+            } else {
+                const newblob = dupNullTerminatedBlob(blob_ptr, blob.len) orelse return CURLE_OUT_OF_MEMORY;
+                defer mem.free(newblob);
+                ret = mbed_ext.mbedtls_x509_crt_parse(&backend.cacert, newblob, blob.len + 1);
+            }
+
+            if (ret < 0) {
+                c_ext.Curl_failf(
+                    data,
+                    "mbedTLS: error importing CA cert blob: (-0x%04X) %s",
+                    @as(c_uint, @intCast(-ret)),
+                    error_strerror(ret, &errorbuf),
+                );
+                return CURLE_SSL_CERTPROBLEM;
+            }
+        }
+
+        if (ssl_cafile != null and verifypeer) {
+            const ret = mbed_ext.mbedtls_x509_crt_parse_file(&backend.cacert, ssl_cafile.?);
+            if (ret < 0) {
+                c_ext.Curl_failf(
+                    data,
+                    "mbedTLS: error reading CA cert file %s: (-0x%04X) %s",
+                    ssl_cafile.?,
+                    @as(c_uint, @intCast(-ret)),
+                    error_strerror(ret, &errorbuf),
+                );
+                return CURLE_SSL_CACERT_BADFILE;
+            }
+        }
+
+        if (ssl_capath) |capath| {
+            const ret = mbed_ext.mbedtls_x509_crt_parse_path(&backend.cacert, capath);
+            if (ret < 0) {
+                c_ext.Curl_failf(
+                    data,
+                    "mbedTLS: error reading CA cert path %s: (-0x%04X) %s",
+                    capath,
+                    @as(c_uint, @intCast(-ret)),
+                    error_strerror(ret, &errorbuf),
+                );
+                if (verifypeer) return CURLE_SSL_CACERT_BADFILE;
+            }
+        }
+
+        return CURLE_OK;
+    }
+
+    fn mbed_load_clicert(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
+        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+        const ssl_cert: ?[*:0]const u8 = conn_config.clientcert;
+        const ssl_cert_blob = conn_config.cert_blob;
+        const ssl_cert_type: ?[*:0]const u8 = conn_config.cert_type;
+        var errorbuf: [128]u8 = @splat(0);
+
+        mbed_ext.mbedtls_x509_crt_init(&backend.clicert);
+
+        if (ssl_cert) |cert_file| {
+            const ret = mbed_ext.mbedtls_x509_crt_parse_file(&backend.clicert, cert_file);
+            if (ret != 0) {
+                c_ext.Curl_failf(
+                    data,
+                    "mbedTLS: error reading client cert file %s: (-0x%04X) %s",
+                    cert_file,
+                    @as(c_uint, @intCast(-ret)),
+                    error_strerror(ret, &errorbuf),
+                );
+                return CURLE_SSL_CERTPROBLEM;
+            }
+        }
+
+        if (ssl_cert_blob) |blob| {
+            const blob_ptr: [*]const u8 = @ptrCast(blob.data orelse return CURLE_SSL_CERTPROBLEM);
+            var ret: c_int = -1;
+            const is_der = ssl_cert_type != null and primitives.curl_strequal(ssl_cert_type, "DER") != 0;
+            if (is_der or (blob.len > 0 and blob_ptr[blob.len - 1] == 0)) {
+                ret = mbed_ext.mbedtls_x509_crt_parse(&backend.clicert, blob_ptr, blob.len);
+            } else {
+                const newblob = dupNullTerminatedBlob(blob_ptr, blob.len) orelse return CURLE_OUT_OF_MEMORY;
+                defer mem.free(newblob);
+                ret = mbed_ext.mbedtls_x509_crt_parse(&backend.clicert, newblob, blob.len + 1);
+            }
+
+            if (ret != 0) {
+                c_ext.Curl_failf(
+                    data,
+                    "mbedTLS: error reading client cert blob: (-0x%04X) %s",
+                    @as(c_uint, @intCast(-ret)),
+                    error_strerror(ret, &errorbuf),
+                );
+                return CURLE_SSL_CERTPROBLEM;
+            }
+        }
+
+        return CURLE_OK;
+    }
+
+    fn mbed_load_privkey(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
+        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+        var errorbuf: [128]u8 = @splat(0);
+
+        mbed_ext.mbedtls_pk_init(&backend.pk);
+
+        if (conn_config.key != null or conn_config.key_blob != null) {
+            if (conn_config.key) |key_file| {
+                var ret = mbed_ext.mbedtls_pk_parse_keyfile(
+                    &backend.pk,
+                    key_file,
+                    conn_config.key_passwd,
+                    mbed_ext.mbedtls_ctr_drbg_random,
+                    &backend.ctr_drbg,
+                );
+                if (ret == 0 and
+                    mbed_ext.mbedtls_pk_can_do(&backend.pk, MBEDTLS_PK_RSA) == 0 and
+                    mbed_ext.mbedtls_pk_can_do(&backend.pk, MBEDTLS_PK_ECKEY) == 0)
+                {
+                    ret = MBEDTLS_ERR_PK_TYPE_MISMATCH;
+                }
+                if (ret != 0) {
+                    c_ext.Curl_failf(
+                        data,
+                        "mbedTLS: error reading private key %s: (-0x%04X) %s",
+                        key_file,
+                        @as(c_uint, @intCast(-ret)),
+                        error_strerror(ret, &errorbuf),
+                    );
+                    return CURLE_SSL_CERTPROBLEM;
+                }
+            } else if (conn_config.key_blob) |blob| {
+                const blob_ptr: [*]const u8 = @ptrCast(blob.data orelse return CURLE_SSL_CERTPROBLEM);
+                const passwd: ?[*:0]const u8 = conn_config.key_passwd;
+                const pwd_ptr: ?[*]const u8 = if (passwd) |p| p else null;
+                const pwd_len: usize = if (passwd) |p| std.mem.len(p) else 0;
+                const is_der = conn_config.key_type != null and primitives.curl_strequal(conn_config.key_type, "DER") != 0;
+                const newblob = dupNullTerminatedBlob(blob_ptr, blob.len) orelse return CURLE_OUT_OF_MEMORY;
+                defer mem.free(newblob);
+                const keylen: usize = if (is_der) blob.len else blob.len + 1;
+
+                var ret = mbed_ext.mbedtls_pk_parse_key(
+                    &backend.pk,
+                    newblob,
+                    keylen,
+                    pwd_ptr,
+                    pwd_len,
+                    mbed_ext.mbedtls_ctr_drbg_random,
+                    &backend.ctr_drbg,
+                );
+                if (ret == 0 and
+                    mbed_ext.mbedtls_pk_can_do(&backend.pk, MBEDTLS_PK_RSA) == 0 and
+                    mbed_ext.mbedtls_pk_can_do(&backend.pk, MBEDTLS_PK_ECKEY) == 0)
+                {
+                    ret = MBEDTLS_ERR_PK_TYPE_MISMATCH;
+                }
+                if (ret != 0) {
+                    c_ext.Curl_failf(
+                        data,
+                        "mbedTLS: error parsing private key: (-0x%04X) %s",
+                        @as(c_uint, @intCast(-ret)),
+                        error_strerror(ret, &errorbuf),
+                    );
+                    return CURLE_SSL_CERTPROBLEM;
+                }
+            }
+        }
+
+        return CURLE_OK;
+    }
+
+    fn mbed_load_crl(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
+        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+        var errorbuf: [128]u8 = @splat(0);
+
+        mbed_ext.mbedtls_x509_crl_init(&backend.crl);
+
+        if (conn_config.CRLfile) |ssl_crlfile| {
+            const ret = mbed_ext.mbedtls_x509_crl_parse_file(&backend.crl, ssl_crlfile);
+            if (ret != 0) {
+                c_ext.Curl_failf(
+                    data,
+                    "mbedTLS: error reading CRL file %s: (-0x%04X) %s",
+                    ssl_crlfile,
+                    @as(c_uint, @intCast(-ret)),
+                    error_strerror(ret, &errorbuf),
+                );
+                return CURLE_SSL_CRL_BADFILE;
+            }
+        }
+
+        return CURLE_OK;
+    }
+
+    fn mbed_apply_session(cf: *CurlCfilter, data: ?*CurlEasy, sc_session: ?*CurlSslSession) bool {
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return false));
+        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return false));
+        const sess = sc_session orelse return false;
+        const sdata: [*]const u8 = @ptrCast(sess.sdata orelse return false);
+        if (sess.sdata_len == 0) return false;
+
+        var session: mbedtls_ssl_session = .{};
+        mbed_ext.mbedtls_ssl_session_init(&session);
+        defer mbed_ext.mbedtls_ssl_session_free(&session);
+
+        var ret = mbed_ext.mbedtls_ssl_session_load(&session, sdata, sess.sdata_len);
+        if (ret != 0) {
+            c_ext.Curl_failf(data, "SSL session error loading: -0x%x", @as(c_uint, @intCast(-ret)));
+            return false;
+        }
+        ret = mbed_ext.mbedtls_ssl_set_session(&backend.ssl, &session);
+        if (ret != 0) {
+            c_ext.Curl_failf(data, "SSL session error setting: -0x%x", @as(c_uint, @intCast(-ret)));
+            return false;
+        }
+        c_ext.Curl_infof(data, "SSL reusing session ID");
+        return true;
+    }
+
+    fn mbed_new_session(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
+        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf);
+        const scache_key = connssl.peer.scache_key orelse return CURLE_OK;
+
+        var scache: ?*CurlSslScache = null;
+        var has_share_scache = false;
+        var trc_feat: ?*CurlTrcFeat = null;
+        c_ext.Curl_vtls_acc_scache_params(data, &scache, &has_share_scache, &trc_feat);
+        if (!vtls_scache_asn1.Curl_ssl_scache_use_zig(data, scache, conn_config)) {
+            return CURLE_OK;
+        }
+
+        var session: mbedtls_ssl_session = .{};
+        mbed_ext.mbedtls_ssl_session_init(&session);
+        var ret = mbed_ext.mbedtls_ssl_get_session(&backend.ssl, &session);
+        const msession_alloced = (ret != MBEDTLS_ERR_SSL_ALLOC_FAILED);
+        defer if (msession_alloced) mbed_ext.mbedtls_ssl_session_free(&session);
+
+        if (ret != 0) {
+            c_ext.Curl_failf(data, "mbedtls_ssl_get_session returned -0x%x", @as(c_uint, @intCast(-ret)));
+            return CURLE_SSL_CONNECT_ERROR;
+        }
+
+        var slen: usize = 0;
+        _ = mbed_ext.mbedtls_ssl_session_save(&session, null, 0, &slen);
+        if (slen == 0) {
+            c_ext.Curl_failf(data, "failed to serialize session: length is 0");
+            return CURLE_OK;
+        }
+
+        const sdata = mem.malloc(slen) orelse return CURLE_OUT_OF_MEMORY;
+        ret = mbed_ext.mbedtls_ssl_session_save(&session, sdata, slen, &slen);
+        if (ret != 0) {
+            mem.free(sdata);
+            c_ext.Curl_failf(data, "failed to serialize session: -0x%x", @as(c_uint, @intCast(-ret)));
+            return CURLE_OK;
+        }
+
+        const ietf_tls_id = backend.ssl.tls_version;
+        var sc_session: ?*CurlSslSession = null;
+        var result = vtls_scache_asn1.Curl_ssl_session_create(
+            sdata,
+            slen,
+            ietf_tls_id,
+            connssl.negotiated_alpn,
+            0,
+            0,
+            &sc_session,
+        );
+        if (result == CURLE_OK) {
+            result = vtls_scache_asn1.Curl_ssl_scache_put_zig(
+                cf,
+                data,
+                scache,
+                has_share_scache,
+                conn_config,
+                trc_feat,
+                scache_key,
+                sc_session,
+            );
+        } else {
+            vtls_scache_asn1.Curl_ssl_session_destroy(sc_session);
+        }
+        return result;
+    }
+
+    fn mbed_configure_ssl(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
+        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+        var errorbuf: [128]u8 = @splat(0);
+
+        if (connssl.peer.origin) |orig| {
+            c_ext.Curl_infof(data, "mbedTLS: Connecting to %s:%d", orig.hostname, @as(c_int, orig.port));
+        }
+
+        mbed_ext.mbedtls_ssl_config_init(&backend.config);
+        var ret = mbed_ext.mbedtls_ssl_config_defaults(
+            &backend.config,
+            MBEDTLS_SSL_IS_CLIENT,
+            MBEDTLS_SSL_TRANSPORT_STREAM,
+            MBEDTLS_SSL_PRESET_DEFAULT,
+        );
+        if (ret != 0) {
+            c_ext.Curl_failf(data, "mbedTLS: ssl_config failed");
+            return CURLE_SSL_CONNECT_ERROR;
+        }
+
+        mbed_ext.mbedtls_ssl_conf_verify(&backend.config, mbed_verify_cb, cf);
+        mbed_ext.mbedtls_ssl_conf_authmode(&backend.config, MBEDTLS_SSL_VERIFY_OPTIONAL);
+
+        mbed_ext.mbedtls_ssl_init(&backend.ssl);
+        backend.flags.initialized = true;
+
+        var result = mbed_set_ssl_version_min_max(data, backend, conn_config);
+        if (result != CURLE_OK) return result;
+
+        mbed_ext.mbedtls_ssl_conf_min_tls_version(&backend.config, backend.config.min_tls_version);
+        mbed_ext.mbedtls_ssl_conf_max_tls_version(&backend.config, backend.config.max_tls_version);
+
+        mbed_ext.mbedtls_ssl_conf_rng(&backend.config, mbed_ext.mbedtls_ctr_drbg_random, &backend.ctr_drbg);
+
+        ret = mbed_ext.mbedtls_ssl_setup(&backend.ssl, &backend.config);
+        if (ret != 0) {
+            c_ext.Curl_failf(
+                data,
+                "mbedTLS: ssl_setup failed: (-0x%04X) %s",
+                @as(c_uint, @intCast(-ret)),
+                error_strerror(ret, &errorbuf),
+            );
+            return CURLE_SSL_CONNECT_ERROR;
+        }
+
+        mbed_ext.mbedtls_ssl_set_bio(&backend.ssl, cf, mbedtls_bio_cf_write, mbedtls_bio_cf_read, null);
+
+        if (conn_config.cipher_list != null or conn_config.cipher_list13 != null) {
+            result = mbed_set_selected_ciphers(data, backend, conn_config.cipher_list, conn_config.cipher_list13);
+            if (result != CURLE_OK) {
+                c_ext.Curl_failf(data, "mbedTLS: failed to set cipher suites");
+                return result;
+            }
+        }
+
+        if (connssl.peer.scache_key) |scache_key| {
+            var scache: ?*CurlSslScache = null;
+            var has_share_scache = false;
+            var trc_feat: ?*CurlTrcFeat = null;
+            c_ext.Curl_vtls_acc_scache_params(data, &scache, &has_share_scache, &trc_feat);
+            if (vtls_scache_asn1.Curl_ssl_scache_use_zig(data, scache, conn_config)) {
+                var sc_session: ?*CurlSslSession = null;
+                const sresult = vtls_scache_asn1.Curl_ssl_scache_take_zig(
+                    cf,
+                    data,
+                    scache,
+                    has_share_scache,
+                    conn_config,
+                    trc_feat,
+                    scache_key,
+                    &sc_session,
+                );
+                if (sresult == CURLE_OK and sc_session != null) {
+                    _ = mbed_apply_session(cf, data, sc_session);
+                }
+                vtls_scache_asn1.Curl_ssl_scache_return_zig(
+                    cf,
+                    data,
+                    scache,
+                    has_share_scache,
+                    conn_config,
+                    trc_feat,
+                    scache_key,
+                    sc_session,
+                );
+            }
+        }
+
+        mbed_ext.mbedtls_ssl_conf_ca_chain(&backend.config, &backend.cacert, &backend.crl);
+
+        if (conn_config.key != null or conn_config.key_blob != null or
+            conn_config.clientcert != null or conn_config.cert_blob != null)
+        {
+            _ = mbed_ext.mbedtls_ssl_conf_own_cert(&backend.config, &backend.clicert, &backend.pk);
+            backend.flags.pkt_enc_key_set = true;
+        }
+
+        const hostname: ?[*:0]const u8 = if (connssl.peer.sni) |sni|
+            sni
+        else if (connssl.peer.origin) |orig|
+            orig.hostname
+        else
+            null;
+        if (mbed_ext.mbedtls_ssl_set_hostname(&backend.ssl, hostname) != 0) {
+            c_ext.Curl_failf(data, "Failed to set SNI");
+            return CURLE_SSL_CONNECT_ERROR;
+        }
+
+        if (connssl.alpn) |alpn| {
+            var i: usize = 0;
+            while (i < alpn.count and i < ALPN_ENTRIES_MAX) : (i += 1) {
+                backend.protocols[i] = @ptrCast(&alpn.entries[i]);
+            }
+            backend.protocols[i] = null;
+            if (mbed_ext.mbedtls_ssl_conf_alpn_protocols(&backend.config, &backend.protocols) != 0) {
+                c_ext.Curl_failf(data, "Failed setting ALPN protocols");
+                return CURLE_SSL_CONNECT_ERROR;
+            }
+            var proto: AlpnProtoBuf = undefined;
+            _ = vtls_impl.Curl_alpn_to_proto_str(&proto, alpn);
+            c_ext.Curl_infof(data, "ALPN: curl offers %s", @as([*:0]const u8, @ptrCast(&proto.data)));
+        }
+
+        var fsslctx: ?*const anyopaque = null;
+        var fsslctxp: ?*anyopaque = null;
+        if (c_ext.Curl_vtls_acc_ssl_fsslctx(data, &fsslctx, &fsslctxp)) {
+            const cb: *const fn (?*CurlEasy, ?*anyopaque, ?*anyopaque) callconv(.c) CURLcode = @ptrCast(@alignCast(fsslctx.?));
+            result = cb(data, &backend.config, fsslctxp);
+            if (result != CURLE_OK) {
+                c_ext.Curl_failf(data, "error signaled by SSL ctx callback");
+                return result;
+            }
+        }
+
+        return CURLE_OK;
+    }
+
+    fn mbed_connect_step1(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
+        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+
+        if (conn_config.version == CURL_SSLVERSION_SSLv2 or conn_config.version == CURL_SSLVERSION_SSLv3) {
+            c_ext.Curl_failf(data, "Not supported SSL version");
+            return CURLE_NOT_BUILT_IN;
+        }
+
+        mbed_ext.mbedtls_ctr_drbg_init(&backend.ctr_drbg);
+        mbed_ext.mbedtls_entropy_init(&backend.entropy);
+        const custom = "curl";
+        const seed_ret = mbed_ext.mbedtls_ctr_drbg_seed(
+            &backend.ctr_drbg,
+            mbed_ext.mbedtls_entropy_func,
+            &backend.entropy,
+            custom.ptr,
+            custom.len,
+        );
+        if (seed_ret != 0) {
+            var errorbuf: [128]u8 = @splat(0);
+            c_ext.Curl_failf(
+                data,
+                "mbedtls_ctr_drbg_seed returned (-0x%04X) %s",
+                @as(c_uint, @intCast(-seed_ret)),
+                error_strerror(seed_ret, &errorbuf),
+            );
+            return CURLE_SSL_CONNECT_ERROR;
+        }
+
+        var result = mbed_load_cacert(cf, data);
+        if (result == CURLE_OK) result = mbed_load_clicert(cf, data);
+        if (result == CURLE_OK) result = mbed_load_privkey(cf, data);
+        if (result == CURLE_OK) result = mbed_load_crl(cf, data);
+        if (result == CURLE_OK) result = mbed_configure_ssl(cf, data);
+        if (result != CURLE_OK) return result;
+
+        connssl.connecting_state = ssl_connect_2;
+        return CURLE_OK;
+    }
+
+    fn mbed_connect_step2(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
+        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+
+        var ret: c_int = 0;
+        while (true) {
+            ret = mbed_ext.mbedtls_ssl_handshake(&backend.ssl);
+            if (ret == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) {
+                const sres = mbed_new_session(cf, data);
+                if (sres != CURLE_OK) return sres;
+                continue;
+            }
+            break;
+        }
+
+        if (ret == MBEDTLS_ERR_SSL_WANT_READ) {
+            connssl.io_need = CURL_SSL_IO_NEED_RECV;
+            return CURLE_OK;
+        } else if (ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
+            connssl.io_need = CURL_SSL_IO_NEED_SEND;
+            return CURLE_OK;
+        }
+
+        const verify_result = mbed_ext.mbedtls_ssl_get_verify_result(&backend.ssl);
+        if (vtls_impl.Curl_ssl_cf_get_easy_config(data, cf)) |ssl_config| {
+            ssl_config.certverifyresult = @intCast(verify_result);
+        }
+
+        if (ret == MBEDTLS_ERR_X509_CERT_VERIFY_FAILED or
+            (verify_result != 0 and (conn_config.verifypeer() or conn_config.verifyhost())))
+        {
+            if (!conn_config.verifyhost() and (verify_result & ~MBEDTLS_X509_BADCERT_CN_MISMATCH) == 0) {
+                // Only CN mismatch occurred and verifyhost is disabled
+            } else if (!conn_config.verifypeer() and (verify_result & MBEDTLS_X509_BADCERT_CN_MISMATCH) == 0) {
+                // Only peer trust errors occurred and verifypeer is disabled
+            } else {
+                if ((verify_result & MBEDTLS_X509_BADCERT_EXPIRED) != 0)
+                    c_ext.Curl_failf(data, "Cert verify failed: BADCERT_EXPIRED");
+                if ((verify_result & MBEDTLS_X509_BADCERT_REVOKED) != 0)
+                    c_ext.Curl_failf(data, "Cert verify failed: BADCERT_REVOKED");
+                if ((verify_result & MBEDTLS_X509_BADCERT_CN_MISMATCH) != 0)
+                    c_ext.Curl_failf(data, "Cert verify failed: BADCERT_CN_MISMATCH");
+                if ((verify_result & MBEDTLS_X509_BADCERT_NOT_TRUSTED) != 0)
+                    c_ext.Curl_failf(data, "Cert verify failed: BADCERT_NOT_TRUSTED");
+                if ((verify_result & MBEDTLS_X509_BADCRL_NOT_TRUSTED) != 0)
+                    c_ext.Curl_failf(data, "Cert verify failed: BADCRL_NOT_TRUSTED");
+                if ((verify_result & MBEDTLS_X509_BADCRL_EXPIRED) != 0)
+                    c_ext.Curl_failf(data, "Cert verify failed: BADCRL_EXPIRED");
+                return CURLE_PEER_FAILED_VERIFICATION;
+            }
+        }
+
+        if (ret != 0) {
+            var errorbuf: [128]u8 = @splat(0);
+            c_ext.Curl_failf(
+                data,
+                "ssl_handshake returned: (-0x%04X) %s",
+                @as(c_uint, @intCast(-ret)),
+                error_strerror(ret, &errorbuf),
+            );
+            return CURLE_SSL_CONNECT_ERROR;
+        }
+
+        c_ext.Curl_infof(
+            data,
+            "mbedTLS: %s Handshake complete, cipher is %s",
+            mbed_ext.mbedtls_ssl_get_version(&backend.ssl) orelse "unknown",
+            mbed_ext.mbedtls_ssl_get_ciphersuite(&backend.ssl) orelse "unknown",
+        );
+
+        if (c_ext.Curl_vtls_acc_ssl_certinfo(data)) {
+            mbed_extract_certinfo(data, mbed_ext.mbedtls_ssl_get_peer_cert(&backend.ssl));
+        }
+
+        if (c_ext.Curl_vtls_acc_pinned_pubkey(data, vtls_impl.Curl_ssl_cf_is_proxy(cf))) |pinnedpubkey| {
+            const peercert = mbed_ext.mbedtls_ssl_get_peer_cert(&backend.ssl) orelse {
+                c_ext.Curl_failf(data, "Failed due to missing peer certificate");
+                return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
+            };
+            const raw_p = peercert.raw.p orelse {
+                c_ext.Curl_failf(data, "Failed due to missing peer certificate");
+                return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
+            };
+            if (peercert.raw.len == 0) {
+                c_ext.Curl_failf(data, "Failed due to missing peer certificate");
+                return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
+            }
+
+            const p_raw = mem.calloc(1, @sizeOf(mbedtls_x509_crt)) orelse return CURLE_OUT_OF_MEMORY;
+            const p: *mbedtls_x509_crt = @ptrCast(@alignCast(p_raw));
+            const pubkey = mem.malloc(PUB_DER_MAX_BYTES) orelse {
+                mem.free(p_raw);
+                return CURLE_OUT_OF_MEMORY;
+            };
+            mbed_ext.mbedtls_x509_crt_init(p);
+            defer {
+                mbed_ext.mbedtls_x509_crt_free(p);
+                mem.free(p_raw);
+                mem.free(pubkey);
+            }
+
+            if (mbed_ext.mbedtls_x509_crt_parse(p, raw_p, peercert.raw.len) != 0) {
+                c_ext.Curl_failf(data, "Failed copying peer certificate");
+                return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
+            }
+
+            const size = mbed_ext.mbedtls_pk_write_pubkey_der(&p.pk, pubkey, PUB_DER_MAX_BYTES);
+            if (size <= 0) {
+                c_ext.Curl_failf(data, "Failed copying public key from peer certificate");
+                return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
+            }
+            const usize_len: usize = @intCast(size);
+            const result = vtls_impl.Curl_pin_peer_pubkey(
+                data,
+                pinnedpubkey,
+                pubkey + (PUB_DER_MAX_BYTES - usize_len),
+                usize_len,
+            );
+            if (result != CURLE_OK) return result;
+        }
+
+        if (connssl.alpn != null) {
+            const proto = mbed_ext.mbedtls_ssl_get_alpn_protocol(&backend.ssl);
+            const proto_len: usize = if (proto) |p| std.mem.len(p) else 0;
+            const result = vtls_impl.Curl_alpn_set_negotiated(
+                cf,
+                data,
+                connssl,
+                if (proto) |p| p else null,
+                proto_len,
+            );
+            if (result != CURLE_OK) return result;
+        }
+
+        connssl.connecting_state = ssl_connect_3;
+        c_ext.Curl_infof(data, "SSL connected");
+        return CURLE_OK;
+    }
+
     fn mbedInit() callconv(.c) c_int {
+        if (comptime use_mbedtls) {
+            if (mbed_ext.psa_crypto_init() != 0) return 0;
+        }
         return 1;
     }
 
     fn mbedCleanup() callconv(.c) void {}
 
     fn mbedVersion(buffer: [*]u8, size: usize) callconv(.c) usize {
-        const version = mbed_ext.mbedtls_version_get_number();
+        const version: c_uint = if (comptime use_mbedtls) mbed_ext.mbedtls_version_get_number() else 0x03060000;
         const rc = c_ext.curl_msnprintf(
             buffer,
             size,
@@ -3878,52 +5067,340 @@ const mbedtls_backend = struct {
     }
 
     fn mbedConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CURLcode {
-        _ = cf;
-        _ = data;
-        done.* = true;
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
+
+        if (connssl.state == ssl_connection_complete) {
+            done.* = true;
+            return CURLE_OK;
+        }
+
+        done.* = false;
+        connssl.io_need = CURL_SSL_IO_NEED_NONE;
+
+        if (connssl.connecting_state == ssl_connect_1) {
+            const result = mbed_connect_step1(cf, data);
+            if (result != CURLE_OK) return result;
+        }
+
+        if (connssl.connecting_state == ssl_connect_2) {
+            const result = mbed_connect_step2(cf, data);
+            if (result != CURLE_OK) return result;
+        }
+
+        if (connssl.connecting_state == ssl_connect_3) {
+            const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+            if (backend.ssl.tls_version <= MBEDTLS_SSL_VERSION_TLS1_2) {
+                const result = mbed_new_session(cf, data);
+                if (result != CURLE_OK) return result;
+            }
+            connssl.connecting_state = ssl_connect_done;
+        }
+
+        if (connssl.connecting_state == ssl_connect_done) {
+            connssl.state = ssl_connection_complete;
+            done.* = true;
+        }
+
         return CURLE_OK;
     }
 
     fn mbedDataPending(cf: *CurlCfilter, data: ?*const CurlEasy) callconv(.c) bool {
-        _ = cf;
         _ = data;
-        return false;
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return false));
+        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return false));
+        return mbed_ext.mbedtls_ssl_get_bytes_avail(&backend.ssl) != 0;
     }
 
-    fn mbedSend(cf: *CurlCfilter, data: ?*CurlEasy, mem_ptr: ?*const anyopaque, len: usize, pnwritten: *usize) callconv(.c) CURLcode {
-        return c_ext.Curl_conn_cf_send(cf.next, data, mem_ptr, len, false, pnwritten);
+    fn mbedSend(cf: *CurlCfilter, data: ?*CurlEasy, mem_ptr: ?*const anyopaque, len_in: usize, pnwritten: *usize) callconv(.c) CURLcode {
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SEND_ERROR));
+        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SEND_ERROR));
+        const buf: [*]const u8 = @ptrCast(mem_ptr orelse return CURLE_BAD_FUNCTION_ARGUMENT);
+        var len = len_in;
+        var result: CURLcode = CURLE_OK;
+
+        while (true) {
+            pnwritten.* = 0;
+            connssl.io_need = CURL_SSL_IO_NEED_NONE;
+
+            if (backend.flags.send_blocked) {
+                if (backend.send_blocked_len > len) {
+                    c_ext.Curl_failf(data, "re-send data shorter than previously");
+                    return CURLE_BAD_FUNCTION_ARGUMENT;
+                }
+                c_ext.Curl_trc_cf_infof(
+                    data,
+                    cf,
+                    "mbedtls_ssl_write(len=%zu) -> previously blocked on %zu bytes",
+                    len,
+                    backend.send_blocked_len,
+                );
+                len = backend.send_blocked_len;
+            }
+
+            const nwritten = mbed_ext.mbedtls_ssl_write(&backend.ssl, buf, len);
+            if (nwritten >= 0) {
+                pnwritten.* = @intCast(nwritten);
+                backend.flags.send_blocked = false;
+                backend.send_blocked_len = 0;
+                result = CURLE_OK;
+                break;
+            } else {
+                c_ext.Curl_trc_cf_infof(
+                    data,
+                    cf,
+                    "mbedtls_ssl_write(len=%zu) -> -0x%04X",
+                    len,
+                    @as(c_uint, @intCast(-nwritten)),
+                );
+                switch (nwritten) {
+                    MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET => {
+                        result = mbed_new_session(cf, data);
+                        if (result == CURLE_OK) continue;
+                    },
+                    MBEDTLS_ERR_SSL_WANT_READ => {
+                        connssl.io_need = CURL_SSL_IO_NEED_RECV;
+                        result = CURLE_AGAIN;
+                    },
+                    MBEDTLS_ERR_SSL_WANT_WRITE => {
+                        connssl.io_need = CURL_SSL_IO_NEED_SEND;
+                        result = CURLE_AGAIN;
+                    },
+                    else => {
+                        result = CURLE_SEND_ERROR;
+                    },
+                }
+                if (result == CURLE_AGAIN and !backend.flags.send_blocked) {
+                    backend.flags.send_blocked = true;
+                    backend.send_blocked_len = len;
+                }
+                break;
+            }
+        }
+
+        c_ext.Curl_trc_cf_infof(data, cf, "mbedtls_ssl_write(len=%zu) -> %d, %zu", len, result, pnwritten.*);
+        return result;
     }
 
     fn mbedRecv(cf: *CurlCfilter, data: ?*CurlEasy, buf: [*]u8, len: usize, pnread: *usize) callconv(.c) CURLcode {
-        return c_ext.Curl_conn_cf_recv(cf.next, data, buf, len, pnread);
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_RECV_ERROR));
+        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_RECV_ERROR));
+        var result: CURLcode = CURLE_OK;
+
+        while (true) {
+            pnread.* = 0;
+            connssl.io_need = CURL_SSL_IO_NEED_NONE;
+
+            const nread = mbed_ext.mbedtls_ssl_read(&backend.ssl, buf, len);
+            if (nread > 0) {
+                pnread.* = @intCast(nread);
+                return CURLE_OK;
+            } else if (nread == 0) {
+                return CURLE_OK;
+            } else {
+                var errorbuf: [128]u8 = @splat(0);
+                c_ext.Curl_trc_cf_infof(
+                    data,
+                    cf,
+                    "mbedtls_ssl_read(len=%zu) -> -0x%04X",
+                    len,
+                    @as(c_uint, @intCast(-nread)),
+                );
+                switch (nread) {
+                    MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET => {
+                        result = mbed_new_session(cf, data);
+                        if (result == CURLE_OK) continue;
+                    },
+                    MBEDTLS_ERR_SSL_WANT_READ => {
+                        connssl.io_need = CURL_SSL_IO_NEED_RECV;
+                        result = CURLE_AGAIN;
+                    },
+                    MBEDTLS_ERR_SSL_WANT_WRITE => {
+                        connssl.io_need = CURL_SSL_IO_NEED_SEND;
+                        result = CURLE_AGAIN;
+                    },
+                    MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY => {
+                        result = CURLE_OK;
+                    },
+                    else => {
+                        c_ext.Curl_failf(
+                            data,
+                            "ssl_read returned: (-0x%04X) %s",
+                            @as(c_uint, @intCast(-nread)),
+                            error_strerror(nread, &errorbuf),
+                        );
+                        result = CURLE_RECV_ERROR;
+                    },
+                }
+                return result;
+            }
+        }
     }
 
     fn mbedShutdown(cf: *CurlCfilter, data: ?*CurlEasy, send_shutdown: bool, done: *bool) callconv(.c) CURLcode {
-        _ = cf;
-        _ = data;
-        _ = send_shutdown;
-        done.* = true;
-        return CURLE_OK;
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse {
+            done.* = true;
+            return CURLE_OK;
+        }));
+        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse {
+            done.* = true;
+            return CURLE_OK;
+        }));
+        var buf: [1024]u8 = undefined;
+        var result: CURLcode = CURLE_OK;
+        var ret: c_int = 0;
+
+        if (!backend.flags.initialized or cf.isShutdown()) {
+            done.* = true;
+            return CURLE_OK;
+        }
+
+        connssl.io_need = CURL_SSL_IO_NEED_NONE;
+        done.* = false;
+
+        if (!backend.flags.sent_shutdown) {
+            backend.flags.sent_shutdown = true;
+            if (send_shutdown) {
+                ret = mbed_ext.mbedtls_ssl_close_notify(&backend.ssl);
+                switch (ret) {
+                    0 => {},
+                    MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY => {
+                        done.* = true;
+                        cf.setShutdown(true);
+                        return CURLE_OK;
+                    },
+                    MBEDTLS_ERR_SSL_WANT_READ => {
+                        connssl.io_need = CURL_SSL_IO_NEED_RECV;
+                        return CURLE_OK;
+                    },
+                    MBEDTLS_ERR_SSL_WANT_WRITE => {
+                        connssl.io_need = CURL_SSL_IO_NEED_SEND;
+                        return CURLE_OK;
+                    },
+                    else => {
+                        c_ext.Curl_trc_cf_infof(data, cf, "mbedtls_shutdown error -0x%04X", @as(c_uint, @intCast(-ret)));
+                        cf.setShutdown(true);
+                        return CURLE_RECV_ERROR;
+                    },
+                }
+            }
+        }
+
+        var i: usize = 0;
+        while (i < 10) : (i += 1) {
+            ret = mbed_ext.mbedtls_ssl_read(&backend.ssl, &buf, buf.len);
+            if (ret == MBEDTLS_ERR_SSL_WANT_READ) {
+                ret = mbed_ext.mbedtls_ssl_read(&backend.ssl, &buf, buf.len);
+            }
+            if (ret == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) {
+                continue;
+            }
+            if (ret <= 0) break;
+        }
+
+        if (ret > 0) {
+            c_ext.Curl_trc_cf_infof(data, cf, "mbedtls_shutdown, still getting data");
+        } else if (ret == 0 or ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
+            c_ext.Curl_trc_cf_infof(data, cf, "mbedtls_shutdown done");
+            done.* = true;
+        } else if (ret == MBEDTLS_ERR_SSL_WANT_READ) {
+            c_ext.Curl_trc_cf_infof(data, cf, "mbedtls_shutdown, need RECV");
+            connssl.io_need = CURL_SSL_IO_NEED_RECV;
+        } else if (ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
+            c_ext.Curl_trc_cf_infof(data, cf, "mbedtls_shutdown, need SEND");
+            connssl.io_need = CURL_SSL_IO_NEED_SEND;
+        } else {
+            c_ext.Curl_trc_cf_infof(data, cf, "mbedtls_shutdown error -0x%04X", @as(c_uint, @intCast(-ret)));
+            result = CURLE_RECV_ERROR;
+        }
+
+        if (result != CURLE_OK or done.*) {
+            cf.setShutdown(true);
+        }
+        return result;
     }
 
     fn mbedClose(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) void {
-        _ = cf;
         _ = data;
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return));
+        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return));
+        if (backend.flags.initialized) {
+            mbed_ext.mbedtls_pk_free(&backend.pk);
+            mbed_ext.mbedtls_x509_crt_free(&backend.clicert);
+            mbed_ext.mbedtls_x509_crt_free(&backend.cacert);
+            mbed_ext.mbedtls_x509_crl_free(&backend.crl);
+            if (backend.ciphersuites) |cs| {
+                mem.free(cs);
+                backend.ciphersuites = null;
+            }
+            mbed_ext.mbedtls_ssl_config_free(&backend.config);
+            mbed_ext.mbedtls_ssl_free(&backend.ssl);
+            mbed_ext.mbedtls_ctr_drbg_free(&backend.ctr_drbg);
+            mbed_ext.mbedtls_entropy_free(&backend.entropy);
+            backend.flags.initialized = false;
+        } else if (backend.ciphersuites) |cs| {
+            mem.free(cs);
+            backend.ciphersuites = null;
+        }
     }
 
     fn mbedGetInternals(connssl: *SslConnectData, info: c_uint) callconv(.c) ?*anyopaque {
-        _ = info;
-        return connssl.backend;
+        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return null));
+        return if (info == CURLINFO_TLS_SESSION) @ptrCast(&backend.config) else @ptrCast(&backend.ssl);
     }
 
     fn mbedRandom(data: ?*CurlEasy, entropy: [*]u8, length: usize) callconv(.c) CURLcode {
-        _ = data;
+        if (comptime use_mbedtls) {
+            var ctr_drbg: mbedtls_ctr_drbg_context = .{};
+            var my_entropy: mbedtls_entropy_context = .{};
+            var errorbuf: [128]u8 = @splat(0);
+
+            mbed_ext.mbedtls_entropy_init(&my_entropy);
+            mbed_ext.mbedtls_ctr_drbg_init(&ctr_drbg);
+            defer {
+                mbed_ext.mbedtls_ctr_drbg_free(&ctr_drbg);
+                mbed_ext.mbedtls_entropy_free(&my_entropy);
+            }
+
+            const custom = "curl";
+            var ret = mbed_ext.mbedtls_ctr_drbg_seed(
+                &ctr_drbg,
+                mbed_ext.mbedtls_entropy_func,
+                &my_entropy,
+                custom.ptr,
+                custom.len,
+            );
+            if (ret != 0) {
+                c_ext.Curl_failf(
+                    data,
+                    "mbedtls_ctr_drbg_seed returned (-0x%04X) %s",
+                    @as(c_uint, @intCast(-ret)),
+                    error_strerror(ret, &errorbuf),
+                );
+                return CURLE_FAILED_INIT;
+            }
+
+            ret = mbed_ext.mbedtls_ctr_drbg_random(&ctr_drbg, entropy, length);
+            if (ret != 0) {
+                c_ext.Curl_failf(
+                    data,
+                    "mbedtls_ctr_drbg_random returned (-0x%04X) %s",
+                    @as(c_uint, @intCast(-ret)),
+                    error_strerror(ret, &errorbuf),
+                );
+                return CURLE_FAILED_INIT;
+            }
+            return CURLE_OK;
+        }
         std.crypto.random.bytes(entropy[0..length]);
         return CURLE_OK;
     }
 
     fn mbedSha256sum(input: [*]const u8, inputlen: usize, sha256sum: [*]u8, sha256len: usize) callconv(.c) CURLcode {
         if (sha256len < 32) return CURLE_BAD_FUNCTION_ARGUMENT;
+        if (comptime use_mbedtls) {
+            const ret = mbed_ext.mbedtls_sha256(input, inputlen, sha256sum, 0);
+            return if (ret == 0) CURLE_OK else CURLE_BAD_FUNCTION_ARGUMENT;
+        }
         var digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(input[0..inputlen], &digest, .{});
         @memcpy(sha256sum[0..32], &digest);
@@ -3952,7 +5429,100 @@ const mbedtls_backend = struct {
         .send_plain = mbedSend,
         .get_channel_binding = null,
     };
+
+    test "mbedTLS version min/max mapping" {
+        var backend = std.mem.zeroes(MbedSslBackendData);
+        var cfg = std.mem.zeroes(SslFilterConfig);
+
+        // Default -> TLS 1.2 .. TLS 1.3
+        cfg.version = CURL_SSLVERSION_DEFAULT;
+        cfg.version_max = CURL_SSLVERSION_MAX_DEFAULT;
+        try std.testing.expectEqual(CURLE_OK, mbed_set_ssl_version_min_max(null, &backend, &cfg));
+        try std.testing.expectEqual(MBEDTLS_SSL_VERSION_TLS1_2, backend.config.min_tls_version);
+        try std.testing.expectEqual(MBEDTLS_SSL_VERSION_TLS1_3, backend.config.max_tls_version);
+
+        // TLS 1.2 min, TLS 1.2 max
+        cfg.version = CURL_SSLVERSION_TLSv1_2;
+        cfg.version_max = MBED_SSLVERSION_MAX_TLSv1_2;
+        try std.testing.expectEqual(CURLE_OK, mbed_set_ssl_version_min_max(null, &backend, &cfg));
+        try std.testing.expectEqual(MBEDTLS_SSL_VERSION_TLS1_2, backend.config.min_tls_version);
+        try std.testing.expectEqual(MBEDTLS_SSL_VERSION_TLS1_2, backend.config.max_tls_version);
+
+        // TLS 1.3 min, TLS 1.3 max
+        cfg.version = CURL_SSLVERSION_TLSv1_3;
+        cfg.version_max = CURL_SSLVERSION_MAX_TLSv1_3;
+        try std.testing.expectEqual(CURLE_OK, mbed_set_ssl_version_min_max(null, &backend, &cfg));
+        try std.testing.expectEqual(MBEDTLS_SSL_VERSION_TLS1_3, backend.config.min_tls_version);
+        try std.testing.expectEqual(MBEDTLS_SSL_VERSION_TLS1_3, backend.config.max_tls_version);
+
+        // Reject SSLv2 and SSLv3 with CURLE_NOT_BUILT_IN
+        cfg.version = CURL_SSLVERSION_SSLv2;
+        cfg.version_max = CURL_SSLVERSION_MAX_DEFAULT;
+        try std.testing.expectEqual(CURLE_NOT_BUILT_IN, mbed_set_ssl_version_min_max(null, &backend, &cfg));
+
+        cfg.version = CURL_SSLVERSION_SSLv3;
+        try std.testing.expectEqual(CURLE_NOT_BUILT_IN, mbed_set_ssl_version_min_max(null, &backend, &cfg));
+
+        // Reject max TLS 1.0 / 1.1 with CURLE_SSL_CONNECT_ERROR
+        cfg.version = CURL_SSLVERSION_TLSv1_2;
+        cfg.version_max = CURL_SSLVERSION_MAX_TLSv1_1;
+        try std.testing.expectEqual(CURLE_SSL_CONNECT_ERROR, mbed_set_ssl_version_min_max(null, &backend, &cfg));
+
+        cfg.version_max = CURL_SSLVERSION_MAX_TLSv1_0;
+        try std.testing.expectEqual(CURLE_SSL_CONNECT_ERROR, mbed_set_ssl_version_min_max(null, &backend, &cfg));
+
+        // Reject min TLS 1.3 > max TLS 1.2
+        cfg.version = CURL_SSLVERSION_TLSv1_3;
+        cfg.version_max = MBED_SSLVERSION_MAX_TLSv1_2;
+        try std.testing.expectEqual(CURLE_SSL_CONNECT_ERROR, mbed_set_ssl_version_min_max(null, &backend, &cfg));
+    }
+
+    test "mbedTLS cipher suite parsing and deduplication" {
+        var backend = std.mem.zeroes(MbedSslBackendData);
+        defer if (backend.ciphersuites) |cs| mem.free(cs);
+
+        try std.testing.expectEqual(
+            CURLE_OK,
+            mbed_set_selected_ciphers(
+                null,
+                &backend,
+                "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:TLS_ECJPAKE_WITH_AES_128_CCM_8",
+                "TLS_AES_128_GCM_SHA256",
+            ),
+        );
+        try std.testing.expect(backend.ciphersuites != null);
+        const cs = backend.ciphersuites.?;
+        try std.testing.expectEqual(@as(c_int, 0x1301), cs[0]);
+        try std.testing.expectEqual(@as(c_int, 0xC02F), cs[1]);
+        try std.testing.expectEqual(@as(c_int, 0xC0FF), cs[2]);
+        try std.testing.expectEqual(@as(c_int, 0), cs[3]);
+
+        // All invalid cipher names -> CURLE_SSL_CIPHER
+        try std.testing.expectEqual(
+            CURLE_SSL_CIPHER,
+            mbed_set_selected_ciphers(null, &backend, "NOT-A-VALID-CIPHER", null),
+        );
+    }
+
+    test "mbedTLS BIO error code mapping" {
+        try std.testing.expectEqual(@as(c_int, 42), mapBioWriteResult(CURLE_OK, 42));
+        try std.testing.expectEqual(MBEDTLS_ERR_SSL_WANT_WRITE, mapBioWriteResult(CURLE_AGAIN, 0));
+        try std.testing.expectEqual(@as(c_int, -1), mapBioWriteResult(CURLE_SEND_ERROR, 0));
+
+        try std.testing.expectEqual(@as(c_int, 128), mapBioReadResult(CURLE_OK, 128));
+        try std.testing.expectEqual(MBEDTLS_ERR_SSL_WANT_READ, mapBioReadResult(CURLE_AGAIN, 0));
+        try std.testing.expectEqual(@as(c_int, -1), mapBioReadResult(CURLE_RECV_ERROR, 0));
+
+        // Null bio / null call_data / null buffer guards
+        const dummy = "hello";
+        try std.testing.expectEqual(@as(c_int, 0), mbedtls_bio_cf_write(null, dummy.ptr, dummy.len));
+        try std.testing.expectEqual(@as(c_int, 0), mbedtls_bio_cf_read(null, null, 0));
+    }
 };
+
+test {
+    _ = mbedtls_backend;
+}
 
 // ============================================================================
 // Conditional Symbol Exports
