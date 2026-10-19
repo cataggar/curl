@@ -185,18 +185,18 @@ pub const SslFilterConfig = extern struct {
     _win_pad: if (builtin.os.tag == .windows) [2]u8 else [0]u8 = if (builtin.os.tag == .windows) .{ 0, 0 } else .{},
     flags: FilterFlagsType,
 
-    const BIT_VERIFYPEER: FilterFlagsType = 1 << 0;
-    const BIT_VERIFYHOST: FilterFlagsType = 1 << 1;
-    const BIT_VERIFYSTATUS: FilterFlagsType = 1 << 2;
-    const BIT_NATIVE_CA_STORE: FilterFlagsType = 1 << 3;
-    const BIT_CACHE_SESSION: FilterFlagsType = 1 << 4;
-    const BIT_DEEP_COPY: FilterFlagsType = 1 << 5;
-    const BIT_EARLYDATA: FilterFlagsType = 1 << 6;
-    const BIT_AUTO_CLIENT_CERT: FilterFlagsType = 1 << 7;
-    const BIT_ENABLE_BEAST: FilterFlagsType = 1 << 8;
-    const BIT_NO_PARTIALCHAIN: FilterFlagsType = 1 << 9;
-    const BIT_NO_REVOKE: FilterFlagsType = 1 << 10;
-    const BIT_REVOKE_BEST_EFFORT: FilterFlagsType = 1 << 11;
+    pub const BIT_VERIFYPEER: FilterFlagsType = 1 << 0;
+    pub const BIT_VERIFYHOST: FilterFlagsType = 1 << 1;
+    pub const BIT_VERIFYSTATUS: FilterFlagsType = 1 << 2;
+    pub const BIT_NATIVE_CA_STORE: FilterFlagsType = 1 << 3;
+    pub const BIT_CACHE_SESSION: FilterFlagsType = 1 << 4;
+    pub const BIT_DEEP_COPY: FilterFlagsType = 1 << 5;
+    pub const BIT_EARLYDATA: FilterFlagsType = 1 << 6;
+    pub const BIT_AUTO_CLIENT_CERT: FilterFlagsType = 1 << 7;
+    pub const BIT_ENABLE_BEAST: FilterFlagsType = 1 << 8;
+    pub const BIT_NO_PARTIALCHAIN: FilterFlagsType = 1 << 9;
+    pub const BIT_NO_REVOKE: FilterFlagsType = 1 << 10;
+    pub const BIT_REVOKE_BEST_EFFORT: FilterFlagsType = 1 << 11;
 
     pub inline fn getFlag(self: *const SslFilterConfig, mask: FilterFlagsType) bool {
         return (self.flags & mask) != 0;
@@ -253,14 +253,14 @@ pub const SslEasyConfig = extern struct {
     _win_pad: if (builtin.os.tag == .windows) [2]u8 else [0]u8 = if (builtin.os.tag == .windows) .{ 0, 0 } else .{},
     flags: EasyFlagsType,
 
-    const BIT_VERIFYPEER: EasyFlagsType = 1 << 0;
-    const BIT_VERIFYHOST: EasyFlagsType = 1 << 1;
-    const BIT_VERIFYSTATUS: EasyFlagsType = 1 << 2;
-    const BIT_CACHE_SESSION: EasyFlagsType = 1 << 3;
-    const BIT_CERTINFO: EasyFlagsType = 1 << 4;
-    const BIT_CUSTOM_CAFILE: EasyFlagsType = 1 << 5;
-    const BIT_CUSTOM_CAPATH: EasyFlagsType = 1 << 6;
-    const BIT_CUSTOM_CABLOB: EasyFlagsType = 1 << 7;
+    pub const BIT_VERIFYPEER: EasyFlagsType = 1 << 0;
+    pub const BIT_VERIFYHOST: EasyFlagsType = 1 << 1;
+    pub const BIT_VERIFYSTATUS: EasyFlagsType = 1 << 2;
+    pub const BIT_CACHE_SESSION: EasyFlagsType = 1 << 3;
+    pub const BIT_CERTINFO: EasyFlagsType = 1 << 4;
+    pub const BIT_CUSTOM_CAFILE: EasyFlagsType = 1 << 5;
+    pub const BIT_CUSTOM_CAPATH: EasyFlagsType = 1 << 6;
+    pub const BIT_CUSTOM_CABLOB: EasyFlagsType = 1 << 7;
 
     pub inline fn getFlag(self: *const SslEasyConfig, mask: EasyFlagsType) bool {
         return (self.flags & mask) != 0;
@@ -527,7 +527,28 @@ pub export fn Curl_ssl_conn_config_update_zig(
     if (dest) |d| {
         d.setFlag(SslFilterConfig.BIT_VERIFYHOST, src.getFlag(SslEasyConfig.BIT_VERIFYHOST));
         d.setFlag(SslFilterConfig.BIT_VERIFYPEER, src.getFlag(SslEasyConfig.BIT_VERIFYPEER));
+        d.setFlag(SslFilterConfig.BIT_VERIFYSTATUS, src.getFlag(SslEasyConfig.BIT_VERIFYSTATUS));
     }
+}
+
+fn peersEqual(p1_raw: ?*const anyopaque, p2_raw: ?*const anyopaque) bool {
+    const p1_ptr = p1_raw orelse return false;
+    const p2_ptr = p2_raw orelse return false;
+    if (p1_ptr == p2_ptr) return true;
+    if (builtin.output_mode == .Lib) {
+        return c_ext.Curl_peer_equal(p1_ptr, p2_ptr);
+    }
+    const p1: *const CurlPeer = @ptrCast(@alignCast(p1_ptr));
+    const p2: *const CurlPeer = @ptrCast(@alignCast(p2_ptr));
+    if (p1.scheme != p2.scheme or p1.port != p2.port or p1.scopeid != p2.scopeid or (p1.flags & 0x7) != (p2.flags & 0x7))
+        return false;
+    if (p1.scopeid == 0 and !primitives.Curl_safecmp(p1.zoneid, p2.zoneid))
+        return false;
+    const unix_socket = (p1.flags & 1) != 0;
+    if (unix_socket) {
+        return std.mem.eql(u8, std.mem.span(p1.hostname), std.mem.span(p2.hostname));
+    }
+    return primitives.curl_strequal(p1.hostname, p2.hostname) != 0;
 }
 
 fn sslEasyConfigComplOptions(
@@ -544,18 +565,9 @@ fn sslEasyConfigComplOptions(
     sslfc.setFlag(SslFilterConfig.BIT_VERIFYSTATUS, sslc.getFlag(SslEasyConfig.BIT_VERIFYSTATUS));
     sslfc.setFlag(SslFilterConfig.BIT_CACHE_SESSION, sslc.getFlag(SslEasyConfig.BIT_CACHE_SESSION));
 
-    var peer_differs = false;
-    if (builtin.output_mode == .Lib) {
-        if (initial_origin != null and origin != null and !c_ext.Curl_peer_equal(origin, initial_origin)) {
-            peer_differs = true;
-        }
-    }
-    if (peer_differs) {
-        sslfc.setFlag(SslFilterConfig.BIT_EARLYDATA, false);
-    } else {
-        sslfc.setFlag(SslFilterConfig.BIT_EARLYDATA, (sslc.ssl_options & CURLSSLOPT_EARLYDATA) != 0);
-    }
-    sslfc.setFlag(SslFilterConfig.BIT_AUTO_CLIENT_CERT, (sslc.ssl_options & CURLSSLOPT_AUTO_CLIENT_CERT) != 0);
+    const same_peer = peersEqual(origin, initial_origin);
+    sslfc.setFlag(SslFilterConfig.BIT_EARLYDATA, (sslc.ssl_options & CURLSSLOPT_EARLYDATA) != 0);
+    sslfc.setFlag(SslFilterConfig.BIT_AUTO_CLIENT_CERT, same_peer and (sslc.ssl_options & CURLSSLOPT_AUTO_CLIENT_CERT) != 0);
     sslfc.setFlag(SslFilterConfig.BIT_ENABLE_BEAST, (sslc.ssl_options & CURLSSLOPT_ALLOW_BEAST) != 0);
     sslfc.setFlag(SslFilterConfig.BIT_NO_REVOKE, (sslc.ssl_options & CURLSSLOPT_NO_REVOKE) != 0);
     sslfc.setFlag(SslFilterConfig.BIT_NO_PARTIALCHAIN, (sslc.ssl_options & CURLSSLOPT_NO_PARTIALCHAIN) != 0);
@@ -629,17 +641,29 @@ pub export fn Curl_ssl_filter_config_tmp_init_zig(
     ssl_origin.issuercert_blob = blobs[BLOB_SSL_ISSUERCERT];
     ssl_origin.cipher_list = strsetGet(strings, STRING_SSL_CIPHER_LIST);
     ssl_origin.cipher_list13 = strsetGet(strings, STRING_SSL_CIPHER13_LIST);
-    ssl_origin.pinned_key = strsetGet(strings, STRING_SSL_PINNEDPUBLICKEY);
-    ssl_origin.cert_blob = blobs[BLOB_CERT];
     ssl_origin.ca_info_blob = blobs[BLOB_CAINFO];
     ssl_origin.curves = strsetGet(strings, @intCast(str_ec_curves_id));
     ssl_origin.signature_algorithms = strsetGet(strings, @intCast(str_sig_algs_id));
-    ssl_origin.clientcert = strsetGet(strings, STRING_CERT);
-    ssl_origin.key = strsetGet(strings, STRING_KEY);
-    ssl_origin.key_blob = blobs[BLOB_KEY];
-    ssl_origin.cert_type = strsetGet(strings, STRING_CERT_TYPE);
-    ssl_origin.key_type = strsetGet(strings, STRING_KEY_TYPE);
-    ssl_origin.key_passwd = strsetGet(strings, STRING_KEY_PASSWD);
+
+    if (peersEqual(initial_origin, origin)) {
+        ssl_origin.pinned_key = strsetGet(strings, STRING_SSL_PINNEDPUBLICKEY);
+        ssl_origin.cert_blob = blobs[BLOB_CERT];
+        ssl_origin.cert_type = strsetGet(strings, STRING_CERT_TYPE);
+        ssl_origin.key = strsetGet(strings, STRING_KEY);
+        ssl_origin.key_type = strsetGet(strings, STRING_KEY_TYPE);
+        ssl_origin.key_passwd = strsetGet(strings, STRING_KEY_PASSWD);
+        ssl_origin.clientcert = strsetGet(strings, STRING_CERT);
+        ssl_origin.key_blob = blobs[BLOB_KEY];
+    } else {
+        ssl_origin.pinned_key = null;
+        ssl_origin.cert_blob = null;
+        ssl_origin.cert_type = null;
+        ssl_origin.key = null;
+        ssl_origin.key_type = null;
+        ssl_origin.key_passwd = null;
+        ssl_origin.clientcert = null;
+        ssl_origin.key_blob = null;
+    }
 
     if (proxy_sslc) |psslc| {
         if (ssl_proxy) |pssl_proxy| {
@@ -685,8 +709,8 @@ pub export fn Curl_ssl_filter_config_tmp_init_zig(
             pssl_proxy.pinned_key = strsetGet(strings, STRING_SSL_PINNEDPUBLICKEY_PROXY);
             pssl_proxy.cert_blob = blobs[BLOB_CERT_PROXY];
             pssl_proxy.ca_info_blob = blobs[BLOB_CAINFO_PROXY];
-            pssl_proxy.curves = strsetGet(strings, @intCast(str_ec_curves_id));
-            pssl_proxy.signature_algorithms = strsetGet(strings, @intCast(str_sig_algs_id));
+            pssl_proxy.curves = null;
+            pssl_proxy.signature_algorithms = null;
             pssl_proxy.clientcert = strsetGet(strings, STRING_CERT_PROXY);
             pssl_proxy.key = strsetGet(strings, STRING_KEY_PROXY);
             pssl_proxy.key_blob = blobs[BLOB_KEY_PROXY];
@@ -3259,4 +3283,137 @@ test "SslFilterConfig cloning, matching, and peer key generation (unit3303 & uni
     const k2_slice = std.mem.span(key2.?);
     try std.testing.expectEqualStrings(k1_slice, k2_slice);
     try std.testing.expect(std.mem.startsWith(u8, k1_slice, "https:example.com:443:KEY-V3:"));
+}
+
+test "Curl_ssl_conn_config_update_zig updates verifypeer, verifyhost, and verifystatus" {
+    var easy_cfg: SslEasyConfig = undefined;
+    Curl_ssl_config_init(&easy_cfg);
+    easy_cfg.setFlag(SslEasyConfig.BIT_VERIFYPEER, false);
+    easy_cfg.setFlag(SslEasyConfig.BIT_VERIFYHOST, false);
+    easy_cfg.setFlag(SslEasyConfig.BIT_VERIFYSTATUS, true);
+
+    var filter_cfg: SslFilterConfig = std.mem.zeroes(SslFilterConfig);
+    filter_cfg.setFlag(SslFilterConfig.BIT_VERIFYPEER, true);
+    filter_cfg.setFlag(SslFilterConfig.BIT_VERIFYHOST, true);
+    filter_cfg.setFlag(SslFilterConfig.BIT_VERIFYSTATUS, false);
+
+    Curl_ssl_conn_config_update_zig(&easy_cfg, &filter_cfg);
+    try std.testing.expect(!filter_cfg.verifypeer());
+    try std.testing.expect(!filter_cfg.verifyhost());
+    try std.testing.expect(filter_cfg.verifystatus());
+
+    easy_cfg.setFlag(SslEasyConfig.BIT_VERIFYPEER, true);
+    easy_cfg.setFlag(SslEasyConfig.BIT_VERIFYHOST, true);
+    easy_cfg.setFlag(SslEasyConfig.BIT_VERIFYSTATUS, false);
+
+    Curl_ssl_conn_config_update_zig(&easy_cfg, &filter_cfg);
+    try std.testing.expect(filter_cfg.verifypeer());
+    try std.testing.expect(filter_cfg.verifyhost());
+    try std.testing.expect(!filter_cfg.verifystatus());
+}
+
+test "Curl_ssl_filter_config_tmp_init_zig gates client certs and pinned key on origin equality" {
+    var sslc: SslEasyConfig = undefined;
+    Curl_ssl_config_init(&sslc);
+    sslc.ssl_options = CURLSSLOPT_AUTO_CLIENT_CERT | CURLSSLOPT_EARLYDATA;
+
+    var proxy_sslc: SslEasyConfig = undefined;
+    Curl_ssl_config_init(&proxy_sslc);
+    proxy_sslc.ssl_options = CURLSSLOPT_AUTO_CLIENT_CERT;
+
+    const u8_strset_init = @extern(*const fn (*collections.u8_strset) callconv(.c) void, .{ .name = "Curl_u8_strset_init" });
+    const u8_strset_clear = @extern(*const fn (*collections.u8_strset) callconv(.c) void, .{ .name = "Curl_u8_strset_clear" });
+    var strings: collections.u8_strset = undefined;
+    u8_strset_init(&strings);
+    defer u8_strset_clear(&strings);
+
+    try std.testing.expectEqual(CURLE_OK, collections.u8_strset_set(&strings, STRING_CERT, "client.pem"));
+    try std.testing.expectEqual(CURLE_OK, collections.u8_strset_set(&strings, STRING_CERT_TYPE, "PEM"));
+    try std.testing.expectEqual(CURLE_OK, collections.u8_strset_set(&strings, STRING_KEY, "client.key"));
+    try std.testing.expectEqual(CURLE_OK, collections.u8_strset_set(&strings, STRING_KEY_TYPE, "PEM"));
+    try std.testing.expectEqual(CURLE_OK, collections.u8_strset_set(&strings, STRING_KEY_PASSWD, "secret"));
+    try std.testing.expectEqual(CURLE_OK, collections.u8_strset_set(&strings, STRING_SSL_PINNEDPUBLICKEY, "sha256//abc="));
+    try std.testing.expectEqual(CURLE_OK, collections.u8_strset_set(&strings, 50, "X25519:P-256"));
+    try std.testing.expectEqual(CURLE_OK, collections.u8_strset_set(&strings, 51, "ecdsa_secp256r1_sha256"));
+
+    const blob_data = "BLOB-DATA";
+    var cert_blob = CurlBlob{ .data = blob_data.ptr, .len = blob_data.len, .flags = 1 };
+    var key_blob = CurlBlob{ .data = blob_data.ptr, .len = blob_data.len, .flags = 1 };
+    var blobs: [8]?*CurlBlob = .{ &cert_blob, &key_blob, null, null, null, null, null, null };
+
+    const scheme = CurlScheme{ .name = "https" };
+    var origin1 = CurlPeer{ .scheme = &scheme, .hostname = "origin1.example.com", .port = 443 };
+    var origin2 = CurlPeer{ .scheme = &scheme, .hostname = "origin2.example.com", .port = 443 };
+
+    // Same origin: client cert, key, pinned_key, and auto_client_cert are preserved
+    var ssl_same: SslFilterConfig = std.mem.zeroes(SslFilterConfig);
+    var ssl_proxy: SslFilterConfig = std.mem.zeroes(SslFilterConfig);
+    try std.testing.expectEqual(
+        CURLE_OK,
+        Curl_ssl_filter_config_tmp_init_zig(
+            null,
+            &origin1,
+            &origin1,
+            &sslc,
+            &proxy_sslc,
+            &strings,
+            &blobs,
+            &ssl_same,
+            &ssl_proxy,
+            null,
+            null,
+            false,
+            50,
+            51,
+        ),
+    );
+    try std.testing.expect(ssl_same.clientcert != null);
+    try std.testing.expect(ssl_same.cert_type != null);
+    try std.testing.expect(ssl_same.key != null);
+    try std.testing.expect(ssl_same.key_type != null);
+    try std.testing.expect(ssl_same.key_passwd != null);
+    try std.testing.expect(ssl_same.pinned_key != null);
+    try std.testing.expect(ssl_same.cert_blob == &cert_blob);
+    try std.testing.expect(ssl_same.key_blob == &key_blob);
+    try std.testing.expect(ssl_same.getFlag(SslFilterConfig.BIT_AUTO_CLIENT_CERT));
+    try std.testing.expect(ssl_same.getFlag(SslFilterConfig.BIT_EARLYDATA));
+    try std.testing.expect(ssl_same.curves != null);
+    try std.testing.expect(ssl_same.signature_algorithms != null);
+
+    // Proxy config does not inherit origin curves, signature_algorithms, or auto_client_cert
+    try std.testing.expect(!ssl_proxy.getFlag(SslFilterConfig.BIT_AUTO_CLIENT_CERT));
+    try std.testing.expect(ssl_proxy.curves == null);
+    try std.testing.expect(ssl_proxy.signature_algorithms == null);
+
+    // Cross-origin redirect: client cert, key, pinned_key, and auto_client_cert are cleared
+    var ssl_diff: SslFilterConfig = std.mem.zeroes(SslFilterConfig);
+    try std.testing.expectEqual(
+        CURLE_OK,
+        Curl_ssl_filter_config_tmp_init_zig(
+            null,
+            &origin2,
+            &origin1,
+            &sslc,
+            null,
+            &strings,
+            &blobs,
+            &ssl_diff,
+            null,
+            null,
+            null,
+            false,
+            50,
+            51,
+        ),
+    );
+    try std.testing.expect(ssl_diff.clientcert == null);
+    try std.testing.expect(ssl_diff.cert_type == null);
+    try std.testing.expect(ssl_diff.key == null);
+    try std.testing.expect(ssl_diff.key_type == null);
+    try std.testing.expect(ssl_diff.key_passwd == null);
+    try std.testing.expect(ssl_diff.pinned_key == null);
+    try std.testing.expect(ssl_diff.cert_blob == null);
+    try std.testing.expect(ssl_diff.key_blob == null);
+    try std.testing.expect(!ssl_diff.getFlag(SslFilterConfig.BIT_AUTO_CLIENT_CERT));
+    try std.testing.expect(ssl_diff.getFlag(SslFilterConfig.BIT_EARLYDATA));
 }

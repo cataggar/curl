@@ -1365,7 +1365,8 @@ const apple = struct {
         if (mock_api) |api| return api;
         if (!builtin.os.tag.isDarwin()) return null;
 
-        if (builtin.output_mode == .Lib and backend_options.ssl == .sectransport) {
+        const use_apple_sectrust = backend_options.ssl == .openssl and (backend_options.apple_sectrust orelse builtin.os.tag.isDarwin());
+        if (builtin.output_mode == .Lib and use_apple_sectrust) {
             return .{
                 .get_filter_config = &darwin_extern.Curl_ssl_cf_get_filter_config,
                 .CFStringCreateWithCString = &darwin_extern.CFStringCreateWithCString,

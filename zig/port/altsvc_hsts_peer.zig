@@ -100,7 +100,7 @@ pub const CURLPROXY_SOCKS5_HOSTNAME: u8 = 7;
 pub const CURLPROXY_HTTPS3: u8 = 8;
 
 pub const CURL_DEFAULT_PROXY_PORT: u16 = 1080;
-pub const SSLSUPP_HTTPS_PROXY: c_uint = 1 << 2;
+pub const SSLSUPP_HTTPS_PROXY: c_uint = 1 << 4;
 
 pub const PROTOPT_SSL: u32 = 1 << 0;
 pub const PROTOPT_NONETWORK: u32 = 1 << 4;

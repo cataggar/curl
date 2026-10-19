@@ -532,9 +532,13 @@ pub const SSLSUPP_HTTPS_PROXY: c_uint = 1 << 4;
 pub const SSLSUPP_TLS13_CIPHERSUITES: c_uint = 1 << 5;
 pub const SSLSUPP_CAINFO_BLOB: c_uint = 1 << 6;
 pub const SSLSUPP_ECH: c_uint = 1 << 7;
-pub const SSLSUPP_CIPHER_LIST: c_uint = 1 << 8;
-pub const SSLSUPP_CA_CACHE: c_uint = 1 << 9;
-pub const SSLSUPP_KEYLOG: c_uint = 1 << 10;
+pub const SSLSUPP_CA_CACHE: c_uint = 1 << 8;
+pub const SSLSUPP_CIPHER_LIST: c_uint = 1 << 9;
+pub const SSLSUPP_SIGNATURE_ALGORITHMS: c_uint = 1 << 10;
+pub const SSLSUPP_ISSUERCERT: c_uint = 1 << 11;
+pub const SSLSUPP_SSL_EC_CURVES: c_uint = 1 << 12;
+pub const SSLSUPP_CRLFILE: c_uint = 1 << 13;
+pub const SSLSUPP_ISSUERCERT_BLOB: c_uint = 1 << 14;
 
 pub const OptionalSslBackendDescriptor = struct {
     info: curl_ssl_backend,
@@ -551,9 +555,11 @@ pub const Curl_ssl_gnutls_desc = OptionalSslBackendDescriptor{
         SSLSUPP_CERTINFO |
         SSLSUPP_PINNEDPUBKEY |
         SSLSUPP_HTTPS_PROXY |
-        SSLSUPP_CAINFO_BLOB |
-        SSLSUPP_KEYLOG |
-        SSLSUPP_CIPHER_LIST,
+        SSLSUPP_CA_CACHE |
+        SSLSUPP_CIPHER_LIST |
+        SSLSUPP_ISSUERCERT |
+        SSLSUPP_CRLFILE |
+        SSLSUPP_TLS13_CIPHERSUITES,
 };
 
 /// Rustls backend descriptor (`Curl_ssl_rustls` in `lib/vtls/rustls.c`).
@@ -563,11 +569,13 @@ pub const Curl_ssl_rustls_desc = OptionalSslBackendDescriptor{
         .name = "rustls",
     },
     .supports = SSLSUPP_CAINFO_BLOB |
+        SSLSUPP_CA_PATH |
+        SSLSUPP_CERTINFO |
         SSLSUPP_HTTPS_PROXY |
         SSLSUPP_CIPHER_LIST |
         SSLSUPP_TLS13_CIPHERSUITES |
-        SSLSUPP_PINNEDPUBKEY |
-        SSLSUPP_KEYLOG,
+        SSLSUPP_SSL_EC_CURVES |
+        SSLSUPP_PINNEDPUBKEY,
 };
 
 /// wolfSSL backend descriptor (`Curl_ssl_wolfssl` in `lib/vtls/wolfssl.c`).
@@ -578,13 +586,15 @@ pub const Curl_ssl_wolfssl_desc = OptionalSslBackendDescriptor{
     },
     .supports = SSLSUPP_CA_PATH |
         SSLSUPP_CAINFO_BLOB |
+        SSLSUPP_ISSUERCERT_BLOB |
         SSLSUPP_PINNEDPUBKEY |
         SSLSUPP_SSL_CTX |
         SSLSUPP_TLS13_CIPHERSUITES |
         SSLSUPP_HTTPS_PROXY |
         SSLSUPP_CIPHER_LIST |
         SSLSUPP_CA_CACHE |
-        SSLSUPP_KEYLOG,
+        SSLSUPP_CRLFILE |
+        SSLSUPP_ECH,
 };
 
 // ============================================================================

@@ -19,7 +19,7 @@ const ftp = @import("ftp.zig");
 const is_windows = builtin.os.tag == .windows;
 const has_ssl_backend = switch (backend_options.ssl) {
     .openssl, .mbedtls, .schannel => true,
-    .none, .sectransport => false,
+    .none => false,
 };
 
 pub const CURLcode = c_uint;

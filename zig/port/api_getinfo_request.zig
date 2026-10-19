@@ -10,7 +10,7 @@ const os_leaf = @import("os_leaf.zig");
 
 const use_ssl = switch (backend_options.ssl) {
     .openssl, .mbedtls, .schannel => true,
-    .none, .sectransport => false,
+    .none => false,
 };
 
 pub const CURLcode = c_uint;
