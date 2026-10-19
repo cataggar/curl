@@ -17,7 +17,6 @@ pub const c_sources = [_][]const u8{
     // LIB_CFILES
     "lib/http.c",
     "lib/multi.c",
-    "lib/url.c",
 };
 
 pub fn createConfigHeader(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Step.ConfigHeader {
