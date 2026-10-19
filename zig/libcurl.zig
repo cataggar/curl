@@ -15,10 +15,8 @@ pub const c_flags = [_][]const u8{
 
 pub const c_sources = [_][]const u8{
     // LIB_CFILES
-    "lib/cf-h2-proxy.c",
     "lib/ftp.c",
     "lib/http.c",
-    "lib/http2.c",
     "lib/multi.c",
     "lib/sendf.c",
     "lib/setopt.c",
