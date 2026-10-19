@@ -1523,7 +1523,7 @@ extern fn Curl_HMAC_final(ctx: *HmacCtx, result: [*]u8) callconv(.c) c_int;
 extern fn Curl_http_method(
     data: ?*Curl_easy,
     method: *?[*:0]const u8,
-    reqp: *c_int,
+    reqp: *c_uint,
 ) callconv(.c) void;
 extern fn Curl_checkheaders(
     data: ?*const Curl_easy,
@@ -1637,7 +1637,7 @@ fn httpsig_resolve_derived(
     if (std.mem.eql(u8, name_slice, "@method")) {
         var method: ?[*:0]const u8 = method_override;
         if (method == null and data != null) {
-            var httpreq: c_int = 0;
+            var httpreq: c_uint = 0;
             Curl_http_method(data, &method, &httpreq);
         }
         return curlx_dyn_add(val_buf, method orelse "GET");

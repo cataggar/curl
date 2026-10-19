@@ -239,7 +239,7 @@ extern fn Curl_http_input_auth(data: ?*Curl_easy, proxy: bool, auth: [*:0]const 
 extern fn Curl_http_auth_act(data: ?*Curl_easy) callconv(.c) CURLcode;
 extern fn Curl_verify_header(data: ?*Curl_easy, hd: [*]const u8, hdlen: usize) callconv(.c) CURLcode;
 extern fn Curl_bump_headersize(data: ?*Curl_easy, delta: usize, connect_only: bool) callconv(.c) CURLcode;
-extern fn Curl_http_to_fold(rbuf: *dynbuf) callconv(.c) CURLcode;
+extern fn Curl_http_to_fold(rbuf: *dynbuf) callconv(.c) void;
 extern fn Curl_client_write(data: ?*Curl_easy, wtype: c_int, buf: [*]const u8, blen: usize) callconv(.c) CURLcode;
 extern fn Curl_client_reset(data: ?*Curl_easy) callconv(.c) void;
 extern fn Curl_creader_set_null(data: ?*Curl_easy) callconv(.c) CURLcode;
@@ -2131,7 +2131,7 @@ fn recv_CONNECT_resp(
 
         if (ts.maybe_folded) {
             if (isBlank(byte)) {
-                _ = Curl_http_to_fold(&ts.rcvbuf);
+                Curl_http_to_fold(&ts.rcvbuf);
                 ts.leading_unfold = true;
             } else {
                 result = single_header(cf, data, ts);
