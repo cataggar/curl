@@ -337,6 +337,7 @@ const FIELD_UPLOAD_FLAGS: c_int = 63;
 const FIELD_GSSAPI_DELEGATION: c_int = 64;
 
 const PTR_SET_STR_COPYPOSTFIELDS: c_int = 1;
+const PTR_SET_POSTFIELDS: c_int = 2;
 const PTR_DATA_HSTS: c_int = 3;
 const PTR_DATA_SHARE: c_int = 4;
 const PTR_SHARE_HSTS: c_int = 5;
@@ -858,9 +859,21 @@ pub export fn Curl_freeset(data: *Curl_easy) callconv(.c) void {
         easyStrClear0(data, STRING_PROXYPASSWORD);
         easyStrClear0(data, STRING_KEY_PASSWD_PROXY);
     }
-    Curl_u8_strset_clear(Curl_easy_strset_ptr(data));
+    const strset = Curl_easy_strset_ptr(data);
+    const slot_cnt: usize = @as(usize, 1) << @intCast(strset.slotbits);
+    for (0..slot_cnt) |i| {
+        if (strset.data[i]) |s| {
+            mem.freeSecretZ(s);
+            strset.data[i] = null;
+        }
+    }
+    mem.secureZero(@ptrCast(strset.data), slot_cnt * @sizeOf(?[*:0]u8));
+    Curl_u8_strset_clear(strset);
 
     if (Curl_setopt_get_ptr(data, PTR_SET_STR_COPYPOSTFIELDS)) |p| {
+        if (Curl_setopt_get_ptr(data, PTR_SET_POSTFIELDS) == p) {
+            Curl_setopt_set_ptr(data, PTR_SET_POSTFIELDS, null);
+        }
         mem.free(p);
         Curl_setopt_set_ptr(data, PTR_SET_STR_COPYPOSTFIELDS, null);
     }
@@ -869,7 +882,15 @@ pub export fn Curl_freeset(data: *Curl_easy) callconv(.c) void {
     while (j < BLOB_LAST) : (j += 1) {
         const bptr = Curl_easy_blob_ptr(data, j);
         if (bptr.*) |b| {
-            mem.free(@ptrCast(b));
+            const copy = (b.flags & 1) != 0;
+            if (copy and b.len > 0) {
+                if (b.data) |bdata| {
+                    mem.secureZero(bdata, b.len);
+                }
+            }
+            const blob_total = @sizeOf(curl_blob) +| (if (copy) b.len else 0);
+            mem.secureZero(@ptrCast(b), blob_total);
+            mem.freeSized(@ptrCast(b), blob_total);
             bptr.* = null;
         }
     }
@@ -885,7 +906,7 @@ pub export fn Curl_freeset(data: *Curl_easy) callconv(.c) void {
         const mimepostp: ?*curl_mimepart = @ptrCast(@alignCast(Curl_setopt_get_ptr(data, PTR_SET_MIMEPOSTP)));
         Curl_mime_cleanpart(mimepostp);
         if (mimepostp) |mp| {
-            mem.free(@ptrCast(mp));
+            mem.freeSized(@ptrCast(mp), @sizeOf(curl_mimepart));
             Curl_setopt_set_ptr(data, PTR_SET_MIMEPOSTP, null);
         }
     }
@@ -920,6 +941,9 @@ pub export fn Curl_close(datap: ?*?*Curl_easy) callconv(.c) CURLcode {
     const dp = datap orelse return CURLE_OK;
     const data = dp.* orelse return CURLE_OK;
     dp.* = null;
+    if (Curl_zig_url_data_get_i64(data, DATA_I64_MAGIC) != CURLEASY_MAGIC_NUMBER) {
+        return CURLE_OK;
+    }
 
     const is_internal = Curl_zig_url_data_get_bit(data, DATA_BIT_INTERNAL);
     const multi: ?*Curl_multi = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_MULTI)));
@@ -929,8 +953,8 @@ pub export fn Curl_close(datap: ?*?*Curl_easy) callconv(.c) CURLcode {
         Curl_detach_connection(data);
         const multi_easy: ?*Curl_multi = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_MULTI_EASY)));
         if (!is_internal and multi_easy != null) {
-            _ = curl_multi_cleanup(multi_easy.?);
             Curl_zig_url_data_set_ptr(data, DATA_PTR_MULTI_EASY, null);
+            _ = curl_multi_cleanup(multi_easy.?);
         }
     }
 
@@ -939,7 +963,9 @@ pub export fn Curl_close(datap: ?*?*Curl_easy) callconv(.c) CURLcode {
     if (Curl_zig_url_data_get_bit(data, DATA_BIT_RANGESTRINGALLOC)) {
         if (Curl_zig_url_data_get_ptr(data, DATA_PTR_STATE_RANGE)) |r| {
             mem.free(r);
+            Curl_zig_url_data_set_ptr(data, DATA_PTR_STATE_RANGE, null);
         }
+        Curl_zig_url_data_set_bit(data, DATA_BIT_RANGESTRINGALLOC, false);
     }
 
     Curl_resolv_destroy_all(data);
@@ -1007,6 +1033,7 @@ pub export fn Curl_close(datap: ?*?*Curl_easy) callconv(.c) CURLcode {
         }
         const hstslist: ?*curl_slist = @ptrCast(@alignCast(Curl_setopt_get_ptr(data, PTR_STATE_HSTSLIST)));
         curl_slist_free_all(hstslist);
+        Curl_setopt_set_ptr(data, PTR_STATE_HSTSLIST, null);
     }
     if (!hasFlag(FLAG_DISABLE_HTTP) and !hasFlag(FLAG_DISABLE_DIGEST_AUTH)) {
         Curl_http_auth_cleanup_digest(
@@ -1054,7 +1081,7 @@ pub export fn Curl_close(datap: ?*?*Curl_easy) callconv(.c) CURLcode {
         const formp: ?*curl_mimepart = @ptrCast(@alignCast(Curl_setopt_get_ptr(data, PTR_STATE_FORMP)));
         Curl_mime_cleanpart(formp);
         if (formp) |fp| {
-            mem.free(@ptrCast(fp));
+            mem.freeSized(@ptrCast(fp), @sizeOf(curl_mimepart));
             Curl_setopt_set_ptr(data, PTR_STATE_FORMP, null);
         }
     }
@@ -1070,11 +1097,13 @@ pub export fn Curl_close(datap: ?*?*Curl_easy) callconv(.c) CURLcode {
     if (!hasFlag(FLAG_DISABLE_DIGEST_AUTH)) {
         if (Curl_zig_url_data_get_ptr(data, DATA_PTR_STATE_ENVPROXY)) |ep| {
             mem.free(ep);
+            Curl_zig_url_data_set_ptr(data, DATA_PTR_STATE_ENVPROXY, null);
         }
     }
 
-    curlx_memzero(@ptrCast(data), Curl_zig_url_easy_sizeof());
-    mem.free(@ptrCast(data));
+    const easy_size = Curl_zig_url_easy_sizeof();
+    mem.secureZero(@ptrCast(data), easy_size);
+    mem.freeSized(@ptrCast(data), easy_size);
     return CURLE_OK;
 }
 
@@ -1304,7 +1333,9 @@ pub export fn Curl_conn_free(data: ?*Curl_easy, conn: *connectdata) callconv(.c)
         }
     }
 
-    mem.free(@ptrCast(conn));
+    const conn_size = Curl_zig_url_conn_sizeof();
+    mem.secureZero(@ptrCast(conn), conn_size);
+    mem.freeSized(@ptrCast(conn), conn_size);
 }
 
 fn xfer_may_multiplex(data: *const Curl_easy, conn: *const connectdata) bool {
@@ -1811,7 +1842,9 @@ fn allocate_conn(data: *Curl_easy) ?*connectdata {
 
     if (easyStr(data, STRING_INTERFACE_OPT)) |if_opt| {
         const dup = mem.strdup(if_opt) orelse {
-            mem.free(@ptrCast(conn));
+            const conn_size = Curl_zig_url_conn_sizeof();
+            mem.secureZero(@ptrCast(conn), conn_size);
+            mem.freeSized(@ptrCast(conn), conn_size);
             return null;
         };
         Curl_zig_url_conn_set_ptr(conn, CONN_PTR_INTERFACE_OPTS, dup);
@@ -2095,8 +2128,8 @@ fn url_set_data_creds(data: *Curl_easy, uh: *CURLU) CURLcode {
         }
 
         if (udecoded) |p| mem.free(p);
-        if (pdecoded) |p| mem.free(p);
-        if (passwd) |p| mem.free(p);
+        mem.freeSecretZ(pdecoded);
+        mem.freeSecretZ(passwd);
         if (user) |p| mem.free(p);
 
         if (result != CURLE_OK) {
@@ -2249,7 +2282,7 @@ pub export fn Curl_parse_login_details(
             const oidx = osep_idx.?;
             obuf = curlx_memdup0(login + oidx + 1, olen) orelse {
                 mem.free(ubuf);
-                if (pbuf) |pb| mem.free(pb);
+                mem.freeSecretZ(pbuf);
                 return CURLE_OUT_OF_MEMORY;
             };
         }
@@ -2257,7 +2290,7 @@ pub export fn Curl_parse_login_details(
     }
 
     if (userp) |up| up.* = ubuf else mem.free(ubuf);
-    if (passwdp) |pp| pp.* = pbuf else if (pbuf) |pb| mem.free(pb);
+    if (passwdp) |pp| pp.* = pbuf else mem.freeSecretZ(pbuf);
     return CURLE_OK;
 }
 
