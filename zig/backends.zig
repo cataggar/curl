@@ -5,6 +5,9 @@ pub const SslBackend = enum {
     openssl,
     mbedtls,
     schannel,
+    gnutls,
+    rustls,
+    wolfssl,
 };
 
 pub const Options = struct {
@@ -68,10 +71,31 @@ pub fn applyCMacros(mod: *std.Build.Module, target: std.Build.ResolvedTarget, op
         },
         .mbedtls => {
             mod.addCMacro("USE_MBEDTLS", "1");
+            if (opts.ca_bundle == null and !opts.ca_fallback and target.result.os.tag == .linux) {
+                mod.addCMacro("CURL_CA_BUNDLE", "\"/etc/ssl/certs/ca-certificates.crt\"");
+            }
         },
         .schannel => {
             mod.addCMacro("USE_SCHANNEL", "1");
             mod.addCMacro("USE_WINDOWS_SSPI", "1");
+        },
+        .gnutls => {
+            mod.addCMacro("USE_GNUTLS", "1");
+            if (opts.ca_bundle == null and !opts.ca_fallback and target.result.os.tag == .linux) {
+                mod.addCMacro("CURL_CA_BUNDLE", "\"/etc/ssl/certs/ca-certificates.crt\"");
+            }
+        },
+        .rustls => {
+            mod.addCMacro("USE_RUSTLS", "1");
+            if (opts.ca_bundle == null and !opts.ca_fallback and target.result.os.tag == .linux) {
+                mod.addCMacro("CURL_CA_BUNDLE", "\"/etc/ssl/certs/ca-certificates.crt\"");
+            }
+        },
+        .wolfssl => {
+            mod.addCMacro("USE_WOLFSSL", "1");
+            if (opts.ca_bundle == null and !opts.ca_fallback and target.result.os.tag == .linux) {
+                mod.addCMacro("CURL_CA_BUNDLE", "\"/etc/ssl/certs/ca-certificates.crt\"");
+            }
         },
     }
 
@@ -116,6 +140,16 @@ pub fn linkBackends(mod: *std.Build.Module, target: std.Build.ResolvedTarget, op
             mod.linkSystemLibrary("crypt32", .{});
             mod.linkSystemLibrary("advapi32", .{});
             mod.linkSystemLibrary("bcrypt", .{});
+        },
+        .gnutls => {
+            mod.linkSystemLibrary("gnutls", .{});
+            mod.linkSystemLibrary("nettle", .{});
+        },
+        .rustls => {
+            mod.linkSystemLibrary("rustls", .{});
+        },
+        .wolfssl => {
+            mod.linkSystemLibrary("wolfssl", .{});
         },
     }
 

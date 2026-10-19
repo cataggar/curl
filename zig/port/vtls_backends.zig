@@ -10,12 +10,16 @@ const curlx_time_net = @import("curlx_time_net.zig");
 const vtls_core = @import("vtls_core.zig");
 const vtls_scache_asn1 = @import("vtls_scache_asn1.zig");
 const cfilters_progress = @import("cfilters_progress.zig");
+pub const vtls_gtls = @import("vtls_gtls.zig");
+pub const vtls_rustls = @import("vtls_rustls.zig");
+pub const vtls_wolfssl = @import("vtls_wolfssl.zig");
 
-const is_windows = builtin.os.tag == .windows;
+pub const is_windows = builtin.os.tag == .windows;
 pub const use_ssl = switch (backend_options.ssl) {
-    .openssl, .mbedtls, .schannel => true,
+    .openssl, .mbedtls, .schannel, .gnutls, .rustls, .wolfssl => true,
     .none => false,
 };
+pub const has_ssl = use_ssl;
 pub const use_apple_sectrust = backend_options.apple_sectrust orelse (backend_options.ssl == .openssl and builtin.os.tag.isDarwin());
 
 // ============================================================================
@@ -347,100 +351,146 @@ pub const CurlTlsSessionInfo = extern struct {
     backend: c_uint,
     internals: ?*anyopaque,
 };
+pub const CurlTlssessioninfo = CurlTlsSessionInfo;
 
-const c_ext = struct {
-    extern fn Curl_failf(data: ?*CurlEasy, fmt: [*:0]const u8, ...) callconv(.c) void;
-    extern fn Curl_infof(data: ?*CurlEasy, fmt: [*:0]const u8, ...) callconv(.c) void;
-    extern fn Curl_trc_cf_infof(data: ?*CurlEasy, cf: ?*CurlCfilter, fmt: [*:0]const u8, ...) callconv(.c) void;
-    extern fn Curl_trc_is_verbose_fn(data: ?*CurlEasy) callconv(.c) bool;
-    extern fn Curl_pgrsTime(data: ?*CurlEasy, id: c_int) callconv(.c) void;
-    extern fn Curl_pgrsTimeWas(data: ?*CurlEasy, timer: c_int, timestamp: CurlTime) callconv(.c) void;
-    extern fn Curl_pgrs_now(data: ?*CurlEasy) callconv(.c) *const CurlTime;
-    extern fn Curl_peer_link(pdest: *?*CurlPeer, src: ?*CurlPeer) callconv(.c) void;
-    extern fn Curl_peer_unlink(ppeer: *?*CurlPeer) callconv(.c) void;
-    extern fn curlx_inet_pton(af: c_int, src: [*:0]const u8, dst: *anyopaque) callconv(.c) c_int;
-    extern "c" fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) callconv(.c) ?*std.c.FILE;
-    extern "c" fn fclose(file: *std.c.FILE) callconv(.c) c_int;
-    extern "c" fn fseek(stream: *std.c.FILE, offset: c_long, whence: c_int) callconv(.c) c_int;
-    extern "c" fn ftell(stream: *std.c.FILE) callconv(.c) c_long;
-    extern "c" fn fread(ptr: *anyopaque, size: usize, nmemb: usize, stream: *std.c.FILE) callconv(.c) usize;
-    extern fn Curl_slist_append_nodup(list: ?*curl_slist, data: [*:0]u8) callconv(.c) ?*curl_slist;
-    extern fn curl_slist_free_all(list: ?*curl_slist) callconv(.c) void;
-    extern fn curlx_base64_decode(src: [*:0]const u8, outptr: *?[*]u8, outlen: *usize) callconv(.c) CURLcode;
-    extern fn curlx_base64_encode(inputbuff: ?[*]const u8, insize: usize, outptr: *?[*:0]u8, outlen: *usize) callconv(.c) CURLcode;
-    extern fn curl_msnprintf(buffer: [*]u8, maxlength: usize, format: [*:0]const u8, ...) callconv(.c) c_int;
-    extern fn curlx_strerror(err: c_int, buf: [*]u8, buflen: usize) callconv(.c) [*:0]const u8;
-    extern fn Curl_cert_hostcheck(match_pattern: [*:0]const u8, match_len: usize, hostname: [*:0]const u8, hostlen: usize) callconv(.c) bool;
-    extern fn Curl_timeleft_ms(data: ?*CurlEasy) callconv(.c) i64;
-    extern fn Curl_socket_check(readfd0: curl_socket_t, readfd1: curl_socket_t, writefd: curl_socket_t, timeout_ms: i64) callconv(.c) c_int;
+pub const c_ext = struct {
+    pub extern fn Curl_failf(data: ?*CurlEasy, fmt: [*:0]const u8, ...) callconv(.c) void;
+    pub extern fn Curl_infof(data: ?*CurlEasy, fmt: [*:0]const u8, ...) callconv(.c) void;
+    pub extern fn Curl_trc_cf_infof(data: ?*CurlEasy, cf: ?*CurlCfilter, fmt: [*:0]const u8, ...) callconv(.c) void;
+    pub extern fn Curl_trc_is_verbose_fn(data: ?*CurlEasy) callconv(.c) bool;
+    pub extern fn Curl_pgrsTime(data: ?*CurlEasy, id: c_int) callconv(.c) void;
+    pub extern fn Curl_pgrsTimeWas(data: ?*CurlEasy, timer: c_int, timestamp: CurlTime) callconv(.c) void;
+    pub extern fn Curl_pgrs_now(data: ?*CurlEasy) callconv(.c) *const CurlTime;
+    pub extern fn Curl_pgrsEarlyData(data: ?*CurlEasy, sent: i64) callconv(.c) void;
+    pub extern fn Curl_pgrsUpdate(data: ?*CurlEasy) callconv(.c) CURLcode;
+    pub extern fn Curl_peer_link(pdest: *?*CurlPeer, src: ?*CurlPeer) callconv(.c) void;
+    pub extern fn Curl_peer_unlink(ppeer: *?*CurlPeer) callconv(.c) void;
+    pub extern fn curlx_inet_pton(af: c_int, src: [*:0]const u8, dst: *anyopaque) callconv(.c) c_int;
+    pub extern "c" fn fopen(filename: [*:0]const u8, mode: [*:0]const u8) callconv(.c) ?*std.c.FILE;
+    pub extern "c" fn fclose(file: *std.c.FILE) callconv(.c) c_int;
+    pub extern "c" fn fseek(stream: *std.c.FILE, offset: c_long, whence: c_int) callconv(.c) c_int;
+    pub extern "c" fn ftell(stream: *std.c.FILE) callconv(.c) c_long;
+    pub extern "c" fn fread(ptr: *anyopaque, size: usize, nmemb: usize, stream: *std.c.FILE) callconv(.c) usize;
+    pub extern fn Curl_slist_append_nodup(list: ?*curl_slist, data: [*:0]u8) callconv(.c) ?*curl_slist;
+    pub extern fn curl_slist_free_all(list: ?*curl_slist) callconv(.c) void;
+    pub extern fn curlx_base64_decode(src: [*:0]const u8, outptr: *?[*]u8, outlen: *usize) callconv(.c) CURLcode;
+    pub extern fn curlx_base64_encode(inputbuff: ?[*]const u8, insize: usize, outptr: *?[*:0]u8, outlen: *usize) callconv(.c) CURLcode;
+    pub extern fn curl_msnprintf(buffer: [*]u8, maxlength: usize, format: [*:0]const u8, ...) callconv(.c) c_int;
+    pub extern fn curlx_strerror(err: c_int, buf: [*]u8, buflen: usize) callconv(.c) [*:0]const u8;
+    pub extern fn Curl_cert_hostcheck(match_pattern: [*:0]const u8, match_len: usize, hostname: [*:0]const u8, hostlen: usize) callconv(.c) bool;
+    pub extern fn Curl_timeleft_ms(data: ?*CurlEasy) callconv(.c) i64;
+    pub extern fn Curl_socket_check(readfd0: curl_socket_t, readfd1: curl_socket_t, writefd: curl_socket_t, timeout_ms: i64) callconv(.c) c_int;
 
-    extern fn Curl_cf_create(pcf: *?*CurlCfilter, cft: *const CurlCftype, ctx: ?*anyopaque) callconv(.c) CURLcode;
-    extern fn Curl_cf_def_cntrl(cf: *CurlCfilter, data: ?*CurlEasy, event: c_int, arg1: c_int, arg2: ?*anyopaque) callconv(.c) CURLcode;
-    extern fn Curl_cf_def_conn_is_alive(cf: *CurlCfilter, data: ?*CurlEasy, input_pending: *bool) callconv(.c) bool;
-    extern fn Curl_cf_def_conn_keep_alive(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) CURLcode;
-    extern fn Curl_cf_def_query(cf: *CurlCfilter, data: ?*CurlEasy, query: c_int, pres1: ?*c_int, pres2: ?*anyopaque) callconv(.c) CURLcode;
+    pub extern fn Curl_cf_create(pcf: *?*CurlCfilter, cft: *const CurlCftype, ctx: ?*anyopaque) callconv(.c) CURLcode;
+    pub extern fn Curl_cf_def_cntrl(cf: *CurlCfilter, data: ?*CurlEasy, event: c_int, arg1: c_int, arg2: ?*anyopaque) callconv(.c) CURLcode;
+    pub extern fn Curl_cf_def_conn_is_alive(cf: *CurlCfilter, data: ?*CurlEasy, input_pending: *bool) callconv(.c) bool;
+    pub extern fn Curl_cf_def_conn_keep_alive(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) CURLcode;
+    pub extern fn Curl_cf_def_query(cf: *CurlCfilter, data: ?*CurlEasy, query: c_int, pres1: ?*c_int, pres2: ?*anyopaque) callconv(.c) CURLcode;
 
-    extern fn Curl_conn_cf_add(data: ?*CurlEasy, conn: ?*ConnectData, sockindex: i8, cf: *CurlCfilter) callconv(.c) void;
-    extern fn Curl_conn_cf_insert_after(cf_at: *CurlCfilter, cf_new: *CurlCfilter) callconv(.c) void;
-    extern fn Curl_conn_cf_discard(pcf: *?*CurlCfilter, data: ?*CurlEasy) callconv(.c) void;
-    extern fn Curl_conn_cf_discard_chain(pcf: *?*CurlCfilter, data: ?*CurlEasy) callconv(.c) void;
-    extern fn Curl_conn_cf_connect(cf: ?*CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CURLcode;
-    extern fn Curl_conn_cf_adjust_pollset(cf: ?*CurlCfilter, data: ?*CurlEasy, ps: ?*EasyPollset) callconv(.c) void;
-    extern fn Curl_conn_cf_data_pending(cf: ?*CurlCfilter, data: ?*const CurlEasy) callconv(.c) bool;
-    extern fn Curl_conn_cf_send(cf: ?*CurlCfilter, data: ?*CurlEasy, buf: ?*const anyopaque, len: usize, eos: bool, pnwritten: *usize) callconv(.c) CURLcode;
-    extern fn Curl_conn_cf_recv(cf: ?*CurlCfilter, data: ?*CurlEasy, buf: [*]u8, len: usize, pnread: *usize) callconv(.c) CURLcode;
-    extern fn Curl_conn_cf_cntrl(cf: ?*CurlCfilter, data: ?*CurlEasy, ignore_result: bool, event: c_int, arg1: c_int, arg2: ?*anyopaque) callconv(.c) CURLcode;
-    extern fn Curl_conn_cf_get_socket(cf: ?*CurlCfilter, data: ?*CurlEasy) callconv(.c) curl_socket_t;
-    extern fn Curl_conn_cf_poll(cf: *CurlCfilter, data: ?*CurlEasy, timeout_ms: i64) callconv(.c) c_int;
-    extern fn Curl_conn_get_origin(conn: ?*ConnectData, sockindex: i8) callconv(.c) ?*CurlPeer;
-    extern fn Curl_conn_get_first_peer(conn: ?*ConnectData, sockindex: i8) callconv(.c) ?*CurlPeer;
-    extern fn Curl_conn_is_ip_connected(data: ?*CurlEasy, sockindex: i8) callconv(.c) bool;
+    pub extern fn Curl_conn_cf_add(data: ?*CurlEasy, conn: ?*ConnectData, sockindex: i8, cf: *CurlCfilter) callconv(.c) void;
+    pub extern fn Curl_conn_cf_insert_after(cf_at: *CurlCfilter, cf_new: *CurlCfilter) callconv(.c) void;
+    pub extern fn Curl_conn_cf_discard(pcf: *?*CurlCfilter, data: ?*CurlEasy) callconv(.c) void;
+    pub extern fn Curl_conn_cf_discard_chain(pcf: *?*CurlCfilter, data: ?*CurlEasy) callconv(.c) void;
+    pub extern fn Curl_conn_cf_connect(cf: ?*CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CURLcode;
+    pub extern fn Curl_conn_cf_adjust_pollset(cf: ?*CurlCfilter, data: ?*CurlEasy, ps: ?*EasyPollset) callconv(.c) void;
+    pub extern fn Curl_conn_cf_data_pending(cf: ?*CurlCfilter, data: ?*const CurlEasy) callconv(.c) bool;
+    pub extern fn Curl_conn_cf_send(cf: ?*CurlCfilter, data: ?*CurlEasy, buf: ?*const anyopaque, len: usize, eos: bool, pnwritten: *usize) callconv(.c) CURLcode;
+    pub extern fn Curl_conn_cf_recv(cf: ?*CurlCfilter, data: ?*CurlEasy, buf: [*]u8, len: usize, pnread: *usize) callconv(.c) CURLcode;
+    pub extern fn Curl_conn_cf_cntrl(cf: ?*CurlCfilter, data: ?*CurlEasy, ignore_result: bool, event: c_int, arg1: c_int, arg2: ?*anyopaque) callconv(.c) CURLcode;
+    pub extern fn Curl_conn_cf_get_socket(cf: ?*CurlCfilter, data: ?*CurlEasy) callconv(.c) curl_socket_t;
+    pub extern fn Curl_conn_cf_get_transport(cf: ?*CurlCfilter, data: ?*CurlEasy) callconv(.c) u8;
+    pub extern fn Curl_conn_cf_poll(cf: *CurlCfilter, data: ?*CurlEasy, timeout_ms: i64) callconv(.c) c_int;
+    pub extern fn Curl_conn_get_origin(conn: ?*ConnectData, sockindex: i8) callconv(.c) ?*CurlPeer;
+    pub extern fn Curl_conn_get_first_peer(conn: ?*ConnectData, sockindex: i8) callconv(.c) ?*CurlPeer;
+    pub extern fn Curl_conn_is_ip_connected(data: ?*CurlEasy, sockindex: i8) callconv(.c) bool;
+    pub extern fn Curl_conn_is_connect_only(conn: ?*const ConnectData) callconv(.c) bool;
+    pub extern fn Curl_h2_conn_is_connect_only(conn: ?*const ConnectData) callconv(.c) bool;
+    pub extern fn Curl_http_acc_conn_scheme_family(conn: ?*const ConnectData) callconv(.c) u64;
 
-    extern fn Curl_pollset_set(data: ?*CurlEasy, ps: ?*EasyPollset, sock: curl_socket_t, do_in: bool, do_out: bool) callconv(.c) CURLcode;
+    pub extern fn Curl_pollset_set(data: ?*CurlEasy, ps: ?*EasyPollset, sock: curl_socket_t, do_in: bool, do_out: bool) callconv(.c) CURLcode;
 
-    extern fn Curl_cshutdn_timeleft_ms(data: ?*CurlEasy, conn: ?*ConnectData, sockindex: i8) callconv(.c) i64;
-    extern fn Curl_cshutdn_start_timer(data: ?*CurlEasy, sockindex: i8, timeout_ms: i64) callconv(.c) void;
-    extern fn Curl_cshutdn_clear_timer(data: ?*CurlEasy, sockindex: i8) callconv(.c) void;
+    pub extern fn Curl_cshutdn_timeleft_ms(data: ?*CurlEasy, conn: ?*ConnectData, sockindex: i8) callconv(.c) i64;
+    pub extern fn Curl_cshutdn_start_timer(data: ?*CurlEasy, sockindex: i8, timeout_ms: i64) callconv(.c) void;
+    pub extern fn Curl_cshutdn_clear_timer(data: ?*CurlEasy, sockindex: i8) callconv(.c) void;
+
+    pub extern fn Curl_hash_pick(h: ?*anyopaque, key: ?*const anyopaque, key_len: usize) callconv(.c) ?*anyopaque;
+    pub extern fn Curl_hash_add(h: ?*anyopaque, key: ?*const anyopaque, key_len: usize, p: ?*anyopaque) callconv(.c) ?*anyopaque;
+    pub extern fn Curl_hash_add2(
+        h: ?*anyopaque,
+        key: ?*const anyopaque,
+        key_len: usize,
+        p: ?*anyopaque,
+        dtor: ?*const fn (key: *const anyopaque, key_len: usize, p: *anyopaque) callconv(.c) void,
+    ) callconv(.c) ?*anyopaque;
+    pub extern fn curlx_str_newline(linep: *?[*:0]const u8) callconv(.c) c_int;
+    pub extern fn curlx_str_number(linep: *[*:0]const u8, nump: *i64, max: i64) callconv(.c) c_int;
+    pub extern fn curlx_gmtime(t: i64, store: *anyopaque) callconv(.c) CURLcode;
+    pub extern fn Curl_extract_certinfo(data: ?*CurlEasy, certnum: c_int, beg: ?[*]const u8, end: ?[*]const u8) callconv(.c) CURLcode;
+    pub extern fn Curl_vtls_apple_verify(
+        cf: *CurlCfilter,
+        data: ?*CurlEasy,
+        peer: *const SslPeer,
+        num_certs: usize,
+        der_cb: *const fn (*CurlCfilter, ?*CurlEasy, ?*anyopaque, usize, *?[*]u8, *usize) callconv(.c) CURLcode,
+        cb_user_data: ?*anyopaque,
+        ocsp_buf: ?[*]const u8,
+        ocsp_len: usize,
+        require_ocsp: bool,
+    ) callconv(.c) CURLcode;
+    pub extern fn Curl_rand_bytes(data: ?*anyopaque, rnd: [*]u8, num: usize) callconv(.c) CURLcode;
+    pub extern fn Curl_rand_alnum(data: ?*anyopaque, rnd: [*]u8, num: usize) callconv(.c) CURLcode;
+
+    pub fn Curl_safefree(ptr: ?*?*anyopaque) callconv(.c) void {
+        if (ptr) |p| {
+            if (p.*) |val| {
+                mem.free(val);
+                p.* = null;
+            }
+        }
+    }
 
     // Accessor helpers in lib/url.c (#ifdef USE_SSL)
-    extern fn Curl_vtls_acc_data_certs(data: ?*CurlEasy) callconv(.c) ?*CurlCertinfo;
-    extern fn Curl_vtls_acc_data_conn(data: ?*CurlEasy) callconv(.c) ?*ConnectData;
-    extern fn Curl_vtls_acc_conn_cfilter(conn: ?*ConnectData, sockindex: i8) callconv(.c) ?*CurlCfilter;
-    extern fn Curl_vtls_acc_data_ssl_easy_config(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?*SslEasyConfig;
-    extern fn Curl_vtls_acc_conn_ssl_filter_config(conn: ?*ConnectData, is_proxy: bool) callconv(.c) ?*SslFilterConfig;
-    extern fn Curl_vtls_acc_cf_ssl_create_params(data: ?*CurlEasy, conn: ?*ConnectData, wanted: *u8, preferred: *u8, only_10: *bool, use_alpn: *bool) callconv(.c) void;
-    extern fn Curl_vtls_acc_cf_proxy_create_params(data: ?*CurlEasy, conn: ?*ConnectData, wanted: *u8, use_alpn: *bool) callconv(.c) void;
-    extern fn Curl_vtls_acc_conn_via_peer(conn: ?*ConnectData, sockindex: i8) callconv(.c) ?*CurlPeer;
-    extern fn Curl_vtls_acc_conn_set_multiplex(conn: ?*ConnectData, val: bool) callconv(.c) void;
-    extern fn Curl_vtls_acc_conn_set_httpversion_seen(conn: ?*ConnectData, ver: u8) callconv(.c) void;
-    extern fn Curl_vtls_acc_conn_set_proxy_ssl_connected(conn: ?*ConnectData, sockindex: i8, val: bool) callconv(.c) void;
-    extern fn Curl_vtls_acc_scache_params(data: ?*CurlEasy, pscache: *?*CurlSslScache, has_share_scache: *bool, ptrc_feat: *?*CurlTrcFeat) callconv(.c) void;
-    extern fn Curl_vtls_acc_get_scache(data: ?*CurlEasy) callconv(.c) ?*CurlSslScache;
-    extern fn Curl_vtls_acc_pinned_pubkey(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
-    extern fn Curl_vtls_acc_ssl_certinfo(data: ?*CurlEasy) callconv(.c) bool;
-    extern fn Curl_vtls_acc_ssl_fsslctx(data: ?*CurlEasy, pfsslctx: *?*const anyopaque, pfsslctxp: *?*anyopaque) callconv(.c) bool;
-    extern fn Curl_vtls_acc_ssl_key_passwd(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
-    extern fn Curl_vtls_acc_ssl_key(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
-    extern fn Curl_vtls_acc_ssl_key_type(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
-    extern fn Curl_vtls_acc_ssl_cert(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
-    extern fn Curl_vtls_acc_ssl_cert_type(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
-    extern fn Curl_vtls_acc_ssl_cert_blob(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?*const CurlBlob;
-    extern fn Curl_vtls_acc_ssl_ca_info_blob(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?*const CurlBlob;
-    extern fn Curl_vtls_acc_ssl_cainfo(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
-    extern fn Curl_vtls_acc_ssl_capath(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
-    extern fn Curl_vtls_acc_ssl_cipher_list(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
-    extern fn Curl_vtls_acc_ssl_cipher13_list(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
-    extern fn Curl_vtls_acc_ssl_ec_curves(data: ?*CurlEasy) callconv(.c) ?[*:0]const u8;
-    extern fn Curl_vtls_acc_ssl_signature_algorithms(data: ?*CurlEasy) callconv(.c) ?[*:0]const u8;
-    extern fn Curl_vtls_acc_ssl_crlfile(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
-    extern fn Curl_vtls_acc_ssl_issuercert(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
-    extern fn Curl_vtls_acc_ssl_issuercert_blob(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?*const CurlBlob;
-    extern fn Curl_vtls_acc_ssl_username(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
-    extern fn Curl_vtls_acc_ssl_password(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
-    extern fn Curl_vtls_acc_ssl_engine(data: ?*CurlEasy) callconv(.c) ?[*:0]const u8;
-    extern fn Curl_vtls_acc_ssl_engine_default(data: ?*CurlEasy) callconv(.c) bool;
-    extern fn Curl_vtls_acc_ssl_buffer_size(data: ?*CurlEasy) callconv(.c) c_int;
-    extern fn Curl_vtls_acc_ssl_ca_cache_timeout(data: ?*CurlEasy) callconv(.c) c_int;
+    pub extern fn Curl_vtls_acc_data_certs(data: ?*CurlEasy) callconv(.c) ?*CurlCertinfo;
+    pub extern fn Curl_vtls_acc_data_conn(data: ?*CurlEasy) callconv(.c) ?*ConnectData;
+    pub extern fn Curl_vtls_acc_conn_cfilter(conn: ?*ConnectData, sockindex: i8) callconv(.c) ?*CurlCfilter;
+    pub extern fn Curl_vtls_acc_multi_proto_hash(data: ?*CurlEasy) callconv(.c) ?*anyopaque;
+    pub extern fn Curl_vtls_acc_conn_get_ssl_context(conn: ?*ConnectData) callconv(.c) ?*anyopaque;
+    pub extern fn Curl_vtls_acc_conn_set_ssl_context(conn: ?*ConnectData, ctx: ?*anyopaque) callconv(.c) void;
+    pub extern fn Curl_vtls_acc_data_ssl_easy_config(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?*SslEasyConfig;
+    pub extern fn Curl_vtls_acc_conn_ssl_filter_config(conn: ?*ConnectData, is_proxy: bool) callconv(.c) ?*SslFilterConfig;
+    pub extern fn Curl_vtls_acc_cf_ssl_create_params(data: ?*CurlEasy, conn: ?*ConnectData, wanted: *u8, preferred: *u8, only_10: *bool, use_alpn: *bool) callconv(.c) void;
+    pub extern fn Curl_vtls_acc_cf_proxy_create_params(data: ?*CurlEasy, conn: ?*ConnectData, wanted: *u8, use_alpn: *bool) callconv(.c) void;
+    pub extern fn Curl_vtls_acc_conn_via_peer(conn: ?*ConnectData, sockindex: i8) callconv(.c) ?*CurlPeer;
+    pub extern fn Curl_vtls_acc_conn_set_multiplex(conn: ?*ConnectData, val: bool) callconv(.c) void;
+    pub extern fn Curl_vtls_acc_conn_set_httpversion_seen(conn: ?*ConnectData, ver: u8) callconv(.c) void;
+    pub extern fn Curl_vtls_acc_conn_set_proxy_ssl_connected(conn: ?*ConnectData, sockindex: i8, val: bool) callconv(.c) void;
+    pub extern fn Curl_vtls_acc_scache_params(data: ?*CurlEasy, pscache: *?*CurlSslScache, has_share_scache: *bool, ptrc_feat: *?*CurlTrcFeat) callconv(.c) void;
+    pub extern fn Curl_vtls_acc_get_scache(data: ?*CurlEasy) callconv(.c) ?*CurlSslScache;
+    pub extern fn Curl_vtls_acc_pinned_pubkey(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
+    pub extern fn Curl_vtls_acc_ssl_certinfo(data: ?*CurlEasy) callconv(.c) bool;
+    pub extern fn Curl_vtls_acc_ssl_fsslctx(data: ?*CurlEasy, pfsslctx: *?*const anyopaque, pfsslctxp: *?*anyopaque) callconv(.c) bool;
+    pub extern fn Curl_vtls_acc_ssl_key_passwd(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
+    pub extern fn Curl_vtls_acc_ssl_key(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
+    pub extern fn Curl_vtls_acc_ssl_key_type(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
+    pub extern fn Curl_vtls_acc_ssl_cert(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
+    pub extern fn Curl_vtls_acc_ssl_cert_type(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
+    pub extern fn Curl_vtls_acc_ssl_cert_blob(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?*const CurlBlob;
+    pub extern fn Curl_vtls_acc_ssl_ca_info_blob(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?*const CurlBlob;
+    pub extern fn Curl_vtls_acc_ssl_cainfo(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
+    pub extern fn Curl_vtls_acc_ssl_capath(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
+    pub extern fn Curl_vtls_acc_ssl_cipher_list(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
+    pub extern fn Curl_vtls_acc_ssl_cipher13_list(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
+    pub extern fn Curl_vtls_acc_ssl_ec_curves(data: ?*CurlEasy) callconv(.c) ?[*:0]const u8;
+    pub extern fn Curl_vtls_acc_ssl_signature_algorithms(data: ?*CurlEasy) callconv(.c) ?[*:0]const u8;
+    pub extern fn Curl_vtls_acc_ssl_crlfile(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
+    pub extern fn Curl_vtls_acc_ssl_issuercert(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
+    pub extern fn Curl_vtls_acc_ssl_issuercert_blob(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?*const CurlBlob;
+    pub extern fn Curl_vtls_acc_ssl_username(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
+    pub extern fn Curl_vtls_acc_ssl_password(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]const u8;
+    pub extern fn Curl_vtls_acc_ssl_engine(data: ?*CurlEasy) callconv(.c) ?[*:0]const u8;
+    pub extern fn Curl_vtls_acc_ssl_engine_default(data: ?*CurlEasy) callconv(.c) bool;
+    pub extern fn Curl_vtls_acc_ssl_buffer_size(data: ?*CurlEasy) callconv(.c) c_int;
+    pub extern fn Curl_vtls_acc_ssl_ca_cache_timeout(data: ?*CurlEasy) callconv(.c) c_int;
 };
 
 // ============================================================================
@@ -570,6 +620,9 @@ fn multisslSetup(backend: ?*const CurlSsl) c_int {
             .schannel => &schannel_backend.Curl_ssl_schannel,
             .openssl => &openssl_backend.Curl_ssl_openssl,
             .mbedtls => &mbedtls_backend.Curl_ssl_mbedtls,
+            .gnutls => &vtls_gtls.Curl_ssl_gnutls,
+            .rustls => &vtls_rustls.Curl_ssl_rustls,
+            .wolfssl => &vtls_wolfssl.Curl_ssl_wolfssl,
             else => unreachable,
         };
         return 0;
@@ -734,75 +787,11 @@ pub fn pubkeyPemToDer(pem_opt: ?[*:0]const u8, der: *?[*]u8, der_len: *usize) CU
 // USE_SSL Implementation
 // ============================================================================
 
-const vtls_impl = struct {
-    pub var Curl_ssl: *const CurlSsl = switch (backend_options.ssl) {
-        .schannel => &schannel_backend.Curl_ssl_schannel,
-        .openssl => &openssl_backend.Curl_ssl_openssl,
-        .mbedtls => &mbedtls_backend.Curl_ssl_mbedtls,
-        else => &Curl_ssl_multi,
-    };
-
-    pub const Curl_ssl_multi = CurlSsl{
-        .info = .{ .id = CURLSSLBACKEND_NONE, .name = "multi" },
-        .supports = 0,
-        .sizeof_ssl_backend_data = std.math.maxInt(usize),
-        .init = multisslInit,
-        .cleanup = null,
-        .version = multisslVersion,
-        .shut_down = null,
-        .data_pending = null,
-        .random = multisslRandom,
-        .cert_status_request = null,
-        .do_connect = multisslConnect,
-        .adjust_pollset = multisslAdjustPollset,
-        .get_internals = multisslGetInternals,
-        .close = multisslClose,
-        .close_all = null,
-        .engines_list = null,
-        .sha256sum = null,
-        .recv_plain = multisslRecvPlain,
-        .send_plain = multisslSendPlain,
-        .get_channel_binding = null,
-    };
-
-    pub var Curl_cft_ssl = CurlCftype{
-        .name = "SSL",
-        .flags = CF_TYPE_SSL,
-        .log_level = CF_LVL_SSL,
-        .destroy = cfSslDestroy,
-        .do_connect = cfSslConnect,
-        .do_shutdown = cfSslShutdown,
-        .adjust_pollset = cfSslAdjustPollset,
-        .has_data_pending = cfSslDataPending,
-        .do_send = cfSslSend,
-        .do_recv = cfSslRecv,
-        .cntrl = cfSslCntrl,
-        .is_alive = cfSslIsAlive,
-        .keep_alive = c_ext.Curl_cf_def_conn_keep_alive,
-        .query = cfSslQuery,
-    };
-
-    pub var Curl_cft_ssl_proxy = CurlCftype{
-        .name = "SSL-PROXY",
-        .flags = CF_TYPE_SSL | CF_TYPE_PROXY,
-        .log_level = CF_LVL_SSL,
-        .destroy = cfSslDestroy,
-        .do_connect = cfSslConnect,
-        .do_shutdown = cfSslShutdown,
-        .adjust_pollset = cfSslAdjustPollset,
-        .has_data_pending = cfSslDataPending,
-        .do_send = cfSslSend,
-        .do_recv = cfSslRecv,
-        .cntrl = cfSslCntrl,
-        .is_alive = cfSslIsAlive,
-        .keep_alive = c_ext.Curl_cf_def_conn_keep_alive,
-        .query = cfSslQuery,
-    };
-
+const vtls_core_impl = struct {
     pub fn Curl_ssl_init() callconv(.c) c_int {
         if (init_ssl) return 1;
         init_ssl = true;
-        if (Curl_ssl.init) |init_fn| {
+        if (vtls_impl.Curl_ssl.init) |init_fn| {
             return init_fn();
         }
         return 1;
@@ -810,7 +799,7 @@ const vtls_impl = struct {
 
     pub fn Curl_ssl_cleanup() callconv(.c) void {
         if (init_ssl) {
-            if (Curl_ssl.cleanup) |cleanup_fn| {
+            if (vtls_impl.Curl_ssl.cleanup) |cleanup_fn| {
                 cleanup_fn();
             }
             init_ssl = false;
@@ -818,7 +807,7 @@ const vtls_impl = struct {
     }
 
     pub fn Curl_ssl_version(buffer: [*]u8, size: usize) callconv(.c) void {
-        _ = Curl_ssl.version(buffer, size);
+        _ = vtls_impl.Curl_ssl.version(buffer, size);
     }
 
     pub fn Curl_ssl_check_cxn(conn: ?*ConnectData) callconv(.c) c_int {
@@ -833,8 +822,8 @@ const vtls_impl = struct {
     pub fn Curl_ssl_data_pending(conn: ?*const ConnectData, sockindex: c_int) callconv(.c) bool {
         var cf = c_ext.Curl_vtls_acc_conn_cfilter(@constCast(conn), @intCast(sockindex));
         while (cf) |cur| : (cf = cur.next) {
-            if (cur.cft == &Curl_cft_ssl or cur.cft == &Curl_cft_ssl_proxy) {
-                if (Curl_ssl.data_pending) |dp| {
+            if (cur.cft == &vtls_impl.Curl_cft_ssl or cur.cft == &vtls_impl.Curl_cft_ssl_proxy) {
+                if (vtls_impl.Curl_ssl.data_pending) |dp| {
                     return dp(cur, null);
                 }
             }
@@ -843,14 +832,14 @@ const vtls_impl = struct {
     }
 
     pub fn Curl_ssl_get_internals(connssl: *SslConnectData, info: c_uint) callconv(.c) ?*anyopaque {
-        if (Curl_ssl.get_internals) |gi| {
+        if (vtls_impl.Curl_ssl.get_internals) |gi| {
             return gi(connssl, info);
         }
         return null;
     }
 
     pub fn Curl_ssl_engines_list(data: ?*CurlEasy) callconv(.c) ?*curl_slist {
-        if (Curl_ssl.engines_list) |el| {
+        if (vtls_impl.Curl_ssl.engines_list) |el| {
             return el(data);
         }
         return null;
@@ -933,7 +922,7 @@ const vtls_impl = struct {
     }
 
     pub fn Curl_ssl_random(data: ?*CurlEasy, buffer: [*]u8, length: usize) callconv(.c) CURLcode {
-        if (Curl_ssl.random) |rand_fn| {
+        if (vtls_impl.Curl_ssl.random) |rand_fn| {
             return rand_fn(data, buffer, length);
         }
         return CURLE_NOT_BUILT_IN;
@@ -948,7 +937,7 @@ const vtls_impl = struct {
     }
 
     pub fn Curl_ssl_sha256sum(input: [*]const u8, inputlen: usize, sha256sum: [*]u8, sha256len: usize) callconv(.c) CURLcode {
-        if (Curl_ssl.sha256sum) |sha_fn| {
+        if (vtls_impl.Curl_ssl.sha256sum) |sha_fn| {
             return sha_fn(input, inputlen, sha256sum, sha256len);
         }
         if (sha256len < 32) return CURLE_BAD_FUNCTION_ARGUMENT;
@@ -972,7 +961,7 @@ const vtls_impl = struct {
         var result: CURLcode = CURLE_SSL_PINNEDPUBKEYNOTMATCH;
 
         if (std.mem.startsWith(u8, pinned_slice, "sha256//")) {
-            const sha_fn = Curl_ssl.sha256sum orelse return result;
+            const sha_fn = vtls_impl.Curl_ssl.sha256sum orelse return result;
             const raw_digest = mem.malloc(CURL_SHA256_DIGEST_LENGTH) orelse return CURLE_OUT_OF_MEMORY;
             const sha256sumdigest: [*]u8 = @ptrCast(raw_digest);
 
@@ -1058,7 +1047,7 @@ const vtls_impl = struct {
     }
 
     pub fn Curl_ssl_cert_status_request() callconv(.c) bool {
-        if (Curl_ssl.cert_status_request) |csr| {
+        if (vtls_impl.Curl_ssl.cert_status_request) |csr| {
             return csr();
         }
         return false;
@@ -1072,6 +1061,8 @@ const vtls_impl = struct {
     pub fn Curl_ssl_setup_x509_store(cf: *CurlCfilter, data: ?*CurlEasy, ssl_ctx: ?*anyopaque) callconv(.c) CURLcode {
         if (comptime backend_options.ssl == .openssl) {
             return openssl_backend.Curl_ossl_setup_x509_store(cf, data, ssl_ctx);
+        } else if (comptime backend_options.ssl == .wolfssl) {
+            return vtls_wolfssl.Curl_wssl_setup_x509_store(cf, data, ssl_ctx);
         }
         return CURLE_OK;
     }
@@ -1094,14 +1085,14 @@ const vtls_impl = struct {
     }
 
     pub fn Curl_ssl_get_channel_binding(data: ?*CurlEasy, sockindex: i8, binding: *DynBuf) callconv(.c) CURLcode {
-        if (Curl_ssl.get_channel_binding) |cb| {
+        if (vtls_impl.Curl_ssl.get_channel_binding) |cb| {
             return cb(data, sockindex, binding);
         }
         return CURLE_OK;
     }
 
     pub fn Curl_ssl_close_all(data: ?*CurlEasy) callconv(.c) void {
-        if (Curl_ssl.close_all) |ca| {
+        if (vtls_impl.Curl_ssl.close_all) |ca| {
             ca(data);
         }
     }
@@ -1121,52 +1112,52 @@ const vtls_impl = struct {
         return CURLE_OK;
     }
 
-    fn multisslInit() callconv(.c) c_int {
+    pub fn multisslInit() callconv(.c) c_int {
         if (multisslSetup(null) != 0) return 1;
-        if (Curl_ssl.init) |init_fn| return init_fn();
+        if (vtls_impl.Curl_ssl.init) |init_fn| return init_fn();
         return 1;
     }
 
-    fn multisslVersion(buffer: [*]u8, size: usize) callconv(.c) usize {
+    pub fn multisslVersion(buffer: [*]u8, size: usize) callconv(.c) usize {
         _ = multisslSetup(null);
-        return Curl_ssl.version(buffer, size);
+        return vtls_impl.Curl_ssl.version(buffer, size);
     }
 
-    fn multisslRandom(data: ?*CurlEasy, entropy: [*]u8, length: usize) callconv(.c) CURLcode {
+    pub fn multisslRandom(data: ?*CurlEasy, entropy: [*]u8, length: usize) callconv(.c) CURLcode {
         if (multisslSetup(null) != 0) return CURLE_FAILED_INIT;
-        if (Curl_ssl.random) |rand_fn| return rand_fn(data, entropy, length);
+        if (vtls_impl.Curl_ssl.random) |rand_fn| return rand_fn(data, entropy, length);
         return CURLE_NOT_BUILT_IN;
     }
 
-    fn multisslConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CURLcode {
+    pub fn multisslConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CURLcode {
         if (multisslSetup(null) != 0) return CURLE_FAILED_INIT;
-        return Curl_ssl.do_connect(cf, data, done);
+        return vtls_impl.Curl_ssl.do_connect(cf, data, done);
     }
 
-    fn multisslAdjustPollset(cf: *CurlCfilter, data: ?*CurlEasy, ps: ?*EasyPollset) callconv(.c) CURLcode {
+    pub fn multisslAdjustPollset(cf: *CurlCfilter, data: ?*CurlEasy, ps: ?*EasyPollset) callconv(.c) CURLcode {
         if (multisslSetup(null) != 0) return CURLE_OK;
-        return Curl_ssl.adjust_pollset(cf, data, ps);
+        return vtls_impl.Curl_ssl.adjust_pollset(cf, data, ps);
     }
 
-    fn multisslGetInternals(connssl: *SslConnectData, info: c_uint) callconv(.c) ?*anyopaque {
+    pub fn multisslGetInternals(connssl: *SslConnectData, info: c_uint) callconv(.c) ?*anyopaque {
         if (multisslSetup(null) != 0) return null;
-        if (Curl_ssl.get_internals) |gi| return gi(connssl, info);
+        if (vtls_impl.Curl_ssl.get_internals) |gi| return gi(connssl, info);
         return null;
     }
 
-    fn multisslClose(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) void {
+    pub fn multisslClose(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) void {
         if (multisslSetup(null) != 0) return;
-        Curl_ssl.close(cf, data);
+        vtls_impl.Curl_ssl.close(cf, data);
     }
 
-    fn multisslRecvPlain(cf: *CurlCfilter, data: ?*CurlEasy, buf: [*]u8, len: usize, pnread: *usize) callconv(.c) CURLcode {
+    pub fn multisslRecvPlain(cf: *CurlCfilter, data: ?*CurlEasy, buf: [*]u8, len: usize, pnread: *usize) callconv(.c) CURLcode {
         if (multisslSetup(null) != 0) return CURLE_FAILED_INIT;
-        return Curl_ssl.recv_plain(cf, data, buf, len, pnread);
+        return vtls_impl.Curl_ssl.recv_plain(cf, data, buf, len, pnread);
     }
 
-    fn multisslSendPlain(cf: *CurlCfilter, data: ?*CurlEasy, mem_ptr: ?*const anyopaque, len: usize, pnwritten: *usize) callconv(.c) CURLcode {
+    pub fn multisslSendPlain(cf: *CurlCfilter, data: ?*CurlEasy, mem_ptr: ?*const anyopaque, len: usize, pnwritten: *usize) callconv(.c) CURLcode {
         if (multisslSetup(null) != 0) return CURLE_FAILED_INIT;
-        return Curl_ssl.send_plain(cf, data, mem_ptr, len, pnwritten);
+        return vtls_impl.Curl_ssl.send_plain(cf, data, mem_ptr, len, pnwritten);
     }
 
     pub fn Curl_multissl_init() callconv(.c) c_int {
@@ -1203,7 +1194,7 @@ const vtls_impl = struct {
         _ = data;
         const raw = mem.calloc(1, @sizeOf(SslConnectData)) orelse return null;
         const ctx: *SslConnectData = @ptrCast(@alignCast(raw));
-        ctx.ssl_impl = Curl_ssl;
+        ctx.ssl_impl = vtls_impl.Curl_ssl;
         ctx.alpn = alpn;
         io_buffers.Curl_bufq_init2(&ctx.earlydata, CURL_SSL_EARLY_MAX, 1, BUFQ_OPT_NO_SPARES);
         ctx.backend = mem.calloc(1, ctx.ssl_impl.sizeof_ssl_backend_data);
@@ -1324,7 +1315,7 @@ const vtls_impl = struct {
         };
 
         var cf: ?*CurlCfilter = null;
-        const result = c_ext.Curl_cf_create(&cf, &Curl_cft_ssl, ctx);
+        const result = c_ext.Curl_cf_create(&cf, &vtls_impl.Curl_cft_ssl, ctx);
         if (result != CURLE_OK) {
             cfCtxFree(ctx);
             pcf.* = null;
@@ -1368,7 +1359,7 @@ const vtls_impl = struct {
         };
 
         var cf: ?*CurlCfilter = null;
-        const result = c_ext.Curl_cf_create(&cf, &Curl_cft_ssl_proxy, ctx);
+        const result = c_ext.Curl_cf_create(&cf, &vtls_impl.Curl_cft_ssl_proxy, ctx);
         if (result != CURLE_OK) {
             cfCtxFree(ctx);
             pcf.* = null;
@@ -1477,7 +1468,7 @@ const vtls_impl = struct {
         const conn = c_ext.Curl_vtls_acc_data_conn(data);
         var cf = c_ext.Curl_vtls_acc_conn_cfilter(conn, sockindex);
         while (cf) |cur| : (cf = cur.next) {
-            if (cur.cft == &Curl_cft_ssl) {
+            if (cur.cft == &vtls_impl.Curl_cft_ssl) {
                 var done = false;
                 c_ext.Curl_cshutdn_start_timer(data, sockindex, 0);
                 result = vtlsShutdownBlocking(cur, data, send_shutdown, &done);
@@ -1626,7 +1617,7 @@ const vtls_impl = struct {
         sockindex: i8,
     ) callconv(.c) ?*CurlSslSession {
         const conn = c_ext.Curl_vtls_acc_data_conn(data) orelse return null;
-        if (cft == &Curl_cft_ssl or cft == &Curl_cft_ssl_proxy) {
+        if (cft == &vtls_impl.Curl_cft_ssl or cft == &vtls_impl.Curl_cft_ssl_proxy) {
             var cf1 = c_ext.Curl_vtls_acc_conn_cfilter(conn, sockindex);
             while (cf1) |cur| : (cf1 = cur.next) {
                 if (cur.cft == cft) {
@@ -1702,7 +1693,7 @@ const vtls_impl = struct {
         return result;
     }
 
-    fn cfSslConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CURLcode {
+    pub fn cfSslConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CURLcode {
         const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_FAILED_INIT));
         if (cf.isConnected() and connssl.state == ssl_connection_complete) {
             done.* = true;
@@ -1723,7 +1714,7 @@ const vtls_impl = struct {
         return result;
     }
 
-    fn cfSslShutdown(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CURLcode {
+    pub fn cfSslShutdown(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CURLcode {
         const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_OK));
         if (cf.isShutdown() or !cf.isConnected() or connssl.state != ssl_connection_complete) {
             done.* = true;
@@ -1745,7 +1736,7 @@ const vtls_impl = struct {
         return result;
     }
 
-    fn cfSslDataPending(cf: *CurlCfilter, data: ?*const CurlEasy) callconv(.c) bool {
+    pub fn cfSslDataPending(cf: *CurlCfilter, data: ?*const CurlEasy) callconv(.c) bool {
         const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return false));
         const saved_call_data = connssl.call_data;
         connssl.call_data = @constCast(data);
@@ -1760,7 +1751,7 @@ const vtls_impl = struct {
         return false;
     }
 
-    fn cfSslAdjustPollset(cf: *CurlCfilter, data: ?*CurlEasy, ps: ?*EasyPollset) callconv(.c) CURLcode {
+    pub fn cfSslAdjustPollset(cf: *CurlCfilter, data: ?*CurlEasy, ps: ?*EasyPollset) callconv(.c) CURLcode {
         const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_OK));
         const saved_call_data = connssl.call_data;
         connssl.call_data = data;
@@ -1776,7 +1767,7 @@ const vtls_impl = struct {
         return result;
     }
 
-    fn cfSslSend(
+    pub fn cfSslSend(
         cf: *CurlCfilter,
         data: ?*CurlEasy,
         buf: ?*const anyopaque,
@@ -1837,7 +1828,7 @@ const vtls_impl = struct {
         return connssl.ssl_impl.send_plain(cf, data, buf, len, pnwritten);
     }
 
-    fn cfSslRecv(
+    pub fn cfSslRecv(
         cf: *CurlCfilter,
         data: ?*CurlEasy,
         buf: [*]u8,
@@ -1894,7 +1885,7 @@ const vtls_impl = struct {
         cf.setConnected(false);
     }
 
-    fn cfSslDestroy(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) void {
+    pub fn cfSslDestroy(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) void {
         if (cf.ctx) |raw_ctx| {
             const ctx: *SslConnectData = @ptrCast(@alignCast(raw_ctx));
             cfSslClose(cf, data);
@@ -1904,7 +1895,7 @@ const vtls_impl = struct {
         }
     }
 
-    fn cfSslCntrl(
+    pub fn cfSslCntrl(
         cf: *CurlCfilter,
         data: ?*CurlEasy,
         event: c_int,
@@ -1943,14 +1934,14 @@ const vtls_impl = struct {
         return CURLE_OK;
     }
 
-    fn cfSslIsAlive(cf: *CurlCfilter, data: ?*CurlEasy, input_pending: *bool) callconv(.c) bool {
+    pub fn cfSslIsAlive(cf: *CurlCfilter, data: ?*CurlEasy, input_pending: *bool) callconv(.c) bool {
         if (cf.next) |next| {
             return next.cft.is_alive(next, data, input_pending);
         }
         return false;
     }
 
-    fn cfSslQuery(
+    pub fn cfSslQuery(
         cf: *CurlCfilter,
         data: ?*CurlEasy,
         query: c_int,
@@ -1993,7 +1984,374 @@ const vtls_impl = struct {
     }
 };
 
-const CURLE_UNKNOWN_OPTION: CURLcode = 48;
+pub const vtls_impl = struct {
+    const root_self = @import("vtls_backends.zig");
+
+    pub var Curl_ssl: *const root_self.CurlSsl = switch (backend_options.ssl) {
+        .schannel => &schannel_backend.Curl_ssl_schannel,
+        .openssl => &openssl_backend.Curl_ssl_openssl,
+        .mbedtls => &mbedtls_backend.Curl_ssl_mbedtls,
+        .gnutls => &vtls_gtls.Curl_ssl_gnutls,
+        .rustls => &vtls_rustls.Curl_ssl_rustls,
+        .wolfssl => &vtls_wolfssl.Curl_ssl_wolfssl,
+        else => &Curl_ssl_multi,
+    };
+
+    pub const Curl_ssl_multi = root_self.CurlSsl{
+        .info = .{ .id = root_self.CURLSSLBACKEND_NONE, .name = "multi" },
+        .supports = 0,
+        .sizeof_ssl_backend_data = std.math.maxInt(usize),
+        .init = vtls_core_impl.multisslInit,
+        .cleanup = null,
+        .version = vtls_core_impl.multisslVersion,
+        .shut_down = null,
+        .data_pending = null,
+        .random = vtls_core_impl.multisslRandom,
+        .cert_status_request = null,
+        .do_connect = vtls_core_impl.multisslConnect,
+        .adjust_pollset = vtls_core_impl.multisslAdjustPollset,
+        .get_internals = vtls_core_impl.multisslGetInternals,
+        .close = vtls_core_impl.multisslClose,
+        .close_all = null,
+        .engines_list = null,
+        .sha256sum = null,
+        .recv_plain = vtls_core_impl.multisslRecvPlain,
+        .send_plain = vtls_core_impl.multisslSendPlain,
+        .get_channel_binding = null,
+    };
+
+    pub var Curl_cft_ssl = root_self.CurlCftype{
+        .name = "SSL",
+        .flags = root_self.CF_TYPE_SSL,
+        .log_level = root_self.CF_LVL_SSL,
+        .destroy = vtls_core_impl.cfSslDestroy,
+        .do_connect = vtls_core_impl.cfSslConnect,
+        .do_shutdown = vtls_core_impl.cfSslShutdown,
+        .adjust_pollset = vtls_core_impl.cfSslAdjustPollset,
+        .has_data_pending = vtls_core_impl.cfSslDataPending,
+        .do_send = vtls_core_impl.cfSslSend,
+        .do_recv = vtls_core_impl.cfSslRecv,
+        .cntrl = vtls_core_impl.cfSslCntrl,
+        .is_alive = vtls_core_impl.cfSslIsAlive,
+        .keep_alive = c_ext.Curl_cf_def_conn_keep_alive,
+        .query = vtls_core_impl.cfSslQuery,
+    };
+
+    pub var Curl_cft_ssl_proxy = root_self.CurlCftype{
+        .name = "SSL-PROXY",
+        .flags = root_self.CF_TYPE_SSL | root_self.CF_TYPE_PROXY,
+        .log_level = root_self.CF_LVL_SSL,
+        .destroy = vtls_core_impl.cfSslDestroy,
+        .do_connect = vtls_core_impl.cfSslConnect,
+        .do_shutdown = vtls_core_impl.cfSslShutdown,
+        .adjust_pollset = vtls_core_impl.cfSslAdjustPollset,
+        .has_data_pending = vtls_core_impl.cfSslDataPending,
+        .do_send = vtls_core_impl.cfSslSend,
+        .do_recv = vtls_core_impl.cfSslRecv,
+        .cntrl = vtls_core_impl.cfSslCntrl,
+        .is_alive = vtls_core_impl.cfSslIsAlive,
+        .keep_alive = c_ext.Curl_cf_def_conn_keep_alive,
+        .query = vtls_core_impl.cfSslQuery,
+    };
+
+    pub const Curl_ssl_init = vtls_core_impl.Curl_ssl_init;
+    pub const Curl_ssl_cleanup = vtls_core_impl.Curl_ssl_cleanup;
+    pub const Curl_ssl_version = vtls_core_impl.Curl_ssl_version;
+    pub const Curl_ssl_check_cxn = vtls_core_impl.Curl_ssl_check_cxn;
+    pub const Curl_ssl_Shutdown = vtls_core_impl.Curl_ssl_Shutdown;
+    pub const Curl_ssl_data_pending = vtls_core_impl.Curl_ssl_data_pending;
+    pub const Curl_ssl_get_internals = vtls_core_impl.Curl_ssl_get_internals;
+    pub const Curl_ssl_engines_list = vtls_core_impl.Curl_ssl_engines_list;
+    pub const Curl_ssl_initsessions = vtls_core_impl.Curl_ssl_initsessions;
+    pub const Curl_ssl_free_certinfo = vtls_core_impl.Curl_ssl_free_certinfo;
+    pub const Curl_ssl_init_certinfo = vtls_core_impl.Curl_ssl_init_certinfo;
+    pub const Curl_ssl_push_certinfo_len = vtls_core_impl.Curl_ssl_push_certinfo_len;
+    pub const Curl_ssl_push_certinfo = vtls_core_impl.Curl_ssl_push_certinfo;
+    pub const Curl_ssl_random = vtls_core_impl.Curl_ssl_random;
+    pub const Curl_ssl_md5sum = vtls_core_impl.Curl_ssl_md5sum;
+    pub const Curl_ssl_sha256sum = vtls_core_impl.Curl_ssl_sha256sum;
+    pub const Curl_pin_peer_pubkey = vtls_core_impl.Curl_pin_peer_pubkey;
+    pub const Curl_ssl_cert_status_request = vtls_core_impl.Curl_ssl_cert_status_request;
+    pub const Curl_ssl_false_start = vtls_core_impl.Curl_ssl_false_start;
+    pub const Curl_ssl_setup_x509_store = vtls_core_impl.Curl_ssl_setup_x509_store;
+    pub const Curl_ssl_get_x509_store = vtls_core_impl.Curl_ssl_get_x509_store;
+    pub const Curl_ssl_get_channel_binding = vtls_core_impl.Curl_ssl_get_channel_binding;
+    pub const Curl_ssl_close_all = vtls_core_impl.Curl_ssl_close_all;
+    pub const Curl_ssl_adjust_pollset = vtls_core_impl.Curl_ssl_adjust_pollset;
+    pub const Curl_multissl_init = vtls_core_impl.Curl_multissl_init;
+    pub const Curl_multissl_version = vtls_core_impl.Curl_multissl_version;
+    pub const Curl_multissl_set = vtls_core_impl.Curl_multissl_set;
+    pub const Curl_ssl_peer_cleanup = vtls_core_impl.Curl_ssl_peer_cleanup;
+    pub const Curl_ssl_peer_init = vtls_core_impl.Curl_ssl_peer_init;
+    pub const Curl_cf_ssl_create = vtls_core_impl.Curl_cf_ssl_create;
+    pub const cfSslInsertAfter = vtls_core_impl.cfSslInsertAfter;
+    pub const Curl_cf_ssl_proxy_create = vtls_core_impl.Curl_cf_ssl_proxy_create;
+    pub const cfSslProxyInsertAfter = vtls_core_impl.cfSslProxyInsertAfter;
+    pub const Curl_ssl_cfilter_add = vtls_core_impl.Curl_ssl_cfilter_add;
+    pub const Curl_ssl_cfilter_remove = vtls_core_impl.Curl_ssl_cfilter_remove;
+    pub const Curl_ssl_cf_is_proxy = vtls_core_impl.Curl_ssl_cf_is_proxy;
+    pub const Curl_ssl_cf_get_easy_config = vtls_core_impl.Curl_ssl_cf_get_easy_config;
+    pub const Curl_ssl_cf_get_filter_config = vtls_core_impl.Curl_ssl_cf_get_filter_config;
+    pub const Curl_ssl_cf_get_ssl = vtls_core_impl.Curl_ssl_cf_get_ssl;
+    pub const Curl_conn_get_ssl_info = vtls_core_impl.Curl_conn_get_ssl_info;
+    pub const Curl_alpn_to_proto_buf = vtls_core_impl.Curl_alpn_to_proto_buf;
+    pub const Curl_alpn_to_proto_str = vtls_core_impl.Curl_alpn_to_proto_str;
+    pub const Curl_alpn_contains_proto = vtls_core_impl.Curl_alpn_contains_proto;
+    pub const Curl_alpn_restrict_to = vtls_core_impl.Curl_alpn_restrict_to;
+    pub const Curl_alpn_copy = vtls_core_impl.Curl_alpn_copy;
+    pub const Curl_alpn_set_negotiated = vtls_core_impl.Curl_alpn_set_negotiated;
+    pub const Curl_on_session_reuse = vtls_core_impl.Curl_on_session_reuse;
+    pub const Curl_ssl_get_cf_session = vtls_core_impl.Curl_ssl_get_cf_session;
+
+    // Re-exported types, constants, and helpers for modular SSL backend files
+    pub const CURLcode = root_self.CURLcode;
+    pub const CURLE_OK = root_self.CURLE_OK;
+    pub const CURLE_UNSUPPORTED_PROTOCOL = root_self.CURLE_UNSUPPORTED_PROTOCOL;
+    pub const CURLE_FAILED_INIT = root_self.CURLE_FAILED_INIT;
+    pub const CURLE_NOT_BUILT_IN = root_self.CURLE_NOT_BUILT_IN;
+    pub const CURLE_COULDNT_CONNECT = root_self.CURLE_COULDNT_CONNECT;
+    pub const CURLE_OUT_OF_MEMORY = root_self.CURLE_OUT_OF_MEMORY;
+    pub const CURLE_OPERATION_TIMEDOUT = root_self.CURLE_OPERATION_TIMEDOUT;
+    pub const CURLE_SSL_CONNECT_ERROR = root_self.CURLE_SSL_CONNECT_ERROR;
+    pub const CURLE_ABORTED_BY_CALLBACK = root_self.CURLE_ABORTED_BY_CALLBACK;
+    pub const CURLE_BAD_FUNCTION_ARGUMENT = root_self.CURLE_BAD_FUNCTION_ARGUMENT;
+    pub const CURLE_TOO_MANY_REDIRECTS = root_self.CURLE_TOO_MANY_REDIRECTS;
+    pub const CURLE_UNKNOWN_OPTION = root_self.CURLE_UNKNOWN_OPTION;
+    pub const CURLE_SETOPT_OPTION_SYNTAX = root_self.CURLE_SETOPT_OPTION_SYNTAX;
+    pub const CURLE_GOT_NOTHING = root_self.CURLE_GOT_NOTHING;
+    pub const CURLE_SSL_ENGINE_NOTFOUND = root_self.CURLE_SSL_ENGINE_NOTFOUND;
+    pub const CURLE_SSL_ENGINE_SETFAILED = root_self.CURLE_SSL_ENGINE_SETFAILED;
+    pub const CURLE_SEND_ERROR = root_self.CURLE_SEND_ERROR;
+    pub const CURLE_RECV_ERROR = root_self.CURLE_RECV_ERROR;
+    pub const CURLE_SSL_CERTPROBLEM = root_self.CURLE_SSL_CERTPROBLEM;
+    pub const CURLE_SSL_CIPHER = root_self.CURLE_SSL_CIPHER;
+    pub const CURLE_PEER_FAILED_VERIFICATION = root_self.CURLE_PEER_FAILED_VERIFICATION;
+    pub const CURLE_BAD_CONTENT_ENCODING = root_self.CURLE_BAD_CONTENT_ENCODING;
+    pub const CURLE_SSL_ENGINE_INITFAILED = root_self.CURLE_SSL_ENGINE_INITFAILED;
+    pub const CURLE_READ_ERROR = root_self.CURLE_READ_ERROR;
+    pub const CURLE_SSL_CACERT_BADFILE = root_self.CURLE_SSL_CACERT_BADFILE;
+    pub const CURLE_SSL_SHUTDOWN_FAILED = root_self.CURLE_SSL_SHUTDOWN_FAILED;
+    pub const CURLE_AGAIN = root_self.CURLE_AGAIN;
+    pub const CURLE_SSL_CRL_BADFILE = root_self.CURLE_SSL_CRL_BADFILE;
+    pub const CURLE_SSL_ISSUER_ERROR = root_self.CURLE_SSL_ISSUER_ERROR;
+    pub const CURLE_SSL_PINNEDPUBKEYNOTMATCH = root_self.CURLE_SSL_PINNEDPUBKEYNOTMATCH;
+    pub const CURLE_SSL_INVALIDCERTSTATUS = root_self.CURLE_SSL_INVALIDCERTSTATUS;
+    pub const CURLE_SSL_CLIENTCERT = root_self.CURLE_SSL_CLIENTCERT;
+    pub const CURLE_ECH_REQUIRED = root_self.CURLE_ECH_REQUIRED;
+
+    pub const CURLSSLBACKEND_NONE = root_self.CURLSSLBACKEND_NONE;
+    pub const CURLSSLBACKEND_OPENSSL = root_self.CURLSSLBACKEND_OPENSSL;
+    pub const CURLSSLBACKEND_GNUTLS = root_self.CURLSSLBACKEND_GNUTLS;
+    pub const CURLSSLBACKEND_WOLFSSL = root_self.CURLSSLBACKEND_WOLFSSL;
+    pub const CURLSSLBACKEND_SCHANNEL = root_self.CURLSSLBACKEND_SCHANNEL;
+    pub const CURLSSLBACKEND_MBEDTLS = root_self.CURLSSLBACKEND_MBEDTLS;
+    pub const CURLSSLBACKEND_RUSTLS = root_self.CURLSSLBACKEND_RUSTLS;
+
+    pub const SSLSUPP_CA_PATH = root_self.SSLSUPP_CA_PATH;
+    pub const SSLSUPP_CERTINFO = root_self.SSLSUPP_CERTINFO;
+    pub const SSLSUPP_PINNEDPUBKEY = root_self.SSLSUPP_PINNEDPUBKEY;
+    pub const SSLSUPP_SSL_CTX = root_self.SSLSUPP_SSL_CTX;
+    pub const SSLSUPP_HTTPS_PROXY = root_self.SSLSUPP_HTTPS_PROXY;
+    pub const SSLSUPP_TLS13_CIPHERSUITES = root_self.SSLSUPP_TLS13_CIPHERSUITES;
+    pub const SSLSUPP_CAINFO_BLOB = root_self.SSLSUPP_CAINFO_BLOB;
+    pub const SSLSUPP_ISSUERCERT = root_self.SSLSUPP_ISSUERCERT;
+    pub const SSLSUPP_ISSUERCERT_BLOB = root_self.SSLSUPP_ISSUERCERT_BLOB;
+    pub const SSLSUPP_CA_CACHE = root_self.SSLSUPP_CA_CACHE;
+    pub const SSLSUPP_CIPHER_LIST = root_self.SSLSUPP_CIPHER_LIST;
+    pub const SSLSUPP_CRLFILE = root_self.SSLSUPP_CRLFILE;
+    pub const SSLSUPP_ECH = root_self.SSLSUPP_ECH;
+    pub const SSLSUPP_SSL_EC_CURVES = root_self.SSLSUPP_SSL_EC_CURVES;
+    pub const SSLSUPP_SIGNATURE_ALGORITHMS = root_self.SSLSUPP_SIGNATURE_ALGORITHMS;
+    pub const SSLSUPP_OCSP_STAPLING = root_self.SSLSUPP_OCSP_STAPLING;
+
+    pub const CURL_SSLVERSION_DEFAULT = root_self.CURL_SSLVERSION_DEFAULT;
+    pub const CURL_SSLVERSION_TLSv1 = root_self.CURL_SSLVERSION_TLSv1;
+    pub const CURL_SSLVERSION_SSLv2 = root_self.CURL_SSLVERSION_SSLv2;
+    pub const CURL_SSLVERSION_SSLv3 = root_self.CURL_SSLVERSION_SSLv3;
+    pub const CURL_SSLVERSION_TLSv1_0 = root_self.CURL_SSLVERSION_TLSv1_0;
+    pub const CURL_SSLVERSION_TLSv1_1 = root_self.CURL_SSLVERSION_TLSv1_1;
+    pub const CURL_SSLVERSION_TLSv1_2 = root_self.CURL_SSLVERSION_TLSv1_2;
+    pub const CURL_SSLVERSION_TLSv1_3 = root_self.CURL_SSLVERSION_TLSv1_3;
+    pub const CURL_SSLVERSION_LAST = root_self.CURL_SSLVERSION_LAST;
+
+    pub const CURL_SSLVERSION_MAX_NONE = root_self.CURL_SSLVERSION_MAX_NONE;
+    pub const CURL_SSLVERSION_MAX_DEFAULT = root_self.CURL_SSLVERSION_MAX_DEFAULT;
+    pub const CURL_SSLVERSION_MAX_TLSv1_0 = root_self.CURL_SSLVERSION_MAX_TLSv1_0;
+    pub const CURL_SSLVERSION_MAX_TLSv1_1 = root_self.CURL_SSLVERSION_MAX_TLSv1_1;
+    pub const CURL_SSLVERSION_MAX_TLSv1_2 = root_self.CURL_SSLVERSION_MAX_TLSv1_2;
+    pub const CURL_SSLVERSION_MAX_TLSv1_3 = root_self.CURL_SSLVERSION_MAX_TLSv1_3;
+    pub const CURL_SSLVERSION_MAX_LAST = root_self.CURL_SSLVERSION_MAX_LAST;
+
+    pub const CURL_TLSAUTH_NONE = root_self.CURL_TLSAUTH_NONE;
+    pub const CURL_TLSAUTH_SRP = root_self.CURL_TLSAUTH_SRP;
+
+    pub const FIRSTSOCKET = root_self.FIRSTSOCKET;
+    pub const SECONDARYSOCKET: i8 = 1;
+    pub const CURLPROTO_FTP: u64 = 1 << 2;
+    pub const TRNSPRT_TCP = root_self.TRNSPRT_TCP;
+    pub const TRNSPRT_UDP = root_self.TRNSPRT_UDP;
+    pub const TRNSPRT_QUIC = root_self.TRNSPRT_QUIC;
+    pub const TRNSPRT_UNIX = root_self.TRNSPRT_UNIX;
+
+    pub const ssl_connection_none = root_self.ssl_connection_none;
+    pub const ssl_connection_deferred = root_self.ssl_connection_deferred;
+    pub const ssl_connection_negotiating = root_self.ssl_connection_negotiating;
+    pub const ssl_connection_complete = root_self.ssl_connection_complete;
+
+    pub const ssl_connect_1 = root_self.ssl_connect_1;
+    pub const ssl_connect_2 = root_self.ssl_connect_2;
+    pub const ssl_connect_3 = root_self.ssl_connect_3;
+    pub const ssl_connect_done = root_self.ssl_connect_done;
+
+    pub const ssl_earlydata_none = root_self.ssl_earlydata_none;
+    pub const ssl_earlydata_await = root_self.ssl_earlydata_await;
+    pub const ssl_earlydata_sending = root_self.ssl_earlydata_sending;
+    pub const ssl_earlydata_sent = root_self.ssl_earlydata_sent;
+    pub const ssl_earlydata_accepted = root_self.ssl_earlydata_accepted;
+    pub const ssl_earlydata_rejected = root_self.ssl_earlydata_rejected;
+
+    pub const CURLINFO_TLS_SESSION = root_self.CURLINFO_TLS_SESSION;
+    pub const CURLINFO_TLS_SSL_PTR = root_self.CURLINFO_TLS_SSL_PTR;
+
+    pub const curl_socket_t = root_self.curl_socket_t;
+    pub const CURL_SOCKET_BAD = root_self.CURL_SOCKET_BAD;
+    pub const SOCKET_READABLE = root_self.SOCKET_READABLE;
+    pub const SOCKET_WRITABLE = root_self.SOCKET_WRITABLE;
+    pub const SOCKET_ERROR = root_self.SOCKET_ERROR;
+
+    pub const CurlTime = root_self.CurlTime;
+    pub const CurlEasy = root_self.CurlEasy;
+    pub const ConnectData = root_self.ConnectData;
+    pub const CurlPeer = root_self.CurlPeer;
+    pub const CurlSslScache = root_self.CurlSslScache;
+    pub const CurlTrcFeat = root_self.CurlTrcFeat;
+    pub const EasyPollset = root_self.EasyPollset;
+    pub const CurlCertinfo = root_self.CurlCertinfo;
+    pub const curl_slist = root_self.curl_slist;
+    pub const CurlBlob = root_self.CurlBlob;
+    pub const SslConfigBlob = root_self.SslConfigBlob;
+    pub const SslEasyConfig = root_self.SslEasyConfig;
+    pub const SslFilterConfig = root_self.SslFilterConfig;
+    pub const SslPrimaryConfig = root_self.SslFilterConfig;
+    pub const SslConfigData = root_self.SslEasyConfig;
+    pub const AlpnSpec = root_self.AlpnSpec;
+    pub const ALPN_ENTRIES_MAX = root_self.ALPN_ENTRIES_MAX;
+    pub const ALPN_NAME_MAX = root_self.ALPN_NAME_MAX;
+    pub const SslPeer = root_self.SslPeer;
+    pub const CurlScachePeer = root_self.SslPeer;
+    pub const SslConnectData = root_self.SslConnectData;
+    pub const CurlSslInfo = root_self.CurlSslInfo;
+    pub const CurlSsl = root_self.CurlSsl;
+    pub const CurlCftype = root_self.CurlCftype;
+    pub const CurlCfilter = root_self.CurlCfilter;
+    pub const CurlTlsSessionInfo = root_self.CurlTlsSessionInfo;
+    pub const CurlTlssessioninfo = root_self.CurlTlssessioninfo;
+
+    pub const Curl_ssl_peer_key_make = vtls_scache_asn1.Curl_ssl_peer_key_make;
+
+    pub const Curl_ssl_cf_get_config = vtls_core_impl.Curl_ssl_cf_get_filter_config;
+    pub const Curl_ssl_cf_get_primary_config = vtls_core_impl.Curl_ssl_cf_get_filter_config;
+    pub const Curl_ssl_cf_get_peer_config = vtls_core_impl.Curl_ssl_cf_get_filter_config;
+
+    pub fn Curl_ssl_scache_put(
+        cf: *root_self.CurlCfilter,
+        data: ?*root_self.CurlEasy,
+        ssl_peer_key: [*:0]const u8,
+        ssession: *vtls_scache_asn1.CurlSslSession,
+    ) root_self.CURLcode {
+        const cfg = vtls_core_impl.Curl_ssl_cf_get_filter_config(cf) orelse return root_self.CURLE_FAILED_INIT;
+        var scache: ?*root_self.CurlSslScache = null;
+        var has_share_scache = false;
+        var trc_feat: ?*root_self.CurlTrcFeat = null;
+        c_ext.Curl_vtls_acc_scache_params(data, &scache, &has_share_scache, &trc_feat);
+        return vtls_scache_asn1.Curl_ssl_scache_put_zig(cf, data, scache, has_share_scache, cfg, trc_feat, ssl_peer_key, ssession);
+    }
+
+    pub fn Curl_ssl_scache_take(
+        cf: *root_self.CurlCfilter,
+        data: ?*root_self.CurlEasy,
+        ssl_peer_key: [*:0]const u8,
+        pssession: *?*vtls_scache_asn1.CurlSslSession,
+    ) root_self.CURLcode {
+        var scache: ?*root_self.CurlSslScache = null;
+        var has_share_scache = false;
+        var trc_feat: ?*root_self.CurlTrcFeat = null;
+        c_ext.Curl_vtls_acc_scache_params(data, &scache, &has_share_scache, &trc_feat);
+        return vtls_scache_asn1.Curl_ssl_scache_take_zig(cf, data, scache, trc_feat, ssl_peer_key, pssession);
+    }
+
+    pub fn Curl_ssl_scache_get(
+        cf: *root_self.CurlCfilter,
+        data: ?*root_self.CurlEasy,
+        ssl_peer_key: [*:0]const u8,
+        psess_id: *?*anyopaque,
+    ) root_self.CURLcode {
+        var scache: ?*root_self.CurlSslScache = null;
+        var has_share_scache = false;
+        var trc_feat: ?*root_self.CurlTrcFeat = null;
+        c_ext.Curl_vtls_acc_scache_params(data, &scache, &has_share_scache, &trc_feat);
+        return vtls_scache_asn1.Curl_ssl_scache_get_zig(cf, data, scache, trc_feat, ssl_peer_key, psess_id);
+    }
+
+    pub fn Curl_ssl_scache_add_obj(
+        cf: *root_self.CurlCfilter,
+        data: ?*root_self.CurlEasy,
+        ssl_peer_key: [*:0]const u8,
+        so_data: ?*anyopaque,
+        so_destroy_cb: vtls_scache_asn1.CurlSslScacheObjDtor,
+    ) root_self.CURLcode {
+        const cfg = vtls_core_impl.Curl_ssl_cf_get_filter_config(cf) orelse return root_self.CURLE_FAILED_INIT;
+        var scache: ?*root_self.CurlSslScache = null;
+        var has_share_scache = false;
+        var trc_feat: ?*root_self.CurlTrcFeat = null;
+        c_ext.Curl_vtls_acc_scache_params(data, &scache, &has_share_scache, &trc_feat);
+        return vtls_scache_asn1.Curl_ssl_scache_add_obj_zig(cf, data, scache, has_share_scache, cfg, ssl_peer_key, so_data, so_destroy_cb);
+    }
+
+    pub fn Curl_ssl_scache_get_obj(
+        cf: *root_self.CurlCfilter,
+        data: ?*root_self.CurlEasy,
+        ssl_peer_key: [*:0]const u8,
+    ) ?*anyopaque {
+        _ = cf;
+        var scache: ?*root_self.CurlSslScache = null;
+        var has_share_scache = false;
+        var trc_feat: ?*root_self.CurlTrcFeat = null;
+        c_ext.Curl_vtls_acc_scache_params(data, &scache, &has_share_scache, &trc_feat);
+        return vtls_scache_asn1.Curl_ssl_scache_get_obj_zig(data, scache, ssl_peer_key);
+    }
+
+    pub fn Curl_ssl_scache_remove_all(
+        cf: *root_self.CurlCfilter,
+        data: ?*root_self.CurlEasy,
+        ssl_peer_key: [*:0]const u8,
+    ) void {
+        _ = cf;
+        var scache: ?*root_self.CurlSslScache = null;
+        var has_share_scache = false;
+        var trc_feat: ?*root_self.CurlTrcFeat = null;
+        c_ext.Curl_vtls_acc_scache_params(data, &scache, &has_share_scache, &trc_feat);
+        vtls_scache_asn1.Curl_ssl_scache_remove_all_zig(data, scache, ssl_peer_key);
+    }
+
+    pub fn Curl_ssl_scache_lock(data: ?*root_self.CurlEasy) void {
+        vtls_scache_asn1.Curl_ssl_scache_lock_zig(data);
+    }
+
+    pub fn Curl_ssl_scache_unlock(data: ?*root_self.CurlEasy) void {
+        vtls_scache_asn1.Curl_ssl_scache_unlock_zig(data);
+    }
+
+    pub const Curl_Rand = c_ext.Curl_rand_bytes;
+    pub const Curl_Rand_alnum = c_ext.Curl_rand_alnum;
+    pub const Curl_ssl_certchain = c_ext.Curl_extract_certinfo;
+    pub const infof = c_ext.Curl_infof;
+    pub const failf = c_ext.Curl_failf;
+    pub const traceSsl = c_ext.Curl_trc_cf_infof;
+    pub const Curl_multi_waitset_add_sock = c_ext.Curl_pollset_set;
+};
+
+pub const CURLE_UNKNOWN_OPTION: CURLcode = 48;
 
 // ============================================================================
 // 2. lib/vtls/schannel.c — Windows Schannel Backend
