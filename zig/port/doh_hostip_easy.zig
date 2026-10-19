@@ -43,7 +43,7 @@ pub const CURLE_ABORTED_BY_CALLBACK: CURLcode = 42;
 pub const CURLE_BAD_FUNCTION_ARGUMENT: CURLcode = 43;
 pub const CURLE_SEND_ERROR: CURLcode = 55;
 pub const CURLE_AGAIN: CURLcode = 81;
-pub const CURLE_RECURSIVE_API_CALL: CURLcode = 94;
+pub const CURLE_RECURSIVE_API_CALL: CURLcode = 93;
 pub const CURLE_UNRECOVERABLE_POLL: CURLcode = 99;
 pub const CURLE_TOO_LARGE: CURLcode = 100;
 pub const CURLE_NOT_BUILT_IN: CURLcode = 4;
@@ -162,18 +162,27 @@ pub const CURL_HTTP_VERSION_2TLS: c_long = 4;
 pub const CURLPROTO_HTTPS: c_long = 1 << 1;
 pub const CURLSSLOPT_AUTO_CLIENT_CERT: c_long = 1 << 5;
 
-pub const CURL_EAPI_FN_easy_perform: c_uint = 1;
-pub const CURL_EAPI_FN_easy_perform_ev: c_uint = 2;
-pub const CURL_EAPI_FN_easy_cleanup: c_uint = 3;
-pub const CURL_EAPI_FN_easy_getinfo: c_uint = 4;
-pub const CURL_EAPI_FN_easy_duphandle: c_uint = 5;
-pub const CURL_EAPI_FN_easy_reset: c_uint = 6;
-pub const CURL_EAPI_FN_easy_pause: c_uint = 7;
+pub const CURL_EAPI_FN_easy_cleanup: c_uint = 0;
+pub const CURL_EAPI_FN_easy_duphandle: c_uint = 1;
+pub const CURL_EAPI_FN_easy_getinfo: c_uint = 2;
+pub const CURL_EAPI_FN_easy_header: c_uint = 3;
+pub const CURL_EAPI_FN_easy_nextheader: c_uint = 4;
+pub const CURL_EAPI_FN_easy_pause: c_uint = 5;
+pub const CURL_EAPI_FN_easy_perform_ev: c_uint = 6;
+pub const CURL_EAPI_FN_easy_perform: c_uint = 7;
 pub const CURL_EAPI_FN_easy_recv: c_uint = 8;
-pub const CURL_EAPI_FN_easy_send: c_uint = 9;
-pub const CURL_EAPI_FN_easy_upkeep: c_uint = 10;
+pub const CURL_EAPI_FN_easy_reset: c_uint = 9;
+pub const CURL_EAPI_FN_easy_send: c_uint = 10;
+pub const CURL_EAPI_FN_easy_setopt: c_uint = 11;
+pub const CURL_EAPI_FN_easy_ssls_export: c_uint = 12;
+pub const CURL_EAPI_FN_easy_ssls_import: c_uint = 13;
+pub const CURL_EAPI_FN_easy_upkeep: c_uint = 14;
+pub const CURL_EAPI_FN_ws_recv: c_uint = 15;
+pub const CURL_EAPI_FN_ws_send: c_uint = 16;
+pub const CURL_EAPI_FN_ws_start_frame: c_uint = 17;
 
-pub const CURL_CBAPI_FN_easy_resolver_start: c_uint = 42;
+pub const CURL_CBAPI_FN_START: c_uint = 128;
+pub const CURL_CBAPI_FN_easy_resolver_start: c_uint = CURL_CBAPI_FN_START + 17;
 
 pub const Curl_easy = vdns_core.Curl_easy;
 pub const Curl_multi = opaque {};
@@ -219,7 +228,7 @@ pub const Curl_resolv_async = extern struct {
 
 pub const Curl_eapi_guard = extern struct {
     data: ?*Curl_easy,
-    depth: u8,
+    depth: u16,
 };
 
 pub const Curl_mapi_guard = extern struct {
@@ -514,6 +523,14 @@ extern fn Curl_easy_clear_error_and_errno(data: *Curl_easy) callconv(.c) void;
 extern fn Curl_easy_get_maxconnects(data: ?*const Curl_easy) callconv(.c) u32;
 extern fn Curl_easy_get_quick_exit(data: ?*const Curl_easy) callconv(.c) bool;
 extern fn Curl_easy_sizeof() callconv(.c) usize;
+extern fn Curl_zig_url_easy_sizeof() callconv(.c) usize;
+extern fn curlx_memzero(dest: ?*anyopaque, n: usize) callconv(.c) void;
+
+inline fn goodEasyHandle(data: ?*const Curl_easy) bool {
+    const d = data orelse return false;
+    const magic: *const u32 = @ptrCast(@alignCast(d));
+    return magic.* == CURLEASY_MAGIC_NUMBER;
+}
 extern fn Curl_easy_dupset_init(dst: *Curl_easy, src: *const Curl_easy) callconv(.c) void;
 extern fn Curl_easy_get_strings(data: *Curl_easy) callconv(.c) *anyopaque;
 extern fn Curl_easy_blob_count() callconv(.c) c_uint;
@@ -1163,10 +1180,13 @@ pub export fn de_cleanup(d: *dohentry) callconv(.c) void {
 }
 
 fn doh_probe_done(doh: *Curl_easy, master: *Curl_easy, result_in: CURLcode) callconv(.c) void {
+    if (!goodEasyHandle(doh) or !goodEasyHandle(master))
+        return;
     var result = result_in;
     var de: dohentry = undefined;
     de_init(&de);
     defer {
+        Curl_doh_clear_sub_xfer_done(doh);
         Curl_multi_mark_dirty(master);
         de_cleanup(&de);
         Curl_meta_remove(doh, "ezm:doh-probe");
@@ -1195,7 +1215,8 @@ fn doh_probe_done(doh: *Curl_easy, master: *Curl_easy, result_in: CURLcode) call
         return;
     }
 
-    async_ctx.queries_ongoing -= 1;
+    if (async_ctx.queries_ongoing > 0)
+        async_ctx.queries_ongoing -= 1;
     const httpcode = Curl_easy_get_httpcode(doh);
     switch (slot) {
         DOH_SLOT_IPV4 => async_ctx.dns_responses |= CURL_DNSQ_A,
@@ -1352,6 +1373,8 @@ fn doh_close(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) void {
     const dohp_raw = a.doh orelse return;
     const doh: *doh_probes = @ptrCast(@alignCast(dohp_raw));
     const d = data orelse return;
+    if (!goodEasyHandle(d))
+        return;
     const multi = Curl_easy_get_multi(d) orelse return;
 
     for (0..DOH_SLOT_COUNT) |slot| {
@@ -1360,6 +1383,8 @@ fn doh_close(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) void {
             continue;
         doh.probe_mid[slot] = std.math.maxInt(u32);
         const probe_data = Curl_multi_get_easy(multi, mid) orelse continue;
+        if (!goodEasyHandle(probe_data))
+            continue;
         Curl_doh_clear_sub_xfer_done(probe_data);
         _ = Curl_multi_remove_handle(multi, probe_data);
         var pd_opt: ?*Curl_easy = probe_data;
@@ -1376,8 +1401,9 @@ pub export fn Curl_doh_cleanup(
 ) callconv(.c) void {
     if (async_ctx.doh) |dohp| {
         doh_close(data, async_ctx);
-        mem.free(dohp);
         async_ctx.doh = null;
+        curlx_memzero(dohp, @sizeOf(doh_probes));
+        mem.free(dohp);
     }
 }
 
@@ -2638,6 +2664,7 @@ fn duphandle_fail(out: *Curl_easy, guard: *Curl_eapi_guard) ?*Curl_easy {
     altsvc_hsts_peer.Curl_altsvc_cleanup(Curl_easy_get_asi_slot(out));
     altsvc_hsts_peer.Curl_hsts_cleanup(Curl_easy_get_hsts_slot(out));
     Curl_freeset(out);
+    curlx_memzero(@ptrCast(out), Curl_zig_url_easy_sizeof());
     mem.free(@ptrCast(out));
     Curl_eapi_leave(guard);
     return null;
@@ -3017,4 +3044,41 @@ test "curl_easy_init, curl_easy_duphandle, curl_easy_reset, and Curl_meta_*" {
     defer curl_easy_cleanup(dup);
 
     curl_easy_reset(easy);
+}
+
+test "EAPI and CBAPI enum parity blocks recursive curl_easy_cleanup in callback" {
+    try std.testing.expectEqual(@as(c_uint, 0), CURL_EAPI_FN_easy_cleanup);
+    try std.testing.expectEqual(@as(c_uint, 1), CURL_EAPI_FN_easy_duphandle);
+    try std.testing.expectEqual(@as(c_uint, 2), CURL_EAPI_FN_easy_getinfo);
+    try std.testing.expectEqual(@as(c_uint, 5), CURL_EAPI_FN_easy_pause);
+    try std.testing.expectEqual(@as(c_uint, 6), CURL_EAPI_FN_easy_perform_ev);
+    try std.testing.expectEqual(@as(c_uint, 7), CURL_EAPI_FN_easy_perform);
+    try std.testing.expectEqual(@as(c_uint, 8), CURL_EAPI_FN_easy_recv);
+    try std.testing.expectEqual(@as(c_uint, 9), CURL_EAPI_FN_easy_reset);
+    try std.testing.expectEqual(@as(c_uint, 10), CURL_EAPI_FN_easy_send);
+    try std.testing.expectEqual(@as(c_uint, 14), CURL_EAPI_FN_easy_upkeep);
+    try std.testing.expectEqual(@as(c_uint, 145), CURL_CBAPI_FN_easy_resolver_start);
+
+    try std.testing.expectEqual(CURLE_OK, curl_global_init(CURL_GLOBAL_DEFAULT));
+    defer curl_global_cleanup();
+
+    const easy = curl_easy_init() orelse return error.OutOfMemory;
+    defer curl_easy_cleanup(easy);
+
+    const multi = Curl_multi_handle(16, 1, 3, 7, 3) orelse return error.OutOfMemory;
+    defer _ = curl_multi_cleanup(multi);
+
+    try std.testing.expectEqual(CURLM_OK, Curl_multi_add_handle(multi, easy));
+    defer _ = Curl_multi_remove_handle(multi, easy);
+
+    var cb_guard: Curl_mapi_guard = .{ .multi = null, .depth = 0 };
+    Curl_cbapi_enter(&cb_guard, easy, null, CURL_CBAPI_FN_easy_resolver_start);
+    try std.testing.expect(Curl_api_multi_is_in_callback(multi));
+
+    // Recursive curl_easy_cleanup inside resolver_start callback must be rejected
+    curl_easy_cleanup(easy);
+    try std.testing.expect(goodEasyHandle(easy));
+
+    Curl_cbapi_leave(&cb_guard);
+    try std.testing.expect(!Curl_api_multi_is_in_callback(multi));
 }
