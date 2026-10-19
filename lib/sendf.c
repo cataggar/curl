@@ -32,6 +32,28 @@
 #elif defined(HAVE_NETINET_TCP_H)
 #include <netinet/tcp.h>
 #endif
+#ifdef HAVE_NETINET_UDP_H
+#include <netinet/udp.h>
+#endif
+#ifdef HAVE_NETINET_IP_H
+#include <netinet/ip.h>
+#endif
+#ifdef HAVE_SYS_IOCTL_H
+#include <sys/ioctl.h>
+#endif
+#ifdef HAVE_NETDB_H
+#include <netdb.h>
+#endif
+#ifdef HAVE_ARPA_INET_H
+#include <arpa/inet.h>
+#endif
+#ifdef HAVE_IFADDRS_H
+#include <ifaddrs.h>
+#endif
+#ifdef HAVE_NET_IF_H
+#include <net/if.h>
+#endif
+#include <signal.h>
 
 #include "urldata.h"
 #include "sendf.h"
@@ -48,6 +70,33 @@
 #include "ftp.h"
 #include "curl_share.h"
 #include "conncache.h"
+#include "if2ip.h"
+#include "cf-socket.h"
+#include "curl_addrinfo.h"
+#include "select.h"
+#include "curlx/inet_ntop.h"
+#include "curlx/inet_pton.h"
+#include "multihandle.h"
+#include "rand.h"
+#include "sockaddr.h"
+#include "curlx/strdup.h"
+#include "curlx/nonblock.h"
+#include "curlx/strcopy.h"
+#include "curlx/version_win32.h"
+#include "curlx/strerr.h"
+#include "curlx/strparse.h"
+#include "curl_range.h"
+#include "http.h"
+#include "url.h"
+#include "getinfo.h"
+#include "hsts.h"
+#include "setopt.h"
+#include "headers.h"
+#include "bufref.h"
+#include "rtsp.h"
+#ifdef _WIN32
+#include <mstcpip.h>
+#endif
 
 static void cl_reset_writer(struct Curl_easy *data)
 {
@@ -2995,4 +3044,1959 @@ void Curl_pop3_smtp_trc_smtp_read(struct Curl_easy *data,
 void Curl_pop3_smtp_infof_msg(struct Curl_easy *data, const char *msg)
 {
   infof(data, "%s", msg);
+}
+
+/* Accessor helpers for Zig protocol handlers (gopher, dict, file, mqtt) */
+
+struct connectdata *Curl_proto_get_conn(struct Curl_easy *data)
+{
+  return data->conn;
+}
+
+curl_socket_t Curl_proto_get_firstsocket(struct Curl_easy *data)
+{
+  return data->conn->sock[FIRSTSOCKET];
+}
+
+const char *Curl_proto_get_up_path(struct Curl_easy *data)
+{
+  return data->state.up.path;
+}
+
+const char *Curl_proto_get_up_query(struct Curl_easy *data)
+{
+  return data->state.up.query;
+}
+
+bool Curl_proto_is_upload(struct Curl_easy *data)
+{
+  return data->state.upload;
+}
+
+curl_off_t Curl_proto_get_resume_from(struct Curl_easy *data)
+{
+  return data->state.resume_from;
+}
+
+void Curl_proto_set_resume_from(struct Curl_easy *data, curl_off_t val)
+{
+  data->state.resume_from = val;
+}
+
+uint32_t Curl_proto_get_new_file_perms(struct Curl_easy *data)
+{
+  return data->set.new_file_perms;
+}
+
+curl_off_t Curl_proto_get_infilesize(struct Curl_easy *data)
+{
+  return data->state.infilesize;
+}
+
+time_t Curl_proto_get_filetime(struct Curl_easy *data)
+{
+  return data->info.filetime;
+}
+
+void Curl_proto_set_filetime(struct Curl_easy *data, time_t val)
+{
+  data->info.filetime = val;
+}
+
+bool Curl_proto_has_range(struct Curl_easy *data)
+{
+  return data->state.range != NULL;
+}
+
+bool Curl_proto_has_timecondition(struct Curl_easy *data)
+{
+  return data->set.timecondition != 0;
+}
+
+bool Curl_proto_is_no_body(struct Curl_easy *data)
+{
+  return data->req.no_body;
+}
+
+curl_off_t Curl_proto_get_maxdownload(struct Curl_easy *data)
+{
+  return data->req.maxdownload;
+}
+
+void Curl_proto_get_creds(struct Curl_easy *data,
+                          const char **user, const char **passwd)
+{
+  struct Curl_creds *creds = data->state.creds;
+  *user = creds ? creds->user : NULL;
+  *passwd = creds ? creds->passwd : NULL;
+}
+
+void Curl_proto_unlink_creds(struct Curl_easy *data)
+{
+  Curl_creds_unlink(&data->state.creds);
+}
+
+char *Curl_proto_get_postfields(struct Curl_easy *data)
+{
+  return (char *)data->set.postfields;
+}
+
+curl_off_t Curl_proto_get_postfieldsize(struct Curl_easy *data)
+{
+  return data->set.postfieldsize;
+}
+
+curl_off_t Curl_proto_get_max_filesize(struct Curl_easy *data)
+{
+  return data->set.max_filesize;
+}
+
+void Curl_proto_set_req_download(struct Curl_easy *data, curl_off_t size)
+{
+  data->req.bytecount = 0;
+  data->req.size = size;
+}
+
+timediff_t Curl_proto_get_upkeep_interval_ms(struct Curl_easy *data)
+{
+  return data->set.upkeep_interval_ms;
+}
+
+bool Curl_proto_is_httpreq_post(struct Curl_easy *data)
+{
+  return data->state.httpreq == HTTPREQ_POST;
+}
+
+CURLcode Curl_proto_range(struct Curl_easy *data)
+{
+  return Curl_range(data);
+}
+
+/* Helpers for cfsocket_transfer.zig */
+
+void Curl_trc_bind_c(struct Curl_easy *data)
+{
+  if(data)
+    (void)CURL_TRC_BIND(data);
+}
+
+int Curl_cfsock_get_errno(void)
+{
+  return SOCKERRNO;
+}
+
+void Curl_cfsock_set_errno(int err)
+{
+  SET_SOCKERRNO(err);
+}
+
+void Curl_cfsock_set_data_os_errno(struct Curl_easy *data, int err)
+{
+  if(data)
+    data->state.os_errno = err;
+}
+
+int Curl_cfsock_get_eafnosupport(void)
+{
+  return SOCKEAFNOSUPPORT;
+}
+
+bool Curl_cfsock_is_einprogress_or_eagain(int sockerr)
+{
+  return (sockerr == SOCKEINPROGRESS || SOCK_EAGAIN(sockerr));
+}
+
+bool Curl_cfsock_is_send_eagain(int sockerr)
+{
+  if(SOCK_EAGAIN(sockerr))
+    return TRUE;
+#ifndef USE_WINSOCK
+  if((sockerr == SOCKEINTR) || (sockerr == SOCKEINPROGRESS))
+    return TRUE;
+#endif
+  return FALSE;
+}
+
+bool Curl_cfsock_is_recv_eagain(int sockerr)
+{
+  if(SOCK_EAGAIN(sockerr))
+    return TRUE;
+#ifndef USE_WINSOCK
+  if(sockerr == SOCKEINTR)
+    return TRUE;
+#endif
+  return FALSE;
+}
+
+int Curl_cfsock_strip_socktype(int x)
+{
+#ifdef SOCK_CLOEXEC
+  x &= ~SOCK_CLOEXEC;
+#endif
+#ifdef CURL_USE_SOCK_NONBLOCK
+  x &= ~SOCK_NONBLOCK;
+#endif
+  return x;
+}
+
+bool Curl_cfsock_is_dgram(int socktype)
+{
+  return Curl_cfsock_strip_socktype(socktype) == SOCK_DGRAM;
+}
+
+#ifdef USE_SO_NOSIGPIPE
+int Curl_sock_nosigpipe(curl_socket_t sockfd)
+{
+  int onoff = 1;
+  return setsockopt(sockfd, SOL_SOCKET, SO_NOSIGPIPE,
+                    (void *)&onoff, sizeof(onoff));
+}
+#endif
+
+#if defined(USE_IPV6) && defined(HAVE_SOCKADDR_IN6_SIN6_SCOPE_ID)
+static uint32_t cfsock_get_scope_id(struct Curl_easy *data,
+                                    struct sockaddr_in6 *sa6)
+{
+  uint32_t scope_id = 0;
+  if(data->conn->scope_id)
+    return data->conn->scope_id;
+  scope_id = sa6->sin6_scope_id;
+  if(!scope_id && IN6_IS_ADDR_LINKLOCAL(&sa6->sin6_addr)) {
+#if defined(HAVE_GETIFADDRS) && defined(HAVE_NET_IF_H)
+    struct ifaddrs *ifa, *ifa_list;
+    if(getifaddrs(&ifa_list) == 0) {
+      for(ifa = ifa_list; ifa; ifa = ifa->ifa_next) {
+        if(ifa->ifa_addr && ifa->ifa_addr->sa_family == AF_INET6 &&
+           (ifa->ifa_flags & IFF_UP) &&
+           !(ifa->ifa_flags & IFF_LOOPBACK)) {
+          struct sockaddr_in6 *s6 = (void *)ifa->ifa_addr;
+          if(IN6_IS_ADDR_LINKLOCAL(&s6->sin6_addr) && s6->sin6_scope_id) {
+            scope_id = s6->sin6_scope_id;
+            infof(data,
+                  "determined scope_id=%lu for link-local address "
+                  "from local interface",
+                  (unsigned long)scope_id);
+            break;
+          }
+        }
+      }
+      freeifaddrs(ifa_list);
+    }
+#endif
+  }
+  return scope_id;
+}
+#endif
+
+CURLcode Curl_cfsock_open_fd(struct Curl_easy *data,
+                             struct Curl_sockaddr_ex *addr,
+                             curl_socket_t *sockfd)
+{
+  char errbuf[STRERROR_LEN];
+
+#ifdef SOCK_CLOEXEC
+  addr->socktype |= SOCK_CLOEXEC;
+#endif
+
+  DEBUGASSERT(data);
+  DEBUGASSERT(data->conn);
+  if(data->set.fopensocket) {
+    struct Curl_mapi_guard guard;
+    CURL_CBAPI_START(&guard, data, easy_fopensocket);
+    *sockfd = data->set.fopensocket(data->set.opensocket_client,
+                                    CURLSOCKTYPE_IPCXN,
+                                    (struct curl_sockaddr *)addr);
+    CURL_CBAPI_END(&guard);
+  }
+  else {
+#ifdef DEBUGBUILD
+    if((addr->family == AF_INET6) && getenv("CURL_DBG_SOCK_FAIL_IPV6")) {
+      failf(data, "CURL_DBG_SOCK_FAIL_IPV6: failed to open socket");
+      return CURLE_COULDNT_CONNECT;
+    }
+#endif
+    *sockfd = CURL_SOCKET(addr->family, addr->socktype, addr->protocol);
+    if((*sockfd == CURL_SOCKET_BAD) && (SOCKERRNO == SOCKENOMEM))
+      return CURLE_OUT_OF_MEMORY;
+  }
+
+  if(*sockfd == CURL_SOCKET_BAD) {
+    failf(data, "failed to open socket: %s",
+          curlx_strerror(SOCKERRNO, errbuf, sizeof(errbuf)));
+    return CURLE_COULDNT_CONNECT;
+  }
+
+#ifdef USE_SO_NOSIGPIPE
+  if(Curl_sock_nosigpipe(*sockfd) < 0) {
+    failf(data, "setsockopt enable SO_NOSIGPIPE: %s",
+          curlx_strerror(SOCKERRNO, errbuf, sizeof(errbuf)));
+    sclose(*sockfd);
+    *sockfd = CURL_SOCKET_BAD;
+    return CURLE_COULDNT_CONNECT;
+  }
+#endif
+
+#if defined(HAVE_FCNTL) && !defined(SOCK_CLOEXEC)
+  if(fcntl(*sockfd, F_SETFD, FD_CLOEXEC) < 0) {
+    failf(data, "fcntl set CLOEXEC: %s",
+          curlx_strerror(SOCKERRNO, errbuf, sizeof(errbuf)));
+    sclose(*sockfd);
+    *sockfd = CURL_SOCKET_BAD;
+    return CURLE_COULDNT_CONNECT;
+  }
+#endif
+
+#if defined(USE_IPV6) && defined(HAVE_SOCKADDR_IN6_SIN6_SCOPE_ID)
+  if(addr->family == AF_INET6) {
+    struct sockaddr_in6 * const sa6 = (void *)&addr->curl_sa_addr;
+    sa6->sin6_scope_id = cfsock_get_scope_id(data, sa6);
+  }
+#endif
+  return CURLE_OK;
+}
+
+int Curl_cfsock_close_fd(struct Curl_easy *data, struct connectdata *conn,
+                         int use_callback, curl_socket_t sock)
+{
+  if(sock == CURL_SOCKET_BAD)
+    return 0;
+
+  if(use_callback && conn && conn->fclosesocket) {
+    struct Curl_mapi_guard guard;
+    int rc;
+    Curl_multi_will_close(data, sock);
+    CURL_CBAPI_START(&guard, data, easy_closesocket);
+    rc = conn->fclosesocket(conn->closesocket_client, sock);
+    CURL_CBAPI_END(&guard);
+    return rc;
+  }
+
+  if(conn)
+    Curl_multi_will_close(data, sock);
+
+  sclose(sock);
+
+  return 0;
+}
+
+static void cfsock_tcpnodelay(struct Curl_cfilter *cf,
+                              struct Curl_easy *data,
+                              curl_socket_t sockfd)
+{
+#if defined(TCP_NODELAY) && defined(CURL_TCP_NODELAY_SUPPORTED)
+  curl_socklen_t onoff = (curl_socklen_t)1;
+  int level = IPPROTO_TCP;
+  VERBOSE(char buffer[STRERROR_LEN]);
+
+  if(setsockopt(sockfd, level, TCP_NODELAY, (void *)&onoff, sizeof(onoff)) < 0)
+    CURL_TRC_CF(data, cf, "Could not set TCP_NODELAY: %s",
+                curlx_strerror(SOCKERRNO, buffer, sizeof(buffer)));
+#else
+  (void)cf;
+  (void)data;
+  (void)sockfd;
+#endif
+}
+
+#if defined(USE_WINSOCK) || defined(TCP_KEEPIDLE) ||               \
+  defined(TCP_KEEPALIVE) || defined(TCP_KEEPALIVE_THRESHOLD) ||    \
+  defined(TCP_KEEPINTVL) || defined(TCP_KEEPALIVE_ABORT_THRESHOLD)
+#if defined(USE_WINSOCK) || \
+  (defined(__sun) && !defined(TCP_KEEPIDLE)) || \
+  (defined(__DragonFly__) && __DragonFly_version < 500702) || \
+  (defined(_WIN32) && !defined(TCP_KEEPIDLE))
+static void cfsock_alive_unit(int *x)
+{
+  if(*x < (INT_MAX / 1000))
+    *x *= 1000;
+  else
+    *x = INT_MAX;
+}
+#else
+#define cfsock_alive_unit(x)
+#endif
+#endif
+
+static void cfsock_tcpkeepalive(struct Curl_cfilter *cf,
+                                struct Curl_easy *data,
+                                curl_socket_t sockfd)
+{
+  int optval = data->set.tcp_keepalive ? 1 : 0;
+
+  if(setsockopt(sockfd, SOL_SOCKET, SO_KEEPALIVE,
+                (void *)&optval, sizeof(optval)) < 0) {
+    CURL_TRC_CF(data, cf, "Failed to set SO_KEEPALIVE on fd "
+                "%" FMT_SOCKET_T ": errno %d", sockfd, SOCKERRNO);
+  }
+  else {
+#ifdef USE_WINSOCK
+    if(curlx_verify_windows_version(10, 0, 16299, PLATFORM_WINNT,
+                                    VERSION_GREATER_THAN_EQUAL)) {
+      CURL_TRC_CF(data, cf, "Set TCP_KEEP* on fd=%" FMT_SOCKET_T, sockfd);
+      optval = curlx_sltosi(data->set.tcp_keepidle);
+#ifndef TCP_KEEPALIVE
+#define TCP_KEEPALIVE 3
+#endif
+#ifndef TCP_KEEPCNT
+#define TCP_KEEPCNT 16
+#endif
+#ifndef TCP_KEEPIDLE
+#define TCP_KEEPIDLE TCP_KEEPALIVE
+#endif
+#ifndef TCP_KEEPINTVL
+#define TCP_KEEPINTVL 17
+#endif
+      if(setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPIDLE,
+                    (const char *)&optval, sizeof(optval)) < 0) {
+        CURL_TRC_CF(data, cf, "Failed to set TCP_KEEPIDLE on fd "
+                    "%" FMT_SOCKET_T ": errno %d", sockfd, SOCKERRNO);
+      }
+      optval = curlx_sltosi(data->set.tcp_keepintvl);
+      if(setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPINTVL,
+                    (const char *)&optval, sizeof(optval)) < 0) {
+        CURL_TRC_CF(data, cf, "Failed to set TCP_KEEPINTVL on fd "
+                    "%" FMT_SOCKET_T ": errno %d", sockfd, SOCKERRNO);
+      }
+      optval = curlx_sltosi(data->set.tcp_keepcnt);
+      if(setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPCNT,
+                    (const char *)&optval, sizeof(optval)) < 0) {
+        CURL_TRC_CF(data, cf, "Failed to set TCP_KEEPCNT on fd "
+                    "%" FMT_SOCKET_T ": errno %d", sockfd, SOCKERRNO);
+      }
+    }
+    else {
+#ifndef SIO_KEEPALIVE_VALS
+#define SIO_KEEPALIVE_VALS  _WSAIOW(IOC_VENDOR, 4)
+      struct tcp_keepalive {
+        u_long onoff;
+        u_long keepalivetime;
+        u_long keepaliveinterval;
+      };
+#endif
+      struct tcp_keepalive vals;
+      DWORD dummy;
+      vals.onoff = 1;
+      optval = curlx_sltosi(data->set.tcp_keepidle);
+      cfsock_alive_unit(&optval);
+      vals.keepalivetime = (u_long)optval;
+      optval = curlx_sltosi(data->set.tcp_keepintvl);
+      cfsock_alive_unit(&optval);
+      vals.keepaliveinterval = (u_long)optval;
+      if(WSAIoctl(sockfd, SIO_KEEPALIVE_VALS, (LPVOID)&vals, sizeof(vals),
+                  NULL, 0, &dummy, NULL, NULL) != 0) {
+        CURL_TRC_CF(data, cf, "Failed to set SIO_KEEPALIVE_VALS on fd "
+                    "%" FMT_SOCKET_T ": errno %d", sockfd, SOCKERRNO);
+      }
+    }
+#else /* !USE_WINSOCK */
+#ifdef TCP_KEEPIDLE
+    optval = curlx_sltosi(data->set.tcp_keepidle);
+    cfsock_alive_unit(&optval);
+    if(setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPIDLE,
+                  (void *)&optval, sizeof(optval)) < 0) {
+      CURL_TRC_CF(data, cf, "Failed to set TCP_KEEPIDLE on fd "
+                  "%" FMT_SOCKET_T ": errno %d", sockfd, SOCKERRNO);
+    }
+#elif defined(TCP_KEEPALIVE)
+    optval = curlx_sltosi(data->set.tcp_keepidle);
+    cfsock_alive_unit(&optval);
+    if(setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPALIVE,
+                  (void *)&optval, sizeof(optval)) < 0) {
+      CURL_TRC_CF(data, cf, "Failed to set TCP_KEEPALIVE on fd "
+                  "%" FMT_SOCKET_T ": errno %d", sockfd, SOCKERRNO);
+    }
+#elif defined(TCP_KEEPALIVE_THRESHOLD)
+    optval = curlx_sltosi(data->set.tcp_keepidle);
+    cfsock_alive_unit(&optval);
+    if(setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPALIVE_THRESHOLD,
+                  (void *)&optval, sizeof(optval)) < 0) {
+      CURL_TRC_CF(data, cf, "Failed to set TCP_KEEPALIVE_THRESHOLD on fd "
+                  "%" FMT_SOCKET_T ": errno %d", sockfd, SOCKERRNO);
+    }
+#endif
+#ifdef TCP_KEEPINTVL
+    optval = curlx_sltosi(data->set.tcp_keepintvl);
+    cfsock_alive_unit(&optval);
+    if(setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPINTVL,
+                  (void *)&optval, sizeof(optval)) < 0) {
+      CURL_TRC_CF(data, cf, "Failed to set TCP_KEEPINTVL on fd "
+                  "%" FMT_SOCKET_T ": errno %d", sockfd, SOCKERRNO);
+    }
+#elif defined(TCP_KEEPALIVE_ABORT_THRESHOLD)
+    {
+      int keepcnt = curlx_sltosi(data->set.tcp_keepcnt);
+      int keepintvl = curlx_sltosi(data->set.tcp_keepintvl);
+
+      if(keepcnt > 0 && keepintvl > (INT_MAX / keepcnt))
+        optval = INT_MAX;
+      else
+        optval = keepcnt * keepintvl;
+    }
+    cfsock_alive_unit(&optval);
+    if(setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPALIVE_ABORT_THRESHOLD,
+                  (void *)&optval, sizeof(optval)) < 0) {
+      CURL_TRC_CF(data, cf, "Failed to set TCP_KEEPALIVE_ABORT_THRESHOLD"
+                  " on fd %" FMT_SOCKET_T ": errno %d", sockfd, SOCKERRNO);
+    }
+#endif
+#ifdef TCP_KEEPCNT
+    optval = curlx_sltosi(data->set.tcp_keepcnt);
+    if(setsockopt(sockfd, IPPROTO_TCP, TCP_KEEPCNT,
+                  (void *)&optval, sizeof(optval)) < 0) {
+      CURL_TRC_CF(data, cf, "Failed to set TCP_KEEPCNT on fd "
+                  "%" FMT_SOCKET_T ": errno %d", sockfd, SOCKERRNO);
+    }
+#endif
+#endif /* USE_WINSOCK */
+  }
+}
+
+#ifdef _WIN32
+#ifndef SIO_TCP_INITIAL_RTO
+#define SIO_TCP_INITIAL_RTO _WSAIOW(IOC_VENDOR, 17)
+#define TCP_INITIAL_RTO_DEFAULT_RTT 0
+typedef struct _TCP_INITIAL_RTO_PARAMETERS {
+  USHORT Rtt;
+  UCHAR MaxSynRetransmissions;
+} TCP_INITIAL_RTO_PARAMETERS;
+#endif
+#ifndef TCP_INITIAL_RTO_NO_SYN_RETRANSMISSIONS
+#define TCP_INITIAL_RTO_NO_SYN_RETRANSMISSIONS 0xFE
+#endif
+static void cfsock_tcplocalhost(curl_socket_t sockfd, int family,
+                                const char *remote_ip)
+{
+  if(((family == AF_INET) && !strcmp(remote_ip, "127.0.0.1")) ||
+     ((family == AF_INET6) && !strcmp(remote_ip, "::1"))) {
+    TCP_INITIAL_RTO_PARAMETERS rto;
+    DWORD bytes = 0;
+    memset(&rto, 0, sizeof(rto));
+    rto.Rtt = TCP_INITIAL_RTO_DEFAULT_RTT;
+    if(curlx_verify_windows_version(10, 0, 16299, PLATFORM_WINNT,
+                                    VERSION_GREATER_THAN_EQUAL))
+      rto.MaxSynRetransmissions = TCP_INITIAL_RTO_NO_SYN_RETRANSMISSIONS;
+    else
+      rto.MaxSynRetransmissions = 1;
+    (void)WSAIoctl(sockfd, SIO_TCP_INITIAL_RTO, &rto, sizeof(rto),
+                   NULL, 0, &bytes, NULL, NULL);
+  }
+}
+#endif
+
+#ifndef CURL_DISABLE_BINDLOCAL
+CURLcode Curl_cfsock_bindlocal(struct Curl_easy *data, struct connectdata *conn,
+                               curl_socket_t sockfd, int af, unsigned int scope,
+                               uint8_t transport)
+{
+  struct Curl_sockaddr_storage sa;
+  struct sockaddr *sock = (struct sockaddr *)&sa;
+  curl_socklen_t sizeof_sa = 0;
+  struct sockaddr_in *si4 = (struct sockaddr_in *)&sa;
+#ifdef USE_IPV6
+  struct sockaddr_in6 *si6 = (struct sockaddr_in6 *)&sa;
+#endif
+  struct Curl_dns_entry *h = NULL;
+  unsigned short port = data->set.localport;
+  int portnum = data->set.localportrange;
+  char *dev_in = NULL, *iface_in = NULL, *host_in = NULL;
+  const char *iface = NULL, *host = NULL;
+  int sockerr;
+#ifdef IP_BIND_ADDRESS_NO_PORT
+  int on = 1;
+#endif
+  CURLcode result = CURLE_OK;
+
+#ifndef USE_IPV6
+  (void)scope;
+#endif
+  if(conn->interface_opts) {
+    result = Curl_parse_interface(conn->interface_opts,
+                                  &dev_in, &iface_in, &host_in);
+    if(result)
+      goto out;
+    iface = iface_in ? iface_in : dev_in;
+    host = host_in ? host_in : dev_in;
+  }
+
+  if(!iface && !host && !port)
+    goto out;
+
+  if(iface && (strlen(iface) >= 255)) {
+    result = CURLE_BAD_FUNCTION_ARGUMENT;
+    goto out;
+  }
+  memset(&sa, 0, sizeof(struct Curl_sockaddr_storage));
+
+  if(iface || host) {
+    char myhost[256] = "";
+    int done = 0;
+    if2ip_result_t if2ip_result = IF2IP_NOT_FOUND;
+
+#ifdef SO_BINDTODEVICE
+    if(iface &&
+       setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE,
+                  iface, (curl_socklen_t)strlen(iface) + 1) == 0 &&
+       !host_in) {
+      infof(data, "socket successfully bound to interface '%s'", iface);
+      result = CURLE_OK;
+      goto out;
+    }
+#endif
+    if(!host_in) {
+      if2ip_result = Curl_if2ip(af,
+#ifdef USE_IPV6
+                                scope, conn->scope_id,
+#endif
+                                iface, myhost, sizeof(myhost));
+    }
+    switch(if2ip_result) {
+    case IF2IP_NOT_FOUND:
+      if(iface_in && !host_in) {
+        char buffer[STRERROR_LEN];
+        data->state.os_errno = sockerr = SOCKERRNO;
+        failf(data, "Could not bind to interface '%s' with errno %d: %s",
+              iface, sockerr, curlx_strerror(sockerr, buffer, sizeof(buffer)));
+        result = CURLE_INTERFACE_FAILED;
+        goto out;
+      }
+      break;
+    case IF2IP_AF_NOT_SUPPORTED:
+      result = CURLE_UNSUPPORTED_PROTOCOL;
+      goto out;
+    case IF2IP_FOUND:
+      host = myhost;
+      infof(data, "Local Interface %s is ip %s using address family %d",
+            iface, host, af);
+      done = 1;
+      break;
+    }
+    if(!iface_in || host_in) {
+      uint8_t dns_queries = (af == AF_INET) ?
+                            CURL_DNSQ_A : (CURL_DNSQ_A | CURL_DNSQ_AAAA);
+#ifdef USE_IPV6
+      if(af == AF_INET6)
+        dns_queries = CURL_DNSQ_AAAA;
+#endif
+
+      (void)Curl_resolv_blocking(data, dns_queries, host, 80, transport, &h);
+      if(h) {
+        int h_af = h->addr->ai_family;
+        Curl_printable_address(h->addr, myhost, sizeof(myhost));
+        infof(data, "Name '%s' family %d resolved to '%s' family %d",
+              host, af, myhost, h_af);
+        Curl_dns_entry_unlink(data, &h);
+        if(af != h_af) {
+          result = CURLE_UNSUPPORTED_PROTOCOL;
+          goto out;
+        }
+        done = 1;
+      }
+      else {
+        done = -1;
+      }
+    }
+
+    if(done > 0) {
+#ifdef USE_IPV6
+      if(af == AF_INET6) {
+#ifdef HAVE_SOCKADDR_IN6_SIN6_SCOPE_ID
+        char *scope_ptr = strchr(myhost, '%');
+        if(scope_ptr)
+          *(scope_ptr++) = '\0';
+#endif
+        if(curlx_inet_pton(AF_INET6, myhost, &si6->sin6_addr) > 0) {
+          si6->sin6_family = AF_INET6;
+          si6->sin6_port = htons(port);
+#ifdef HAVE_SOCKADDR_IN6_SIN6_SCOPE_ID
+          if(scope_ptr) {
+            curl_off_t scope_id;
+            if(curlx_str_number((const char **)CURL_UNCONST(&scope_ptr),
+                                &scope_id, UINT_MAX)) {
+              result = CURLE_UNSUPPORTED_PROTOCOL;
+              goto out;
+            }
+            si6->sin6_scope_id = (unsigned int)scope_id;
+          }
+#endif
+        }
+        sizeof_sa = sizeof(struct sockaddr_in6);
+      }
+      else
+#endif
+      if((af == AF_INET) &&
+         (curlx_inet_pton(AF_INET, myhost, &si4->sin_addr) > 0)) {
+        si4->sin_family = AF_INET;
+        si4->sin_port = htons(port);
+        sizeof_sa = sizeof(struct sockaddr_in);
+      }
+    }
+
+    if(done < 1) {
+      char buffer[STRERROR_LEN];
+      data->state.errorbuf = FALSE;
+      data->state.os_errno = sockerr = SOCKERRNO;
+      failf(data, "Could not bind to '%s' with errno %d: %s", host,
+            sockerr, curlx_strerror(sockerr, buffer, sizeof(buffer)));
+      result = CURLE_INTERFACE_FAILED;
+      goto out;
+    }
+  }
+  else {
+#ifdef USE_IPV6
+    if(af == AF_INET6) {
+      si6->sin6_family = AF_INET6;
+      si6->sin6_port = htons(port);
+      sizeof_sa = sizeof(struct sockaddr_in6);
+    }
+    else
+#endif
+    if(af == AF_INET) {
+      si4->sin_family = AF_INET;
+      si4->sin_port = htons(port);
+      sizeof_sa = sizeof(struct sockaddr_in);
+    }
+  }
+#ifdef IP_BIND_ADDRESS_NO_PORT
+  (void)setsockopt(sockfd, SOL_IP, IP_BIND_ADDRESS_NO_PORT, &on, sizeof(on));
+#endif
+  for(;;) {
+    if(bind(sockfd, sock, sizeof_sa) >= 0) {
+      infof(data, "Local port: %hu", port);
+      conn->bits.bound = TRUE;
+      result = CURLE_OK;
+      goto out;
+    }
+
+    if(--portnum > 0) {
+      port++;
+      if(port == 0)
+        break;
+      infof(data, "Bind to local port %d failed, trying next", port - 1);
+      if(sock->sa_family == AF_INET)
+        si4->sin_port = htons(port);
+#ifdef USE_IPV6
+      else
+        si6->sin6_port = htons(port);
+#endif
+    }
+    else
+      break;
+  }
+  {
+    char buffer[STRERROR_LEN];
+    data->state.os_errno = sockerr = SOCKERRNO;
+    failf(data, "bind failed with errno %d: %s",
+          sockerr, curlx_strerror(sockerr, buffer, sizeof(buffer)));
+  }
+
+  result = CURLE_INTERFACE_FAILED;
+
+out:
+  curlx_free(dev_in);
+  curlx_free(iface_in);
+  curlx_free(host_in);
+  return result;
+}
+#endif
+
+void Curl_cfsock_tuck_nonblock(struct Curl_easy *data,
+                               struct Curl_sockaddr_ex *addr,
+                               bool set)
+{
+#ifdef CURL_USE_SOCK_NONBLOCK
+  if(!data->set.fopensocket) {
+    if(set)
+      addr->socktype |= SOCK_NONBLOCK;
+    else
+      addr->socktype &= ~SOCK_NONBLOCK;
+  }
+#else
+  (void)data;
+  (void)addr;
+  (void)set;
+#endif
+}
+
+bool Curl_cfsock_needs_nonblock_call(struct Curl_easy *data)
+{
+#ifndef CURL_USE_SOCK_NONBLOCK
+  (void)data;
+  return TRUE;
+#else
+  return data->set.fopensocket != NULL;
+#endif
+}
+
+CURLcode Curl_cfsock_post_open_opts(struct Curl_cfilter *cf,
+                                    struct Curl_easy *data,
+                                    curl_socket_t sock,
+                                    const struct Curl_sockaddr_ex *addr,
+                                    const struct ip_quadruple *ip,
+                                    uint8_t transport,
+                                    bool *isconnected_out)
+{
+  bool is_tcp;
+  *isconnected_out = FALSE;
+
+#ifdef USE_IPV6
+  if(addr->family == AF_INET6) {
+#ifdef USE_WINSOCK
+    int on = 0;
+    (void)setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY,
+                     (void *)&on, sizeof(on));
+#endif
+#ifdef HAVE_SOCKADDR_IN6_SIN6_SCOPE_ID
+    {
+      const struct sockaddr_in6 *sa6 = (const void *)&addr->curl_sa_addr;
+      if(sa6->sin6_scope_id)
+        infof(data, "  Trying [%s]:%d scope_id=%lu...",
+              ip->remote_ip, ip->remote_port,
+              (unsigned long)sa6->sin6_scope_id);
+      else
+#endif
+        infof(data, "  Trying [%s]:%d...",
+              ip->remote_ip, ip->remote_port);
+#ifdef HAVE_SOCKADDR_IN6_SIN6_SCOPE_ID
+    }
+#endif
+  }
+  else
+#endif
+    infof(data, "  Trying %s:%d...", ip->remote_ip, ip->remote_port);
+
+#ifdef USE_IPV6
+  is_tcp = (addr->family == AF_INET ||
+            addr->family == AF_INET6) &&
+    Curl_cfsock_strip_socktype(addr->socktype) == SOCK_STREAM;
+#else
+  is_tcp = (addr->family == AF_INET) &&
+    Curl_cfsock_strip_socktype(addr->socktype) == SOCK_STREAM;
+#endif
+  if(is_tcp) {
+    if(data->set.tcp_nodelay)
+      cfsock_tcpnodelay(cf, data, sock);
+
+    if(data->set.tcp_keepalive)
+      cfsock_tcpkeepalive(cf, data, sock);
+
+#ifdef _WIN32
+    cfsock_tcplocalhost(sock, addr->family, ip->remote_ip);
+#endif
+  }
+
+  if(data->set.fsockopt) {
+    struct Curl_mapi_guard guard;
+    int error;
+    CURL_CBAPI_START(&guard, data, easy_fsockopt);
+    error = data->set.fsockopt(data->set.sockopt_client,
+                               sock,
+                               CURLSOCKTYPE_IPCXN);
+    CURL_CBAPI_END(&guard);
+
+    if(error == CURL_SOCKOPT_ALREADY_CONNECTED)
+      *isconnected_out = TRUE;
+    else if(error)
+      return CURLE_ABORTED_BY_CALLBACK;
+  }
+
+#ifndef CURL_DISABLE_BINDLOCAL
+  if(addr->family == AF_INET
+#ifdef USE_IPV6
+     || addr->family == AF_INET6
+#endif
+    ) {
+    CURLcode result = Curl_cfsock_bindlocal(data, cf->conn, sock, addr->family,
+                                            Curl_ipv6_scope(&addr->curl_sa_addr),
+                                            transport);
+    if(result) {
+      if(result == CURLE_UNSUPPORTED_PROTOCOL)
+        result = CURLE_COULDNT_CONNECT;
+      return result;
+    }
+  }
+#else
+  (void)transport;
+#endif
+
+  return CURLE_OK;
+}
+
+int Curl_cfsock_do_connect(struct Curl_cfilter *cf, struct Curl_easy *data,
+                           curl_socket_t sock, struct Curl_sockaddr_ex *addr,
+                           bool is_tcp_fastopen)
+{
+#ifdef TCP_FASTOPEN_CONNECT
+  int optval = 1;
+#endif
+  int rc = -1;
+
+  (void)data;
+  if(is_tcp_fastopen) {
+#ifdef CONNECT_DATA_IDEMPOTENT
+#  ifdef HAVE_BUILTIN_AVAILABLE
+    if(__builtin_available(macOS 10.11, iOS 9, tvOS 9, watchOS 2, *)) {
+      sa_endpoints_t endpoints;
+      endpoints.sae_srcif = 0;
+      endpoints.sae_srcaddr = NULL;
+      endpoints.sae_srcaddrlen = 0;
+      endpoints.sae_dstaddr = &addr->curl_sa_addr;
+      endpoints.sae_dstaddrlen = addr->addrlen;
+
+      rc = connectx(sock, &endpoints, SAE_ASSOCID_ANY,
+                    CONNECT_RESUME_ON_READ_WRITE | CONNECT_DATA_IDEMPOTENT,
+                    NULL, 0, NULL, NULL);
+    }
+    else {
+      rc = connect(sock, &addr->curl_sa_addr, addr->addrlen);
+    }
+#  else
+    rc = connect(sock, &addr->curl_sa_addr, addr->addrlen);
+#  endif
+#elif defined(TCP_FASTOPEN_CONNECT)
+    if(setsockopt(sock, IPPROTO_TCP, TCP_FASTOPEN_CONNECT,
+                  (void *)&optval, sizeof(optval)) < 0)
+      CURL_TRC_CF(data, cf, "Failed to enable TCP Fast Open on fd %"
+                  FMT_SOCKET_T, sock);
+
+    rc = connect(sock, &addr->curl_sa_addr, addr->addrlen);
+#elif defined(MSG_FASTOPEN)
+    if(Curl_conn_is_ssl(cf->conn, cf->sockindex))
+      rc = connect(sock, &addr->curl_sa_addr, addr->addrlen);
+    else
+      rc = 0;
+#endif
+  }
+  else {
+    rc = connect(sock, &addr->curl_sa_addr,
+                 (curl_socklen_t)addr->addrlen);
+  }
+  return rc;
+}
+
+bool Curl_cfsock_verifyconnect(curl_socket_t sockfd, int *psockerr)
+{
+  bool rc = TRUE;
+#ifdef SO_ERROR
+  int sockerr = 0;
+  curl_socklen_t errSize = sizeof(sockerr);
+
+#ifdef _WIN32
+  SleepEx(0, FALSE);
+#endif
+
+  if(getsockopt(sockfd, SOL_SOCKET, SO_ERROR, (void *)&sockerr, &errSize))
+    sockerr = SOCKERRNO;
+#if defined(EBADIOCTL) && defined(__minix)
+  if(EBADIOCTL == sockerr) {
+    SET_SOCKERRNO(0);
+    sockerr = 0;
+  }
+#endif
+  if((sockerr == 0) || (SOCKEISCONN == sockerr))
+    rc = TRUE;
+  else
+    rc = FALSE;
+  if(psockerr)
+    *psockerr = sockerr;
+#else
+  (void)sockfd;
+  if(psockerr)
+    *psockerr = SOCKERRNO;
+#endif
+  return rc;
+}
+
+int Curl_cfsock_getsockname(struct Curl_easy *data, curl_socket_t sock,
+                            struct Curl_sockaddr_storage *ssloc,
+                            curl_socklen_t *slen, int *sockerr_out)
+{
+#ifdef HAVE_GETSOCKNAME
+  if((sock != CURL_SOCKET_BAD) &&
+     !(data->conn->scheme->protocol & CURLPROTO_TFTP)) {
+    *slen = sizeof(struct Curl_sockaddr_storage);
+    memset(ssloc, 0, sizeof(struct Curl_sockaddr_storage));
+    if(getsockname(sock, (struct sockaddr *)ssloc, slen)) {
+      *sockerr_out = SOCKERRNO;
+      return -1;
+    }
+    return 1;
+  }
+#else
+  (void)data;
+  (void)sock;
+  (void)ssloc;
+  (void)slen;
+  (void)sockerr_out;
+#endif
+  return 0;
+}
+
+int Curl_cfsock_getpeername(curl_socket_t sock,
+                            struct Curl_sockaddr_storage *ssrem,
+                            curl_socklen_t *plen, int *sockerr_out)
+{
+#ifdef HAVE_GETPEERNAME
+  *plen = sizeof(struct Curl_sockaddr_storage);
+  memset(ssrem, 0, sizeof(struct Curl_sockaddr_storage));
+  if(getpeername(sock, (struct sockaddr *)ssrem, plen)) {
+    *sockerr_out = SOCKERRNO;
+    return -1;
+  }
+  return 1;
+#else
+  (void)sock;
+  (void)ssrem;
+  (void)plen;
+  (void)sockerr_out;
+  return 0;
+#endif
+}
+
+ssize_t Curl_cfsock_swrite(struct connectdata *conn, curl_socket_t sock,
+                           const void *buf, size_t len,
+                           const struct Curl_sockaddr_ex *addr,
+                           int *sockerr_out)
+{
+  ssize_t rv;
+#if defined(MSG_FASTOPEN) && !defined(TCP_FASTOPEN_CONNECT)
+  if(conn->bits.tcp_fastopen) {
+    rv = sendto(sock, buf, len, MSG_FASTOPEN,
+                &addr->curl_sa_addr, addr->addrlen);
+    conn->bits.tcp_fastopen = FALSE;
+  }
+  else
+#else
+  (void)conn;
+  (void)addr;
+#endif
+    rv = swrite(sock, buf, len);
+  if(rv < 0)
+    *sockerr_out = SOCKERRNO;
+  return rv;
+}
+
+ssize_t Curl_cfsock_sread(curl_socket_t sock, void *buf, size_t len,
+                          int *sockerr_out)
+{
+  ssize_t rv = sread(sock, buf, len);
+  if(rv < 0)
+    *sockerr_out = SOCKERRNO;
+  return rv;
+}
+
+void Curl_cfsock_win_update_sndbuf(struct Curl_easy *data,
+                                   curl_socket_t sock,
+                                   struct curltime *last_query_at,
+                                   unsigned int *sndbuf_size)
+{
+#ifdef USE_WINSOCK
+#ifndef SIO_IDEAL_SEND_BACKLOG_QUERY
+#define SIO_IDEAL_SEND_BACKLOG_QUERY 0x4004747B
+#endif
+  ULONG ideal;
+  DWORD ideallen;
+
+  if(curlx_ptimediff_ms(Curl_pgrs_now(data), last_query_at) > 1000) {
+    if(!WSAIoctl(sock, SIO_IDEAL_SEND_BACKLOG_QUERY, 0, 0,
+                 &ideal, sizeof(ideal), &ideallen, 0, 0) &&
+       ideal != (ULONG)*sndbuf_size &&
+       !setsockopt(sock, SOL_SOCKET, SO_SNDBUF,
+                   (const char *)&ideal, sizeof(ideal))) {
+      *sndbuf_size = (unsigned int)ideal;
+    }
+    *last_query_at = *Curl_pgrs_now(data);
+  }
+#else
+  (void)data;
+  (void)sock;
+  (void)last_query_at;
+  (void)sndbuf_size;
+#endif
+}
+
+void Curl_cfsock_quic_opts(curl_socket_t sock, int addr_family)
+{
+#if (defined(__linux__) || defined(__APPLE__)) && defined(IP_RECVTOS)
+  {
+    unsigned int tos = 1;
+    switch(addr_family) {
+    case AF_INET:
+      (void)setsockopt(sock, IPPROTO_IP, IP_RECVTOS, &tos, sizeof(tos));
+      break;
+#ifdef IPV6_RECVTCLASS
+    case AF_INET6:
+      (void)setsockopt(sock, IPPROTO_IPV6, IPV6_RECVTCLASS,
+                       &tos, sizeof(tos));
+      break;
+#endif
+    }
+  }
+#endif
+#ifdef __linux__
+  {
+    int val;
+    switch(addr_family) {
+#ifdef IP_MTU_DISCOVER
+    case AF_INET:
+      val = IP_PMTUDISC_DO;
+      (void)setsockopt(sock, IPPROTO_IP, IP_MTU_DISCOVER, &val,
+                       sizeof(val));
+      break;
+#endif
+#ifdef IPV6_MTU_DISCOVER
+    case AF_INET6:
+      val = IPV6_PMTUDISC_DO;
+      (void)setsockopt(sock, IPPROTO_IPV6, IPV6_MTU_DISCOVER, &val,
+                       sizeof(val));
+      break;
+#endif
+    }
+  }
+#endif
+#if (defined(__linux__) || defined(__APPLE__)) && defined(IP_DONTFRAG)
+  {
+    int val = 1;
+    switch(addr_family) {
+    case AF_INET:
+      (void)setsockopt(sock, IPPROTO_IP, IP_DONTFRAG, &val, sizeof(val));
+      break;
+#ifdef IPV6_DONTFRAG
+    case AF_INET6:
+      (void)setsockopt(sock, IPPROTO_IPV6, IPV6_DONTFRAG,
+                       &val, sizeof(val));
+      break;
+#endif
+    }
+  }
+#endif
+#if defined(UDP_GRO) &&                                                 \
+  (defined(HAVE_SENDMMSG) || defined(HAVE_SENDMSG)) &&                  \
+  ((defined(USE_NGTCP2) && defined(USE_NGHTTP3)) || defined(USE_QUICHE))
+  {
+    int one = 1;
+    (void)setsockopt(sock, IPPROTO_UDP, UDP_GRO, &one,
+                     (socklen_t)sizeof(one));
+  }
+#endif
+  (void)sock;
+  (void)addr_family;
+}
+
+timediff_t Curl_cfsock_get_accepttimeout(struct Curl_easy *data)
+{
+  timediff_t timeout_ms = DEFAULT_ACCEPT_TIMEOUT;
+#ifndef CURL_DISABLE_FTP
+  if(data->set.accepttimeout > 0)
+    timeout_ms = data->set.accepttimeout;
+#else
+  (void)data;
+#endif
+  return timeout_ms;
+}
+
+CURLcode Curl_cfsock_accept_fd(struct Curl_easy *data,
+                               struct connectdata *conn,
+                               curl_socket_t listen_sock,
+                               curl_socket_t *s_accepted_out)
+{
+  char errbuf[STRERROR_LEN];
+#ifdef USE_IPV6
+  struct Curl_sockaddr_storage add;
+#else
+  struct sockaddr_in add;
+#endif
+  curl_socklen_t size = (curl_socklen_t)sizeof(add);
+  curl_socket_t s_accepted;
+
+#ifdef HAVE_ACCEPT4
+  s_accepted = CURL_ACCEPT4(listen_sock, (struct sockaddr *)&add, &size,
+                            SOCK_NONBLOCK | SOCK_CLOEXEC);
+#else
+  s_accepted = CURL_ACCEPT(listen_sock, (struct sockaddr *)&add, &size);
+#endif
+
+  if(s_accepted == CURL_SOCKET_BAD) {
+    failf(data, "Error accept()ing server connect: %s",
+          curlx_strerror(SOCKERRNO, errbuf, sizeof(errbuf)));
+    return CURLE_FTP_ACCEPT_FAILED;
+  }
+#ifndef HAVE_ACCEPT4
+#ifdef HAVE_FCNTL
+  if(fcntl(s_accepted, F_SETFD, FD_CLOEXEC) < 0) {
+    failf(data, "fcntl set CLOEXEC: %s",
+          curlx_strerror(SOCKERRNO, errbuf, sizeof(errbuf)));
+    Curl_socket_close(data, conn, s_accepted);
+    return CURLE_FTP_ACCEPT_FAILED;
+  }
+#endif
+  if(curlx_nonblock(s_accepted, TRUE) < 0) {
+    failf(data, "set socket NONBLOCK: %s",
+          curlx_strerror(SOCKERRNO, errbuf, sizeof(errbuf)));
+    Curl_socket_close(data, conn, s_accepted);
+    return CURLE_FTP_ACCEPT_FAILED;
+  }
+#else
+  (void)conn;
+#endif
+  *s_accepted_out = s_accepted;
+  return CURLE_OK;
+}
+
+CURLcode Curl_cfsock_call_fsockopt_accept(struct Curl_easy *data,
+                                          curl_socket_t sock)
+{
+  if(data->set.fsockopt) {
+    struct Curl_mapi_guard guard;
+    int error = 0;
+
+    CURL_CBAPI_START(&guard, data, easy_fsockopt);
+    error = data->set.fsockopt(data->set.sockopt_client,
+                               sock, CURLSOCKTYPE_ACCEPT);
+    CURL_CBAPI_END(&guard);
+
+    if(error)
+      return CURLE_ABORTED_BY_CALLBACK;
+  }
+  return CURLE_OK;
+}
+
+curl_socket_t Curl_cfsock_get_conn_sock(struct connectdata *conn,
+                                        int8_t sockindex)
+{
+  return conn->sock[sockindex];
+}
+
+void Curl_cfsock_set_conn_sock(struct connectdata *conn,
+                               int8_t sockindex,
+                               curl_socket_t sock)
+{
+  conn->sock[sockindex] = sock;
+}
+
+struct Curl_cfilter *Curl_cfsock_get_conn_cfilter(struct Curl_easy *data,
+                                                  int8_t sockindex)
+{
+  return data->conn->cfilter[sockindex];
+}
+
+bool Curl_cfsock_is_tcp_fastopen(struct connectdata *conn)
+{
+  return (bool)conn->bits.tcp_fastopen;
+}
+
+void Curl_cfsock_set_conn_ipv6(struct connectdata *conn, int8_t sockindex,
+                               int addr_family)
+{
+#ifdef USE_IPV6
+  if(sockindex == FIRSTSOCKET)
+    conn->bits.ipv6 = (addr_family == AF_INET6);
+#else
+  (void)conn;
+  (void)sockindex;
+  (void)addr_family;
+#endif
+}
+
+void Curl_cfsock_set_data_primary_ip(struct Curl_easy *data,
+                                     const struct ip_quadruple *ip)
+{
+  data->info.primary = *ip;
+}
+
+/* Transfer helpers for cfsocket_transfer.zig */
+
+struct curl_slist *Curl_xfer_get_set_headers(const struct Curl_easy *data)
+{
+  return data->set.headers;
+}
+
+struct connectdata *Curl_xfer_get_conn(struct Curl_easy *data)
+{
+  return data ? data->conn : NULL;
+}
+
+int8_t Curl_xfer_get_send_idx(struct Curl_easy *data)
+{
+  return data->conn->send_idx;
+}
+
+int8_t Curl_xfer_get_recv_idx(struct Curl_easy *data)
+{
+  return data->conn->recv_idx;
+}
+
+bool Curl_xfer_in_recv_shutdown(struct Curl_easy *data)
+{
+  if(!data || !data->conn)
+    return FALSE;
+  return CURL_CONN_IN_SHUTDOWN(data->conn, data->conn->recv_idx);
+}
+
+uint32_t Curl_xfer_get_scheme_protocol(struct Curl_easy *data)
+{
+  return data->conn->scheme->protocol;
+}
+
+void Curl_xfer_get_timecond_info(struct Curl_easy *data,
+                                 curl_off_t *timevalue,
+                                 uint8_t *timecondition)
+{
+  *timevalue = data->set.timevalue;
+  *timecondition = data->set.timecondition;
+}
+
+void Curl_xfer_set_timecond_met(struct Curl_easy *data)
+{
+  data->info.timecond = TRUE;
+}
+
+void Curl_xfer_get_recv_resp_state(struct Curl_easy *data,
+                                   curl_off_t *size,
+                                   curl_off_t *bytecount,
+                                   bool *header,
+                                   bool *shutdown)
+{
+  *size = data->req.size;
+  *bytecount = data->req.bytecount;
+  *header = (bool)data->req.header;
+  *shutdown = (bool)data->req.shutdown;
+}
+
+struct Curl_rlimit *Curl_xfer_get_dl_rlimit(struct Curl_easy *data)
+{
+  return &data->progress.dl.rlimit;
+}
+
+struct Curl_rlimit *Curl_xfer_get_ul_rlimit(struct Curl_easy *data)
+{
+  return &data->progress.ul.rlimit;
+}
+
+bool Curl_xfer_can_skip_eagain_eos(struct Curl_easy *data)
+{
+  return data->req.download_done && data->req.no_body &&
+         !data->req.resp_trailer;
+}
+
+bool Curl_xfer_is_eos_written(struct Curl_easy *data)
+{
+  return (bool)data->req.eos_written;
+}
+
+bool Curl_xfer_is_req_done(struct Curl_easy *data)
+{
+  return (bool)data->req.done;
+}
+
+void Curl_xfer_set_req_done(struct Curl_easy *data, bool done)
+{
+  data->req.done = done;
+}
+
+bool Curl_xfer_is_download_done(struct Curl_easy *data)
+{
+  return (bool)data->req.download_done;
+}
+
+void Curl_xfer_clear_req_recv(struct Curl_easy *data)
+{
+  CURL_REQ_CLEAR_RECV(data);
+}
+
+bool Curl_xfer_req_want_recv(struct Curl_easy *data)
+{
+  return (bool)CURL_REQ_WANT_RECV(data);
+}
+
+bool Curl_xfer_req_want_send(struct Curl_easy *data)
+{
+  return (bool)CURL_REQ_WANT_SEND(data);
+}
+
+bool Curl_xfer_req_want_io(struct Curl_easy *data)
+{
+  return (bool)CURL_REQ_WANT_IO(data);
+}
+
+bool Curl_xfer_is_conn_close(struct Curl_easy *data)
+{
+  return (bool)data->conn->bits.close;
+}
+
+void Curl_xfer_get_final_check_info(struct Curl_easy *data,
+                                    bool *no_body,
+                                    curl_off_t *size,
+                                    curl_off_t *bytecount,
+                                    bool *has_newurl)
+{
+  *no_body = (bool)data->req.no_body;
+  *size = data->req.size;
+  *bytecount = data->req.bytecount;
+  *has_newurl = data->req.newurl != NULL;
+}
+
+void Curl_xfer_init_connect_c(struct Curl_easy *data)
+{
+  data->state.fread_func = data->set.fread_func_set;
+  data->state.in = data->set.in_set;
+  data->state.upload = (data->state.httpreq == HTTPREQ_PUT);
+}
+
+CURLcode Curl_xfer_pretransfer_c(struct Curl_easy *data)
+{
+  CURLcode result = CURLE_OK;
+
+  data->state.retrycount = 0;
+
+  if(!CURL_EASY_STR(data, STRING_SET_URL) && !data->set.uh) {
+    failf(data, "No URL set");
+    return CURLE_URL_MALFORMAT;
+  }
+
+  if(data->set.uh) {
+    char *url = NULL;
+    CURLUcode uc;
+    uc = curl_url_get(data->set.uh, CURLUPART_URL, &url, 0);
+    if(uc) {
+      Curl_bufref_set(&data->state.url, NULL, 0, NULL);
+      failf(data, "No URL set");
+      return CURLE_URL_MALFORMAT;
+    }
+    result = CURL_EASY_STR_SETN(data, STRING_SET_URL, url);
+    if(result)
+      return result;
+  }
+
+  Curl_bufref_set(&data->state.url, CURL_EASY_STR(data, STRING_SET_URL),
+                  0, NULL);
+
+  if(data->set.postfields && data->set.set_resume_from) {
+    failf(data, "cannot mix POSTFIELDS with RESUME_FROM");
+    return CURLE_BAD_FUNCTION_ARGUMENT;
+  }
+
+  data->state.prefer_ascii = data->set.prefer_ascii;
+#ifdef CURL_LIST_ONLY_PROTOCOL
+  data->state.list_only = data->set.list_only;
+#endif
+  data->state.httpreq = data->set.method;
+
+  Curl_peer_unlink(&data->state.initial_origin);
+  Curl_peer_unlink(&data->state.origin);
+  data->state.requests = 0;
+  data->state.followlocation = 0;
+  data->state.this_is_a_follow = FALSE;
+  data->state.http_ignorecustom = FALSE;
+  data->state.errorbuf = FALSE;
+#ifndef CURL_DISABLE_HTTP
+  Curl_http_neg_init(data, &data->state.http_neg);
+#endif
+  data->state.authproblem = FALSE;
+  data->state.authhost.want = data->set.httpauth;
+  data->state.authproxy.want = data->set.proxyauth;
+  curlx_safefree(data->info.wouldredirect);
+  curlx_safefree(data->info.effective_url);
+  Curl_data_priority_clear_state(data);
+  if(data->set.http_auto_referer)
+    Curl_bufref_free(&data->state.referer);
+  if(CURL_EASY_STR(data, STRING_SET_REFERER))
+    Curl_bufref_set(&data->state.referer,
+                    CURL_EASY_STR(data, STRING_SET_REFERER), 0, NULL);
+  else
+    Curl_bufref_free(&data->state.referer);
+
+  if(data->state.httpreq == HTTPREQ_PUT)
+    data->state.infilesize = data->set.filesize;
+  else if((data->state.httpreq != HTTPREQ_GET) &&
+          (data->state.httpreq != HTTPREQ_HEAD)) {
+    data->state.infilesize = data->set.postfieldsize;
+    if(data->set.postfields && (data->state.infilesize == -1))
+      data->state.infilesize = (curl_off_t)strlen(data->set.postfields);
+  }
+  else
+    data->state.infilesize = 0;
+
+  result = Curl_cookie_loadfiles(data,
+                                 data->set.cookiesession ?
+                                 COOKIE_NOSESSION : 0);
+  if(!result)
+    Curl_cookie_run(data);
+
+  if(!result && data->state.resolve)
+    result = Curl_loadhostpairs(data);
+
+  if(!result)
+    result = Curl_hsts_loadfiles(data);
+
+  if(!result) {
+    data->state.allow_port = TRUE;
+
+#if defined(HAVE_SIGNAL) && defined(SIGPIPE) && !defined(MSG_NOSIGNAL)
+    if(!data->set.no_signal)
+      data->state.prev_signal = signal(SIGPIPE, SIG_IGN);
+#endif
+
+    Curl_initinfo(data);
+    Curl_pgrsResetTransferSizes(data);
+    Curl_pgrsStart(data, NULL);
+
+    data->state.authhost.picked &= data->state.authhost.want;
+    data->state.authproxy.picked &= data->state.authproxy.want;
+
+#ifndef CURL_DISABLE_FTP
+    data->state.wildcardmatch = data->set.wildcard_enabled;
+#ifdef DEBUGBUILD
+    if(getenv("CURL_DBG_FTP_WILDCARD"))
+      data->state.wildcardmatch = TRUE;
+#endif
+    if(data->state.wildcardmatch) {
+      struct WildcardData *wc;
+      if(!data->wildcard) {
+        data->wildcard = curlx_calloc(1, sizeof(struct WildcardData));
+        if(!data->wildcard)
+          return CURLE_OUT_OF_MEMORY;
+      }
+      wc = data->wildcard;
+      if(wc->state < CURLWC_INIT) {
+        if(wc->ftpwc)
+          wc->dtor(wc->ftpwc);
+        curlx_safefree(wc->pattern);
+        curlx_safefree(wc->path);
+        Curl_wildcard_init(wc);
+      }
+    }
+#endif
+    result = Curl_hsts_loadcb(data, data->hsts);
+  }
+
+  data->req.headerbytecount = 0;
+  Curl_headers_cleanup(data);
+  return result;
+}
+
+int Curl_xfer_check_retry(struct Curl_easy *data, uint8_t *retrycount_out)
+{
+  struct connectdata *conn = data->conn;
+
+  if(data->state.upload &&
+     !(conn->scheme->protocol & (PROTO_FAMILY_HTTP | CURLPROTO_RTSP)))
+    return 0;
+
+  if(conn->bits.reuse &&
+     (data->req.bytecount + data->req.headerbytecount == 0) &&
+     ((!data->req.no_body && !data->req.done) ||
+      (conn->scheme->protocol & PROTO_FAMILY_HTTP))
+#ifndef CURL_DISABLE_RTSP
+     && (data->set.rtspreq != RTSPREQ_RECEIVE)
+#endif
+    ) {
+    *retrycount_out = data->state.retrycount;
+    return 1;
+  }
+  else if(data->state.refused_stream &&
+          (data->req.bytecount + data->req.headerbytecount == 0)) {
+    data->state.refused_stream = FALSE;
+    *retrycount_out = data->state.retrycount;
+    return 2;
+  }
+  return 0;
+}
+
+void Curl_xfer_set_retrycount(struct Curl_easy *data, uint8_t val)
+{
+  data->state.retrycount = val;
+}
+
+CURLcode Curl_xfer_apply_retry(struct Curl_easy *data, char **url)
+{
+  struct connectdata *conn = data->conn;
+  *url = Curl_bufref_dup(&data->state.url);
+  if(!*url)
+    return CURLE_OUT_OF_MEMORY;
+
+  connclose(conn);
+  conn->bits.retry = TRUE;
+  return CURLE_OK;
+}
+
+void Curl_xfer_setup_fields(struct Curl_easy *data,
+                            int8_t send_idx,
+                            int8_t recv_idx,
+                            curl_off_t recv_size,
+                            bool *is_header_out)
+{
+  struct SingleRequest *k = &data->req;
+  struct connectdata *conn = data->conn;
+
+  DEBUGASSERT(conn);
+  DEBUGASSERT((send_idx <= 1) && (send_idx >= -1));
+  DEBUGASSERT((recv_idx <= 1) && (recv_idx >= -1));
+  DEBUGASSERT((send_idx >= 0) || !Curl_req_want_send(data));
+
+  conn->send_idx = send_idx;
+  conn->recv_idx = recv_idx;
+
+  DEBUGASSERT((conn->recv_idx >= 0) || (recv_size == -1));
+  k->size = recv_size;
+  k->header = !!conn->scheme->run->write_resp_hd;
+  k->shutdown = FALSE;
+  k->shutdown_err_ignore = FALSE;
+  *is_header_out = (bool)k->header;
+
+  if(conn->scheme->run->write_resp_hd || !data->req.no_body) {
+    if(conn->recv_idx != -1)
+      CURL_REQ_SET_RECV(data);
+    if(conn->send_idx != -1)
+      CURL_REQ_SET_SEND(data);
+  }
+}
+
+void Curl_xfer_set_shutdown_fields(struct Curl_easy *data,
+                                   bool shutdown,
+                                   bool ignore_errors)
+{
+  DEBUGASSERT(!shutdown ||
+              (data->conn->send_idx < 0) || (data->conn->recv_idx < 0));
+  data->req.shutdown = shutdown;
+  data->req.shutdown_err_ignore = ignore_errors;
+}
+
+CURLcode Curl_xfer_scheme_write_resp(struct Curl_easy *data,
+                                     const char *buf, size_t blen,
+                                     bool is_eos, bool *handled_out)
+{
+  if(data->conn->scheme->run->write_resp) {
+    *handled_out = TRUE;
+    return data->conn->scheme->run->write_resp(data, buf, blen, is_eos);
+  }
+  *handled_out = FALSE;
+  return CURLE_OK;
+}
+
+void Curl_xfer_mark_eos_written(struct Curl_easy *data)
+{
+  data->req.eos_written = TRUE;
+  data->req.download_done = TRUE;
+}
+
+bool Curl_xfer_is_cwriter_paused(struct Curl_easy *data)
+{
+  return Curl_cwriter_is_paused(data);
+}
+
+CURLcode Curl_xfer_scheme_write_resp_hd(struct Curl_easy *data,
+                                        const char *hd0, size_t hdlen,
+                                        bool is_eos, bool *handled_out)
+{
+  if(data->conn->scheme->run->write_resp_hd) {
+    DEBUGASSERT(!hd0[hdlen]);
+    *handled_out = TRUE;
+    return data->conn->scheme->run->write_resp_hd(data, hd0, hdlen, is_eos);
+  }
+  *handled_out = FALSE;
+  return CURLE_OK;
+}
+
+void Curl_xfer_add_request_size(struct Curl_easy *data, size_t nwritten)
+{
+  data->info.request_size += nwritten;
+}
+
+size_t Curl_xfer_get_buffer_size(struct Curl_easy *data)
+{
+  DEBUGASSERT(data);
+  DEBUGASSERT(data->conn);
+  DEBUGASSERT(data->set.buffer_size > 0);
+  return curlx_uitouz(data->set.buffer_size);
+}
+
+bool Curl_xfer_check_is_secure(struct Curl_easy *data)
+{
+#ifndef CURL_DISABLE_PROXY
+  if(data->conn && data->conn->bits.origin_is_proxy) {
+    DEBUGASSERT(!(data->state.origin->scheme->flags & PROTOPT_SSL));
+    return FALSE;
+  }
+#endif
+  return (data->state.origin->scheme->flags & PROTOPT_SSL) != 0;
+}
+
+#include "cf-setup.h"
+#include "thrdqueue.h"
+
+void Curl_zig_connect_timeleft_info(struct Curl_easy *data,
+                                    bool *in_shutdown,
+                                    timediff_t *connecttimeout_ms,
+                                    timediff_t *timeout_ms,
+                                    uint8_t *connect_only)
+{
+  *in_shutdown = (data->conn &&
+                  CURL_CONN_IN_SHUTDOWN(data->conn, FIRSTSOCKET)) ?
+                 TRUE : FALSE;
+  *connecttimeout_ms = data->set.connecttimeout;
+  *timeout_ms = data->set.timeout;
+  *connect_only = data->set.connect_only;
+}
+
+struct connectdata *Curl_zig_data_get_conn(struct Curl_easy *data)
+{
+  return data ? data->conn : NULL;
+}
+
+curl_socket_t Curl_zig_conn_get_sock(const struct connectdata *conn,
+                                     int8_t sockindex)
+{
+  return conn->sock[sockindex];
+}
+
+void Curl_zig_conn_set_close(struct connectdata *conn, bool close_it)
+{
+  conn->bits.close = close_it ? TRUE : FALSE;
+}
+
+struct Curl_cfilter *Curl_zig_conn_get_cfilter(const struct connectdata *conn,
+                                               int8_t sockindex)
+{
+  return conn ? conn->cfilter[sockindex] : NULL;
+}
+
+bool Curl_zig_conn_is_https(const struct connectdata *conn)
+{
+  return (conn && conn->scheme &&
+          (conn->scheme->protocol == CURLPROTO_HTTPS)) ? TRUE : FALSE;
+}
+
+uint8_t Curl_zig_conn_get_ip_version(const struct connectdata *conn)
+{
+  return conn->ip_version;
+}
+
+CURLcode Curl_zig_cf_setup_add(struct Curl_easy *data,
+                               struct connectdata *conn,
+                               int8_t sockindex,
+                               int ssl_mode)
+{
+  return Curl_cf_setup_add(data, conn, sockindex,
+                           conn->transport_wanted, ssl_mode);
+}
+
+CURLcode Curl_zig_cf_setup_insert_after(struct Curl_cfilter *cf,
+                                        struct Curl_easy *data,
+                                        uint8_t transport,
+                                        int ssl_mode)
+{
+  return Curl_cf_setup_insert_after(cf, data, transport, ssl_mode);
+}
+
+const char *Curl_zig_conn_host_dispname(const struct connectdata *conn)
+{
+  return CURL_CONN_HOST_DISPNAME(conn);
+}
+
+unsigned int Curl_zig_conn_scheme_flags(const struct connectdata *conn)
+{
+  return conn->scheme->flags;
+}
+
+unsigned int Curl_zig_data_origin_scheme_flags(const struct Curl_easy *data)
+{
+  return (data && data->state.origin && data->state.origin->scheme) ?
+         data->state.origin->scheme->flags : 0;
+}
+
+void Curl_zig_conn_set_multiplex(struct connectdata *conn,
+                                 struct Curl_multi **out_multi)
+{
+  if(!conn->bits.multiplex) {
+    conn->bits.multiplex = TRUE;
+    *out_multi = conn->attached_multi;
+  }
+  else
+    *out_multi = NULL;
+}
+
+struct Curl_peer *Curl_zig_conn_get_origin(
+  struct connectdata *conn, int8_t sockindex)
+{
+  return (sockindex == SECONDARYSOCKET) ? conn->origin2 : conn->origin;
+}
+
+struct Curl_peer *Curl_zig_conn_get_destination(
+  struct connectdata *conn, int8_t sockindex)
+{
+  return (sockindex == SECONDARYSOCKET) ?
+    (conn->via_peer2 ? conn->via_peer2 : conn->origin2) :
+    (conn->via_peer ? conn->via_peer : conn->origin);
+}
+
+struct Curl_peer *Curl_zig_conn_get_first_peer(
+  struct connectdata *conn, int8_t sockindex)
+{
+#ifndef CURL_DISABLE_PROXY
+  if(conn->socks_proxy.peer)
+    return conn->socks_proxy.peer;
+  if(conn->http_proxy.peer)
+    return conn->http_proxy.peer;
+#endif
+  return (sockindex == SECONDARYSOCKET) ?
+    (conn->via_peer2 ? conn->via_peer2 : conn->origin2) :
+    (conn->via_peer ? conn->via_peer : conn->origin);
+}
+
+void Curl_zig_data_get_http_neg(const struct Curl_easy *data,
+                                uint8_t *wanted,
+                                uint8_t *allowed,
+                                uint8_t *preferred)
+{
+  *wanted = data->state.http_neg.wanted;
+  *allowed = data->state.http_neg.allowed;
+  *preferred = data->state.http_neg.preferred;
+}
+
+void Curl_zig_data_set_http_neg_wanted(struct Curl_easy *data,
+                                       uint8_t wanted)
+{
+  data->state.http_neg.wanted = wanted;
+}
+
+timediff_t Curl_zig_data_happy_eyeballs_timeout(const struct Curl_easy *data)
+{
+  return data->set.happy_eyeballs_timeout;
+}
+
+bool Curl_zig_conn_should_https_setup(const struct connectdata *conn)
+{
+  return (conn->scheme->protocol == CURLPROTO_HTTPS) &&
+#ifndef CURL_DISABLE_PROXY
+         !conn->bits.origin_is_proxy &&
+#endif
+         conn->bits.tls_enable_alpn;
+}
+
+uint8_t Curl_zig_conn_get_transport_wanted(const struct connectdata *conn)
+{
+  return conn->transport_wanted;
+}
+
+void Curl_zig_conn_get_peers(const struct connectdata *conn,
+                             struct Curl_peer **origin,
+                             struct Curl_peer **socks_proxy_peer,
+                             struct Curl_peer **http_proxy_peer)
+{
+  *origin = conn->origin;
+#ifndef CURL_DISABLE_PROXY
+  *socks_proxy_peer = conn->socks_proxy.peer;
+  *http_proxy_peer = conn->http_proxy.peer;
+#else
+  *socks_proxy_peer = NULL;
+  *http_proxy_peer = NULL;
+#endif
+}
+
+bool Curl_zig_data_is_os_errno_timedout(const struct Curl_easy *data)
+{
+#ifdef SOCKETIMEDOUT
+  return (SOCKETIMEDOUT == data->state.os_errno) ? TRUE : FALSE;
+#else
+  (void)data;
+  return FALSE;
+#endif
+}
+
+bool Curl_zig_conn_is_ssh(const struct connectdata *conn)
+{
+  return (conn->scheme->protocol & PROTO_FAMILY_SSH) != 0;
+}
+
+void Curl_zig_data_inc_numconnects(struct Curl_easy *data)
+{
+  data->info.numconnects++;
+}
+
+uint32_t Curl_zig_data_get_mid(const struct Curl_easy *data)
+{
+  return data->mid;
+}
+
+curl_off_t Curl_zig_data_get_id(const struct Curl_easy *data)
+{
+  return data->id;
+}
+
+struct Curl_multi *Curl_zig_data_get_multi(const struct Curl_easy *data)
+{
+  return data ? data->multi : NULL;
+}
+
+struct curl_thrdq **Curl_zig_multi_get_resolv_thrdq_ptr(
+  struct Curl_multi *multi)
+{
+  return &multi->resolv_thrdq;
+}
+
+struct curl_thrdq *Curl_zig_multi_get_resolv_thrdq(
+  const struct Curl_multi *multi)
+{
+  return multi ? multi->resolv_thrdq : NULL;
+}
+
+void Curl_zig_multi_set_resolv_thrdq(struct Curl_multi *multi,
+                                     struct curl_thrdq *thrdq)
+{
+  multi->resolv_thrdq = thrdq;
+}
+
+struct Curl_easy *Curl_zig_multi_get_admin(const struct Curl_multi *multi)
+{
+  return multi ? multi->admin : NULL;
+}
+
+unsigned int Curl_zig_data_get_conn_scope_id(const struct Curl_easy *data)
+{
+  return (data && data->conn) ? data->conn->scope_id : 0;
+}
+
+bool Curl_zig_trc_is_verbose(struct Curl_easy *data)
+{
+  return Curl_trc_is_verbose(data) ? TRUE : FALSE;
+}
+
+bool Curl_zig_trc_cf_is_verbose(const struct Curl_cfilter *cf,
+                                struct Curl_easy *data)
+{
+  return Curl_trc_cf_is_verbose(cf, data) ? TRUE : FALSE;
+}
+
+bool Curl_zig_trc_dns_is_verbose(struct Curl_easy *data)
+{
+  return CURL_TRC_DNS_is_verbose(data) ? TRUE : FALSE;
+}
+
+void Curl_zig_thrdq_trace(struct curl_thrdq *tqueue, struct Curl_easy *data)
+{
+  CURL_THRDQ_TRACE(tqueue, data);
+}
+
+void Curl_zig_async_thrdd_classify_gai_error(int rc,
+                                             int *out_sockerr,
+                                             bool *out_negative)
+{
+  int sockerr = SOCKERRNO ? SOCKERRNO : rc;
+  if(sockerr == 0)
+    sockerr = EAI_MEMORY;
+  *out_sockerr = sockerr;
+  switch(rc) {
+#ifdef EAI_NONAME
+  case EAI_NONAME:
+#endif
+#if defined(EAI_NODATA) && \
+  (!defined(EAI_NONAME) || (EAI_NODATA != EAI_NONAME))
+  case EAI_NODATA:
+#endif
+    *out_negative = TRUE;
+    break;
+  default:
+    *out_negative = FALSE;
+    break;
+  }
 }

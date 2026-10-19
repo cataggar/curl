@@ -38,6 +38,7 @@ pub const tftp_socks_telnet = @import("tftp_socks_telnet.zig");
 pub const optional_backends = @import("optional_backends.zig");
 pub const imap_ws = @import("imap_ws.zig");
 pub const pop3_smtp = @import("pop3_smtp.zig");
+pub const cfsocket_transfer = @import("cfsocket_transfer.zig");
 
 // C executables (such as src/tool_main.c) provide their own C main().
 pub extern fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int;
@@ -82,6 +83,7 @@ comptime {
     _ = optional_backends;
     _ = imap_ws;
     _ = pop3_smtp;
+    _ = cfsocket_transfer;
 }
 
 test {
