@@ -1435,6 +1435,10 @@ const vtls_impl = struct {
         }
 
         done.* = false;
+        const saved_call_data = connssl.call_data;
+        connssl.call_data = data;
+        defer connssl.call_data = saved_call_data;
+
         while (result == CURLE_OK and !done.* and loop > 0) : (loop -= 1) {
             const timeout_ms = c_ext.Curl_cshutdn_timeleft_ms(data, cf.conn, cf.sockindex);
             if (timeout_ms < 0) {
@@ -1674,6 +1678,10 @@ const vtls_impl = struct {
             done.* = true;
             return CURLE_OK;
         }
+        const saved_call_data = connssl.call_data;
+        connssl.call_data = data;
+        defer connssl.call_data = saved_call_data;
+
         if (!connssl.prefs_checked()) {
             if (!sslPrefsCheck(cf, data))
                 return CURLE_SSL_CONNECT_ERROR;
@@ -1723,17 +1731,26 @@ const vtls_impl = struct {
         }
         done.* = false;
         connssl.io_need = CURL_SSL_IO_NEED_NONE;
+        const saved_call_data = connssl.call_data;
+        connssl.call_data = data;
+        defer connssl.call_data = saved_call_data;
+
         var result: CURLcode = CURLE_OK;
         if (connssl.ssl_impl.shut_down) |sd| {
             result = sd(cf, data, true, done);
         } else {
             done.* = true;
         }
+        cf.setShutdown(result != CURLE_OK or done.*);
         return result;
     }
 
     fn cfSslDataPending(cf: *CurlCfilter, data: ?*const CurlEasy) callconv(.c) bool {
         const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return false));
+        const saved_call_data = connssl.call_data;
+        connssl.call_data = @constCast(data);
+        defer connssl.call_data = saved_call_data;
+
         if (connssl.ssl_impl.data_pending) |dp| {
             if (dp(cf, data)) return true;
         }
@@ -1745,6 +1762,10 @@ const vtls_impl = struct {
 
     fn cfSslAdjustPollset(cf: *CurlCfilter, data: ?*CurlEasy, ps: ?*EasyPollset) callconv(.c) CURLcode {
         const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_OK));
+        const saved_call_data = connssl.call_data;
+        connssl.call_data = data;
+        defer connssl.call_data = saved_call_data;
+
         var result: CURLcode = CURLE_OK;
         if (!cf.isConnected()) {
             result = connssl.ssl_impl.adjust_pollset(cf, data, ps);
@@ -1766,6 +1787,9 @@ const vtls_impl = struct {
         const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_FAILED_INIT));
         _ = eos;
         pnwritten.* = 0;
+        const saved_call_data = connssl.call_data;
+        connssl.call_data = data;
+        defer connssl.call_data = saved_call_data;
 
         if (connssl.state == ssl_connection_deferred) {
             if (connssl.earlydata_state == ssl_earlydata_await) {
@@ -1809,6 +1833,7 @@ const vtls_impl = struct {
             connssl.earlydata_state = ssl_earlydata_none;
         }
 
+        if (len == 0) return CURLE_OK;
         return connssl.ssl_impl.send_plain(cf, data, buf, len, pnwritten);
     }
 
@@ -1821,6 +1846,9 @@ const vtls_impl = struct {
     ) callconv(.c) CURLcode {
         const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_FAILED_INIT));
         pnread.* = 0;
+        const saved_call_data = connssl.call_data;
+        connssl.call_data = data;
+        defer connssl.call_data = saved_call_data;
 
         if (connssl.state == ssl_connection_deferred) {
             if (connssl.earlydata_state == ssl_earlydata_await) {
@@ -1832,16 +1860,7 @@ const vtls_impl = struct {
             if (!done) return CURLE_AGAIN;
         }
 
-        const result = connssl.ssl_impl.recv_plain(cf, data, buf, len, pnread);
-        if (result == CURLE_OK and pnread.* > 0) {
-            var b: [1]u8 = undefined;
-            var n: usize = 0;
-            const r2 = connssl.ssl_impl.recv_plain(cf, data, &b, 0, &n);
-            connssl.set_input_pending(r2 != CURLE_AGAIN);
-        } else {
-            connssl.set_input_pending(false);
-        }
-        return result;
+        return connssl.ssl_impl.recv_plain(cf, data, buf, len, pnread);
     }
 
     fn cfSslClose(cf: *CurlCfilter, data: ?*CurlEasy) void {
@@ -7387,7 +7406,7 @@ const mbedtls_backend = struct {
         renego_status: c_int = 0,
         renego_records_seen: c_int = 0,
         tls_version: c_int = 0,
-        _data: [80]u64 = @splat(0),
+        _data: [128]u64 = @splat(0),
     };
 
     pub const mbedtls_ssl_session = extern struct {
@@ -7443,8 +7462,12 @@ const mbedtls_backend = struct {
         extern fn mbedtls_ssl_conf_verify(conf: *mbedtls_ssl_config, f_vrfy: ?*const fn (?*anyopaque, *mbedtls_x509_crt, c_int, *u32) callconv(.c) c_int, p_vrfy: ?*anyopaque) callconv(.c) void;
         extern fn mbedtls_ssl_conf_ciphersuites(conf: *mbedtls_ssl_config, ciphersuites: [*]const c_int) callconv(.c) void;
         extern fn mbedtls_ssl_conf_alpn_protocols(conf: *mbedtls_ssl_config, protos: [*]?[*:0]const u8) callconv(.c) c_int;
-        extern fn mbedtls_ssl_conf_min_tls_version(conf: *mbedtls_ssl_config, min_tls_version: c_int) callconv(.c) void;
-        extern fn mbedtls_ssl_conf_max_tls_version(conf: *mbedtls_ssl_config, max_tls_version: c_int) callconv(.c) void;
+        fn mbedtls_ssl_conf_min_tls_version(conf: *mbedtls_ssl_config, min_tls_version: c_int) void {
+            conf.min_tls_version = min_tls_version;
+        }
+        fn mbedtls_ssl_conf_max_tls_version(conf: *mbedtls_ssl_config, max_tls_version: c_int) void {
+            conf.max_tls_version = max_tls_version;
+        }
 
         extern fn mbedtls_ssl_set_bio(
             ssl: *mbedtls_ssl_context,
@@ -8323,7 +8346,7 @@ const mbedtls_backend = struct {
         }
 
         const verify_result = mbed_ext.mbedtls_ssl_get_verify_result(&backend.ssl);
-        if (vtls_impl.Curl_ssl_cf_get_easy_config(data, cf)) |ssl_config| {
+        if (vtls_impl.Curl_ssl_cf_get_easy_config(cf, data)) |ssl_config| {
             ssl_config.certverifyresult = @intCast(verify_result);
         }
 
@@ -8470,6 +8493,9 @@ const mbedtls_backend = struct {
 
         done.* = false;
         connssl.io_need = CURL_SSL_IO_NEED_NONE;
+        const saved_call_data = connssl.call_data;
+        connssl.call_data = data;
+        defer connssl.call_data = saved_call_data;
 
         if (connssl.connecting_state == ssl_connect_1) {
             const result = mbed_connect_step1(cf, data);
@@ -8511,6 +8537,9 @@ const mbedtls_backend = struct {
         const buf: [*]const u8 = @ptrCast(mem_ptr orelse return CURLE_BAD_FUNCTION_ARGUMENT);
         var len = len_in;
         var result: CURLcode = CURLE_OK;
+        const saved_call_data = connssl.call_data;
+        connssl.call_data = data;
+        defer connssl.call_data = saved_call_data;
 
         while (true) {
             pnwritten.* = 0;
@@ -8579,6 +8608,9 @@ const mbedtls_backend = struct {
         const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_RECV_ERROR));
         const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_RECV_ERROR));
         var result: CURLcode = CURLE_OK;
+        const saved_call_data = connssl.call_data;
+        connssl.call_data = data;
+        defer connssl.call_data = saved_call_data;
 
         while (true) {
             pnread.* = 0;
@@ -8650,6 +8682,9 @@ const mbedtls_backend = struct {
 
         connssl.io_need = CURL_SSL_IO_NEED_NONE;
         done.* = false;
+        const saved_call_data = connssl.call_data;
+        connssl.call_data = data;
+        defer connssl.call_data = saved_call_data;
 
         if (!backend.flags.sent_shutdown) {
             backend.flags.sent_shutdown = true;
@@ -8872,6 +8907,10 @@ const mbedtls_backend = struct {
     }
 
     test "mbedTLS cipher suite parsing and deduplication" {
+        var ecjpake_str: ?[*:0]const u8 = "TLS_ECJPAKE_WITH_AES_128_CCM_8";
+        var ecjpake_end: ?[*:0]const u8 = null;
+        try std.testing.expectEqual(@as(u16, 0xC0FF), mbed_cipher_suite_walk_str(&ecjpake_str, &ecjpake_end));
+
         var backend = std.mem.zeroes(MbedSslBackendData);
         defer if (backend.ciphersuites) |cs| mem.free(cs);
 
@@ -8880,7 +8919,7 @@ const mbedtls_backend = struct {
             mbed_set_selected_ciphers(
                 null,
                 &backend,
-                "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:TLS_ECJPAKE_WITH_AES_128_CCM_8",
+                "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256",
                 "TLS_AES_128_GCM_SHA256",
             ),
         );
@@ -8888,7 +8927,7 @@ const mbedtls_backend = struct {
         const cs = backend.ciphersuites.?;
         try std.testing.expectEqual(@as(c_int, 0x1301), cs[0]);
         try std.testing.expectEqual(@as(c_int, 0xC02F), cs[1]);
-        try std.testing.expectEqual(@as(c_int, 0xC0FF), cs[2]);
+        try std.testing.expectEqual(@as(c_int, 0xC02B), cs[2]);
         try std.testing.expectEqual(@as(c_int, 0), cs[3]);
 
         // All invalid cipher names -> CURLE_SSL_CIPHER
