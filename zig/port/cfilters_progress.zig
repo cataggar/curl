@@ -3875,3 +3875,94 @@ test "Progress bitflags and size setters" {
     try std.testing.expect(!p.isDlSizeKnown());
     try std.testing.expectEqual(@as(i64, 0), p.dl.total_size);
 }
+
+// ============================================================================
+// C-Zig ABI & Struct Layout Verification
+// ============================================================================
+
+comptime {
+    std.debug.assert(@sizeOf(CurlCfilter) == 40);
+    std.debug.assert(@alignOf(CurlCfilter) == 8);
+    std.debug.assert(@offsetOf(CurlCfilter, "cft") == 0);
+    std.debug.assert(@offsetOf(CurlCfilter, "next") == 8);
+    std.debug.assert(@offsetOf(CurlCfilter, "ctx") == 16);
+    std.debug.assert(@offsetOf(CurlCfilter, "conn") == 24);
+    std.debug.assert(@offsetOf(CurlCfilter, "sockindex") == 32);
+
+    std.debug.assert(@sizeOf(CurlCftype) == 104);
+    std.debug.assert(@alignOf(CurlCftype) == 8);
+    std.debug.assert(@offsetOf(CurlCftype, "name") == 0);
+    std.debug.assert(@offsetOf(CurlCftype, "flags") == 8);
+    std.debug.assert(@offsetOf(CurlCftype, "log_level") == 12);
+    std.debug.assert(@offsetOf(CurlCftype, "destroy") == 16);
+    std.debug.assert(@offsetOf(CurlCftype, "do_connect") == 24);
+    std.debug.assert(@offsetOf(CurlCftype, "do_shutdown") == 32);
+    std.debug.assert(@offsetOf(CurlCftype, "adjust_pollset") == 40);
+    std.debug.assert(@offsetOf(CurlCftype, "has_data_pending") == 48);
+    std.debug.assert(@offsetOf(CurlCftype, "do_send") == 56);
+    std.debug.assert(@offsetOf(CurlCftype, "do_recv") == 64);
+    std.debug.assert(@offsetOf(CurlCftype, "cntrl") == 72);
+    std.debug.assert(@offsetOf(CurlCftype, "is_alive") == 80);
+    std.debug.assert(@offsetOf(CurlCftype, "keep_alive") == 88);
+    std.debug.assert(@offsetOf(CurlCftype, "query") == 96);
+
+    std.debug.assert(@sizeOf(CurlCwtype) == 64);
+    std.debug.assert(@alignOf(CurlCwtype) == 8);
+    std.debug.assert(@offsetOf(CurlCwtype, "name") == 0);
+    std.debug.assert(@offsetOf(CurlCwtype, "alias") == 8);
+    std.debug.assert(@offsetOf(CurlCwtype, "flags") == 16);
+    std.debug.assert(@offsetOf(CurlCwtype, "do_init") == 24);
+    std.debug.assert(@offsetOf(CurlCwtype, "do_write") == 32);
+    std.debug.assert(@offsetOf(CurlCwtype, "do_flush") == 40);
+    std.debug.assert(@offsetOf(CurlCwtype, "do_close") == 48);
+    std.debug.assert(@offsetOf(CurlCwtype, "cwriter_size") == 56);
+
+    std.debug.assert(@sizeOf(CurlCwriter) == 32);
+    std.debug.assert(@alignOf(CurlCwriter) == 8);
+    std.debug.assert(@offsetOf(CurlCwriter, "cwt") == 0);
+    std.debug.assert(@offsetOf(CurlCwriter, "next") == 8);
+    std.debug.assert(@offsetOf(CurlCwriter, "ctx") == 16);
+    std.debug.assert(@offsetOf(CurlCwriter, "phase") == 24);
+
+    std.debug.assert(@sizeOf(Progress) == 472);
+    std.debug.assert(@alignOf(Progress) == 8);
+    std.debug.assert(@offsetOf(Progress, "now") == 0);
+    std.debug.assert(@offsetOf(Progress, "start") == 16);
+    std.debug.assert(@offsetOf(Progress, "ul") == 32);
+    std.debug.assert(@offsetOf(Progress, "dl") == 136);
+    std.debug.assert(@offsetOf(Progress, "deliver") == 240);
+    std.debug.assert(@offsetOf(Progress, "current_speed") == 248);
+    std.debug.assert(@offsetOf(Progress, "earlydata_sent") == 256);
+    std.debug.assert(@offsetOf(Progress, "delta") == 264);
+    std.debug.assert(@offsetOf(Progress, "total") == 304);
+    std.debug.assert(@offsetOf(Progress, "speed_amount") == 368);
+    std.debug.assert(@offsetOf(Progress, "speed_time") == 416);
+    std.debug.assert(@offsetOf(Progress, "speeder_c") == 464);
+    std.debug.assert(@offsetOf(Progress, "flags") == 468);
+
+    std.debug.assert(@sizeOf(Cpool) == 128);
+    std.debug.assert(@alignOf(Cpool) == 8);
+    std.debug.assert(@offsetOf(Cpool, "conns") == 0);
+    std.debug.assert(@offsetOf(Cpool, "idles") == 24);
+    std.debug.assert(@offsetOf(Cpool, "dest2bundle") == 40);
+    std.debug.assert(@offsetOf(Cpool, "next_connection_id") == 80);
+    std.debug.assert(@offsetOf(Cpool, "next_easy_id") == 88);
+    std.debug.assert(@offsetOf(Cpool, "last_cleanup") == 96);
+    std.debug.assert(@offsetOf(Cpool, "share") == 112);
+}
+
+extern fn Curl_zig_abi_sizeof_cfilter() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_cftype() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_cwtype() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_cwriter() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_progress() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_cpool() callconv(.c) usize;
+
+test "C-Zig ABI struct sizes in cfilters_progress" {
+    try std.testing.expectEqual(@sizeOf(CurlCfilter), Curl_zig_abi_sizeof_cfilter());
+    try std.testing.expectEqual(@sizeOf(CurlCftype), Curl_zig_abi_sizeof_cftype());
+    try std.testing.expectEqual(@sizeOf(CurlCwtype), Curl_zig_abi_sizeof_cwtype());
+    try std.testing.expectEqual(@sizeOf(CurlCwriter), Curl_zig_abi_sizeof_cwriter());
+    try std.testing.expectEqual(@sizeOf(Progress), Curl_zig_abi_sizeof_progress());
+    try std.testing.expectEqual(@sizeOf(Cpool), Curl_zig_abi_sizeof_cpool());
+}
