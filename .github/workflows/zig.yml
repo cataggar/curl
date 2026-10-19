@@ -29,6 +29,11 @@ jobs:
           tools: |
             cataggar/zig@v0.17.0 RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
 
+      - name: Install TLS system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libssl-dev libmbedtls-dev
+
       - name: Format check
         run: zig fmt --check build.zig build.zig.zon zig/
 
@@ -37,6 +42,12 @@ jobs:
 
       - name: Run tests (ReleaseSafe)
         run: zig build test -Doptimize=ReleaseSafe --summary all
+
+      - name: Build and test (-Dssl=openssl)
+        run: zig build test -Dssl=openssl --summary all
+
+      - name: Build and test (-Dssl=mbedtls)
+        run: zig build test -Dssl=mbedtls --summary all
 
       - name: Build and test (-Dzstd=true)
         run: zig build test -Dzstd=true --summary all
@@ -58,6 +69,8 @@ jobs:
           - target: aarch64-linux-musl
             extra_args: ""
           - target: x86_64-windows-gnu
+            extra_args: "-Dssl=schannel"
+          - target: aarch64-windows-gnu
             extra_args: "-Dssl=schannel"
           - target: aarch64-macos
             extra_args: ""
