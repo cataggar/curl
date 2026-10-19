@@ -19,7 +19,6 @@ pub const c_sources = [_][]const u8{
     "lib/http.c",
     "lib/multi.c",
     "lib/sendf.c",
-    "lib/setopt.c",
     "lib/url.c",
     // LIB_VTLS_CFILES
     "lib/vtls/mbedtls.c",

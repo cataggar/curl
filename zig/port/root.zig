@@ -40,6 +40,7 @@ pub const imap_ws = @import("imap_ws.zig");
 pub const pop3_smtp = @import("pop3_smtp.zig");
 pub const cfsocket_transfer = @import("cfsocket_transfer.zig");
 pub const http2_h2proxy = @import("http2_h2proxy.zig");
+pub const setopt = @import("setopt.zig");
 
 // C executables (such as src/tool_main.c) provide their own C main().
 pub extern fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int;
@@ -86,6 +87,7 @@ comptime {
     _ = pop3_smtp;
     _ = cfsocket_transfer;
     _ = http2_h2proxy;
+    _ = setopt;
 }
 
 test {
