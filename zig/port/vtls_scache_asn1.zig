@@ -435,6 +435,20 @@ fn cloneSslFilterConfig(source: *const SslFilterConfig, dest: *SslFilterConfig) 
     return true;
 }
 
+fn freeBlobScrubbed(blob_opt: ?*CurlBlob) void {
+    if (blob_opt) |blob| {
+        const copy = (blob.flags & 1) != 0;
+        if (copy and blob.len > 0) {
+            if (blob.data) |bdata| {
+                mem.secureZero(@ptrCast(@constCast(bdata)), blob.len);
+            }
+        }
+        const total = @sizeOf(CurlBlob) +| (if (copy) blob.len else 0);
+        mem.secureZero(blob, total);
+        mem.freeSized(blob, total);
+    }
+}
+
 pub export fn Curl_ssl_config_cleanup(sslc: *SslFilterConfig) callconv(.c) void {
     if (sslc.getFlag(SslFilterConfig.BIT_DEEP_COPY)) {
         mem.free(sslc.CAfile);
@@ -459,19 +473,19 @@ pub export fn Curl_ssl_config_cleanup(sslc: *SslFilterConfig) callconv(.c) void 
         sslc.key = null;
         mem.free(sslc.key_type);
         sslc.key_type = null;
-        mem.free(sslc.key_passwd);
+        mem.freeSecretZ(sslc.key_passwd);
         sslc.key_passwd = null;
         mem.free(sslc.curves);
         sslc.curves = null;
         mem.free(sslc.signature_algorithms);
         sslc.signature_algorithms = null;
-        mem.free(sslc.cert_blob);
+        freeBlobScrubbed(sslc.cert_blob);
         sslc.cert_blob = null;
-        mem.free(sslc.ca_info_blob);
+        freeBlobScrubbed(sslc.ca_info_blob);
         sslc.ca_info_blob = null;
-        mem.free(sslc.issuercert_blob);
+        freeBlobScrubbed(sslc.issuercert_blob);
         sslc.issuercert_blob = null;
-        mem.free(sslc.key_blob);
+        freeBlobScrubbed(sslc.key_blob);
         sslc.key_blob = null;
         sslc.setFlag(SslFilterConfig.BIT_DEEP_COPY, false);
     }
@@ -1033,10 +1047,22 @@ pub export fn Curl_ssl_peer_key_make(
 fn cfSslScacheSessionLdestroy(udata: ?*anyopaque, obj: ?*anyopaque) callconv(.c) void {
     _ = udata;
     const s: *CurlSslSession = @ptrCast(@alignCast(obj orelse return));
-    mem.free(s.sdata);
-    mem.free(s.quic_tp);
+    if (s.sdata) |sd| {
+        mem.secureZero(sd, s.sdata_len);
+        mem.freeSized(sd, s.sdata_len);
+        s.sdata = null;
+        s.sdata_len = 0;
+    }
+    if (s.quic_tp) |qtp| {
+        mem.secureZero(qtp, s.quic_tp_len);
+        mem.freeSized(qtp, s.quic_tp_len);
+        s.quic_tp = null;
+        s.quic_tp_len = 0;
+    }
     mem.free(s.alpn);
-    mem.free(s);
+    s.alpn = null;
+    mem.secureZero(s, @sizeOf(CurlSslSession));
+    mem.freeSized(s, @sizeOf(CurlSslSession));
 }
 
 pub export fn Curl_ssl_session_create(
@@ -1073,14 +1099,23 @@ pub export fn Curl_ssl_session_create2(
     psession: *?*CurlSslSession,
 ) callconv(.c) CURLcode {
     if (sdata == null or sdata_len == 0) {
-        mem.free(sdata);
+        if (sdata) |sd| {
+            mem.secureZero(sd, sdata_len);
+            mem.freeSized(sd, sdata_len);
+        }
         return CURLE_BAD_FUNCTION_ARGUMENT;
     }
 
     psession.* = null;
     const s_raw = mem.calloc(1, @sizeOf(CurlSslSession)) orelse {
-        mem.free(sdata);
-        mem.free(quic_tp);
+        if (sdata) |sd| {
+            mem.secureZero(sd, sdata_len);
+            mem.freeSized(sd, sdata_len);
+        }
+        if (quic_tp) |qtp| {
+            mem.secureZero(qtp, quic_tp_len);
+            mem.freeSized(qtp, quic_tp_len);
+        }
         return CURLE_OUT_OF_MEMORY;
     };
     const s: *CurlSslSession = @ptrCast(@alignCast(s_raw));
@@ -1164,10 +1199,12 @@ fn cfSslScacheClearPeer(peer: *CurlSslScachePeer) void {
     peer.sobj_free = null;
     mem.free(peer.clientcert);
     peer.clientcert = null;
-    mem.free(peer.key_passwd);
+    mem.freeSecretZ(peer.key_passwd);
     peer.key_passwd = null;
-    mem.free(peer.ssl_peer_key);
+    mem.freeSecretZ(peer.ssl_peer_key);
     peer.ssl_peer_key = null;
+    mem.secureZero(&peer.key_salt, peer.key_salt.len);
+    mem.secureZero(&peer.key_hmac, peer.key_hmac.len);
     peer.age = 0;
     peer.setHmacSet(false);
 }
@@ -1295,12 +1332,16 @@ pub export fn Curl_ssl_scache_destroy(scache_opt: ?*CurlSslScache) callconv(.c) 
     if (scache_opt) |scache| {
         if (goodScache(scache)) {
             scache.magic = 0;
-            for (0..scache.peer_count) |i| {
+            const peer_count = scache.peer_count;
+            for (0..peer_count) |i| {
                 cfSslScacheClearPeer(&scache.peers[i]);
             }
-            mem.free(scache.peers);
+            const peers_size = peer_count *| @sizeOf(CurlSslScachePeer);
+            mem.secureZero(scache.peers, peers_size);
+            mem.freeSized(scache.peers, peers_size);
             threads_psl.mutexDestroy(&scache.mutex);
-            mem.free(scache);
+            mem.secureZero(scache, @sizeOf(CurlSslScache));
+            mem.freeSized(scache, @sizeOf(CurlSslScache));
         }
     }
 }
@@ -3153,12 +3194,19 @@ test "SslFilterConfig cloning, matching, and peer key generation (unit3303 & uni
     var passwd_buf = "secret".*;
     var ctype_buf = "PEM".*;
     var ktype_buf = "PEM".*;
+    const key_blob_bytes = "PRIVATE-KEY-MATERIAL";
+    var key_blob = CurlBlob{
+        .data = @ptrCast(@constCast(key_blob_bytes.ptr)),
+        .len = key_blob_bytes.len,
+        .flags = 1,
+    };
 
     ssl_cfg.clientcert = &cert_buf;
     ssl_cfg.key = &key_buf;
     ssl_cfg.key_passwd = &passwd_buf;
     ssl_cfg.cert_type = &ctype_buf;
     ssl_cfg.key_type = &ktype_buf;
+    ssl_cfg.key_blob = &key_blob;
 
     var cloned_cfg: SslFilterConfig = std.mem.zeroes(SslFilterConfig);
     try std.testing.expectEqual(CURLE_OK, Curl_ssl_conn_config_clone_zig(&ssl_cfg, null, &cloned_cfg, null));
@@ -3171,6 +3219,19 @@ test "SslFilterConfig cloning, matching, and peer key generation (unit3303 & uni
     try std.testing.expect(!Curl_ssl_conn_config_match_zig(&ssl_cfg, &cloned_cfg, null, false));
     ssl_cfg.key_passwd = &passwd_buf;
     try std.testing.expect(Curl_ssl_conn_config_match_zig(&ssl_cfg, &cloned_cfg, null, false));
+
+    // Verify session ticket & QUIC transport parameter scrubbing on destroy
+    const ticket_raw = mem.malloc(16) orelse return error.OutOfMemory;
+    @memset(ticket_raw[0..16], 0x77);
+    const qtp_raw = mem.malloc(8) orelse return error.OutOfMemory;
+    @memset(qtp_raw[0..8], 0x88);
+    var sess: ?*CurlSslSession = null;
+    try std.testing.expectEqual(
+        CURLE_OK,
+        Curl_ssl_session_create2(ticket_raw, 16, 0x0304, "h2", 999999, 0, qtp_raw, 8, &sess),
+    );
+    try std.testing.expect(sess != null);
+    Curl_ssl_session_destroy(sess);
 
     const scheme = CurlScheme{ .name = "https" };
     var origin = CurlPeer{
