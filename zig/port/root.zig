@@ -30,6 +30,7 @@ pub const vdns_core = @import("vdns_core.zig");
 pub const small_protocols = @import("small_protocols.zig");
 pub const cfilters_progress = @import("cfilters_progress.zig");
 pub const sasl_rtsp_ftplist = @import("sasl_rtsp_ftplist.zig");
+pub const proxies_encoding = @import("proxies_encoding.zig");
 
 // C executables (such as src/tool_main.c) provide their own C main().
 pub extern fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int;
@@ -66,6 +67,7 @@ comptime {
     _ = small_protocols;
     _ = cfilters_progress;
     _ = sasl_rtsp_ftplist;
+    _ = proxies_encoding;
 }
 
 test {
