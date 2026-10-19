@@ -5990,3 +5990,980 @@ void Curl_h2_clear_ignorebody(struct Curl_easy *data)
   data->req.ignorebody = FALSE;
 }
 #endif /* !CURL_DISABLE_HTTP && USE_NGHTTP2 */
+
+#ifndef CURL_DISABLE_FTP
+#ifdef HAVE_NETINET_IN_H
+#include <netinet/in.h>
+#endif
+#ifdef HAVE_ARPA_INET_H
+#include <arpa/inet.h>
+#endif
+#ifdef HAVE_NETDB_H
+#include <netdb.h>
+#endif
+#include "sendf.h"
+#include "curl_addrinfo.h"
+#include "curl_trc.h"
+#include "if2ip.h"
+#include "progress.h"
+#include "transfer.h"
+#include "escape.h"
+#include "ftp.h"
+#include "ftp-int.h"
+#include "ftplistparser.h"
+#include "curl_range.h"
+#include "strcase.h"
+#include "vtls/vtls.h"
+#include "cfilters.h"
+#include "cf-socket.h"
+#include "connect.h"
+#include "curlx/inet_ntop.h"
+#include "curlx/inet_pton.h"
+#include "select.h"
+#include "parsedate.h"
+#include "sockaddr.h"
+#include "multiif.h"
+#include "url.h"
+#include "vdns/hostip.h"
+#include "curlx/strdup.h"
+#include "curlx/strerr.h"
+#include "curlx/strparse.h"
+#include "peer.h"
+#include "creds.h"
+#include "api.h"
+
+void Curl_ftp_acc_trc_bind(struct Curl_easy *data);
+struct connectdata *Curl_ftp_acc_get_conn(struct Curl_easy *data);
+bool Curl_ftp_acc_pwd_stop_debug(struct Curl_easy *data);
+struct WildcardData *Curl_ftp_acc_get_wildcard(struct Curl_easy *data);
+bool Curl_ftp_acc_get_wildcardmatch(struct Curl_easy *data);
+uint8_t Curl_ftp_acc_get_ftp_filemethod(struct Curl_easy *data);
+void Curl_ftp_acc_set_ftp_filemethod(struct Curl_easy *data, uint8_t val);
+bool Curl_ftp_acc_get_upload(struct Curl_easy *data);
+bool Curl_ftp_acc_get_prefer_ascii(struct Curl_easy *data);
+void Curl_ftp_acc_set_prefer_ascii(struct Curl_easy *data, bool val);
+bool Curl_ftp_acc_get_list_only(struct Curl_easy *data);
+void Curl_ftp_acc_set_list_only(struct Curl_easy *data, bool val);
+bool Curl_ftp_acc_get_no_body(struct Curl_easy *data);
+curl_off_t Curl_ftp_acc_get_infilesize(struct Curl_easy *data);
+void Curl_ftp_acc_set_infilesize(struct Curl_easy *data, curl_off_t val);
+curl_off_t Curl_ftp_acc_get_resume_from(struct Curl_easy *data);
+void Curl_ftp_acc_set_resume_from(struct Curl_easy *data, curl_off_t val);
+curl_off_t Curl_ftp_acc_get_req_size(struct Curl_easy *data);
+void Curl_ftp_acc_set_req_size(struct Curl_easy *data, curl_off_t val);
+curl_off_t Curl_ftp_acc_get_req_maxdownload(struct Curl_easy *data);
+curl_off_t Curl_ftp_acc_get_req_bytecount(struct Curl_easy *data);
+curl_off_t Curl_ftp_acc_get_req_writebytecount(struct Curl_easy *data);
+curl_off_t Curl_ftp_acc_get_max_filesize(struct Curl_easy *data);
+bool Curl_ftp_acc_get_ignorecl(struct Curl_easy *data);
+bool Curl_ftp_acc_get_crlf(struct Curl_easy *data);
+bool Curl_ftp_acc_get_remote_append(struct Curl_easy *data);
+bool Curl_ftp_acc_get_ftp_use_port(struct Curl_easy *data);
+bool Curl_ftp_acc_get_ftp_use_pret(struct Curl_easy *data);
+bool Curl_ftp_acc_get_ftp_skip_ip(struct Curl_easy *data);
+uint8_t Curl_ftp_acc_get_ftp_create_missing_dirs(struct Curl_easy *data);
+uint8_t Curl_ftp_acc_get_use_ssl(struct Curl_easy *data);
+uint8_t Curl_ftp_acc_get_ftpsslauth(struct Curl_easy *data);
+uint8_t Curl_ftp_acc_get_ftp_ccc(struct Curl_easy *data);
+timediff_t Curl_ftp_acc_get_accepttimeout(struct Curl_easy *data);
+bool Curl_ftp_acc_get_get_filetime(struct Curl_easy *data);
+uint8_t Curl_ftp_acc_get_timecondition(struct Curl_easy *data);
+curl_off_t Curl_ftp_acc_get_timevalue(struct Curl_easy *data);
+curl_off_t Curl_ftp_acc_get_info_filetime(struct Curl_easy *data);
+time_t *Curl_ftp_acc_get_info_filetime_ptr(struct Curl_easy *data);
+void Curl_ftp_acc_set_info_timecond(struct Curl_easy *data, bool val);
+void Curl_ftp_acc_set_info_httpcode(struct Curl_easy *data, int code);
+void Curl_ftp_acc_clear_state_errorbuf(struct Curl_easy *data);
+CURLcode Curl_ftp_acc_set_most_recent_ftp_entrypath(struct Curl_easy *data,
+                                                    const char *entrypath);
+char *Curl_ftp_acc_get_up_path_after_slash(struct Curl_easy *data);
+struct curl_slist *Curl_ftp_acc_get_quote(struct Curl_easy *data);
+struct curl_slist *Curl_ftp_acc_get_prequote(struct Curl_easy *data);
+struct curl_slist *Curl_ftp_acc_get_postquote(struct Curl_easy *data);
+const char *Curl_ftp_acc_get_str_ftpport(struct Curl_easy *data);
+const char *Curl_ftp_acc_get_str_customrequest(struct Curl_easy *data);
+const char *Curl_ftp_acc_get_str_ftp_account(struct Curl_easy *data);
+const char *Curl_ftp_acc_get_str_ftp_alternative_to_user(
+  struct Curl_easy *data);
+CURLcode Curl_ftp_acc_client_write_header(struct Curl_easy *data,
+                                          char *buf, size_t blen);
+curl_socket_t Curl_ftp_acc_conn_get_sock(struct connectdata *conn, int idx);
+bool Curl_ftp_acc_conn_has_cfilter(struct connectdata *conn, int idx);
+bool Curl_ftp_acc_conn_get_reuse(struct connectdata *conn);
+bool Curl_ftp_acc_conn_get_ipv6(struct connectdata *conn);
+bool Curl_ftp_acc_conn_get_ftp_use_eprt(struct connectdata *conn);
+void Curl_ftp_acc_conn_set_ftp_use_eprt(struct connectdata *conn, bool val);
+bool Curl_ftp_acc_conn_get_ftp_use_epsv(struct connectdata *conn);
+void Curl_ftp_acc_conn_set_ftp_use_epsv(struct connectdata *conn, bool val);
+bool Curl_ftp_acc_conn_get_ftp_use_data_ssl(struct connectdata *conn);
+void Curl_ftp_acc_conn_set_ftp_use_data_ssl(struct connectdata *conn,
+                                            bool val);
+void Curl_ftp_acc_conn_set_do_more(struct connectdata *conn, bool val);
+const char *Curl_ftp_acc_conn_get_origin_hostname(struct connectdata *conn);
+unsigned int Curl_ftp_acc_conn_get_scheme_flags(struct connectdata *conn);
+const char *Curl_ftp_acc_conn_get_user(struct connectdata *conn);
+const char *Curl_ftp_acc_conn_get_passwd(struct connectdata *conn);
+bool Curl_ftp_acc_has_seek_func(struct Curl_easy *data);
+int Curl_ftp_acc_call_seek_func(struct Curl_easy *data, curl_off_t offset);
+size_t Curl_ftp_acc_call_fread_func(struct Curl_easy *data, char *buf,
+                                    size_t amount);
+bool Curl_ftp_acc_has_chunk_bgn(struct Curl_easy *data);
+long Curl_ftp_acc_call_chunk_bgn(struct Curl_easy *data,
+                                 const struct curl_fileinfo *finfo,
+                                 int remains);
+bool Curl_ftp_acc_has_chunk_end(struct Curl_easy *data);
+void Curl_ftp_acc_call_chunk_end(struct Curl_easy *data);
+int Curl_ftp_acc_get_sockerrno(void);
+timediff_t Curl_ftp_acc_pp_state_timeleft_ms(struct Curl_easy *data,
+                                             struct pingpong *pp);
+CURLcode Curl_ftp_acc_pp_statemach(struct Curl_easy *data,
+                                   struct pingpong *pp,
+                                   bool block, bool disconnecting);
+CURLcode Curl_ftp_acc_pp_readresp(struct Curl_easy *data, int8_t sockindex,
+                                  struct pingpong *pp,
+                                  int *code, size_t *size);
+CURLcode Curl_ftp_acc_pp_pollset(struct Curl_easy *data,
+                                 struct pingpong *pp,
+                                 struct easy_pollset *ps);
+CURLcode Curl_ftp_acc_pollset_add_in(struct Curl_easy *data,
+                                     struct easy_pollset *ps,
+                                     curl_socket_t sock);
+CURLcode Curl_ftp_acc_range(struct Curl_easy *data);
+void Curl_ftp_acc_xfer_setup_send(struct Curl_easy *data);
+void Curl_ftp_acc_xfer_setup_recv(struct Curl_easy *data, curl_off_t size);
+void Curl_ftp_acc_connclose(struct connectdata *conn);
+CURLcode Curl_ftp_acc_ssl_cfilter_add(struct Curl_easy *data,
+                                      struct connectdata *conn,
+                                      int8_t sockindex);
+CURLcode Curl_ftp_acc_ssl_cfilter_remove(struct Curl_easy *data,
+                                         int8_t sockindex,
+                                         bool send_shutdown);
+CURLcode Curl_ftp_acc_control_addr_dup(struct Curl_easy *data,
+                                       char **newhostp);
+CURLcode Curl_ftp_acc_setup_pasv_conn(struct Curl_easy *data,
+                                      struct connectdata *conn,
+                                      const char *newhost,
+                                      unsigned short newport);
+bool Curl_ftp_acc_is_ipv6_literal(const char *str);
+int Curl_ftp_acc_if2ip(struct Curl_easy *data, struct connectdata *conn,
+                       const char *ipstr, char *hbuf, size_t hbuflen);
+CURLcode Curl_ftp_acc_port_default_host(struct Curl_easy *data,
+                                        struct connectdata *conn,
+                                        void *ss_ptr,
+                                        unsigned int *sslenp,
+                                        char *hbuf, size_t hbuflen);
+CURLcode Curl_ftp_acc_port_resolve_host(struct Curl_easy *data,
+                                        struct connectdata *conn,
+                                        const char *host,
+                                        struct Curl_dns_entry **dns_entryp,
+                                        const struct Curl_addrinfo **resp);
+CURLcode Curl_ftp_acc_port_open_socket(struct Curl_easy *data,
+                                       struct connectdata *conn,
+                                       const struct Curl_addrinfo *res,
+                                       const struct Curl_addrinfo **aip,
+                                       curl_socket_t *portsockp);
+CURLcode Curl_ftp_acc_port_bind_socket(struct Curl_easy *data,
+                                       struct connectdata *conn,
+                                       curl_socket_t portsock,
+                                       const struct Curl_addrinfo *ai,
+                                       void *ss_ptr,
+                                       unsigned int *sslen_io,
+                                       unsigned short port_min,
+                                       unsigned short port_max,
+                                       bool non_local,
+                                       unsigned short *pbound_port);
+CURLcode Curl_ftp_acc_port_listen(struct Curl_easy *data,
+                                  curl_socket_t portsock);
+void Curl_ftp_acc_port_extract_sa(const void *ss_ptr,
+                                  const struct Curl_addrinfo *ai,
+                                  char *myhost, size_t myhost_len,
+                                  bool *pis_ipv4, bool *pis_ipv6,
+                                  unsigned short *pport);
+
+void Curl_ftp_acc_trc_bind(struct Curl_easy *data)
+{
+  (void)CURL_TRC_BIND(data);
+}
+
+struct connectdata *Curl_ftp_acc_get_conn(struct Curl_easy *data)
+{
+  (void)CURL_TRC_BIND(data);
+  return data ? data->conn : NULL;
+}
+
+bool Curl_ftp_acc_pwd_stop_debug(struct Curl_easy *data)
+{
+#ifdef DEBUGBUILD
+  if(!data->id && getenv("CURL_FTP_PWD_STOP"))
+    return TRUE;
+#else
+  (void)data;
+#endif
+  return FALSE;
+}
+
+struct WildcardData *Curl_ftp_acc_get_wildcard(struct Curl_easy *data)
+{
+  return data->wildcard;
+}
+
+bool Curl_ftp_acc_get_wildcardmatch(struct Curl_easy *data)
+{
+  return (bool)data->state.wildcardmatch;
+}
+
+uint8_t Curl_ftp_acc_get_ftp_filemethod(struct Curl_easy *data)
+{
+  return data->set.ftp_filemethod;
+}
+
+void Curl_ftp_acc_set_ftp_filemethod(struct Curl_easy *data, uint8_t val)
+{
+  data->set.ftp_filemethod = val;
+}
+
+bool Curl_ftp_acc_get_upload(struct Curl_easy *data)
+{
+  return (bool)data->state.upload;
+}
+
+bool Curl_ftp_acc_get_prefer_ascii(struct Curl_easy *data)
+{
+  return (bool)data->state.prefer_ascii;
+}
+
+void Curl_ftp_acc_set_prefer_ascii(struct Curl_easy *data, bool val)
+{
+  data->state.prefer_ascii = val;
+}
+
+bool Curl_ftp_acc_get_list_only(struct Curl_easy *data)
+{
+  return (bool)data->state.list_only;
+}
+
+void Curl_ftp_acc_set_list_only(struct Curl_easy *data, bool val)
+{
+  data->state.list_only = val;
+}
+
+bool Curl_ftp_acc_get_no_body(struct Curl_easy *data)
+{
+  return (bool)data->req.no_body;
+}
+
+curl_off_t Curl_ftp_acc_get_infilesize(struct Curl_easy *data)
+{
+  return data->state.infilesize;
+}
+
+void Curl_ftp_acc_set_infilesize(struct Curl_easy *data, curl_off_t val)
+{
+  data->state.infilesize = val;
+}
+
+curl_off_t Curl_ftp_acc_get_resume_from(struct Curl_easy *data)
+{
+  return data->state.resume_from;
+}
+
+void Curl_ftp_acc_set_resume_from(struct Curl_easy *data, curl_off_t val)
+{
+  data->state.resume_from = val;
+}
+
+curl_off_t Curl_ftp_acc_get_req_size(struct Curl_easy *data)
+{
+  return data->req.size;
+}
+
+void Curl_ftp_acc_set_req_size(struct Curl_easy *data, curl_off_t val)
+{
+  data->req.size = val;
+}
+
+curl_off_t Curl_ftp_acc_get_req_maxdownload(struct Curl_easy *data)
+{
+  return data->req.maxdownload;
+}
+
+curl_off_t Curl_ftp_acc_get_req_bytecount(struct Curl_easy *data)
+{
+  return data->req.bytecount;
+}
+
+curl_off_t Curl_ftp_acc_get_req_writebytecount(struct Curl_easy *data)
+{
+  return data->req.writebytecount;
+}
+
+curl_off_t Curl_ftp_acc_get_max_filesize(struct Curl_easy *data)
+{
+  return data->set.max_filesize;
+}
+
+bool Curl_ftp_acc_get_ignorecl(struct Curl_easy *data)
+{
+  return (bool)data->set.ignorecl;
+}
+
+bool Curl_ftp_acc_get_crlf(struct Curl_easy *data)
+{
+  return (bool)data->set.crlf;
+}
+
+bool Curl_ftp_acc_get_remote_append(struct Curl_easy *data)
+{
+  return (bool)data->set.remote_append;
+}
+
+bool Curl_ftp_acc_get_ftp_use_port(struct Curl_easy *data)
+{
+  return (bool)data->set.ftp_use_port;
+}
+
+bool Curl_ftp_acc_get_ftp_use_pret(struct Curl_easy *data)
+{
+  return (bool)data->set.ftp_use_pret;
+}
+
+bool Curl_ftp_acc_get_ftp_skip_ip(struct Curl_easy *data)
+{
+  return (bool)data->set.ftp_skip_ip;
+}
+
+uint8_t Curl_ftp_acc_get_ftp_create_missing_dirs(struct Curl_easy *data)
+{
+  return data->set.ftp_create_missing_dirs;
+}
+
+uint8_t Curl_ftp_acc_get_use_ssl(struct Curl_easy *data)
+{
+  return data->set.use_ssl;
+}
+
+uint8_t Curl_ftp_acc_get_ftpsslauth(struct Curl_easy *data)
+{
+  return data->set.ftpsslauth;
+}
+
+uint8_t Curl_ftp_acc_get_ftp_ccc(struct Curl_easy *data)
+{
+  return data->set.ftp_ccc;
+}
+
+timediff_t Curl_ftp_acc_get_accepttimeout(struct Curl_easy *data)
+{
+  return data->set.accepttimeout;
+}
+
+bool Curl_ftp_acc_get_get_filetime(struct Curl_easy *data)
+{
+  return (bool)data->set.get_filetime;
+}
+
+uint8_t Curl_ftp_acc_get_timecondition(struct Curl_easy *data)
+{
+  return data->set.timecondition;
+}
+
+curl_off_t Curl_ftp_acc_get_timevalue(struct Curl_easy *data)
+{
+  return data->set.timevalue;
+}
+
+curl_off_t Curl_ftp_acc_get_info_filetime(struct Curl_easy *data)
+{
+  return (curl_off_t)data->info.filetime;
+}
+
+time_t *Curl_ftp_acc_get_info_filetime_ptr(struct Curl_easy *data)
+{
+  return &data->info.filetime;
+}
+
+void Curl_ftp_acc_set_info_timecond(struct Curl_easy *data, bool val)
+{
+  data->info.timecond = val;
+}
+
+void Curl_ftp_acc_set_info_httpcode(struct Curl_easy *data, int code)
+{
+  data->info.httpcode = code;
+}
+
+void Curl_ftp_acc_clear_state_errorbuf(struct Curl_easy *data)
+{
+  data->state.errorbuf = FALSE;
+}
+
+CURLcode Curl_ftp_acc_set_most_recent_ftp_entrypath(struct Curl_easy *data,
+                                                    const char *entrypath)
+{
+  curlx_free(data->state.most_recent_ftp_entrypath);
+  data->state.most_recent_ftp_entrypath = curlx_strdup(entrypath);
+  return data->state.most_recent_ftp_entrypath ?
+    CURLE_OK : CURLE_OUT_OF_MEMORY;
+}
+
+char *Curl_ftp_acc_get_up_path_after_slash(struct Curl_easy *data)
+{
+  return &data->state.up.path[1];
+}
+
+struct curl_slist *Curl_ftp_acc_get_quote(struct Curl_easy *data)
+{
+  return data->set.quote;
+}
+
+struct curl_slist *Curl_ftp_acc_get_prequote(struct Curl_easy *data)
+{
+  return data->set.prequote;
+}
+
+struct curl_slist *Curl_ftp_acc_get_postquote(struct Curl_easy *data)
+{
+  return data->set.postquote;
+}
+
+const char *Curl_ftp_acc_get_str_ftpport(struct Curl_easy *data)
+{
+  return CURL_EASY_STR(data, STRING_FTPPORT);
+}
+
+const char *Curl_ftp_acc_get_str_customrequest(struct Curl_easy *data)
+{
+  return CURL_EASY_STR(data, STRING_CUSTOMREQUEST);
+}
+
+const char *Curl_ftp_acc_get_str_ftp_account(struct Curl_easy *data)
+{
+  return CURL_EASY_STR(data, STRING_FTP_ACCOUNT);
+}
+
+const char *Curl_ftp_acc_get_str_ftp_alternative_to_user(
+  struct Curl_easy *data)
+{
+  return CURL_EASY_STR(data, STRING_FTP_ALTERNATIVE_TO_USER);
+}
+
+CURLcode Curl_ftp_acc_client_write_header(struct Curl_easy *data,
+                                          char *buf, size_t blen)
+{
+  CURLcode result;
+  bool save = (bool)data->set.include_header;
+  data->set.include_header = TRUE;
+  result = Curl_client_write(data, CLIENTWRITE_HEADER, buf, blen);
+  data->set.include_header = save;
+  return result;
+}
+
+curl_socket_t Curl_ftp_acc_conn_get_sock(struct connectdata *conn, int idx)
+{
+  return conn->sock[idx];
+}
+
+bool Curl_ftp_acc_conn_has_cfilter(struct connectdata *conn, int idx)
+{
+  return conn->cfilter[idx] != NULL;
+}
+
+bool Curl_ftp_acc_conn_get_reuse(struct connectdata *conn)
+{
+  return (bool)conn->bits.reuse;
+}
+
+bool Curl_ftp_acc_conn_get_ipv6(struct connectdata *conn)
+{
+  return (bool)conn->bits.ipv6;
+}
+
+bool Curl_ftp_acc_conn_get_ftp_use_eprt(struct connectdata *conn)
+{
+  return (bool)conn->bits.ftp_use_eprt;
+}
+
+void Curl_ftp_acc_conn_set_ftp_use_eprt(struct connectdata *conn, bool val)
+{
+  conn->bits.ftp_use_eprt = val;
+}
+
+bool Curl_ftp_acc_conn_get_ftp_use_epsv(struct connectdata *conn)
+{
+  return (bool)conn->bits.ftp_use_epsv;
+}
+
+void Curl_ftp_acc_conn_set_ftp_use_epsv(struct connectdata *conn, bool val)
+{
+  conn->bits.ftp_use_epsv = val;
+}
+
+bool Curl_ftp_acc_conn_get_ftp_use_data_ssl(struct connectdata *conn)
+{
+  return (bool)conn->bits.ftp_use_data_ssl;
+}
+
+void Curl_ftp_acc_conn_set_ftp_use_data_ssl(struct connectdata *conn,
+                                            bool val)
+{
+  conn->bits.ftp_use_data_ssl = val;
+}
+
+void Curl_ftp_acc_conn_set_do_more(struct connectdata *conn, bool val)
+{
+  conn->bits.do_more = val;
+}
+
+const char *Curl_ftp_acc_conn_get_origin_hostname(struct connectdata *conn)
+{
+  return conn->origin->hostname;
+}
+
+unsigned int Curl_ftp_acc_conn_get_scheme_flags(struct connectdata *conn)
+{
+  return conn->scheme->flags;
+}
+
+const char *Curl_ftp_acc_conn_get_user(struct connectdata *conn)
+{
+  return Curl_creds_user(conn->creds);
+}
+
+const char *Curl_ftp_acc_conn_get_passwd(struct connectdata *conn)
+{
+  return Curl_creds_passwd(conn->creds);
+}
+
+bool Curl_ftp_acc_has_seek_func(struct Curl_easy *data)
+{
+  return data->set.seek_func != NULL;
+}
+
+int Curl_ftp_acc_call_seek_func(struct Curl_easy *data, curl_off_t offset)
+{
+  struct Curl_mapi_guard guard;
+  int seekerr;
+  CURL_CBAPI_START(&guard, data, easy_seek_func);
+  seekerr = data->set.seek_func(data->set.seek_client, offset, SEEK_SET);
+  CURL_CBAPI_END(&guard);
+  return seekerr;
+}
+
+size_t Curl_ftp_acc_call_fread_func(struct Curl_easy *data, char *buf,
+                                    size_t amount)
+{
+  return data->state.fread_func(buf, 1, amount, data->state.in);
+}
+
+bool Curl_ftp_acc_has_chunk_bgn(struct Curl_easy *data)
+{
+  return data->set.chunk_bgn != NULL;
+}
+
+long Curl_ftp_acc_call_chunk_bgn(struct Curl_easy *data,
+                                 const struct curl_fileinfo *finfo,
+                                 int remains)
+{
+  struct Curl_mapi_guard guard;
+  long rc;
+  CURL_CBAPI_START(&guard, data, easy_chunk_bgn);
+  rc = data->set.chunk_bgn(finfo, data->set.wildcardptr, remains);
+  CURL_CBAPI_END(&guard);
+  return rc;
+}
+
+bool Curl_ftp_acc_has_chunk_end(struct Curl_easy *data)
+{
+  return data->set.chunk_end != NULL;
+}
+
+void Curl_ftp_acc_call_chunk_end(struct Curl_easy *data)
+{
+  struct Curl_mapi_guard guard;
+  CURL_CBAPI_START(&guard, data, easy_chunk_end);
+  data->set.chunk_end(data->set.wildcardptr);
+  CURL_CBAPI_END(&guard);
+}
+
+int Curl_ftp_acc_get_sockerrno(void)
+{
+  return SOCKERRNO;
+}
+
+timediff_t Curl_ftp_acc_pp_state_timeleft_ms(struct Curl_easy *data,
+                                             struct pingpong *pp)
+{
+  return Curl_pp_state_timeleft_ms(data, pp);
+}
+
+CURLcode Curl_ftp_acc_pp_statemach(struct Curl_easy *data,
+                                   struct pingpong *pp,
+                                   bool block, bool disconnecting)
+{
+  return Curl_pp_statemach(data, pp, block, disconnecting);
+}
+
+CURLcode Curl_ftp_acc_pp_readresp(struct Curl_easy *data, int8_t sockindex,
+                                  struct pingpong *pp,
+                                  int *code, size_t *size)
+{
+  return Curl_pp_readresp(data, sockindex, pp, code, size);
+}
+
+CURLcode Curl_ftp_acc_pp_pollset(struct Curl_easy *data,
+                                 struct pingpong *pp,
+                                 struct easy_pollset *ps)
+{
+  return Curl_pp_pollset(data, pp, ps);
+}
+
+CURLcode Curl_ftp_acc_pollset_add_in(struct Curl_easy *data,
+                                     struct easy_pollset *ps,
+                                     curl_socket_t sock)
+{
+  return Curl_pollset_add_in(data, ps, sock);
+}
+
+CURLcode Curl_ftp_acc_range(struct Curl_easy *data)
+{
+  return Curl_range(data);
+}
+
+void Curl_ftp_acc_xfer_setup_send(struct Curl_easy *data)
+{
+  Curl_xfer_setup_send(data, SECONDARYSOCKET);
+}
+
+void Curl_ftp_acc_xfer_setup_recv(struct Curl_easy *data, curl_off_t size)
+{
+  Curl_xfer_setup_recv(data, SECONDARYSOCKET, size);
+}
+
+void Curl_ftp_acc_connclose(struct connectdata *conn)
+{
+  connclose(conn);
+}
+
+CURLcode Curl_ftp_acc_ssl_cfilter_add(struct Curl_easy *data,
+                                      struct connectdata *conn,
+                                      int8_t sockindex)
+{
+  (void)data;
+  (void)conn;
+  (void)sockindex;
+  return Curl_ssl_cfilter_add(data, Curl_conn_get_origin(conn, FIRSTSOCKET),
+                              conn, sockindex);
+}
+
+CURLcode Curl_ftp_acc_ssl_cfilter_remove(struct Curl_easy *data,
+                                         int8_t sockindex,
+                                         bool send_shutdown)
+{
+  (void)data;
+  (void)sockindex;
+  (void)send_shutdown;
+  return Curl_ssl_cfilter_remove(data, sockindex, send_shutdown);
+}
+
+CURLcode Curl_ftp_acc_control_addr_dup(struct Curl_easy *data,
+                                       char **newhostp)
+{
+  struct connectdata *conn = data->conn;
+  struct ip_quadruple ipquad;
+  bool is_ipv6;
+
+#ifndef CURL_DISABLE_PROXY
+  if(Curl_conn_is_tunneling(conn, FIRSTSOCKET))
+    *newhostp = curlx_strdup(conn->origin->hostname);
+  else
+#endif
+  if(!Curl_conn_get_ip_info(data, conn, FIRSTSOCKET, &is_ipv6, &ipquad) &&
+     *ipquad.remote_ip)
+    *newhostp = curlx_strdup(ipquad.remote_ip);
+  else {
+    failf(data, "unable to get peername of DATA connection");
+    *newhostp = NULL;
+    return CURLE_FTP_CANT_GET_HOST;
+  }
+  return *newhostp ? CURLE_OK : CURLE_OUT_OF_MEMORY;
+}
+
+CURLcode Curl_ftp_acc_setup_pasv_conn(struct Curl_easy *data,
+                                      struct connectdata *conn,
+                                      const char *newhost,
+                                      unsigned short newport)
+{
+  CURLcode result;
+  Curl_peer_unlink(&conn->origin2);
+  result = Curl_peer_create(data, conn->scheme, newhost, newport,
+                            &conn->origin2);
+  if(result)
+    return result;
+
+  if(conn->via_peer) {
+    Curl_peer_unlink(&conn->via_peer2);
+    result = Curl_peer_create(data, conn->via_peer->scheme,
+                              conn->via_peer->hostname, newport,
+                              &conn->via_peer2);
+    if(result)
+      return result;
+  }
+
+  result = Curl_conn_setup(data, conn, SECONDARYSOCKET,
+                           conn->bits.ftp_use_data_ssl ?
+                           CURL_CF_SSL_ENABLE : CURL_CF_SSL_DISABLE);
+  if(result)
+    return result;
+
+#ifdef CURLVERBOSE
+  if(data->set.verbose) {
+    infof(data, "Connecting to %s port %d",
+          conn->origin2->hostname, conn->origin2->port);
+  }
+#endif
+  return CURLE_OK;
+}
+
+bool Curl_ftp_acc_is_ipv6_literal(const char *str)
+{
+#ifdef USE_IPV6
+  struct in6_addr addr6;
+  return curlx_inet_pton(AF_INET6, str, &addr6) == 1;
+#else
+  (void)str;
+  return FALSE;
+#endif
+}
+
+int Curl_ftp_acc_if2ip(struct Curl_easy *data, struct connectdata *conn,
+                       const char *ipstr, char *hbuf, size_t hbuflen)
+{
+  const struct Curl_sockaddr_ex *remote_addr =
+    Curl_conn_get_remote_addr(data, FIRSTSOCKET);
+#ifndef USE_IPV6
+  (void)conn;
+#endif
+  if(!remote_addr)
+    return -1;
+  return (int)Curl_if2ip(remote_addr->family,
+#ifdef USE_IPV6
+                         Curl_ipv6_scope(&remote_addr->curl_sa_addr),
+                         conn->scope_id,
+#endif
+                         ipstr, hbuf, hbuflen);
+}
+
+CURLcode Curl_ftp_acc_port_default_host(struct Curl_easy *data,
+                                        struct connectdata *conn,
+                                        void *ss_ptr,
+                                        unsigned int *sslenp,
+                                        char *hbuf, size_t hbuflen)
+{
+  struct Curl_sockaddr_storage *ss = ss_ptr;
+  struct sockaddr *sa = (struct sockaddr *)ss;
+  struct sockaddr_in * const sa4 = (void *)sa;
+#ifdef USE_IPV6
+  struct sockaddr_in6 * const sa6 = (void *)sa;
+#endif
+  char buffer[STRERROR_LEN];
+  curl_socklen_t slen = (curl_socklen_t)sizeof(*ss);
+  CURLcode result;
+
+  if(getsockname(conn->sock[FIRSTSOCKET], sa, &slen)) {
+    failf(data, "getsockname() failed: %s",
+          curlx_strerror(SOCKERRNO, buffer, sizeof(buffer)));
+    return CURLE_FTP_PORT_FAILED;
+  }
+  *sslenp = (unsigned int)slen;
+  switch(sa->sa_family) {
+#ifdef USE_IPV6
+  case AF_INET6:
+    result = curlx_inet_ntop(sa->sa_family, &sa6->sin6_addr, hbuf, hbuflen);
+    break;
+#endif
+  default:
+    result = curlx_inet_ntop(sa->sa_family, &sa4->sin_addr, hbuf, hbuflen);
+    break;
+  }
+  if(result)
+    return CURLE_FTP_PORT_FAILED;
+  return CURLE_OK;
+}
+
+CURLcode Curl_ftp_acc_port_resolve_host(struct Curl_easy *data,
+                                        struct connectdata *conn,
+                                        const char *host,
+                                        struct Curl_dns_entry **dns_entryp,
+                                        const struct Curl_addrinfo **resp)
+{
+  CURLcode result;
+
+  *resp = NULL;
+  result = Curl_resolv_blocking(
+    data, Curl_resolv_dns_queries(data, conn->ip_version),
+    host, 0, Curl_conn_get_transport(data, conn), dns_entryp);
+  if(result)
+    failf(data, "failed to resolve the address provided to PORT: %s", host);
+  else {
+    DEBUGASSERT(*dns_entryp);
+    *resp = (*dns_entryp)->addr;
+  }
+  return result;
+}
+
+CURLcode Curl_ftp_acc_port_open_socket(struct Curl_easy *data,
+                                       struct connectdata *conn,
+                                       const struct Curl_addrinfo *res,
+                                       const struct Curl_addrinfo **aip,
+                                       curl_socket_t *portsockp)
+{
+  char buffer[STRERROR_LEN];
+  int sockerr = 0;
+  const struct Curl_addrinfo *ai;
+  CURLcode result = CURLE_FTP_PORT_FAILED;
+
+  for(ai = res; ai; ai = ai->ai_next) {
+    result =
+      Curl_socket_open(data, ai, NULL,
+                       Curl_conn_get_transport(data, conn), portsockp);
+    if(result) {
+      if(result == CURLE_OUT_OF_MEMORY)
+        return result;
+      result = CURLE_FTP_PORT_FAILED;
+      sockerr = SOCKERRNO;
+      continue;
+    }
+    break;
+  }
+  if(!ai) {
+    failf(data, "socket failure: %s",
+          curlx_strerror(sockerr, buffer, sizeof(buffer)));
+    return CURLE_FTP_PORT_FAILED;
+  }
+  *aip = ai;
+  return result;
+}
+
+CURLcode Curl_ftp_acc_port_bind_socket(struct Curl_easy *data,
+                                       struct connectdata *conn,
+                                       curl_socket_t portsock,
+                                       const struct Curl_addrinfo *ai,
+                                       void *ss_ptr,
+                                       unsigned int *sslen_io,
+                                       unsigned short port_min,
+                                       unsigned short port_max,
+                                       bool non_local,
+                                       unsigned short *pbound_port)
+{
+  struct Curl_sockaddr_storage *ss = ss_ptr;
+  struct sockaddr *sa = (struct sockaddr *)ss;
+  struct sockaddr_in * const sa4 = (void *)sa;
+#ifdef USE_IPV6
+  struct sockaddr_in6 * const sa6 = (void *)sa;
+#endif
+  char buffer[STRERROR_LEN];
+  unsigned short port;
+  int sockerr;
+  curl_socklen_t slen;
+
+  memcpy(sa, ai->ai_addr, ai->ai_addrlen);
+  slen = ai->ai_addrlen;
+
+  for(port = port_min; port <= port_max;) {
+    if(sa->sa_family == AF_INET)
+      sa4->sin_port = htons(port);
+#ifdef USE_IPV6
+    else
+      sa6->sin6_port = htons(port);
+#endif
+    if(bind(portsock, sa, slen)) {
+      sockerr = SOCKERRNO;
+      if(non_local && (sockerr == SOCKEADDRNOTAVAIL)) {
+        infof(data, "bind(port=%hu) on non-local address failed: %s", port,
+              curlx_strerror(sockerr, buffer, sizeof(buffer)));
+
+        slen = (curl_socklen_t)sizeof(*ss);
+        if(getsockname(conn->sock[FIRSTSOCKET], sa, &slen)) {
+          failf(data, "getsockname() failed: %s",
+                curlx_strerror(SOCKERRNO, buffer, sizeof(buffer)));
+          return CURLE_FTP_PORT_FAILED;
+        }
+        port = port_min;
+        non_local = FALSE;
+        continue;
+      }
+      if(sockerr != SOCKEADDRINUSE && sockerr != SOCKEACCES) {
+        failf(data, "bind(port=%hu) failed: %s", port,
+              curlx_strerror(sockerr, buffer, sizeof(buffer)));
+        return CURLE_FTP_PORT_FAILED;
+      }
+    }
+    else
+      break;
+
+    if(port == port_max) {
+      failf(data, "bind() failed, ran out of ports");
+      return CURLE_FTP_PORT_FAILED;
+    }
+    port++;
+  }
+
+  slen = (curl_socklen_t)sizeof(*ss);
+  if(getsockname(portsock, sa, &slen)) {
+    failf(data, "getsockname() failed: %s",
+          curlx_strerror(SOCKERRNO, buffer, sizeof(buffer)));
+    return CURLE_FTP_PORT_FAILED;
+  }
+  *sslen_io = (unsigned int)slen;
+  *pbound_port = port;
+  return CURLE_OK;
+}
+
+CURLcode Curl_ftp_acc_port_listen(struct Curl_easy *data,
+                                  curl_socket_t portsock)
+{
+  char buffer[STRERROR_LEN];
+
+  if(listen(portsock, 1)) {
+    failf(data, "socket failure: %s",
+          curlx_strerror(SOCKERRNO, buffer, sizeof(buffer)));
+    return CURLE_FTP_PORT_FAILED;
+  }
+  return CURLE_OK;
+}
+
+void Curl_ftp_acc_port_extract_sa(const void *ss_ptr,
+                                  const struct Curl_addrinfo *ai,
+                                  char *myhost, size_t myhost_len,
+                                  bool *pis_ipv4, bool *pis_ipv6,
+                                  unsigned short *pport)
+{
+  const struct Curl_sockaddr_storage *ss = ss_ptr;
+  const struct sockaddr *sa = (const struct sockaddr *)ss;
+  const struct sockaddr_in * const sa4 = (const void *)sa;
+#ifdef USE_IPV6
+  const struct sockaddr_in6 * const sa6 = (const void *)sa;
+#endif
+
+  myhost[0] = '\0';
+  Curl_printable_address(ai, myhost, myhost_len);
+  *pis_ipv4 = FALSE;
+  *pis_ipv6 = FALSE;
+  *pport = 0;
+
+  switch(sa->sa_family) {
+  case AF_INET:
+    *pis_ipv4 = TRUE;
+    *pport = ntohs(sa4->sin_port);
+    break;
+#ifdef USE_IPV6
+  case AF_INET6:
+    *pis_ipv6 = TRUE;
+    *pport = ntohs(sa6->sin6_port);
+    break;
+#endif
+  default:
+    break;
+  }
+}
+#endif /* CURL_DISABLE_FTP */

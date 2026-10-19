@@ -15,7 +15,6 @@ pub const c_flags = [_][]const u8{
 
 pub const c_sources = [_][]const u8{
     // LIB_CFILES
-    "lib/ftp.c",
     "lib/http.c",
     "lib/multi.c",
     "lib/url.c",
