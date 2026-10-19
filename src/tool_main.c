@@ -219,3 +219,196 @@ int main(int argc, char *argv[])
 #endif
 
 #endif /* !UNITTESTS */
+
+#ifdef HAVE_PWD_H
+#include <pwd.h>
+#endif
+
+struct tool_var *tool_zig_get_variables(void)
+{
+  return global->variables;
+}
+
+void tool_zig_set_variables(struct tool_var *v)
+{
+  global->variables = v;
+}
+
+struct OperationConfig *tool_zig_get_global_last(void)
+{
+  return global->last;
+}
+
+bool tool_zig_next_operation(struct OperationConfig **configp)
+{
+  struct OperationConfig *config = *configp;
+  if(config->url_list && config->url_list->url) {
+    config->next = config_alloc();
+    if(config->next) {
+      global->last = config->next;
+      config->next->prev = config;
+      *configp = config->next;
+    }
+    else
+      return FALSE;
+  }
+  return TRUE;
+}
+
+FILE *tool_zig_stdin(void)
+{
+  return stdin;
+}
+
+int tool_zig_get_errno(void)
+{
+  return errno;
+}
+
+bool tool_zig_errno_is_acces_or_exist(void)
+{
+  return (errno == EACCES) || (errno == EEXIST);
+}
+
+void tool_zig_show_dir_errno(const char *name)
+{
+  switch(errno) {
+#ifdef EACCES
+  case EACCES:
+    errorf("You do not have permission to create %s", name);
+    break;
+#endif
+#ifdef ENAMETOOLONG
+  case ENAMETOOLONG:
+    errorf("The directory name %s is too long", name);
+    break;
+#endif
+#ifdef EROFS
+  case EROFS:
+    errorf("%s resides on a read-only file system", name);
+    break;
+#endif
+#ifdef ENOSPC
+  case ENOSPC:
+    errorf("No space left on the file system that would "
+           "contain the directory %s", name);
+    break;
+#endif
+#ifdef EDQUOT
+  case EDQUOT:
+    errorf("Cannot create directory %s because you "
+           "exceeded your quota", name);
+    break;
+#endif
+  default:
+    errorf("Error creating directory %s", name);
+    break;
+  }
+}
+
+#ifndef _WIN32
+int tool_zig_stat_mtime(const char *filename, curl_off_t *stamp)
+{
+  curlx_struct_stat statbuf;
+  if(curlx_stat(filename, &statbuf) != -1) {
+    *stamp = (curl_off_t)statbuf.st_mtime;
+    return 0;
+  }
+  return -1;
+}
+#else
+void tool_zig_set_config_cacert(struct OperationConfig *config, char *cacert)
+{
+  curlx_free(config->cacert);
+  config->cacert = cacert;
+}
+#endif
+
+const char *tool_zig_get_pw_dir(void)
+{
+#if defined(HAVE_GETPWUID) && defined(HAVE_GETEUID)
+  struct passwd *pw = getpwuid(geteuid());
+  if(pw && pw->pw_dir && pw->pw_dir[0])
+    return pw->pw_dir;
+#endif
+  return NULL;
+}
+
+void tool_zig_errorf_0(const char *msg)
+{
+  errorf("%s", msg);
+}
+
+void tool_zig_errorf_s(const char *fmt, const char *s)
+{
+  errorf(fmt, s);
+}
+
+void tool_zig_errorf_ss(const char *fmt, const char *s1, const char *s2)
+{
+  errorf(fmt, s1, s2);
+}
+
+void tool_zig_errorf_ns(const char *fmt, int n, const char *s)
+{
+  errorf(fmt, n, s);
+}
+
+void tool_zig_errorf_d(const char *fmt, int d)
+{
+  errorf(fmt, d);
+}
+
+void tool_zig_errorf_lx(const char *fmt, unsigned long lx)
+{
+  errorf(fmt, lx);
+}
+
+void tool_zig_errorf_cfg(const char *display, int lineno, const char *option,
+                         const char *reason)
+{
+  errorf("%s:%d config file option '%s' %s", display, lineno, option, reason);
+}
+
+void tool_zig_warnf_0(const char *msg)
+{
+  warnf("%s", msg);
+}
+
+void tool_zig_warnf_s(const char *fmt, const char *s)
+{
+  warnf(fmt, s);
+}
+
+void tool_zig_warnf_zu(const char *fmt, size_t n)
+{
+  warnf(fmt, n);
+}
+
+void tool_zig_warnf_lx(const char *fmt, unsigned long lx)
+{
+  warnf(fmt, lx);
+}
+
+void tool_zig_warnf_off_lx(const char *fmt, curl_off_t off, unsigned long lx)
+{
+  warnf(fmt, off, lx);
+}
+
+void tool_zig_warnf_off_ss(const char *fmt, curl_off_t off, const char *s1,
+                           const char *s2)
+{
+  warnf(fmt, off, s1, s2);
+}
+
+void tool_zig_warnf_cfg(const char *fmt, const char *filename, int lineno,
+                        const char *option)
+{
+  warnf(fmt, filename, lineno, option);
+}
+
+void tool_zig_notef_s(const char *fmt, const char *s)
+{
+  notef(fmt, s);
+}
+

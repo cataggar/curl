@@ -3,7 +3,6 @@ const libcurl = @import("libcurl.zig");
 
 pub const c_sources = [_][]const u8{
     "src/config2setopts.c",
-    "src/slist_wc.c",
     "src/terminal.c",
     "src/tool_cb_dbg.c",
     "src/tool_cb_hdr.c",
@@ -13,11 +12,7 @@ pub const c_sources = [_][]const u8{
     "src/tool_cb_soc.c",
     "src/tool_cb_wrt.c",
     "src/tool_cfgable.c",
-    "src/tool_dirhie.c",
-    "src/tool_doswin.c",
     "src/tool_easysrc.c",
-    "src/tool_filetime.c",
-    "src/tool_findfile.c",
     "src/tool_formparse.c",
     "src/tool_getparam.c",
     "src/tool_getpass.c",
@@ -31,19 +26,12 @@ pub const c_sources = [_][]const u8{
     "src/tool_operate.c",
     "src/tool_operhlp.c",
     "src/tool_paramhlp.c",
-    "src/tool_parsecfg.c",
     "src/tool_progress.c",
     "src/tool_setopt.c",
     "src/tool_ssls.c",
     "src/tool_stderr.c",
-    "src/tool_urlglob.c",
-    "src/tool_util.c",
-    "src/tool_vms.c",
     "src/tool_writeout.c",
     "src/tool_writeout_json.c",
-    "src/tool_xattr.c",
-    "src/var.c",
-    "src/toolx/tool_time.c",
 };
 
 pub const curlx_c_sources = [_][]const u8{};
@@ -59,7 +47,7 @@ pub fn addCurlExe(
     const exe = b.addExecutable(.{
         .name = "curl",
         .root_module = b.createModule(.{
-            .root_source_file = if (!is_static_libcurl) b.path("zig/port/root.zig") else null,
+            .root_source_file = b.path("zig/port/cli_root.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
