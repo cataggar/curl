@@ -2001,6 +2001,7 @@ const schannel_backend = struct {
     const SEC_E_OK: SECURITY_STATUS = 0x00000000;
     const SEC_I_CONTINUE_NEEDED: SECURITY_STATUS = 0x00090312;
     const SEC_I_CONTEXT_EXPIRED: SECURITY_STATUS = 0x00090317;
+    const SEC_I_INCOMPLETE_CREDENTIALS: SECURITY_STATUS = 0x00090320;
     const SEC_I_RENEGOTIATE: SECURITY_STATUS = 0x00090321;
     const SEC_E_INCOMPLETE_MESSAGE: SECURITY_STATUS = @bitCast(@as(u32, 0x80090318));
     const SEC_E_INSUFFICIENT_MEMORY: SECURITY_STATUS = @bitCast(@as(u32, 0x80090300));
@@ -2011,6 +2012,13 @@ const schannel_backend = struct {
     const CRYPT_E_NO_REVOCATION_CHECK: SECURITY_STATUS = @bitCast(@as(u32, 0x80092012));
     const CRYPT_E_REVOCATION_OFFLINE: SECURITY_STATUS = @bitCast(@as(u32, 0x80092013));
     const CRYPT_E_REVOKED: SECURITY_STATUS = @bitCast(@as(u32, 0x80092010));
+
+    const ERROR_INVALID_PASSWORD: DWORD = 86;
+    const CP_UTF8: c_uint = 65001;
+    const MB_ERR_INVALID_CHARS: DWORD = 0x00000008;
+    const CURL_MAX_INPUT_LENGTH: usize = 8000000;
+    const SEEK_SET: c_int = 0;
+    const SEEK_END: c_int = 2;
 
     const SECPKG_CRED_OUTBOUND: ULONG = 0x00000002;
     const SECURITY_NETWORK_DREP: ULONG = 0x00000000;
@@ -2049,13 +2057,16 @@ const schannel_backend = struct {
 
     const SCHANNEL_SHUTDOWN: DWORD = 1;
     const UNISP_NAME_A: [*:0]const u8 = "Microsoft Unified Security Protocol Provider";
+    const CURLE_SSL_CACERT_BADFILE: CURLcode = 77;
 
     const SCH_CRED_VERSION: DWORD = 0x00000004;
     const SCHANNEL_CRED_VERSION: DWORD = 0x00000004;
+    const SCH_CREDENTIALS_VERSION: DWORD = 0x00000005;
     const SCH_CRED_MANUAL_CRED_VALIDATION: DWORD = 0x00000008;
     const SCH_CRED_NO_DEFAULT_CREDS: DWORD = 0x00000010;
     const SCH_CRED_AUTO_CRED_VALIDATION: DWORD = 0x00000020;
-    const SCH_CRED_USE_DEFAULT_CRYPTO: DWORD = 0x00000040;
+    const SCH_CRED_USE_DEFAULT_CREDS: DWORD = 0x00000040;
+    const SCH_CRED_NO_SERVERNAME_CHECK: DWORD = 0x00000004;
     const SCH_CRED_IGNORE_NO_REVOCATION_CHECK: DWORD = 0x00000800;
     const SCH_CRED_IGNORE_REVOCATION_OFFLINE: DWORD = 0x00001000;
     const SCH_CRED_REVOCATION_CHECK_CHAIN: DWORD = 0x00000200;
@@ -2068,14 +2079,37 @@ const schannel_backend = struct {
 
     const CURL_SCHANNEL_BUFFER_INIT_SIZE: usize = 4096;
     const CURL_SCHANNEL_BUFFER_FREE_SIZE: usize = 1024;
-    const CURL_SCHANNEL_BUFFER_STEP_FACTOR: usize = 2;
+    const CERT_THUMBPRINT_STR_LEN: usize = 40;
+    const CERT_THUMBPRINT_DATA_LEN: usize = 20;
+    const MAX_ALLOWED_CERT_AMOUNT: c_int = 100;
+    const STRERROR_LEN: usize = 256;
 
-    const PROV_RSA_FULL: DWORD = 1;
-    const CRYPT_VERIFYCONTEXT: DWORD = 0xF0000000;
-    const CRYPT_SILENT: DWORD = 0x00000040;
+    const PKCS12_NO_PERSIST_KEY: DWORD = 0x00008000;
+    const CERT_STORE_PROV_SYSTEM_A: usize = 9;
+    const CERT_STORE_OPEN_EXISTING_FLAG: DWORD = 0x00004000;
+    const CERT_SYSTEM_STORE_CURRENT_USER: DWORD = 1 << 16;
+    const CERT_SYSTEM_STORE_LOCAL_MACHINE: DWORD = 2 << 16;
+    const CERT_SYSTEM_STORE_CURRENT_SERVICE: DWORD = 4 << 16;
+    const CERT_SYSTEM_STORE_SERVICES: DWORD = 5 << 16;
+    const CERT_SYSTEM_STORE_USERS: DWORD = 6 << 16;
+    const CERT_SYSTEM_STORE_CURRENT_USER_GROUP_POLICY: DWORD = 7 << 16;
+    const CERT_SYSTEM_STORE_LOCAL_MACHINE_GROUP_POLICY: DWORD = 8 << 16;
+    const CERT_SYSTEM_STORE_LOCAL_MACHINE_ENTERPRISE: DWORD = 9 << 16;
+
+    const CRYPT_STRING_HEX: DWORD = 0x00000004;
+    const CERT_FIND_ANY: DWORD = 0;
+    const CERT_FIND_HASH: DWORD = 1 << 16;
+    const CERT_FIND_HAS_PRIVATE_KEY: DWORD = 21 << 16;
 
     const X509_ASN_ENCODING: DWORD = 0x00000001;
     const PKCS_7_ASN_ENCODING: DWORD = 0x00010000;
+
+    const PLATFORM_WINNT: c_int = 2;
+    const VERSION_GREATER_THAN_EQUAL: c_int = 3;
+
+    const MPROTO_SCHANNEL_CERT_SHARE_KEY = "tls:schannel:cert:share";
+
+    var s_win_has_alpn: bool = false;
 
     pub const SecHandle = extern struct {
         dwLower: usize,
@@ -2109,11 +2143,6 @@ const schannel_backend = struct {
         cbBlockSize: ULONG,
     };
 
-    pub const SecPkgContext_Bindings = extern struct {
-        BindingsLength: ULONG,
-        Bindings: ?*anyopaque,
-    };
-
     pub const SecPkgContext_ApplicationProtocol = extern struct {
         ProtoNegoStatus: u32,
         ProtoNegoExt: u32,
@@ -2138,42 +2167,49 @@ const schannel_backend = struct {
         dwCredFormat: DWORD,
     };
 
+    pub const UNICODE_STRING = extern struct {
+        Length: WORD = 0,
+        MaximumLength: WORD = 0,
+        Buffer: ?[*]u16 = null,
+    };
+
     pub const CRYPTO_SETTINGS = extern struct {
-        eAlgorithmUsage: c_uint,
-        pszAlgId: ?[*:0]const u16,
-        cChainingModes: DWORD,
-        rgstrChainingModes: ?*?[*:0]const u16,
-        dwMinBitLength: DWORD,
-        dwMaxBitLength: DWORD,
+        eAlgorithmUsage: c_int = 0,
+        strCngAlgId: UNICODE_STRING = .{},
+        cChainingModes: DWORD = 0,
+        rgstrChainingModes: ?*UNICODE_STRING = null,
+        dwMinBitLength: DWORD = 0,
+        dwMaxBitLength: DWORD = 0,
     };
 
     pub const TLS_PARAMETERS = extern struct {
-        cAlpnIds: DWORD,
-        rgstrAlpnIds: ?*?[*:0]const u16,
-        grbitDisabledProtocols: DWORD,
-        cDisabledCrypto: DWORD,
-        pDisabledCrypto: ?[*]CRYPTO_SETTINGS,
-        dwFlags: DWORD,
+        cAlpnIds: DWORD = 0,
+        rgstrAlpnIds: ?*UNICODE_STRING = null,
+        grbitDisabledProtocols: DWORD = 0,
+        cDisabledCrypto: DWORD = 0,
+        pDisabledCrypto: ?[*]CRYPTO_SETTINGS = null,
+        dwFlags: DWORD = 0,
     };
 
     pub const SCH_CREDENTIALS = extern struct {
-        dwVersion: DWORD,
-        dwCredFormat: DWORD,
-        cCreds: DWORD,
-        paCred: ?*?*const CERT_CONTEXT,
-        hRootStore: HCERTSTORE,
-        cMappers: DWORD,
-        aphMappers: ?*anyopaque,
-        dwSessionLifespan: DWORD,
-        dwFlags: DWORD,
-        cTlsParameters: DWORD,
-        pTlsParameters: ?[*]TLS_PARAMETERS,
+        dwVersion: DWORD = SCH_CREDENTIALS_VERSION,
+        dwCredFormat: DWORD = 0,
+        cCreds: DWORD = 0,
+        paCred: ?*?*const CERT_CONTEXT = null,
+        hRootStore: HCERTSTORE = null,
+        cMappers: DWORD = 0,
+        aphMappers: ?*anyopaque = null,
+        dwSessionLifespan: DWORD = 0,
+        dwFlags: DWORD = 0,
+        cTlsParameters: DWORD = 0,
+        pTlsParameters: ?*TLS_PARAMETERS = null,
     };
 
     pub const CRYPT_DATA_BLOB = extern struct {
         cbData: DWORD,
         pbData: ?[*]u8,
     };
+    pub const CRYPT_HASH_BLOB = CRYPT_DATA_BLOB;
 
     pub const CRYPT_BIT_BLOB = extern struct {
         cbData: DWORD,
@@ -2221,15 +2257,18 @@ const schannel_backend = struct {
 
     pub const CurlSchannelCred = extern struct {
         cred_handle: CredHandle,
-        time_stamp: TimeStamp,
+        sni_hostname: ?[*:0]u8,
         client_cert_store: HCERTSTORE,
-        cached_cert_store: HCERTSTORE,
         refcount: c_int,
     };
 
     pub const CurlSchannelCtxt = extern struct {
         ctxt_handle: CtxtHandle,
-        time_stamp: TimeStamp,
+    };
+
+    const SecPkgContext_Bindings = extern struct {
+        BindingsLength: ULONG,
+        Bindings: ?*anyopaque,
     };
 
     pub const SBuffer = extern struct {
@@ -2310,6 +2349,14 @@ const schannel_backend = struct {
         }
     };
 
+    const SchCertShare = extern struct {
+        CAinfo_blob_digest: [CURL_SHA256_DIGEST_LENGTH]u8,
+        CAinfo_blob_size: usize,
+        CAfile: ?[*:0]u8,
+        cert_store: HCERTSTORE,
+        time: CurlTime,
+    };
+
     pub const SecurityFunctionTableA = extern struct {
         dwVersion: ULONG,
         EnumerateSecurityPackagesA: ?*const anyopaque,
@@ -2323,7 +2370,7 @@ const schannel_backend = struct {
             pGetKeyFn: ?*const anyopaque,
             pvGetKeyArgument: ?*anyopaque,
             phCredential: *CredHandle,
-            ptsExpiry: *TimeStamp,
+            ptsExpiry: ?*TimeStamp,
         ) callconv(sspi_cc) SECURITY_STATUS,
         FreeCredentialsHandle: *const fn (phCredential: *CredHandle) callconv(sspi_cc) SECURITY_STATUS,
         Reserved2: ?*anyopaque,
@@ -2366,22 +2413,76 @@ const schannel_backend = struct {
 
     const win_ext = struct {
         extern var Curl_pSecFn: ?*SecurityFunctionTableA;
+        extern "ws2_32" fn WSAGetLastError() callconv(sspi_cc) c_int;
+        extern "crypt32" fn CertOpenStore(
+            lpszStoreProvider: usize,
+            dwEncodingType: DWORD,
+            hCryptProv: HCRYPTPROV,
+            dwFlags: DWORD,
+            pvPara: ?*const anyopaque,
+        ) callconv(sspi_cc) HCERTSTORE;
         extern "crypt32" fn CertCloseStore(hCertStore: HCERTSTORE, dwFlags: DWORD) callconv(sspi_cc) BOOL;
         extern "crypt32" fn CertFreeCertificateContext(pCertContext: ?*const CERT_CONTEXT) callconv(sspi_cc) BOOL;
-        extern "advapi32" fn CryptAcquireContextA(phProv: *HCRYPTPROV, pszContainer: ?[*:0]const u8, pszProvider: ?[*:0]const u8, dwProvType: DWORD, dwFlags: DWORD) callconv(sspi_cc) BOOL;
-        extern "advapi32" fn CryptGenRandom(hProv: HCRYPTPROV, dwLen: DWORD, pbBuffer: [*]u8) callconv(sspi_cc) BOOL;
-        extern "advapi32" fn CryptReleaseContext(hProv: HCRYPTPROV, dwFlags: DWORD) callconv(sspi_cc) BOOL;
-        extern "bcrypt" fn BCryptOpenAlgorithmProvider(phAlgorithm: *BCRYPT_ALG_HANDLE, pszAlgId: [*:0]const u16, pszImplementation: ?[*:0]const u16, dwFlags: ULONG) callconv(sspi_cc) NTSTATUS;
-        extern "bcrypt" fn BCryptCloseAlgorithmProvider(hAlgorithm: BCRYPT_ALG_HANDLE, dwFlags: ULONG) callconv(sspi_cc) NTSTATUS;
-        extern "bcrypt" fn BCryptGetProperty(hObject: BCRYPT_ALG_HANDLE, pszProperty: [*:0]const u16, pbOutput: [*]u8, cbOutput: ULONG, pcbResult: *ULONG, dwFlags: ULONG) callconv(sspi_cc) NTSTATUS;
-        extern "bcrypt" fn BCryptCreateHash(hAlgorithm: BCRYPT_ALG_HANDLE, phHash: *BCRYPT_HASH_HANDLE, pbHashObject: [*]u8, cbHashObject: ULONG, pbSecret: ?[*]u8, cbSecret: ULONG, dwFlags: ULONG) callconv(sspi_cc) NTSTATUS;
-        extern "bcrypt" fn BCryptHashData(hHash: BCRYPT_HASH_HANDLE, pbInput: [*]const u8, cbInput: ULONG, dwFlags: ULONG) callconv(sspi_cc) NTSTATUS;
-        extern "bcrypt" fn BCryptFinishHash(hHash: BCRYPT_HASH_HANDLE, pbOutput: [*]u8, cbOutput: ULONG, dwFlags: ULONG) callconv(sspi_cc) NTSTATUS;
-        extern "bcrypt" fn BCryptDestroyHash(hHash: BCRYPT_HASH_HANDLE) callconv(sspi_cc) NTSTATUS;
+        extern "crypt32" fn CertFindCertificateInStore(
+            hCertStore: HCERTSTORE,
+            dwCertEncodingType: DWORD,
+            dwFindFlags: DWORD,
+            dwFindType: DWORD,
+            pvFindPara: ?*const anyopaque,
+            pPrevCertContext: ?*const CERT_CONTEXT,
+        ) callconv(sspi_cc) ?*const CERT_CONTEXT;
+        extern "crypt32" fn CertEnumCertificatesInStore(
+            hCertStore: HCERTSTORE,
+            pPrevCertContext: ?*const CERT_CONTEXT,
+        ) callconv(sspi_cc) ?*const CERT_CONTEXT;
+        extern "crypt32" fn CryptStringToBinaryA(
+            pszString: [*]const u8,
+            cchString: DWORD,
+            dwFlags: DWORD,
+            pbBinary: ?[*]u8,
+            pcbBinary: *DWORD,
+            pdwSkip: ?*DWORD,
+            pdwFlags: ?*DWORD,
+        ) callconv(sspi_cc) BOOL;
+        extern "crypt32" fn PFXImportCertStore(
+            pPFX: *const CRYPT_DATA_BLOB,
+            szPassword: ?[*:0]const u16,
+            dwFlags: DWORD,
+        ) callconv(sspi_cc) HCERTSTORE;
+        extern "kernel32" fn GetLastError() callconv(sspi_cc) DWORD;
+        extern "kernel32" fn GetModuleHandleA(lpModuleName: ?[*:0]const u8) callconv(sspi_cc) ?*anyopaque;
+        extern "kernel32" fn GetProcAddress(hModule: ?*anyopaque, lpProcName: [*:0]const u8) callconv(sspi_cc) ?*const anyopaque;
+        extern "kernel32" fn MultiByteToWideChar(
+            CodePage: c_uint,
+            dwFlags: DWORD,
+            lpMultiByteStr: [*]const u8,
+            cbMultiByte: c_int,
+            lpWideCharStr: ?[*]u16,
+            cchWideChar: c_int,
+        ) callconv(sspi_cc) c_int;
+        extern fn fseek(stream: *anyopaque, offset: c_long, whence: c_int) callconv(.c) c_int;
+        extern fn ftell(stream: *anyopaque) callconv(.c) c_long;
+        extern fn fread(ptr: [*]u8, size: usize, nmemb: usize, stream: *anyopaque) callconv(.c) usize;
+        extern fn fclose(stream: *anyopaque) callconv(.c) c_int;
         extern fn Curl_verify_certificate(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) CURLcode;
-        extern fn Curl_verify_host(cf: *CurlCfilter, data: ?*CurlEasy, pCertContextServer: *CERT_CONTEXT) callconv(.c) CURLcode;
+        extern fn Curl_verify_host(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) CURLcode;
         extern fn curlx_verify_windows_version(majorVersion: c_uint, minorVersion: c_uint, buildVersion: c_uint, platform: c_int, condition: c_int) callconv(.c) bool;
         extern fn Curl_sspi_strerror(err: i32, buf: [*]u8, buflen: usize) callconv(.c) [*:0]const u8;
+        extern fn Curl_sspi_global_init() callconv(.c) CURLcode;
+        extern fn Curl_sspi_global_cleanup() callconv(.c) void;
+        extern fn curlx_str_number(linep: *[*:0]const u8, nump: *i64, max: i64) callconv(.c) c_int;
+        extern fn Curl_pgrsUpdate(data: ?*CurlEasy) callconv(.c) CURLcode;
+        extern fn Curl_vtls_acc_multi_proto_hash(data: ?*CurlEasy) callconv(.c) ?*anyopaque;
+        extern fn Curl_vtls_acc_conn_get_ssl_context(conn: ?*ConnectData) callconv(.c) ?*anyopaque;
+        extern fn Curl_vtls_acc_conn_set_ssl_context(conn: ?*ConnectData, ctx: ?*anyopaque) callconv(.c) void;
+        extern fn Curl_hash_pick(h: *anyopaque, key: *const anyopaque, key_len: usize) callconv(.c) ?*anyopaque;
+        extern fn Curl_hash_add2(
+            h: *anyopaque,
+            key: *const anyopaque,
+            key_len: usize,
+            p: *anyopaque,
+            dtor: *const fn (key: *const anyopaque, key_len: usize, p: *anyopaque) callconv(.c) void,
+        ) callconv(.c) ?*anyopaque;
     };
 
     inline fn initSecBuffer(buf: *SecBuffer, buf_type: ULONG, pv: ?*anyopaque, cb: ULONG) void {
@@ -2396,42 +2497,558 @@ const schannel_backend = struct {
         desc.pBuffers = buffers;
     }
 
+    fn schannelMemdup0(src: [*]const u8, len: usize) ?[*:0]u8 {
+        const buf = mem.malloc(len + 1) orelse return null;
+        if (len > 0) @memcpy(buf[0..len], src[0..len]);
+        buf[len] = 0;
+        return @ptrCast(buf);
+    }
+
     fn setSslVersionMinMax(enabled_protocols: *DWORD, cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
         const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
-        var ssl_version = conn_config.version;
+        const ssl_version: u32 = conn_config.version;
         var ssl_version_max: u32 = @intCast(conn_config.version_max);
-
-        switch (ssl_version) {
-            CURL_SSLVERSION_DEFAULT, CURL_SSLVERSION_TLSv1 => {
-                ssl_version = CURL_SSLVERSION_TLSv1_0;
-            },
-            else => {},
-        }
 
         switch (ssl_version_max) {
             CURL_SSLVERSION_MAX_NONE, CURL_SSLVERSION_MAX_DEFAULT => {
-                ssl_version_max = CURL_SSLVERSION_MAX_TLSv1_3;
+                if (win_ext.curlx_verify_windows_version(10, 0, 20348, PLATFORM_WINNT, VERSION_GREATER_THAN_EQUAL)) {
+                    ssl_version_max = CURL_SSLVERSION_MAX_TLSv1_3;
+                } else {
+                    ssl_version_max = CURL_SSLVERSION_MAX_TLSv1_2;
+                }
             },
             else => {},
         }
 
-        var i: u8 = ssl_version;
-        while (@as(u32, i) <= (ssl_version_max >> 16)) : (i += 1) {
-            switch (i) {
+        var i: u32 = ssl_version;
+        while (i <= (ssl_version_max >> 16)) : (i += 1) {
+            switch (@as(u8, @intCast(i))) {
                 CURL_SSLVERSION_TLSv1_0 => enabled_protocols.* |= SP_PROT_TLS1_0_CLIENT,
                 CURL_SSLVERSION_TLSv1_1 => enabled_protocols.* |= SP_PROT_TLS1_1_CLIENT,
                 CURL_SSLVERSION_TLSv1_2 => enabled_protocols.* |= SP_PROT_TLS1_2_CLIENT,
-                CURL_SSLVERSION_TLSv1_3 => enabled_protocols.* |= SP_PROT_TLS1_3_CLIENT,
-                CURL_SSLVERSION_SSLv2, CURL_SSLVERSION_SSLv3 => {
-                    c_ext.Curl_failf(data, "SSL versions not supported");
-                    return CURLE_NOT_BUILT_IN;
+                CURL_SSLVERSION_TLSv1_3 => {
+                    if (win_ext.curlx_verify_windows_version(10, 0, 20348, PLATFORM_WINNT, VERSION_GREATER_THAN_EQUAL)) {
+                        enabled_protocols.* |= SP_PROT_TLS1_3_CLIENT;
+                    } else {
+                        c_ext.Curl_failf(data, "schannel: TLS 1.3 not supported on Windows 10 or older");
+                        return CURLE_SSL_CONNECT_ERROR;
+                    }
                 },
-                else => {
-                    c_ext.Curl_failf(data, "Unrecognized parameter passed via CURLOPT_SSLVERSION");
-                    return CURLE_SSL_CONNECT_ERROR;
-                },
+                else => {},
             }
         }
+        return CURLE_OK;
+    }
+
+    const Algo = struct {
+        name: []const u8,
+        id: c_int,
+    };
+
+    const NUM_CIPHERS: usize = 47;
+
+    const algs = [NUM_CIPHERS]Algo{
+        .{ .name = "CALG_MD2", .id = 0x00008001 },
+        .{ .name = "CALG_MD4", .id = 0x00008002 },
+        .{ .name = "CALG_MD5", .id = 0x00008003 },
+        .{ .name = "CALG_SHA", .id = 0x00008004 },
+        .{ .name = "CALG_SHA1", .id = 0x00008004 },
+        .{ .name = "CALG_MAC", .id = 0x00008005 },
+        .{ .name = "CALG_RSA_SIGN", .id = 0x00002400 },
+        .{ .name = "CALG_DSS_SIGN", .id = 0x00002200 },
+        .{ .name = "CALG_NO_SIGN", .id = 0x00002000 },
+        .{ .name = "CALG_RSA_KEYX", .id = 0x0000a400 },
+        .{ .name = "CALG_DES", .id = 0x00006601 },
+        .{ .name = "CALG_3DES_112", .id = 0x00006609 },
+        .{ .name = "CALG_3DES", .id = 0x00006603 },
+        .{ .name = "CALG_DESX", .id = 0x00006604 },
+        .{ .name = "CALG_RC2", .id = 0x00006602 },
+        .{ .name = "CALG_RC4", .id = 0x00006801 },
+        .{ .name = "CALG_SEAL", .id = 0x00006802 },
+        .{ .name = "CALG_DH_SF", .id = 0x0000aa01 },
+        .{ .name = "CALG_DH_EPHEM", .id = 0x0000aa02 },
+        .{ .name = "CALG_AGREEDKEY_ANY", .id = 0x0000aa03 },
+        .{ .name = "CALG_HUGHES_MD5", .id = 0x0000a003 },
+        .{ .name = "CALG_SKIPJACK", .id = 0x0000660a },
+        .{ .name = "CALG_TEK", .id = 0x0000660b },
+        .{ .name = "CALG_CYLINK_MEK", .id = 0x0000660c },
+        .{ .name = "CALG_SSL3_SHAMD5", .id = 0x00008008 },
+        .{ .name = "CALG_SSL3_MASTER", .id = 0x00004c01 },
+        .{ .name = "CALG_SCHANNEL_MASTER_HASH", .id = 0x00004c02 },
+        .{ .name = "CALG_SCHANNEL_MAC_KEY", .id = 0x00004c03 },
+        .{ .name = "CALG_SCHANNEL_ENC_KEY", .id = 0x00004c07 },
+        .{ .name = "CALG_PCT1_MASTER", .id = 0x00004c04 },
+        .{ .name = "CALG_SSL2_MASTER", .id = 0x00004c05 },
+        .{ .name = "CALG_TLS1_MASTER", .id = 0x00004c06 },
+        .{ .name = "CALG_RC5", .id = 0x0000660d },
+        .{ .name = "CALG_HMAC", .id = 0x00008009 },
+        .{ .name = "CALG_TLS1PRF", .id = 0x0000800a },
+        .{ .name = "CALG_HASH_REPLACE_OWF", .id = 0x0000800b },
+        .{ .name = "CALG_AES_128", .id = 0x0000660e },
+        .{ .name = "CALG_AES_192", .id = 0x0000660f },
+        .{ .name = "CALG_AES_256", .id = 0x00006610 },
+        .{ .name = "CALG_AES", .id = 0x00006611 },
+        .{ .name = "CALG_SHA_256", .id = 0x0000800c },
+        .{ .name = "CALG_SHA_384", .id = 0x0000800d },
+        .{ .name = "CALG_SHA_512", .id = 0x0000800e },
+        .{ .name = "CALG_ECDH", .id = 0x0000aa05 },
+        .{ .name = "CALG_ECMQV", .id = 0x0000a001 },
+        .{ .name = "CALG_ECDSA", .id = 0x00002203 },
+        .{ .name = "CALG_ECDH_EPHEM", .id = 0x0000ae06 },
+    };
+
+    fn getAlgIdByName(name: [*:0]const u8) c_int {
+        const s = std.mem.span(name);
+        const n = std.mem.indexOfScalar(u8, s, ':') orelse s.len;
+        for (algs) |entry| {
+            if (entry.name.len == n and std.mem.eql(u8, entry.name, s[0..n])) {
+                return entry.id;
+            }
+        }
+        return 0;
+    }
+
+    fn setSslCiphers(schannel_cred: *SCHANNEL_CRED, ciphers: [*:0]const u8, alg_ids: *[NUM_CIPHERS]ALG_ID) CURLcode {
+        var start_cur: ?[*:0]const u8 = ciphers;
+        var alg_count: usize = 0;
+        while (start_cur) |cur_init| {
+            if (cur_init[0] == 0 or alg_count >= NUM_CIPHERS) break;
+            var cur: [*:0]const u8 = cur_init;
+            var alg: i64 = 0;
+            if (win_ext.curlx_str_number(&cur, &alg, std.math.maxInt(c_int)) != 0 or alg == 0) {
+                alg = getAlgIdByName(cur);
+            }
+            if (alg != 0) {
+                alg_ids[alg_count] = @intCast(alg);
+                alg_count += 1;
+            } else {
+                const cur_slice = std.mem.span(cur);
+                if (std.mem.startsWith(u8, cur_slice, "USE_STRONG_CRYPTO") or
+                    std.mem.startsWith(u8, cur_slice, "SCH_USE_STRONG_CRYPTO"))
+                {
+                    schannel_cred.dwFlags |= SCH_USE_STRONG_CRYPTO;
+                } else {
+                    return CURLE_SSL_CIPHER;
+                }
+            }
+            const rest = std.mem.span(cur);
+            if (std.mem.indexOfScalar(u8, rest, ':')) |colon_idx| {
+                start_cur = cur + colon_idx + 1;
+            } else {
+                start_cur = null;
+            }
+        }
+        schannel_cred.palgSupportedAlgs = alg_ids;
+        schannel_cred.cSupportedAlgs = @intCast(alg_count);
+        return CURLE_OK;
+    }
+
+    fn getCertLocation(
+        path: [*:0]const u8,
+        store_name: *DWORD,
+        store_path: *?[*:0]u8,
+        thumbprint: *?[*:0]const u8,
+    ) CURLcode {
+        const path_slice = std.mem.span(path);
+        const first_sep = std.mem.indexOfScalar(u8, path_slice, '\\') orelse return CURLE_SSL_CERTPROBLEM;
+        const store_name_slice = path_slice[0..first_sep];
+
+        if (std.mem.eql(u8, store_name_slice, "CurrentUser")) {
+            store_name.* = CERT_SYSTEM_STORE_CURRENT_USER;
+        } else if (std.mem.eql(u8, store_name_slice, "LocalMachine")) {
+            store_name.* = CERT_SYSTEM_STORE_LOCAL_MACHINE;
+        } else if (std.mem.eql(u8, store_name_slice, "CurrentService")) {
+            store_name.* = CERT_SYSTEM_STORE_CURRENT_SERVICE;
+        } else if (std.mem.eql(u8, store_name_slice, "Services")) {
+            store_name.* = CERT_SYSTEM_STORE_SERVICES;
+        } else if (std.mem.eql(u8, store_name_slice, "Users")) {
+            store_name.* = CERT_SYSTEM_STORE_USERS;
+        } else if (std.mem.eql(u8, store_name_slice, "CurrentUserGroupPolicy")) {
+            store_name.* = CERT_SYSTEM_STORE_CURRENT_USER_GROUP_POLICY;
+        } else if (std.mem.eql(u8, store_name_slice, "LocalMachineGroupPolicy")) {
+            store_name.* = CERT_SYSTEM_STORE_LOCAL_MACHINE_GROUP_POLICY;
+        } else if (std.mem.eql(u8, store_name_slice, "LocalMachineEnterprise")) {
+            store_name.* = CERT_SYSTEM_STORE_LOCAL_MACHINE_ENTERPRISE;
+        } else {
+            return CURLE_SSL_CERTPROBLEM;
+        }
+
+        const remainder = path_slice[first_sep + 1 ..];
+        const second_sep = std.mem.indexOfScalar(u8, remainder, '\\') orelse return CURLE_SSL_CERTPROBLEM;
+
+        const tp_offset = first_sep + 1 + second_sep + 1;
+        const tp_ptr: [*:0]const u8 = path + tp_offset;
+        if (std.mem.len(tp_ptr) != CERT_THUMBPRINT_STR_LEN) {
+            return CURLE_SSL_CERTPROBLEM;
+        }
+        thumbprint.* = tp_ptr;
+
+        const sp_slice = remainder[0..second_sep];
+        const raw_sp = mem.malloc(sp_slice.len + 1) orelse return CURLE_OUT_OF_MEMORY;
+        const sp_buf: [*]u8 = @ptrCast(raw_sp);
+        if (sp_slice.len > 0) {
+            @memcpy(sp_buf[0..sp_slice.len], sp_slice);
+        }
+        sp_buf[sp_slice.len] = 0;
+        store_path.* = @ptrCast(sp_buf);
+
+        return CURLE_OK;
+    }
+
+    fn getClientCert(
+        cf: *CurlCfilter,
+        data: ?*CurlEasy,
+        out_cert_store: *HCERTSTORE,
+        out_cert_context: *?*const CERT_CONTEXT,
+    ) CURLcode {
+        const sslc = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+        var client_cert: ?*const CERT_CONTEXT = null;
+        var client_cert_store: HCERTSTORE = null;
+        var result: CURLcode = CURLE_OK;
+
+        if (sslc.clientcert != null or sslc.cert_blob != null) {
+            var cert_store_name: DWORD = 0;
+            var cert_store_path: ?[*:0]u8 = null;
+            var cert_thumbprint_str: ?[*:0]const u8 = null;
+            var cert_thumbprint_buf: [CERT_THUMBPRINT_STR_LEN + 1]u8 = @splat(0);
+            var cert_store: HCERTSTORE = null;
+            var fInCert: ?*anyopaque = null;
+            var certdata: ?[*]u8 = null;
+            var certsize: usize = 0;
+            const blob = sslc.cert_blob != null;
+
+            if (blob) {
+                const cb = sslc.cert_blob.?;
+                certdata = @ptrCast(@constCast(cb.data));
+                certsize = cb.len;
+            } else {
+                const clientcert = sslc.clientcert.?;
+                const cert_path = mem.strdup(clientcert) orelse return CURLE_OUT_OF_MEMORY;
+                result = getCertLocation(cert_path, &cert_store_name, &cert_store_path, &cert_thumbprint_str);
+                if (result == CURLE_OK and cert_thumbprint_str != null) {
+                    @memcpy(cert_thumbprint_buf[0 .. CERT_THUMBPRINT_STR_LEN + 1], cert_thumbprint_str.?[0 .. CERT_THUMBPRINT_STR_LEN + 1]);
+                    cert_thumbprint_str = @ptrCast(&cert_thumbprint_buf);
+                }
+                mem.free(cert_path);
+                if (result != CURLE_OK and clientcert[0] != 0) {
+                    fInCert = os_leaf.win32.curlx_win32_fopen(clientcert, "rb");
+                }
+                if (result != CURLE_OK and fInCert == null) {
+                    c_ext.Curl_failf(
+                        data,
+                        "schannel: Failed to get certificate location or file for %s",
+                        clientcert,
+                    );
+                    return result;
+                }
+            }
+
+            if ((fInCert != null or blob) and sslc.cert_type != null and
+                primitives.curl_strequal(sslc.cert_type.?, "P12") == 0)
+            {
+                c_ext.Curl_failf(
+                    data,
+                    "schannel: certificate format compatibility error for %s",
+                    if (blob) @as([*:0]const u8, "(memory blob)") else @as([*:0]const u8, sslc.clientcert.?),
+                );
+                if (cert_store_path) |sp| mem.free(sp);
+                if (fInCert) |f| _ = win_ext.fclose(f);
+                return CURLE_SSL_CERTPROBLEM;
+            }
+
+            if (fInCert != null or blob) {
+                const cert_showfilename_error: [*:0]const u8 = if (blob) "(memory blob)" else sslc.clientcert.?;
+                if (cert_store_path) |sp| {
+                    mem.free(sp);
+                    cert_store_path = null;
+                }
+                if (fInCert) |f| {
+                    var continue_reading = (win_ext.fseek(f, 0, SEEK_END) == 0);
+                    if (continue_reading) {
+                        const cert_tell = win_ext.ftell(f);
+                        if (cert_tell < 0) {
+                            continue_reading = false;
+                        } else {
+                            certsize = @intCast(cert_tell);
+                        }
+                    }
+                    if (continue_reading) {
+                        continue_reading = (win_ext.fseek(f, 0, SEEK_SET) == 0);
+                    }
+                    if (continue_reading and certsize < CURL_MAX_INPUT_LENGTH) {
+                        if (mem.malloc(certsize + 1)) |raw_cd| {
+                            certdata = @ptrCast(raw_cd);
+                        }
+                    }
+                    if (certdata == null or win_ext.fread(certdata.?, certsize, 1, f) != 1) {
+                        continue_reading = false;
+                    }
+                    _ = win_ext.fclose(f);
+                    if (!continue_reading) {
+                        c_ext.Curl_failf(data, "schannel: Failed to read cert file %s", sslc.clientcert.?);
+                        if (certdata) |cd| mem.free(cd);
+                        return CURLE_SSL_CERTPROBLEM;
+                    }
+                }
+
+                const datablob = CRYPT_DATA_BLOB{
+                    .pbData = certdata,
+                    .cbData = @intCast(certsize),
+                };
+
+                const pwd_len: usize = if (sslc.key_passwd) |kp| std.mem.len(kp) else 0;
+                if (mem.malloc(@sizeOf(u16) * (pwd_len + 1))) |raw_pw| {
+                    const pszPassword: [*]u16 = @ptrCast(@alignCast(raw_pw));
+                    var str_w_len: c_int = 0;
+                    if (pwd_len > 0) {
+                        str_w_len = win_ext.MultiByteToWideChar(
+                            CP_UTF8,
+                            MB_ERR_INVALID_CHARS,
+                            sslc.key_passwd.?,
+                            @intCast(pwd_len),
+                            pszPassword,
+                            @intCast(pwd_len + 1),
+                        );
+                    }
+                    if (str_w_len >= 0 and @as(usize, @intCast(str_w_len)) <= pwd_len) {
+                        pszPassword[@intCast(str_w_len)] = 0;
+                    } else {
+                        pszPassword[0] = 0;
+                    }
+
+                    cert_store = win_ext.PFXImportCertStore(
+                        &datablob,
+                        @ptrCast(pszPassword),
+                        PKCS12_NO_PERSIST_KEY,
+                    );
+                    mem.secureZero(@ptrCast(pszPassword), @sizeOf(u16) * (pwd_len + 1));
+                    mem.free(raw_pw);
+                }
+
+                if (!blob) {
+                    if (certdata) |cd| mem.free(cd);
+                }
+
+                if (cert_store == null) {
+                    const errorcode = win_ext.GetLastError();
+                    if (errorcode == ERROR_INVALID_PASSWORD) {
+                        c_ext.Curl_failf(
+                            data,
+                            "schannel: Failed to import cert file %s, password is bad",
+                            cert_showfilename_error,
+                        );
+                    } else {
+                        c_ext.Curl_failf(
+                            data,
+                            "schannel: Failed to import cert file %s, last error is 0x%08lx",
+                            cert_showfilename_error,
+                            @as(c_ulong, errorcode),
+                        );
+                    }
+                    return CURLE_SSL_CERTPROBLEM;
+                }
+
+                const cert_find_flags: DWORD = if (win_ext.curlx_verify_windows_version(
+                    6,
+                    2,
+                    0,
+                    PLATFORM_WINNT,
+                    VERSION_GREATER_THAN_EQUAL,
+                )) CERT_FIND_HAS_PRIVATE_KEY else CERT_FIND_ANY;
+
+                client_cert = win_ext.CertFindCertificateInStore(
+                    cert_store,
+                    X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+                    0,
+                    cert_find_flags,
+                    null,
+                    null,
+                );
+
+                if (client_cert == null) {
+                    c_ext.Curl_failf(
+                        data,
+                        "schannel: Failed to get certificate from file %s, last error is 0x%08lx",
+                        cert_showfilename_error,
+                        @as(c_ulong, win_ext.GetLastError()),
+                    );
+                    _ = win_ext.CertCloseStore(cert_store, 0);
+                    return CURLE_SSL_CERTPROBLEM;
+                }
+            } else {
+                cert_store = win_ext.CertOpenStore(
+                    CERT_STORE_PROV_SYSTEM_A,
+                    0,
+                    0,
+                    CERT_STORE_OPEN_EXISTING_FLAG | cert_store_name,
+                    cert_store_path,
+                );
+                if (cert_store == null) {
+                    c_ext.Curl_failf(
+                        data,
+                        "schannel: Failed to open cert store %lx %s, last error is 0x%08lx",
+                        @as(c_ulong, cert_store_name),
+                        if (cert_store_path) |sp| @as([*:0]const u8, sp) else "(unknown)",
+                        @as(c_ulong, win_ext.GetLastError()),
+                    );
+                    if (cert_store_path) |sp| mem.free(sp);
+                    return CURLE_SSL_CERTPROBLEM;
+                }
+                if (cert_store_path) |sp| {
+                    mem.free(sp);
+                    cert_store_path = null;
+                }
+
+                var cert_thumbprint_data: [CERT_THUMBPRINT_DATA_LEN]u8 = undefined;
+                var cert_thumbprint = CRYPT_HASH_BLOB{
+                    .pbData = &cert_thumbprint_data,
+                    .cbData = CERT_THUMBPRINT_DATA_LEN,
+                };
+
+                if (win_ext.CryptStringToBinaryA(
+                    cert_thumbprint_str.?,
+                    CERT_THUMBPRINT_STR_LEN,
+                    CRYPT_STRING_HEX,
+                    &cert_thumbprint_data,
+                    &cert_thumbprint.cbData,
+                    null,
+                    null,
+                ) == 0) {
+                    _ = win_ext.CertCloseStore(cert_store, 0);
+                    return CURLE_SSL_CERTPROBLEM;
+                }
+
+                client_cert = win_ext.CertFindCertificateInStore(
+                    cert_store,
+                    X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+                    0,
+                    CERT_FIND_HASH,
+                    &cert_thumbprint,
+                    null,
+                );
+                if (client_cert == null) {
+                    _ = win_ext.CertCloseStore(cert_store, 0);
+                    c_ext.Curl_failf(data, "schannel: client cert not found in cert store");
+                    return CURLE_SSL_CERTPROBLEM;
+                }
+            }
+            client_cert_store = cert_store;
+        }
+
+        out_cert_store.* = client_cert_store;
+        out_cert_context.* = client_cert;
+        return CURLE_OK;
+    }
+
+    fn acquireSspiHandle(
+        cf: *CurlCfilter,
+        data: ?*CurlEasy,
+        backend: *SchannelSslBackendData,
+        client_cert: ?*const CERT_CONTEXT,
+        flags: DWORD,
+        enabled_protocols: DWORD,
+    ) CURLcode {
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+        const sec_fn = win_ext.Curl_pSecFn orelse return CURLE_SSL_CONNECT_ERROR;
+        const cred = backend.cred orelse return CURLE_SSL_CONNECT_ERROR;
+        var sspi_status: SECURITY_STATUS = SEC_E_OK;
+
+        if (conn_config.cipher_list == null and
+            win_ext.curlx_verify_windows_version(10, 0, 20348, PLATFORM_WINNT, VERSION_GREATER_THAN_EQUAL))
+        {
+            var credentials = SCH_CREDENTIALS{};
+            var tls_parameters = TLS_PARAMETERS{};
+            var crypto_settings: [1]CRYPTO_SETTINGS = .{.{}};
+            var client_certs: [1]?*const CERT_CONTEXT = .{client_cert};
+
+            tls_parameters.pDisabledCrypto = &crypto_settings;
+            tls_parameters.cDisabledCrypto = 0;
+            tls_parameters.grbitDisabledProtocols = ~enabled_protocols;
+
+            credentials.pTlsParameters = &tls_parameters;
+            credentials.cTlsParameters = 1;
+            credentials.dwVersion = SCH_CREDENTIALS_VERSION;
+            credentials.dwFlags = flags | SCH_USE_STRONG_CRYPTO;
+
+            if (client_certs[0] != null) {
+                credentials.cCreds = 1;
+                credentials.paCred = &client_certs[0];
+            }
+
+            sspi_status = sec_fn.AcquireCredentialsHandleA(
+                null,
+                UNISP_NAME_A,
+                SECPKG_CRED_OUTBOUND,
+                null,
+                &credentials,
+                null,
+                null,
+                &cred.cred_handle,
+                null,
+            );
+        } else {
+            var alg_ids: [NUM_CIPHERS]ALG_ID = undefined;
+            var schannel_cred = std.mem.zeroes(SCHANNEL_CRED);
+            var client_certs: [1]?*const CERT_CONTEXT = .{client_cert};
+
+            schannel_cred.dwVersion = SCHANNEL_CRED_VERSION;
+            schannel_cred.dwFlags = flags;
+            schannel_cred.grbitEnabledProtocols = enabled_protocols;
+
+            if (conn_config.cipher_list) |ciphers| {
+                if ((enabled_protocols & SP_PROT_TLS1_3_CLIENT) != 0) {
+                    if ((enabled_protocols & ~SP_PROT_TLS1_3_CLIENT) == 0) {
+                        c_ext.Curl_failf(
+                            data,
+                            "schannel: TLS 1.3 is not supported with a cipher list; remove the cipher list or allow a lower TLS version",
+                        );
+                        return CURLE_SSL_CONNECT_ERROR;
+                    }
+                    c_ext.Curl_infof(
+                        data,
+                        "schannel: WARNING: This version of Schannel negotiates a less-secure TLS version than TLS 1.3 because the user set an algorithm cipher list.",
+                    );
+                }
+                const result = setSslCiphers(&schannel_cred, ciphers, &alg_ids);
+                if (result != CURLE_OK) {
+                    c_ext.Curl_failf(data, "schannel: Failed setting algorithm cipher list");
+                    return result;
+                }
+            } else {
+                schannel_cred.dwFlags = flags | SCH_USE_STRONG_CRYPTO;
+            }
+
+            if (client_certs[0] != null) {
+                schannel_cred.cCreds = 1;
+                schannel_cred.paCred = &client_certs[0];
+            }
+
+            sspi_status = sec_fn.AcquireCredentialsHandleA(
+                null,
+                UNISP_NAME_A,
+                SECPKG_CRED_OUTBOUND,
+                null,
+                &schannel_cred,
+                null,
+                null,
+                &cred.cred_handle,
+                null,
+            );
+        }
+
+        if (sspi_status != SEC_E_OK) {
+            var buffer: [STRERROR_LEN]u8 = undefined;
+            c_ext.Curl_failf(
+                data,
+                "schannel: AcquireCredentialsHandle failed: %s",
+                win_ext.Curl_sspi_strerror(sspi_status, &buffer, buffer.len),
+            );
+            return switch (sspi_status) {
+                SEC_E_INSUFFICIENT_MEMORY => CURLE_OUT_OF_MEMORY,
+                else => CURLE_SSL_CONNECT_ERROR,
+            };
+        }
+
         return CURLE_OK;
     }
 
@@ -2439,56 +3056,90 @@ const schannel_backend = struct {
         const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
         const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
         const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
-        const sec_fn = win_ext.Curl_pSecFn orelse return CURLE_SSL_CONNECT_ERROR;
 
-        var flags: DWORD = SCH_CRED_NO_DEFAULT_CREDS | SCH_CRED_REVOCATION_CHECK_CHAIN;
-        if (backend.use_manual_cred_validation()) {
-            flags = SCH_CRED_MANUAL_CRED_VALIDATION | SCH_CRED_IGNORE_NO_REVOCATION_CHECK | SCH_CRED_IGNORE_REVOCATION_OFFLINE;
-        } else {
-            flags |= SCH_CRED_AUTO_CRED_VALIDATION;
-            if (conn_config.revoke_best_effort()) {
-                flags |= SCH_CRED_IGNORE_NO_REVOCATION_CHECK | SCH_CRED_IGNORE_REVOCATION_OFFLINE;
-            } else if (conn_config.no_revoke()) {
-                flags &= ~SCH_CRED_REVOCATION_CHECK_CHAIN;
-                flags |= SCH_CRED_IGNORE_NO_REVOCATION_CHECK | SCH_CRED_IGNORE_REVOCATION_OFFLINE;
+        var client_cert: ?*const CERT_CONTEXT = null;
+        var client_cert_store: HCERTSTORE = null;
+        var flags: DWORD = 0;
+        var enabled_protocols: DWORD = 0;
+
+        if (conn_config.verifypeer()) {
+            if (backend.use_manual_cred_validation()) {
+                flags = SCH_CRED_MANUAL_CRED_VALIDATION;
+            } else {
+                flags = SCH_CRED_AUTO_CRED_VALIDATION;
             }
+
+            if (conn_config.no_revoke()) {
+                flags |= SCH_CRED_IGNORE_NO_REVOCATION_CHECK | SCH_CRED_IGNORE_REVOCATION_OFFLINE;
+            } else if (conn_config.revoke_best_effort()) {
+                flags |= SCH_CRED_IGNORE_NO_REVOCATION_CHECK |
+                    SCH_CRED_IGNORE_REVOCATION_OFFLINE |
+                    SCH_CRED_REVOCATION_CHECK_CHAIN;
+            } else {
+                flags |= SCH_CRED_REVOCATION_CHECK_CHAIN;
+            }
+        } else {
+            flags = SCH_CRED_MANUAL_CRED_VALIDATION |
+                SCH_CRED_IGNORE_NO_REVOCATION_CHECK |
+                SCH_CRED_IGNORE_REVOCATION_OFFLINE;
         }
 
-        var enabled_protocols: DWORD = 0;
-        const result = setSslVersionMinMax(&enabled_protocols, cf, data);
+        if (!conn_config.verifyhost()) {
+            flags |= SCH_CRED_NO_SERVERNAME_CHECK;
+        }
+
+        if (!conn_config.auto_client_cert()) {
+            flags &= ~SCH_CRED_USE_DEFAULT_CREDS;
+            flags |= SCH_CRED_NO_DEFAULT_CREDS;
+            c_ext.Curl_infof(data, "schannel: disabled automatic use of client certificate");
+        } else {
+            c_ext.Curl_infof(data, "schannel: enabled automatic use of client certificate");
+        }
+
+        switch (conn_config.version) {
+            CURL_SSLVERSION_TLSv1,
+            CURL_SSLVERSION_TLSv1_0,
+            CURL_SSLVERSION_TLSv1_1,
+            CURL_SSLVERSION_TLSv1_2,
+            CURL_SSLVERSION_TLSv1_3,
+            => {
+                const result = setSslVersionMinMax(&enabled_protocols, cf, data);
+                if (result != CURLE_OK) return result;
+            },
+            CURL_SSLVERSION_SSLv3, CURL_SSLVERSION_SSLv2 => {
+                c_ext.Curl_failf(data, "SSL versions not supported");
+                return CURLE_NOT_BUILT_IN;
+            },
+            else => {
+                c_ext.Curl_failf(data, "Unrecognized parameter passed via CURLOPT_SSLVERSION");
+                return CURLE_SSL_CONNECT_ERROR;
+            },
+        }
+
+        var result = getClientCert(cf, data, &client_cert_store, &client_cert);
         if (result != CURLE_OK) return result;
 
-        const raw_cred = mem.calloc(1, @sizeOf(CurlSchannelCred)) orelse return CURLE_OUT_OF_MEMORY;
+        const raw_cred = mem.calloc(1, @sizeOf(CurlSchannelCred)) orelse {
+            c_ext.Curl_failf(data, "schannel: unable to allocate memory");
+            if (client_cert) |cc| _ = win_ext.CertFreeCertificateContext(cc);
+            if (client_cert_store) |cs| _ = win_ext.CertCloseStore(cs, 0);
+            return CURLE_OUT_OF_MEMORY;
+        };
         const cred: *CurlSchannelCred = @ptrCast(@alignCast(raw_cred));
         cred.refcount = 1;
+        cred.client_cert_store = client_cert_store;
         backend.cred = cred;
 
-        var schannel_cred = std.mem.zeroes(SCHANNEL_CRED);
-        schannel_cred.dwVersion = SCHANNEL_CRED_VERSION;
-        schannel_cred.dwFlags = flags | SCH_USE_STRONG_CRYPTO;
-        schannel_cred.grbitEnabledProtocols = enabled_protocols;
+        result = acquireSspiHandle(cf, data, backend, client_cert, flags, enabled_protocols);
 
-        const sspi_status = sec_fn.AcquireCredentialsHandleA(
-            null,
-            UNISP_NAME_A,
-            SECPKG_CRED_OUTBOUND,
-            null,
-            &schannel_cred,
-            null,
-            null,
-            &cred.cred_handle,
-            &cred.time_stamp,
-        );
-
-        if (sspi_status != SEC_E_OK) {
-            mem.free(cred);
-            backend.cred = null;
-            return CURLE_SSL_CONNECT_ERROR;
+        if (client_cert) |cc| {
+            _ = win_ext.CertFreeCertificateContext(cc);
         }
-        return CURLE_OK;
+
+        return result;
     }
 
-    fn schannelCredFree(ptr: ?*anyopaque) callconv(.c) void {
+    fn schannelSessionFree(ptr: ?*anyopaque) callconv(.c) void {
         const cred_opt: ?*CurlSchannelCred = if (ptr) |p| @ptrCast(@alignCast(p)) else null;
         if (cred_opt) |cred| {
             cred.refcount -= 1;
@@ -2496,11 +3147,12 @@ const schannel_backend = struct {
                 if (win_ext.Curl_pSecFn) |sec_fn| {
                     _ = sec_fn.FreeCredentialsHandle(&cred.cred_handle);
                 }
+                if (cred.sni_hostname) |sni| {
+                    mem.free(sni);
+                }
                 if (cred.client_cert_store) |cs| {
                     _ = win_ext.CertCloseStore(cs, 0);
-                }
-                if (cred.cached_cert_store) |ccs| {
-                    _ = win_ext.CertCloseStore(ccs, 0);
+                    cred.client_cert_store = null;
                 }
                 mem.free(cred);
             }
@@ -2515,13 +3167,20 @@ const schannel_backend = struct {
 
         var result: CURLcode = CURLE_OK;
 
-        backend.set_use_alpn(connssl.alpn != null);
-        backend.set_use_manual_cred_validation(false);
+        backend.set_use_alpn(connssl.alpn != null and s_win_has_alpn);
 
         if (conn_config.CAfile != null or conn_config.ca_info_blob != null) {
-            backend.set_use_manual_cred_validation(true);
-        } else if (!conn_config.verifypeer()) {
-            backend.set_use_manual_cred_validation(true);
+            if (win_ext.curlx_verify_windows_version(6, 1, 0, PLATFORM_WINNT, VERSION_GREATER_THAN_EQUAL)) {
+                backend.set_use_manual_cred_validation(true);
+            } else {
+                c_ext.Curl_failf(
+                    data,
+                    "schannel: this version of Windows is too old to support certificate verification via CA bundle file.",
+                );
+                return CURLE_SSL_CACERT_BADFILE;
+            }
+        } else {
+            backend.set_use_manual_cred_validation(false);
         }
 
         backend.cred = null;
@@ -2543,38 +3202,19 @@ const schannel_backend = struct {
 
         if (backend.cred == null) {
             result = schannelAcquireCredentialHandle(cf, data);
-            if (result != CURLE_OK) return result;
-            if (conn_config.primary_cache_session() and connssl.peer.scache_key != null) {
-                vtls_scache_asn1.Curl_ssl_scache_lock_zig(data, scache, has_share_scache);
-                if (backend.cred) |cred| {
-                    const rc = vtls_scache_asn1.Curl_ssl_scache_add_obj_zig(
-                        cf,
-                        data,
-                        scache,
-                        conn_config,
-                        trc_feat,
-                        connssl.peer.scache_key.?,
-                        cred,
-                        schannelCredFree,
-                    );
-                    if (rc == CURLE_OK) {
-                        cred.refcount += 1;
-                    }
-                }
-                vtls_scache_asn1.Curl_ssl_scache_unlock_zig(data, scache, has_share_scache);
+            if (result != CURLE_OK or backend.cred == null) return result;
+
+            const snihost: ?[*:0]const u8 = connssl.peer.sni orelse connssl.peer.origin.?.hostname;
+            if (snihost) |sh| {
+                backend.cred.?.sni_hostname = mem.strdup(sh) orelse return CURLE_OUT_OF_MEMORY;
+            } else {
+                return CURLE_OUT_OF_MEMORY;
             }
         }
 
-        backend.req_flags = ISC_REQ_SEQUENCE_DETECT | ISC_REQ_REPLAY_DETECT | ISC_REQ_CONFIDENTIALITY | ISC_REQ_ALLOCATE_MEMORY | ISC_REQ_STREAM;
-        if (!conn_config.auto_client_cert()) {
-            backend.req_flags |= ISC_REQ_USE_SUPPLIED_CREDS;
+        if (connssl.peer.type != SSL_PEER_DNS) {
+            c_ext.Curl_infof(data, "schannel: using IP address, SNI is not supported by OS.");
         }
-        if (backend.use_manual_cred_validation()) {
-            backend.req_flags |= ISC_REQ_MANUAL_CRED_VALIDATION;
-        }
-
-        const raw_ctxt = mem.calloc(1, @sizeOf(CurlSchannelCtxt)) orelse return CURLE_OUT_OF_MEMORY;
-        backend.ctxt = @ptrCast(@alignCast(raw_ctxt));
 
         var alpn_buffer: [128]u8 = undefined;
         var inbuf: SecBuffer = undefined;
@@ -2582,61 +3222,262 @@ const schannel_backend = struct {
         var outbuf: SecBuffer = undefined;
         var outbuf_desc: SecBufferDesc = undefined;
 
-        var p_inbuf_desc: ?*SecBufferDesc = null;
         if (backend.use_alpn()) {
-            var proto_buf: AlpnProtoBuf = undefined;
-            if (alpnToProtoBuf(&proto_buf, connssl.alpn) == CURLE_OK and proto_buf.len > 0) {
-                const list_len: u32 = @intCast(proto_buf.len);
-                const total_len: u32 = 4 + 4 + list_len;
-                if (total_len <= alpn_buffer.len) {
-                    const ext_len: u32 = 4 + list_len;
-                    @memcpy(alpn_buffer[0..4], std.mem.asBytes(&ext_len));
-                    const nego_ext: u32 = SecApplicationProtocolNegotiationExt_ALPN;
-                    @memcpy(alpn_buffer[4..8], std.mem.asBytes(&nego_ext));
-                    const bit_len: u16 = @intCast(list_len);
-                    @memcpy(alpn_buffer[8..10], std.mem.asBytes(&bit_len));
-                    @memcpy(alpn_buffer[10 .. 10 + list_len], proto_buf.data[0..list_len]);
-                    initSecBuffer(&inbuf, SECBUFFER_APPLICATION_PROTOCOLS, &alpn_buffer, 10 + list_len);
-                    initSecBufferDesc(&inbuf_desc, @ptrCast(&inbuf), 1);
-                    p_inbuf_desc = &inbuf_desc;
-                }
+            var proto: AlpnProtoBuf = undefined;
+            result = alpnToProtoBuf(&proto, connssl.alpn);
+            if (result != CURLE_OK) {
+                c_ext.Curl_failf(data, "Error setting ALPN");
+                return CURLE_SSL_CONNECT_ERROR;
             }
+            const proto_len: usize = @intCast(proto.len);
+            const list_len: u16 = @intCast(proto_len);
+            const ext_len: u32 = @as(u32, list_len) + @sizeOf(u32) + @sizeOf(u16);
+            const ui_alpn: u32 = SecApplicationProtocolNegotiationExt_ALPN;
+            @memcpy(alpn_buffer[0..4], std.mem.asBytes(&ext_len));
+            @memcpy(alpn_buffer[4..8], std.mem.asBytes(&ui_alpn));
+            @memcpy(alpn_buffer[8..10], std.mem.asBytes(&list_len));
+            if (proto_len > 0) {
+                @memcpy(alpn_buffer[10 .. 10 + proto_len], proto.data[0..proto_len]);
+            }
+            initSecBuffer(&inbuf, SECBUFFER_APPLICATION_PROTOCOLS, &alpn_buffer, @intCast(10 + proto_len));
+            initSecBufferDesc(&inbuf_desc, @ptrCast(&inbuf), 1);
+
+            _ = alpnToProtoStr(&proto, connssl.alpn);
+            c_ext.Curl_infof(data, "ALPN: curl offers %s", @as([*:0]const u8, @ptrCast(&proto.data)));
+        } else {
+            initSecBuffer(&inbuf, SECBUFFER_EMPTY, null, 0);
+            initSecBufferDesc(&inbuf_desc, @ptrCast(&inbuf), 1);
         }
 
         initSecBuffer(&outbuf, SECBUFFER_EMPTY, null, 0);
         initSecBufferDesc(&outbuf_desc, @ptrCast(&outbuf), 1);
 
+        backend.req_flags = ISC_REQ_SEQUENCE_DETECT |
+            ISC_REQ_REPLAY_DETECT |
+            ISC_REQ_CONFIDENTIALITY |
+            ISC_REQ_ALLOCATE_MEMORY |
+            ISC_REQ_STREAM |
+            (if (!conn_config.auto_client_cert()) ISC_REQ_USE_SUPPLIED_CREDS else 0);
+
+        const raw_ctxt = mem.calloc(1, @sizeOf(CurlSchannelCtxt)) orelse {
+            c_ext.Curl_failf(data, "schannel: unable to allocate memory");
+            return CURLE_OUT_OF_MEMORY;
+        };
+        backend.ctxt = @ptrCast(@alignCast(raw_ctxt));
+
         const sspi_status = sec_fn.InitializeSecurityContextA(
             &backend.cred.?.cred_handle,
             null,
-            connssl.peer.sni,
+            backend.cred.?.sni_hostname,
             backend.req_flags,
             0,
             0,
-            p_inbuf_desc,
+            if (backend.use_alpn()) &inbuf_desc else null,
             0,
             &backend.ctxt.?.ctxt_handle,
             &outbuf_desc,
             &backend.ret_flags,
-            &backend.ctxt.?.time_stamp,
+            null,
         );
 
         if (sspi_status != SEC_I_CONTINUE_NEEDED) {
+            var buffer: [STRERROR_LEN]u8 = undefined;
             mem.free(backend.ctxt);
             backend.ctxt = null;
-            return CURLE_SSL_CONNECT_ERROR;
-        }
-
-        if (outbuf.cbBuffer != 0 and outbuf.pvBuffer != null) {
-            var written: usize = 0;
-            result = c_ext.Curl_conn_cf_send(cf.next, data, outbuf.pvBuffer, outbuf.cbBuffer, false, &written);
-            _ = sec_fn.FreeContextBuffer(outbuf.pvBuffer);
-            if (result != CURLE_OK or outbuf.cbBuffer != written) {
-                return CURLE_SSL_CONNECT_ERROR;
+            switch (sspi_status) {
+                SEC_E_INSUFFICIENT_MEMORY => {
+                    c_ext.Curl_failf(
+                        data,
+                        "schannel: initial InitializeSecurityContext failed: %s",
+                        win_ext.Curl_sspi_strerror(sspi_status, &buffer, buffer.len),
+                    );
+                    return CURLE_OUT_OF_MEMORY;
+                },
+                SEC_E_WRONG_PRINCIPAL => {
+                    c_ext.Curl_failf(
+                        data,
+                        "schannel: SNI or certificate check failed: %s",
+                        win_ext.Curl_sspi_strerror(sspi_status, &buffer, buffer.len),
+                    );
+                    return CURLE_PEER_FAILED_VERIFICATION;
+                },
+                else => {
+                    c_ext.Curl_failf(
+                        data,
+                        "schannel: initial InitializeSecurityContext failed: %s",
+                        win_ext.Curl_sspi_strerror(sspi_status, &buffer, buffer.len),
+                    );
+                    return CURLE_SSL_CONNECT_ERROR;
+                },
             }
         }
 
+        var written: usize = 0;
+        result = c_ext.Curl_conn_cf_send(
+            cf.next,
+            data,
+            outbuf.pvBuffer,
+            outbuf.cbBuffer,
+            false,
+            &written,
+        );
+        _ = sec_fn.FreeContextBuffer(outbuf.pvBuffer);
+        if (result != CURLE_OK or outbuf.cbBuffer != written) {
+            c_ext.Curl_failf(
+                data,
+                "schannel: failed to send initial handshake data: sent %zu of %lu bytes",
+                written,
+                outbuf.cbBuffer,
+            );
+            return CURLE_SSL_CONNECT_ERROR;
+        }
+
+        backend.recv_unrecoverable_err = CURLE_OK;
+        backend.set_recv_sspi_close_notify(false);
+        backend.set_recv_connection_closed(false);
+        backend.set_recv_renegotiating(false);
+        backend.renegotiate_state.started = false;
+        backend.set_encdata_is_incomplete(false);
+        backend.set_shutdown_generated(false);
+        backend.shutdown_offset = 0;
+        backend.shutdown_token = std.mem.zeroes(SecBuffer);
+
         connssl.connecting_state = ssl_connect_2;
+        return CURLE_OK;
+    }
+
+    fn schannelError(data: ?*CurlEasy, sspi_status: SECURITY_STATUS) CURLcode {
+        var buffer: [STRERROR_LEN]u8 = undefined;
+        switch (sspi_status) {
+            SEC_E_INSUFFICIENT_MEMORY => {
+                c_ext.Curl_failf(
+                    data,
+                    "schannel: next InitializeSecurityContext failed: %s",
+                    win_ext.Curl_sspi_strerror(sspi_status, &buffer, buffer.len),
+                );
+                return CURLE_OUT_OF_MEMORY;
+            },
+            SEC_E_WRONG_PRINCIPAL => {
+                c_ext.Curl_failf(
+                    data,
+                    "schannel: SNI or certificate check failed: %s",
+                    win_ext.Curl_sspi_strerror(sspi_status, &buffer, buffer.len),
+                );
+                return CURLE_PEER_FAILED_VERIFICATION;
+            },
+            SEC_E_UNTRUSTED_ROOT => {
+                c_ext.Curl_failf(
+                    data,
+                    "schannel: %s",
+                    win_ext.Curl_sspi_strerror(sspi_status, &buffer, buffer.len),
+                );
+                return CURLE_PEER_FAILED_VERIFICATION;
+            },
+            else => {
+                c_ext.Curl_failf(
+                    data,
+                    "schannel: next InitializeSecurityContext failed: %s",
+                    win_ext.Curl_sspi_strerror(sspi_status, &buffer, buffer.len),
+                );
+                return CURLE_SSL_CONNECT_ERROR;
+            },
+        }
+    }
+
+    fn schannelPkpPinPeerPubkey(cf: *CurlCfilter, data: ?*CurlEasy, pinnedpubkey: ?[*:0]const u8) CURLcode {
+        const pinned = pinnedpubkey orelse return CURLE_OK;
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_PINNEDPUBKEYNOTMATCH));
+        const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_PINNEDPUBKEYNOTMATCH));
+        const sec_fn = win_ext.Curl_pSecFn orelse return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
+
+        var pCertContextServer: ?*CERT_CONTEXT = null;
+        var result: CURLcode = CURLE_SSL_PINNEDPUBKEYNOTMATCH;
+
+        while (true) {
+            const sspi_status = sec_fn.QueryContextAttributesA(
+                &backend.ctxt.?.ctxt_handle,
+                SECPKG_ATTR_REMOTE_CERT_CONTEXT,
+                @ptrCast(&pCertContextServer),
+            );
+            if (sspi_status != SEC_E_OK or pCertContextServer == null) {
+                var buffer: [STRERROR_LEN]u8 = undefined;
+                c_ext.Curl_failf(
+                    data,
+                    "schannel: Failed to read remote certificate context: %s",
+                    win_ext.Curl_sspi_strerror(sspi_status, &buffer, buffer.len),
+                );
+                break;
+            }
+
+            const cert_ctx = pCertContextServer.?;
+            if ((cert_ctx.dwCertEncodingType & X509_ASN_ENCODING) == 0 or
+                cert_ctx.cbCertEncoded == 0 or
+                cert_ctx.pbCertEncoded == null)
+            {
+                break;
+            }
+
+            const x509_der = cert_ctx.pbCertEncoded.?;
+            const x509_der_len: usize = cert_ctx.cbCertEncoded;
+            var x509_parsed = std.mem.zeroes(vtls_scache_asn1.CurlX509certificate);
+            if (vtls_scache_asn1.Curl_parseX509(&x509_parsed, x509_der, x509_der + x509_der_len) != 0) {
+                break;
+            }
+
+            const pubkey = &x509_parsed.subjectPublicKeyInfo;
+            if (pubkey.header == null or pubkey.end == null or @intFromPtr(pubkey.end.?) <= @intFromPtr(pubkey.header.?)) {
+                c_ext.Curl_failf(data, "SSL: failed retrieving public key from server certificate");
+                break;
+            }
+
+            result = vtls_impl.Curl_pin_peer_pubkey(
+                data,
+                pinned,
+                pubkey.header.?,
+                @intFromPtr(pubkey.end.?) - @intFromPtr(pubkey.header.?),
+            );
+            if (result != CURLE_OK) {
+                c_ext.Curl_failf(data, "SSL: public key does not match pinned public key");
+            }
+            break;
+        }
+
+        if (pCertContextServer) |cc| {
+            _ = win_ext.CertFreeCertificateContext(cc);
+        }
+
+        return result;
+    }
+
+    fn ensureEncodingSize(data: ?*CurlEasy, encdata: *SBuffer, min_length: usize) CURLcode {
+        if (encdata.length < encdata.offset) return CURLE_FAILED_INIT;
+        const size = encdata.length - encdata.offset;
+        if (size < CURL_SCHANNEL_BUFFER_FREE_SIZE or encdata.length < min_length) {
+            var length = encdata.offset + CURL_SCHANNEL_BUFFER_FREE_SIZE;
+            if (length < min_length) length = min_length;
+            const raw = mem.realloc(encdata.buffer, length) orelse {
+                c_ext.Curl_failf(data, "schannel: unable to re-allocate memory");
+                return CURLE_OUT_OF_MEMORY;
+            };
+            encdata.buffer = @ptrCast(raw);
+            encdata.length = length;
+        }
+        return CURLE_OK;
+    }
+
+    fn ensureDecodingSize(data: ?*CurlEasy, decdata: *SBuffer, nowsize: usize, len: usize) CURLcode {
+        const size = if (nowsize > CURL_SCHANNEL_BUFFER_FREE_SIZE) nowsize else CURL_SCHANNEL_BUFFER_FREE_SIZE;
+        if (decdata.length < decdata.offset) return CURLE_FAILED_INIT;
+        if (decdata.length - decdata.offset < size or decdata.length < len) {
+            var length = decdata.offset + size;
+            if (length < len) length = len;
+            const raw = mem.realloc(decdata.buffer, length) orelse {
+                c_ext.Curl_failf(data, "schannel: unable to re-allocate memory");
+                return CURLE_OUT_OF_MEMORY;
+            };
+            decdata.buffer = @ptrCast(raw);
+            decdata.length = length;
+        }
         return CURLE_OK;
     }
 
@@ -2646,48 +3487,67 @@ const schannel_backend = struct {
         const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
         const sec_fn = win_ext.Curl_pSecFn orelse return CURLE_SSL_CONNECT_ERROR;
 
+        var doread = (connssl.io_need & CURL_SSL_IO_NEED_SEND) == 0;
+        connssl.io_need = CURL_SSL_IO_NEED_NONE;
+
+        if (backend.cred == null or backend.ctxt == null) {
+            return CURLE_SSL_CONNECT_ERROR;
+        }
+
+        if (backend.decdata.buffer == null) {
+            backend.decdata.offset = 0;
+            backend.decdata.length = CURL_SCHANNEL_BUFFER_INIT_SIZE;
+            const raw = mem.malloc(backend.decdata.length) orelse {
+                c_ext.Curl_failf(data, "schannel: unable to allocate memory");
+                return CURLE_OUT_OF_MEMORY;
+            };
+            backend.decdata.buffer = @ptrCast(raw);
+        }
+
         if (backend.encdata.buffer == null) {
+            backend.set_encdata_is_incomplete(false);
             backend.encdata.offset = 0;
             backend.encdata.length = CURL_SCHANNEL_BUFFER_INIT_SIZE;
-            const raw = mem.malloc(backend.encdata.length) orelse return CURLE_OUT_OF_MEMORY;
+            const raw = mem.malloc(backend.encdata.length) orelse {
+                c_ext.Curl_failf(data, "schannel: unable to allocate memory");
+                return CURLE_OUT_OF_MEMORY;
+            };
             backend.encdata.buffer = @ptrCast(raw);
         }
 
-        while (true) {
-            if (backend.encdata.length - backend.encdata.offset <= CURL_SCHANNEL_BUFFER_FREE_SIZE) {
-                const new_len = backend.encdata.offset + CURL_SCHANNEL_BUFFER_FREE_SIZE * CURL_SCHANNEL_BUFFER_STEP_FACTOR;
-                const raw = mem.realloc(backend.encdata.buffer, new_len) orelse return CURLE_OUT_OF_MEMORY;
-                backend.encdata.buffer = @ptrCast(raw);
-                backend.encdata.length = new_len;
-            }
+        var result = ensureEncodingSize(data, &backend.encdata, 0);
+        if (result != CURLE_OK) return result;
 
-            var nread: usize = 0;
-            var result = c_ext.Curl_conn_cf_recv(
-                cf.next,
-                data,
-                backend.encdata.buffer.? + backend.encdata.offset,
-                backend.encdata.length - backend.encdata.offset,
-                &nread,
-            );
-            if (result == CURLE_AGAIN) {
-                if (!backend.encdata_is_incomplete()) {
-                    result = CURLE_OK;
+        var sspi_status: SECURITY_STATUS = SEC_E_OK;
+
+        while (true) {
+            if (doread) {
+                var nread: usize = 0;
+                result = c_ext.Curl_conn_cf_recv(
+                    cf.next,
+                    data,
+                    backend.encdata.buffer.? + backend.encdata.offset,
+                    backend.encdata.length - backend.encdata.offset,
+                    &nread,
+                );
+                if (result == CURLE_AGAIN) {
+                    if (backend.encdata.offset == 0 or backend.encdata_is_incomplete()) {
+                        connssl.io_need = CURL_SSL_IO_NEED_RECV;
+                        return CURLE_OK;
+                    }
+                } else if (result != CURLE_OK or nread == 0) {
+                    c_ext.Curl_failf(data, "schannel: failed to receive handshake, SSL/TLS connection failed");
+                    return CURLE_SSL_CONNECT_ERROR;
                 } else {
-                    connssl.io_need = CURL_SSL_IO_NEED_RECV;
-                    return CURLE_OK;
+                    backend.encdata.offset += nread;
+                    backend.set_encdata_is_incomplete(false);
                 }
-            } else if (result != CURLE_OK) {
-                return result;
-            } else if (nread == 0) {
-                return CURLE_SSL_CONNECT_ERROR;
-            } else {
-                backend.encdata.offset += nread;
-                backend.set_encdata_is_incomplete(false);
             }
 
             var inbuf: [2]SecBuffer = undefined;
             var inbuf_desc: SecBufferDesc = undefined;
-            initSecBuffer(&inbuf[0], SECBUFFER_TOKEN, backend.encdata.buffer, @intCast(backend.encdata.offset));
+            const dup_buf = schannelMemdup0(backend.encdata.buffer.?, backend.encdata.offset);
+            initSecBuffer(&inbuf[0], SECBUFFER_TOKEN, if (dup_buf) |db| @ptrCast(db) else null, @intCast(backend.encdata.offset));
             initSecBuffer(&inbuf[1], SECBUFFER_EMPTY, null, 0);
             initSecBufferDesc(&inbuf_desc, &inbuf, 2);
 
@@ -2698,10 +3558,22 @@ const schannel_backend = struct {
             initSecBuffer(&outbuf[2], SECBUFFER_EMPTY, null, 0);
             initSecBufferDesc(&outbuf_desc, &outbuf, 3);
 
-            const sspi_status = sec_fn.InitializeSecurityContextA(
+            if (inbuf[0].pvBuffer == null) {
+                c_ext.Curl_failf(data, "schannel: unable to allocate memory");
+                return CURLE_OUT_OF_MEMORY;
+            }
+
+            const sockfd = c_ext.Curl_conn_cf_get_socket(cf, data);
+            if (c_ext.Curl_socket_check(CURL_SOCKET_BAD, CURL_SOCKET_BAD, sockfd, 0) == 0) {
+                connssl.io_need = CURL_SSL_IO_NEED_SEND;
+                mem.free(inbuf[0].pvBuffer);
+                return CURLE_OK;
+            }
+
+            sspi_status = sec_fn.InitializeSecurityContextA(
                 &backend.cred.?.cred_handle,
                 &backend.ctxt.?.ctxt_handle,
-                connssl.peer.sni,
+                backend.cred.?.sni_hostname,
                 backend.req_flags,
                 0,
                 0,
@@ -2710,94 +3582,182 @@ const schannel_backend = struct {
                 null,
                 &outbuf_desc,
                 &backend.ret_flags,
-                &backend.ctxt.?.time_stamp,
+                null,
             );
 
-            if (sspi_status == SEC_E_INCOMPLETE_MESSAGE) {
-                backend.set_encdata_is_incomplete(true);
-                connssl.io_need = CURL_SSL_IO_NEED_RECV;
-                return CURLE_OK;
-            }
-
-            for (0..3) |i| {
-                if (outbuf[i].BufferType == SECBUFFER_TOKEN and outbuf[i].cbBuffer > 0 and outbuf[i].pvBuffer != null) {
-                    var written: usize = 0;
-                    result = c_ext.Curl_conn_cf_send(cf.next, data, outbuf[i].pvBuffer, outbuf[i].cbBuffer, false, &written);
-                    if (result != CURLE_OK or outbuf[i].cbBuffer != written) {
-                        for (0..3) |j| {
-                            if (outbuf[j].pvBuffer) |pv| _ = sec_fn.FreeContextBuffer(pv);
-                        }
-                        return if (result != CURLE_OK) result else CURLE_SSL_CONNECT_ERROR;
-                    }
-                }
-                if (outbuf[i].pvBuffer) |pv| {
-                    _ = sec_fn.FreeContextBuffer(pv);
-                }
-            }
+            mem.free(inbuf[0].pvBuffer);
+            inbuf[0].pvBuffer = null;
 
             switch (sspi_status) {
-                SEC_E_OK, SEC_I_CONTINUE_NEEDED => {
-                    if (inbuf[1].BufferType == SECBUFFER_EXTRA and inbuf[1].cbBuffer > 0) {
-                        if (backend.encdata.offset > inbuf[1].cbBuffer) {
-                            const extra_len: usize = inbuf[1].cbBuffer;
-                            const src_off = backend.encdata.offset - extra_len;
-                            std.mem.copyForwards(u8, backend.encdata.buffer.?[0..extra_len], backend.encdata.buffer.?[src_off .. src_off + extra_len]);
-                            backend.encdata.offset = extra_len;
+                SEC_E_INCOMPLETE_MESSAGE => {
+                    backend.set_encdata_is_incomplete(true);
+                    connssl.io_need = CURL_SSL_IO_NEED_RECV;
+                    return CURLE_OK;
+                },
+                SEC_I_CONTINUE_NEEDED, SEC_E_OK => {
+                    result = CURLE_OK;
+                    for (0..3) |i| {
+                        if (outbuf[i].BufferType == SECBUFFER_TOKEN and outbuf[i].cbBuffer > 0) {
+                            var written: usize = 0;
+                            result = c_ext.Curl_conn_cf_send(
+                                cf.next,
+                                data,
+                                outbuf[i].pvBuffer,
+                                outbuf[i].cbBuffer,
+                                false,
+                                &written,
+                            );
+                            if (result != CURLE_OK or outbuf[i].cbBuffer != written) {
+                                c_ext.Curl_failf(
+                                    data,
+                                    "schannel: failed to send next handshake data: sent %zu of %lu bytes",
+                                    written,
+                                    outbuf[i].cbBuffer,
+                                );
+                                result = CURLE_SSL_CONNECT_ERROR;
+                            }
                         }
-                    } else {
-                        backend.encdata.offset = 0;
                     }
-                    if (sspi_status == SEC_I_CONTINUE_NEEDED) {
-                        if (inbuf[1].BufferType == SECBUFFER_EXTRA) continue;
-                        connssl.io_need = CURL_SSL_IO_NEED_RECV;
+                    for (0..3) |i| {
+                        if (outbuf[i].pvBuffer) |pv| {
+                            _ = sec_fn.FreeContextBuffer(pv);
+                        }
+                    }
+                    if (result != CURLE_OK) return result;
+                },
+                SEC_I_INCOMPLETE_CREDENTIALS => {
+                    if ((backend.req_flags & ISC_REQ_USE_SUPPLIED_CREDS) == 0) {
+                        backend.req_flags |= ISC_REQ_USE_SUPPLIED_CREDS;
+                        connssl.io_need = CURL_SSL_IO_NEED_SEND;
                         return CURLE_OK;
                     }
-                    break;
+                    return schannelError(data, sspi_status);
                 },
-                SEC_E_UNTRUSTED_ROOT, SEC_E_CERT_EXPIRED, SEC_E_WRONG_PRINCIPAL, CRYPT_E_REVOKED => {
-                    return CURLE_PEER_FAILED_VERIFICATION;
-                },
-                CRYPT_E_NO_REVOCATION_CHECK, CRYPT_E_REVOCATION_OFFLINE => {
-                    if (!conn_config.revoke_best_effort() and !conn_config.no_revoke()) {
-                        return CURLE_PEER_FAILED_VERIFICATION;
+                else => return schannelError(data, sspi_status),
+            }
+
+            if (inbuf[1].BufferType == SECBUFFER_EXTRA and inbuf[1].cbBuffer > 0) {
+                const extra_len: usize = inbuf[1].cbBuffer;
+                if (backend.encdata.offset > extra_len) {
+                    const src_off = backend.encdata.offset - extra_len;
+                    std.mem.copyForwards(
+                        u8,
+                        backend.encdata.buffer.?[0..extra_len],
+                        backend.encdata.buffer.?[src_off .. src_off + extra_len],
+                    );
+                    backend.encdata.offset = extra_len;
+                    if (sspi_status == SEC_I_CONTINUE_NEEDED) {
+                        doread = false;
+                        continue;
                     }
-                    break;
-                },
-                else => return CURLE_SSL_CONNECT_ERROR,
+                }
+            } else {
+                backend.encdata.offset = 0;
+            }
+            break;
+        }
+
+        if (sspi_status == SEC_I_CONTINUE_NEEDED) {
+            connssl.io_need = CURL_SSL_IO_NEED_RECV;
+            return CURLE_OK;
+        }
+
+        if (sspi_status == SEC_E_OK) {
+            connssl.connecting_state = ssl_connect_3;
+        }
+
+        if (c_ext.Curl_vtls_acc_pinned_pubkey(data, vtls_impl.Curl_ssl_cf_is_proxy(cf))) |pubkey_ptr| {
+            result = schannelPkpPinPeerPubkey(cf, data, pubkey_ptr);
+            if (result != CURLE_OK) {
+                c_ext.Curl_failf(data, "SSL: public key does not match pinned public key");
+                return result;
             }
         }
 
-        if (backend.use_manual_cred_validation()) {
-            const vres = win_ext.Curl_verify_certificate(cf, data);
-            if (vres != CURLE_OK) return vres;
+        if (conn_config.verifypeer() and backend.use_manual_cred_validation()) {
+            return win_ext.Curl_verify_certificate(cf, data);
         }
 
-        connssl.connecting_state = ssl_connect_3;
+        if (!conn_config.verifypeer() and conn_config.verifyhost()) {
+            return win_ext.Curl_verify_host(cf, data);
+        }
+
         return CURLE_OK;
     }
 
-    fn schannelPkpPinPeerPubkey(cf: *CurlCfilter, data: ?*CurlEasy, pinnedpubkey: [*:0]const u8) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_PINNEDPUBKEYNOTMATCH));
-        const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_PINNEDPUBKEYNOTMATCH));
-        const sec_fn = win_ext.Curl_pSecFn orelse return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
+    fn validCertEncoding(cert_context: ?*const CERT_CONTEXT) bool {
+        const ctx = cert_context orelse return false;
+        return (ctx.dwCertEncodingType & X509_ASN_ENCODING) != 0 and
+            ctx.pbCertEncoded != null and
+            ctx.cbCertEncoded > 0;
+    }
 
-        var cert_context: ?*CERT_CONTEXT = null;
-        const sspi_status = sec_fn.QueryContextAttributesA(
-            &backend.ctxt.?.ctxt_handle,
-            SECPKG_ATTR_REMOTE_CERT_CONTEXT,
-            @ptrCast(&cert_context),
-        );
-        if (sspi_status != SEC_E_OK or cert_context == null) {
-            return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
-        }
-        defer _ = win_ext.CertFreeCertificateContext(cert_context);
+    const ReadCrtFunc = *const fn (ccert_context: *const CERT_CONTEXT, reverse_order: bool, arg: *anyopaque) bool;
 
-        if (cert_context.?.pCertInfo) |ci| {
-            if (ci.SubjectPublicKeyInfo.PublicKey.pbData) |pb| {
-                return vtls_impl.Curl_pin_peer_pubkey(data, pinnedpubkey, pb, ci.SubjectPublicKeyInfo.PublicKey.cbData);
+    fn traverseCertStore(context: *const CERT_CONTEXT, func: ReadCrtFunc, arg: *anyopaque) void {
+        var current_context: ?*const CERT_CONTEXT = null;
+        var should_continue = true;
+        var first = true;
+        var reverse_order = false;
+        while (should_continue) {
+            current_context = win_ext.CertEnumCertificatesInStore(context.hCertStore, current_context);
+            const cur = current_context orelse break;
+            if (first and context.pbCertEncoded != cur.pbCertEncoded) {
+                reverse_order = true;
             }
+            should_continue = func(cur, reverse_order, arg);
+            first = false;
         }
-        return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
+        if (current_context) |cur| {
+            _ = win_ext.CertFreeCertificateContext(cur);
+        }
+    }
+
+    fn certCounterCallback(ccert_context: *const CERT_CONTEXT, reverse_order: bool, certs_count_raw: *anyopaque) bool {
+        _ = reverse_order;
+        const certs_count: *c_int = @ptrCast(@alignCast(certs_count_raw));
+        if (validCertEncoding(ccert_context)) {
+            certs_count.* += 1;
+        }
+        if (certs_count.* > MAX_ALLOWED_CERT_AMOUNT) {
+            return false;
+        }
+        return true;
+    }
+
+    const AdderArgs = struct {
+        data: ?*CurlEasy,
+        result: CURLcode,
+        idx: c_int,
+        certs_count: c_int,
+    };
+
+    fn addCertToCertinfo(ccert_context: *const CERT_CONTEXT, reverse_order: bool, raw_arg: *anyopaque) bool {
+        const args: *AdderArgs = @ptrCast(@alignCast(raw_arg));
+        args.result = CURLE_OK;
+        if (validCertEncoding(ccert_context)) {
+            const insert_index: c_int = if (reverse_order) (args.certs_count - 1) - args.idx else args.idx;
+            const pb = ccert_context.pbCertEncoded.?;
+            args.result = vtls_scache_asn1.Curl_extract_certinfo_zig(
+                args.data,
+                insert_index,
+                pb,
+                pb + ccert_context.cbCertEncoded,
+                true,
+                @ptrCast(&vtls_impl.Curl_ssl_push_certinfo_len),
+            );
+            args.idx += 1;
+        }
+        return args.result == CURLE_OK;
+    }
+
+    fn cStrncmpDiff(a: [*:0]const u8, b: [*]const u8, n: usize) bool {
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            if (a[i] != b[i]) return true;
+            if (a[i] == 0) return false;
+        }
+        return false;
     }
 
     fn schannelConnectStep3(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
@@ -2805,8 +3765,26 @@ const schannel_backend = struct {
         const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
         const sec_fn = win_ext.Curl_pSecFn orelse return CURLE_SSL_CONNECT_ERROR;
 
-        const inc_flags: ULONG = ISC_RET_SEQUENCE_DETECT | ISC_RET_REPLAY_DETECT | ISC_RET_CONFIDENTIALITY | ISC_RET_ALLOCATED_MEMORY | ISC_RET_STREAM;
-        if ((backend.ret_flags & inc_flags) != inc_flags) {
+        if (backend.cred == null) {
+            return CURLE_SSL_CONNECT_ERROR;
+        }
+
+        if (backend.ret_flags != backend.req_flags) {
+            if ((backend.ret_flags & ISC_RET_SEQUENCE_DETECT) == 0) {
+                c_ext.Curl_failf(data, "schannel: failed to setup sequence detection");
+            }
+            if ((backend.ret_flags & ISC_RET_REPLAY_DETECT) == 0) {
+                c_ext.Curl_failf(data, "schannel: failed to setup replay detection");
+            }
+            if ((backend.ret_flags & ISC_RET_CONFIDENTIALITY) == 0) {
+                c_ext.Curl_failf(data, "schannel: failed to setup confidentiality");
+            }
+            if ((backend.ret_flags & ISC_RET_ALLOCATED_MEMORY) == 0) {
+                c_ext.Curl_failf(data, "schannel: failed to setup memory allocation");
+            }
+            if ((backend.ret_flags & ISC_RET_STREAM) == 0) {
+                c_ext.Curl_failf(data, "schannel: failed to setup stream orientation");
+            }
             return CURLE_SSL_CONNECT_ERROR;
         }
 
@@ -2817,41 +3795,94 @@ const schannel_backend = struct {
                 SECPKG_ATTR_APPLICATION_PROTOCOL,
                 @ptrCast(&alpn_result),
             );
-            if (sspi_status != SEC_E_OK) return CURLE_SSL_CONNECT_ERROR;
-            if (alpn_result.ProtoNegoStatus == SecApplicationProtocolNegotiationStatus_Success) {
-                const rc = vtls_impl.Curl_alpn_set_negotiated(cf, data, connssl, &alpn_result.ProtocolId, alpn_result.ProtocolIdSize);
-                if (rc != CURLE_OK) return rc;
-            } else if (!backend.recv_renegotiating()) {
-                const rc = vtls_impl.Curl_alpn_set_negotiated(cf, data, connssl, null, 0);
-                if (rc != CURLE_OK) return rc;
+            if (sspi_status != SEC_E_OK) {
+                c_ext.Curl_failf(data, "schannel: failed to retrieve ALPN result");
+                return CURLE_SSL_CONNECT_ERROR;
             }
-        }
-
-        if (c_ext.Curl_vtls_acc_ssl_certinfo(data)) {
-            var cert_context: ?*CERT_CONTEXT = null;
-            const st = sec_fn.QueryContextAttributesA(
-                &backend.ctxt.?.ctxt_handle,
-                SECPKG_ATTR_REMOTE_CERT_CONTEXT,
-                @ptrCast(&cert_context),
-            );
-            if (st == SEC_E_OK and cert_context != null) {
-                defer _ = win_ext.CertFreeCertificateContext(cert_context);
-                if (cert_context.?.pbCertEncoded) |der| {
-                    _ = vtls_scache_asn1.Curl_extract_certinfo_zig(
-                        data,
-                        0,
-                        der,
-                        der + cert_context.?.cbCertEncoded,
-                        true,
-                        @ptrCast(&vtls_impl.Curl_ssl_push_certinfo_len),
-                    );
+            if (alpn_result.ProtoNegoStatus == SecApplicationProtocolNegotiationStatus_Success) {
+                if (backend.recv_renegotiating()) {
+                    if (connssl.negotiated_alpn) |neg_alpn| {
+                        if (cStrncmpDiff(neg_alpn, &alpn_result.ProtocolId, alpn_result.ProtocolIdSize)) {
+                            c_ext.Curl_failf(data, "schannel: server selected an ALPN protocol too late");
+                            return CURLE_SSL_CONNECT_ERROR;
+                        }
+                    }
+                }
+                _ = vtls_impl.Curl_alpn_set_negotiated(
+                    cf,
+                    data,
+                    connssl,
+                    &alpn_result.ProtocolId,
+                    alpn_result.ProtocolIdSize,
+                );
+            } else {
+                if (!backend.recv_renegotiating()) {
+                    _ = vtls_impl.Curl_alpn_set_negotiated(cf, data, connssl, null, 0);
                 }
             }
         }
 
-        if (c_ext.Curl_vtls_acc_pinned_pubkey(data, vtls_impl.Curl_ssl_cf_is_proxy(cf))) |pinned| {
-            const rc = schannelPkpPinPeerPubkey(cf, data, pinned);
-            if (rc != CURLE_OK) return rc;
+        var result: CURLcode = CURLE_OK;
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf);
+        if (conn_config != null and conn_config.?.primary_cache_session() and connssl.peer.scache_key != null) {
+            var scache: ?*CurlSslScache = null;
+            var has_share_scache = false;
+            var trc_feat: ?*CurlTrcFeat = null;
+            c_ext.Curl_vtls_acc_scache_params(data, &scache, &has_share_scache, &trc_feat);
+            vtls_scache_asn1.Curl_ssl_scache_lock_zig(data, scache, has_share_scache);
+            backend.cred.?.refcount += 1;
+            result = vtls_scache_asn1.Curl_ssl_scache_add_obj_zig(
+                cf,
+                data,
+                scache,
+                conn_config,
+                trc_feat,
+                connssl.peer.scache_key.?,
+                backend.cred.?,
+                schannelSessionFree,
+            );
+            vtls_scache_asn1.Curl_ssl_scache_unlock_zig(data, scache, has_share_scache);
+            if (result != CURLE_OK) return result;
+        }
+
+        if (c_ext.Curl_vtls_acc_ssl_certinfo(data)) {
+            var certs_count: c_int = 0;
+            var ccert_context: ?*CERT_CONTEXT = null;
+            const sspi_status = sec_fn.QueryContextAttributesA(
+                &backend.ctxt.?.ctxt_handle,
+                SECPKG_ATTR_REMOTE_CERT_CONTEXT,
+                @ptrCast(&ccert_context),
+            );
+            if (sspi_status != SEC_E_OK or ccert_context == null) {
+                c_ext.Curl_failf(data, "schannel: failed to retrieve remote cert context");
+                return CURLE_PEER_FAILED_VERIFICATION;
+            }
+
+            traverseCertStore(ccert_context.?, certCounterCallback, @ptrCast(&certs_count));
+            if (certs_count > MAX_ALLOWED_CERT_AMOUNT) {
+                c_ext.Curl_failf(
+                    data,
+                    "%d certificates is more than allowed (%d)",
+                    certs_count,
+                    MAX_ALLOWED_CERT_AMOUNT,
+                );
+                _ = win_ext.CertFreeCertificateContext(ccert_context);
+                return CURLE_SSL_CONNECT_ERROR;
+            }
+
+            result = vtls_impl.Curl_ssl_init_certinfo(data, certs_count);
+            if (result == CURLE_OK) {
+                var args = AdderArgs{
+                    .data = data,
+                    .idx = 0,
+                    .certs_count = certs_count,
+                    .result = CURLE_OK,
+                };
+                traverseCertStore(ccert_context.?, addCertToCertinfo, @ptrCast(&args));
+                result = args.result;
+            }
+            _ = win_ext.CertFreeCertificateContext(ccert_context);
+            if (result != CURLE_OK) return result;
         }
 
         connssl.connecting_state = ssl_connect_done;
@@ -2865,7 +3896,6 @@ const schannel_backend = struct {
             return CURLE_OK;
         }
         done.* = false;
-        connssl.io_need = CURL_SSL_IO_NEED_NONE;
 
         if (connssl.connecting_state == ssl_connect_1) {
             const rc = schannelConnectStep1(cf, data);
@@ -2880,10 +3910,152 @@ const schannel_backend = struct {
             if (rc != CURLE_OK) return rc;
         }
         if (connssl.connecting_state == ssl_connect_done) {
+            const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+            const sec_fn = win_ext.Curl_pSecFn orelse return CURLE_SSL_CONNECT_ERROR;
+            if (sec_fn.QueryContextAttributesA(
+                &backend.ctxt.?.ctxt_handle,
+                SECPKG_ATTR_STREAM_SIZES,
+                @ptrCast(&backend.stream_sizes),
+            ) != SEC_E_OK) {
+                c_ext.Curl_failf(data, "schannel: failed getting stream sizes");
+                return CURLE_SSL_CONNECT_ERROR;
+            }
             connssl.state = ssl_connection_complete;
+            win_ext.Curl_vtls_acc_conn_set_ssl_context(cf.conn, &backend.ctxt.?.ctxt_handle);
             done.* = true;
         }
         return CURLE_OK;
+    }
+
+    const SchannelRenegotiateCaller = enum(c_uint) {
+        recv = 0,
+        send = 1,
+    };
+
+    const MAX_RENEG_BLOCK_TIME: i64 = 60 * 1000;
+
+    fn schannelRecvRenegotiate(
+        cf: *CurlCfilter,
+        data: ?*CurlEasy,
+        caller: SchannelRenegotiateCaller,
+    ) CURLcode {
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
+        const backend_opt: ?*SchannelSslBackendData = if (connssl.backend) |b| @ptrCast(@alignCast(b)) else null;
+        if (backend_opt == null or !backend_opt.?.recv_renegotiating()) {
+            c_ext.Curl_failf(data, "schannel: unexpected call to schannel_recv_renegotiate");
+            return CURLE_SSL_CONNECT_ERROR;
+        }
+        const backend = backend_opt.?;
+        const rs = &backend.renegotiate_state;
+
+        const sockfd = c_ext.Curl_conn_cf_get_socket(cf, data);
+        if (sockfd == CURL_SOCKET_BAD) {
+            c_ext.Curl_failf(data, "schannel: renegotiation missing socket");
+            return CURLE_SSL_CONNECT_ERROR;
+        }
+
+        if (!rs.started) {
+            c_ext.Curl_infof(data, "schannel: renegotiating SSL/TLS connection");
+            connssl.state = ssl_connection_negotiating;
+            connssl.connecting_state = ssl_connect_2;
+            rs.* = std.mem.zeroes(SchannelRenegotiateState);
+            rs.io_need = CURL_SSL_IO_NEED_SEND;
+            rs.start_time = c_ext.Curl_pgrs_now(data).*;
+            rs.started = true;
+        }
+
+        var result: CURLcode = CURLE_OK;
+        while (true) {
+            var elapsed = curlx_time_net.curlx_ptimediff_ms(c_ext.Curl_pgrs_now(data), &rs.start_time);
+            if (elapsed >= MAX_RENEG_BLOCK_TIME) {
+                c_ext.Curl_failf(data, "schannel: renegotiation timeout");
+                result = CURLE_SSL_CONNECT_ERROR;
+                break;
+            }
+
+            connssl.io_need = rs.io_need;
+            var done = false;
+            result = schannelConnect(cf, data, &done);
+            rs.io_need = connssl.io_need;
+
+            if (result == CURLE_OK and !done) {
+                result = CURLE_AGAIN;
+            }
+            if (result != CURLE_AGAIN) {
+                break;
+            }
+
+            const readfd: curl_socket_t = if ((rs.io_need & CURL_SSL_IO_NEED_RECV) != 0) sockfd else CURL_SOCKET_BAD;
+            const writefd: curl_socket_t = if ((rs.io_need & CURL_SSL_IO_NEED_SEND) != 0) sockfd else CURL_SOCKET_BAD;
+
+            if (readfd == CURL_SOCKET_BAD and writefd == CURL_SOCKET_BAD) {
+                continue;
+            }
+
+            const block_read = (caller == .send);
+            const block_write = (caller == .recv);
+            const blocking = (block_read and readfd != CURL_SOCKET_BAD) or
+                (block_write and writefd != CURL_SOCKET_BAD);
+
+            while (true) {
+                result = win_ext.Curl_pgrsUpdate(data);
+                if (result != CURLE_OK) break;
+
+                elapsed = curlx_time_net.curlx_ptimediff_ms(c_ext.Curl_pgrs_now(data), &rs.start_time);
+                if (elapsed >= MAX_RENEG_BLOCK_TIME) {
+                    c_ext.Curl_failf(data, "schannel: renegotiation timeout");
+                    result = CURLE_SSL_CONNECT_ERROR;
+                    break;
+                }
+
+                const remaining = MAX_RENEG_BLOCK_TIME - elapsed;
+                var timeout_ms: i64 = 0;
+                if (blocking) {
+                    timeout_ms = c_ext.Curl_timeleft_ms(data);
+                    if (timeout_ms < 0) {
+                        result = CURLE_OPERATION_TIMEDOUT;
+                        break;
+                    }
+                    if (timeout_ms == 0 or timeout_ms > 1000) {
+                        timeout_ms = 1000;
+                    }
+                    if (timeout_ms > remaining) {
+                        timeout_ms = remaining;
+                    }
+                }
+
+                const what = c_ext.Curl_socket_check(readfd, CURL_SOCKET_BAD, writefd, timeout_ms);
+                if (what > 0 and (what & (0x01 | 0x02)) != 0) {
+                    result = CURLE_AGAIN;
+                    break;
+                } else if (what == 0) {
+                    if (blocking) {
+                        continue;
+                    } else {
+                        return CURLE_AGAIN;
+                    }
+                }
+
+                c_ext.Curl_failf(data, "schannel: socket error during renegotiation");
+                result = CURLE_SSL_CONNECT_ERROR;
+                break;
+            }
+            if (result != CURLE_AGAIN) {
+                break;
+            }
+        }
+
+        rs.started = false;
+        backend.set_recv_renegotiating(false);
+        connssl.io_need = CURL_SSL_IO_NEED_NONE;
+
+        if (result != CURLE_OK) {
+            c_ext.Curl_failf(data, "schannel: renegotiation failed");
+        } else {
+            c_ext.Curl_infof(data, "schannel: SSL/TLS connection renegotiated");
+        }
+
+        return result;
     }
 
     fn schannelSend(
@@ -2898,85 +4070,95 @@ const schannel_backend = struct {
         const sec_fn = win_ext.Curl_pSecFn orelse return CURLE_SEND_ERROR;
 
         pnwritten.* = 0;
-        var len = len_in;
 
-        if (backend.stream_sizes.cbMaximumMessage == 0) {
-            const st = sec_fn.QueryContextAttributesA(
-                &backend.ctxt.?.ctxt_handle,
-                SECPKG_ATTR_STREAM_SIZES,
-                @ptrCast(&backend.stream_sizes),
-            );
-            if (st != SEC_E_OK) return CURLE_SEND_ERROR;
+        if (backend.recv_renegotiating()) {
+            const rres = schannelRecvRenegotiate(cf, data, .send);
+            if (rres != CURLE_OK) return rres;
         }
 
+        var len = len_in;
         if (len > backend.stream_sizes.cbMaximumMessage) {
             len = backend.stream_sizes.cbMaximumMessage;
         }
 
-        if (backend.send_buffer == null) {
-            const data_len: usize = @as(usize, backend.stream_sizes.cbHeader) + len + @as(usize, backend.stream_sizes.cbTrailer);
-            const raw = mem.malloc(data_len) orelse return CURLE_OUT_OF_MEMORY;
-            backend.send_buffer = @ptrCast(raw);
-
-            var outbuf: [4]SecBuffer = undefined;
-            initSecBuffer(&outbuf[0], SECBUFFER_STREAM_HEADER, backend.send_buffer, backend.stream_sizes.cbHeader);
-            initSecBuffer(&outbuf[1], SECBUFFER_DATA, backend.send_buffer.? + backend.stream_sizes.cbHeader, @intCast(len));
-            initSecBuffer(&outbuf[2], SECBUFFER_STREAM_TRAILER, backend.send_buffer.? + backend.stream_sizes.cbHeader + len, backend.stream_sizes.cbTrailer);
-            initSecBuffer(&outbuf[3], SECBUFFER_EMPTY, null, 0);
-
-            if (buf_opt != null and len > 0) {
-                const src: [*]const u8 = @ptrCast(buf_opt.?);
-                const dst: [*]u8 = @ptrCast(outbuf[1].pvBuffer.?);
-                @memcpy(dst[0..len], src[0..len]);
-            }
-
-            var outbuf_desc: SecBufferDesc = undefined;
-            initSecBufferDesc(&outbuf_desc, &outbuf, 4);
-
-            const st = sec_fn.EncryptMessage(&backend.ctxt.?.ctxt_handle, 0, &outbuf_desc, 0);
-            if (st != SEC_E_OK) {
-                mem.free(backend.send_buffer);
-                backend.send_buffer = null;
-                return if (st == SEC_E_INSUFFICIENT_MEMORY) CURLE_OUT_OF_MEMORY else CURLE_SEND_ERROR;
-            }
-            backend.send_buffer_len = outbuf[0].cbBuffer + outbuf[1].cbBuffer + outbuf[2].cbBuffer;
+        const data_len: usize = @as(usize, backend.stream_sizes.cbHeader) + len + @as(usize, backend.stream_sizes.cbTrailer);
+        var ptr: [*]u8 = undefined;
+        if (data_len > backend.send_buffer_len) {
+            const raw = mem.realloc(backend.send_buffer, data_len) orelse return CURLE_OUT_OF_MEMORY;
+            ptr = @ptrCast(raw);
+            backend.send_buffer = ptr;
+            backend.send_buffer_len = data_len;
+        } else {
+            ptr = backend.send_buffer.?;
         }
 
-        var total_written: usize = 0;
+        var outbuf: [4]SecBuffer = undefined;
+        var outbuf_desc: SecBufferDesc = undefined;
+        initSecBuffer(&outbuf[0], SECBUFFER_STREAM_HEADER, ptr, backend.stream_sizes.cbHeader);
+        initSecBuffer(&outbuf[1], SECBUFFER_DATA, ptr + backend.stream_sizes.cbHeader, @intCast(len));
+        initSecBuffer(&outbuf[2], SECBUFFER_STREAM_TRAILER, ptr + backend.stream_sizes.cbHeader + len, backend.stream_sizes.cbTrailer);
+        initSecBuffer(&outbuf[3], SECBUFFER_EMPTY, null, 0);
+        initSecBufferDesc(&outbuf_desc, &outbuf, 4);
+
+        if (buf_opt != null and len > 0) {
+            const src: [*]const u8 = @ptrCast(buf_opt.?);
+            const dst: [*]u8 = @ptrCast(outbuf[1].pvBuffer.?);
+            @memcpy(dst[0..len], src[0..len]);
+        }
+
+        const sspi_status = sec_fn.EncryptMessage(&backend.ctxt.?.ctxt_handle, 0, &outbuf_desc, 0);
         var result: CURLcode = CURLE_OK;
-        while (total_written < backend.send_buffer_len) {
-            var this_write: usize = 0;
-            result = c_ext.Curl_conn_cf_send(
-                cf.next,
-                data,
-                backend.send_buffer.? + total_written,
-                backend.send_buffer_len - total_written,
-                false,
-                &this_write,
-            );
-            if (result == CURLE_AGAIN) {
-                connssl.io_need = CURL_SSL_IO_NEED_SEND;
-                break;
-            } else if (result != CURLE_OK) {
-                break;
+
+        if (sspi_status == SEC_E_OK) {
+            len = outbuf[0].cbBuffer + outbuf[1].cbBuffer + outbuf[2].cbBuffer;
+            while (len > pnwritten.*) {
+                var this_write: usize = 0;
+                var timeout_ms = c_ext.Curl_timeleft_ms(data);
+                if (timeout_ms < 0) {
+                    c_ext.Curl_failf(data, "schannel: timed out sending data (bytes sent: %zu)", pnwritten.*);
+                    result = CURLE_OPERATION_TIMEDOUT;
+                    break;
+                } else if (timeout_ms == 0) {
+                    timeout_ms = std.math.maxInt(i64);
+                }
+                const sockfd = c_ext.Curl_conn_cf_get_socket(cf, data);
+                const what = c_ext.Curl_socket_check(CURL_SOCKET_BAD, CURL_SOCKET_BAD, sockfd, timeout_ms);
+                if (what < 0) {
+                    c_ext.Curl_failf(data, "select/poll on SSL socket, errno: %d", win_ext.WSAGetLastError());
+                    result = CURLE_SEND_ERROR;
+                    break;
+                } else if (what == 0) {
+                    c_ext.Curl_failf(data, "schannel: timed out sending data (bytes sent: %zu)", pnwritten.*);
+                    result = CURLE_OPERATION_TIMEDOUT;
+                    break;
+                }
+
+                result = c_ext.Curl_conn_cf_send(
+                    cf.next,
+                    data,
+                    ptr + pnwritten.*,
+                    len - pnwritten.*,
+                    false,
+                    &this_write,
+                );
+                if (result == CURLE_AGAIN) {
+                    continue;
+                } else if (result != CURLE_OK) {
+                    break;
+                }
+                pnwritten.* += this_write;
             }
-            total_written += this_write;
+        } else if (sspi_status == SEC_E_INSUFFICIENT_MEMORY) {
+            result = CURLE_OUT_OF_MEMORY;
+        } else {
+            result = CURLE_SEND_ERROR;
         }
 
-        if (total_written == backend.send_buffer_len or result != CURLE_AGAIN) {
-            mem.free(backend.send_buffer);
-            backend.send_buffer = null;
-            backend.send_buffer_len = 0;
-            if (result == CURLE_OK) pnwritten.* = len;
-            return result;
+        if (len == pnwritten.*) {
+            pnwritten.* = outbuf[1].cbBuffer;
         }
 
-        if (total_written > 0) {
-            const rem = backend.send_buffer_len - total_written;
-            std.mem.copyForwards(u8, backend.send_buffer.?[0..rem], backend.send_buffer.?[total_written .. total_written + rem]);
-            backend.send_buffer_len = rem;
-        }
-        return CURLE_AGAIN;
+        return result;
     }
 
     fn schannelRecv(
@@ -2992,22 +4174,28 @@ const schannel_backend = struct {
 
         pnread.* = 0;
         var result: CURLcode = CURLE_OK;
+        var sspi_status: SECURITY_STATUS = SEC_E_OK;
 
-        if (backend.decdata.buffer == null) {
-            backend.decdata.offset = 0;
-            backend.decdata.length = CURL_SCHANNEL_BUFFER_INIT_SIZE;
-            const raw = mem.malloc(backend.decdata.length) orelse return CURLE_OUT_OF_MEMORY;
-            backend.decdata.buffer = @ptrCast(raw);
+        if (backend.recv_renegotiating()) {
+            result = schannelRecvRenegotiate(cf, data, .recv);
+            if (result != CURLE_OK) return result;
         }
 
-        if (len > backend.decdata.offset and !(backend.recv_connection_closed() or backend.recv_sspi_close_notify()) and backend.recv_unrecoverable_err == CURLE_OK) {
-            while (backend.encdata.offset == 0 or backend.encdata_is_incomplete()) {
-                if (backend.encdata.length - backend.encdata.offset <= CURL_SCHANNEL_BUFFER_FREE_SIZE) {
-                    const new_len = backend.encdata.offset + CURL_SCHANNEL_BUFFER_FREE_SIZE * CURL_SCHANNEL_BUFFER_STEP_FACTOR;
-                    const raw = mem.realloc(backend.encdata.buffer, new_len) orelse return CURLE_OUT_OF_MEMORY;
-                    backend.encdata.buffer = @ptrCast(raw);
-                    backend.encdata.length = new_len;
-                }
+        cleanup: {
+            if (len > 0 and len <= backend.decdata.offset) {
+                break :cleanup;
+            } else if (backend.recv_unrecoverable_err != CURLE_OK) {
+                result = backend.recv_unrecoverable_err;
+                c_ext.Curl_infof(data, "schannel: an unrecoverable error occurred in a prior call");
+                break :cleanup;
+            } else if (backend.recv_sspi_close_notify()) {
+                c_ext.Curl_infof(data, "schannel: server indicated shutdown in a prior call");
+                break :cleanup;
+            } else if (len > 0 and !backend.recv_connection_closed()) {
+                const min_encdata_length = len + CURL_SCHANNEL_BUFFER_FREE_SIZE;
+                result = ensureEncodingSize(data, &backend.encdata, min_encdata_length);
+                if (result != CURLE_OK) break :cleanup;
+
                 var nread: usize = 0;
                 result = c_ext.Curl_conn_cf_recv(
                     cf.next,
@@ -3016,87 +4204,132 @@ const schannel_backend = struct {
                     backend.encdata.length - backend.encdata.offset,
                     &nread,
                 );
-                if (result == CURLE_AGAIN) {
-                    connssl.io_need = CURL_SSL_IO_NEED_RECV;
-                    break;
-                } else if (result == CURLE_OK) {
-                    if (nread == 0) {
-                        backend.set_recv_connection_closed(true);
-                        break;
+                if (result != CURLE_OK) {
+                    if (result != CURLE_AGAIN) {
+                        c_ext.Curl_infof(data, "schannel: recv returned error %d", @as(c_int, @intCast(result)));
+                        backend.recv_unrecoverable_err = result;
                     }
+                } else if (nread == 0) {
+                    backend.set_recv_connection_closed(true);
+                } else {
                     backend.encdata.offset += nread;
                     backend.set_encdata_is_incomplete(false);
-                } else {
-                    backend.recv_unrecoverable_err = result;
-                    break;
                 }
+            }
 
-                while (backend.encdata.offset > 0 and backend.recv_unrecoverable_err == CURLE_OK and !backend.encdata_is_incomplete() and len > backend.decdata.offset) {
-                    var inbuf: [4]SecBuffer = undefined;
-                    initSecBuffer(&inbuf[0], SECBUFFER_DATA, backend.encdata.buffer, @intCast(backend.encdata.offset));
-                    initSecBuffer(&inbuf[1], SECBUFFER_EMPTY, null, 0);
-                    initSecBuffer(&inbuf[2], SECBUFFER_EMPTY, null, 0);
-                    initSecBuffer(&inbuf[3], SECBUFFER_EMPTY, null, 0);
+            while (backend.encdata.offset > 0 and sspi_status == SEC_E_OK and
+                (len == 0 or backend.decdata.offset < len or backend.recv_connection_closed()))
+            {
+                var inbuf: [4]SecBuffer = undefined;
+                var inbuf_desc: SecBufferDesc = undefined;
+                initSecBuffer(&inbuf[0], SECBUFFER_DATA, backend.encdata.buffer, @intCast(backend.encdata.offset));
+                initSecBuffer(&inbuf[1], SECBUFFER_EMPTY, null, 0);
+                initSecBuffer(&inbuf[2], SECBUFFER_EMPTY, null, 0);
+                initSecBuffer(&inbuf[3], SECBUFFER_EMPTY, null, 0);
+                initSecBufferDesc(&inbuf_desc, &inbuf, 4);
 
-                    var inbuf_desc: SecBufferDesc = undefined;
-                    initSecBufferDesc(&inbuf_desc, &inbuf, 4);
+                sspi_status = sec_fn.DecryptMessage(&backend.ctxt.?.ctxt_handle, &inbuf_desc, 0, null);
 
-                    const st = sec_fn.DecryptMessage(&backend.ctxt.?.ctxt_handle, &inbuf_desc, 0, null);
-                    if (st == SEC_E_OK or st == SEC_I_RENEGOTIATE or st == SEC_I_CONTEXT_EXPIRED) {
-                        if (inbuf[1].BufferType == SECBUFFER_DATA) {
-                            const dsize: usize = inbuf[1].cbBuffer;
-                            if (backend.decdata.offset + dsize > backend.decdata.length) {
-                                const new_len = backend.decdata.offset + dsize;
-                                const raw = mem.realloc(backend.decdata.buffer, new_len) orelse return CURLE_OUT_OF_MEMORY;
-                                backend.decdata.buffer = @ptrCast(raw);
-                                backend.decdata.length = new_len;
-                            }
-                            if (dsize > 0 and inbuf[1].pvBuffer != null) {
-                                const src: [*]const u8 = @ptrCast(inbuf[1].pvBuffer.?);
-                                @memcpy(backend.decdata.buffer.?[backend.decdata.offset .. backend.decdata.offset + dsize], src[0..dsize]);
-                                backend.decdata.offset += dsize;
-                            }
+                if (sspi_status == SEC_E_OK or sspi_status == SEC_I_RENEGOTIATE or sspi_status == SEC_I_CONTEXT_EXPIRED) {
+                    if (inbuf[1].BufferType == SECBUFFER_DATA) {
+                        result = ensureDecodingSize(data, &backend.decdata, inbuf[1].cbBuffer, len);
+                        if (result != CURLE_OK) break :cleanup;
+
+                        const dsize: usize = inbuf[1].cbBuffer;
+                        if (dsize > 0 and inbuf[1].pvBuffer != null) {
+                            const src: [*]const u8 = @ptrCast(inbuf[1].pvBuffer.?);
+                            @memcpy(backend.decdata.buffer.?[backend.decdata.offset .. backend.decdata.offset + dsize], src[0..dsize]);
+                            backend.decdata.offset += dsize;
                         }
-                        if (inbuf[3].BufferType == SECBUFFER_EXTRA and inbuf[3].cbBuffer > 0) {
-                            const extra_len: usize = inbuf[3].cbBuffer;
-                            if (backend.encdata.offset > extra_len) {
-                                const src_off = backend.encdata.offset - extra_len;
-                                std.mem.copyForwards(u8, backend.encdata.buffer.?[0..extra_len], backend.encdata.buffer.?[src_off .. src_off + extra_len]);
-                                backend.encdata.offset = extra_len;
-                            }
-                        } else {
-                            backend.encdata.offset = 0;
-                        }
-                        if (st == SEC_I_CONTEXT_EXPIRED) {
-                            backend.set_recv_sspi_close_notify(true);
-                            break;
-                        }
-                    } else if (st == SEC_E_INCOMPLETE_MESSAGE) {
-                        backend.set_encdata_is_incomplete(true);
-                        connssl.io_need = CURL_SSL_IO_NEED_RECV;
-                        break;
-                    } else {
-                        backend.recv_unrecoverable_err = CURLE_RECV_ERROR;
-                        break;
                     }
+
+                    if (inbuf[3].BufferType == SECBUFFER_EXTRA and inbuf[3].cbBuffer > 0) {
+                        const extra_len: usize = inbuf[3].cbBuffer;
+                        if (backend.encdata.offset > extra_len) {
+                            const src_off = backend.encdata.offset - extra_len;
+                            std.mem.copyForwards(
+                                u8,
+                                backend.encdata.buffer.?[0..extra_len],
+                                backend.encdata.buffer.?[src_off .. src_off + extra_len],
+                            );
+                            backend.encdata.offset = extra_len;
+                        }
+                    } else {
+                        backend.encdata.offset = 0;
+                    }
+
+                    if (sspi_status == SEC_I_RENEGOTIATE) {
+                        c_ext.Curl_infof(data, "schannel: remote party requests renegotiation");
+                        if (result != CURLE_OK and result != CURLE_AGAIN) {
+                            c_ext.Curl_infof(data, "schannel: cannot renegotiate, an error is pending");
+                            break :cleanup;
+                        }
+
+                        backend.set_recv_renegotiating(true);
+                        result = schannelRecvRenegotiate(cf, data, .recv);
+                        if (result != CURLE_OK) break :cleanup;
+
+                        sspi_status = SEC_E_OK;
+                        continue;
+                    } else if (sspi_status == SEC_I_CONTEXT_EXPIRED) {
+                        backend.set_recv_sspi_close_notify(true);
+                        if (!backend.recv_connection_closed()) {
+                            backend.set_recv_connection_closed(true);
+                        }
+                        if (result == CURLE_RECV_ERROR) {
+                            result = CURLE_OK;
+                        }
+                        c_ext.Curl_infof(data, "schannel: server close notification received (close_notify)");
+                        break :cleanup;
+                    }
+                } else if (sspi_status == SEC_E_INCOMPLETE_MESSAGE) {
+                    backend.set_encdata_is_incomplete(true);
+                    if (result == CURLE_OK) {
+                        result = CURLE_AGAIN;
+                    }
+                    break :cleanup;
+                } else {
+                    var buffer: [STRERROR_LEN]u8 = undefined;
+                    c_ext.Curl_failf(
+                        data,
+                        "schannel: failed to read data from server: %s",
+                        win_ext.Curl_sspi_strerror(sspi_status, &buffer, buffer.len),
+                    );
+                    result = CURLE_RECV_ERROR;
+                    break :cleanup;
                 }
             }
         }
 
-        if (len > 0 and backend.decdata.offset > 0) {
-            const copy_len = @min(len, backend.decdata.offset);
-            @memcpy(buf[0..copy_len], backend.decdata.buffer.?[0..copy_len]);
-            const rem = backend.decdata.offset - copy_len;
+        if (len > 0 and backend.decdata.offset == 0 and backend.recv_connection_closed() and !backend.recv_sspi_close_notify()) {
+            result = CURLE_RECV_ERROR;
+            c_ext.Curl_failf(data, "schannel: server closed abruptly (missing close_notify)");
+        }
+
+        if (result != CURLE_OK and result != CURLE_AGAIN) {
+            backend.recv_unrecoverable_err = result;
+        }
+
+        const copy_size = @min(len, backend.decdata.offset);
+        if (copy_size > 0) {
+            @memcpy(buf[0..copy_size], backend.decdata.buffer.?[0..copy_size]);
+            const rem = backend.decdata.offset - copy_size;
             if (rem > 0) {
-                std.mem.copyForwards(u8, backend.decdata.buffer.?[0..rem], backend.decdata.buffer.?[copy_len .. copy_len + rem]);
+                std.mem.copyForwards(u8, backend.decdata.buffer.?[0..rem], backend.decdata.buffer.?[copy_size .. copy_size + rem]);
             }
             backend.decdata.offset = rem;
-            pnread.* = copy_len;
+            pnread.* = copy_size;
             return CURLE_OK;
         }
 
-        if (backend.recv_unrecoverable_err != CURLE_OK) return backend.recv_unrecoverable_err;
-        if (backend.recv_sspi_close_notify() or backend.recv_connection_closed()) return CURLE_OK;
+        if (result == CURLE_OK and !backend.recv_connection_closed()) {
+            result = CURLE_AGAIN;
+        }
+
+        if (len == 0) {
+            return CURLE_OK;
+        }
+
         return result;
     }
 
@@ -3105,107 +4338,185 @@ const schannel_backend = struct {
         const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return false));
         const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return false));
         if (backend.ctxt != null) {
-            return (backend.decdata.offset > 0 or (backend.encdata.offset > 0 and !backend.encdata_is_incomplete()));
+            return backend.decdata.offset > 0 or
+                (backend.encdata.offset > 0 and !backend.encdata_is_incomplete()) or
+                backend.recv_connection_closed() or
+                backend.recv_sspi_close_notify() or
+                backend.recv_unrecoverable_err != CURLE_OK;
         }
         return false;
     }
 
     fn schannelShutdown(cf: *CurlCfilter, data: ?*CurlEasy, send_shutdown: bool, done: *bool) callconv(.c) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_OK));
-        const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_OK));
-        const sec_fn = win_ext.Curl_pSecFn orelse return CURLE_SSL_SHUTDOWN_FAILED;
-
-        if (cf.isShutdown() or backend.ctxt == null) {
+        _ = send_shutdown;
+        if (cf.isShutdown()) {
             done.* = true;
             return CURLE_OK;
         }
 
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_OK));
+        const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_OK));
+        const sec_fn = win_ext.Curl_pSecFn orelse return CURLE_SEND_ERROR;
+        var result: CURLcode = CURLE_OK;
+
         done.* = false;
-        if (send_shutdown and !backend.sent_shutdown()) {
-            if (!backend.shutdown_generated()) {
+        if (backend.ctxt != null) {
+            if (connssl.peer.origin) |orig| {
+                c_ext.Curl_infof(
+                    data,
+                    "schannel: shutting down SSL/TLS connection with %s port %d",
+                    orig.hostname,
+                    orig.port,
+                );
+            }
+        }
+
+        out: {
+            if (backend.ctxt == null or cf.isShutdown()) {
+                done.* = true;
+                break :out;
+            }
+
+            if (backend.cred != null and backend.ctxt != null and !backend.sent_shutdown() and !backend.shutdown_generated()) {
+                var BuffDesc: SecBufferDesc = undefined;
+                var Buffer: SecBuffer = undefined;
+                var outbuf: SecBuffer = undefined;
+                var outbuf_desc: SecBufferDesc = undefined;
                 var dwshut: DWORD = SCHANNEL_SHUTDOWN;
-                var ShutBuff: SecBuffer = undefined;
-                var ShutBuffDesc: SecBufferDesc = undefined;
-                initSecBuffer(&ShutBuff, SECBUFFER_TOKEN, &dwshut, @sizeOf(DWORD));
-                initSecBufferDesc(&ShutBuffDesc, @ptrCast(&ShutBuff), 1);
 
-                var st = sec_fn.ApplyControlToken(&backend.ctxt.?.ctxt_handle, &ShutBuffDesc);
-                if (st != SEC_E_OK) return CURLE_SSL_SHUTDOWN_FAILED;
+                initSecBuffer(&Buffer, SECBUFFER_TOKEN, &dwshut, @sizeOf(DWORD));
+                initSecBufferDesc(&BuffDesc, @ptrCast(&Buffer), 1);
 
-                var outbufDesc: SecBufferDesc = undefined;
-                initSecBuffer(&backend.shutdown_token, SECBUFFER_EMPTY, null, 0);
-                initSecBufferDesc(&outbufDesc, @ptrCast(&backend.shutdown_token), 1);
+                var sspi_status = sec_fn.ApplyControlToken(&backend.ctxt.?.ctxt_handle, &BuffDesc);
+                if (sspi_status != SEC_E_OK) {
+                    var buffer: [STRERROR_LEN]u8 = undefined;
+                    c_ext.Curl_failf(
+                        data,
+                        "schannel: ApplyControlToken failure: %s",
+                        win_ext.Curl_sspi_strerror(sspi_status, &buffer, buffer.len),
+                    );
+                    result = CURLE_SEND_ERROR;
+                    break :out;
+                }
 
-                st = sec_fn.InitializeSecurityContextA(
+                initSecBuffer(&outbuf, SECBUFFER_EMPTY, null, 0);
+                initSecBufferDesc(&outbuf_desc, @ptrCast(&outbuf), 1);
+
+                sspi_status = sec_fn.InitializeSecurityContextA(
                     &backend.cred.?.cred_handle,
                     &backend.ctxt.?.ctxt_handle,
-                    connssl.peer.sni,
+                    backend.cred.?.sni_hostname,
                     backend.req_flags,
                     0,
                     0,
                     null,
                     0,
                     &backend.ctxt.?.ctxt_handle,
-                    &outbufDesc,
+                    &outbuf_desc,
                     &backend.ret_flags,
-                    &backend.ctxt.?.time_stamp,
+                    null,
                 );
-                if (st != SEC_E_OK and st != SEC_I_CONTEXT_EXPIRED) {
-                    if (backend.shutdown_token.pvBuffer) |pv| {
+
+                if (sspi_status == SEC_E_OK or sspi_status == SEC_I_CONTEXT_EXPIRED) {
+                    backend.shutdown_token = outbuf;
+                    backend.set_shutdown_generated(true);
+                } else {
+                    var buffer: [STRERROR_LEN]u8 = undefined;
+                    if (outbuf.pvBuffer) |pv| {
                         _ = sec_fn.FreeContextBuffer(pv);
-                        backend.shutdown_token.pvBuffer = null;
                     }
-                    return CURLE_SSL_SHUTDOWN_FAILED;
+                    c_ext.Curl_failf(
+                        data,
+                        "schannel: generating close msg failed: %s",
+                        win_ext.Curl_sspi_strerror(sspi_status, &buffer, buffer.len),
+                    );
+                    result = CURLE_SEND_ERROR;
+                    break :out;
                 }
-                backend.shutdown_offset = 0;
-                backend.set_shutdown_generated(true);
             }
 
-            if (backend.shutdown_token.pvBuffer != null and backend.shutdown_offset < backend.shutdown_token.cbBuffer) {
+            if (backend.shutdown_generated() and !backend.sent_shutdown()) {
                 var written: usize = 0;
-                const token_ptr: [*]const u8 = @ptrCast(backend.shutdown_token.pvBuffer.?);
-                const result = c_ext.Curl_conn_cf_send(
-                    cf.next,
-                    data,
-                    token_ptr + backend.shutdown_offset,
-                    backend.shutdown_token.cbBuffer - backend.shutdown_offset,
-                    false,
-                    &written,
-                );
+                const remaining: usize = @as(usize, backend.shutdown_token.cbBuffer) - backend.shutdown_offset;
+                if (remaining > 0) {
+                    const token_ptr: [*]const u8 = @ptrCast(backend.shutdown_token.pvBuffer.?);
+                    result = c_ext.Curl_conn_cf_send(
+                        cf.next,
+                        data,
+                        token_ptr + backend.shutdown_offset,
+                        remaining,
+                        false,
+                        &written,
+                    );
+                    if (result == CURLE_OK) {
+                        backend.shutdown_offset += written;
+                    }
+                    if (result == CURLE_AGAIN or (result == CURLE_OK and written < remaining)) {
+                        connssl.io_need = CURL_SSL_IO_NEED_SEND;
+                        result = CURLE_OK;
+                        break :out;
+                    }
+                } else {
+                    result = CURLE_OK;
+                }
+                if (result != CURLE_OK) {
+                    if (backend.recv_connection_closed()) {
+                        done.* = true;
+                        result = CURLE_OK;
+                    } else {
+                        c_ext.Curl_failf(data, "schannel: error sending close msg: %d", @as(c_int, @intCast(result)));
+                        result = CURLE_SEND_ERROR;
+                    }
+                    break :out;
+                }
+                if (backend.shutdown_token.pvBuffer) |pv| {
+                    _ = sec_fn.FreeContextBuffer(pv);
+                }
+                backend.shutdown_token = std.mem.zeroes(SecBuffer);
+                backend.shutdown_offset = 0;
+                backend.set_sent_shutdown(true);
+                done.* = true;
+            }
+
+            if (backend.cred != null and backend.ctxt != null and
+                !backend.recv_sspi_close_notify() and !backend.recv_connection_closed())
+            {
+                var buffer: [1024]u8 = undefined;
+                var nread: usize = 0;
+                result = schannelRecv(cf, data, &buffer, buffer.len, &nread);
                 if (result == CURLE_AGAIN) {
-                    connssl.io_need = CURL_SSL_IO_NEED_SEND;
-                    return CURLE_OK;
+                    connssl.io_need = CURL_SSL_IO_NEED_RECV;
                 } else if (result != CURLE_OK) {
-                    return CURLE_SSL_SHUTDOWN_FAILED;
-                }
-                backend.shutdown_offset += written;
-                if (backend.shutdown_offset < backend.shutdown_token.cbBuffer) {
-                    connssl.io_need = CURL_SSL_IO_NEED_SEND;
-                    return CURLE_OK;
+                    result = CURLE_RECV_ERROR;
+                } else if (nread == 0) {
+                    backend.set_recv_connection_closed(true);
+                    done.* = true;
                 }
             }
-            if (backend.shutdown_token.pvBuffer) |pv| {
-                _ = sec_fn.FreeContextBuffer(pv);
-                backend.shutdown_token.pvBuffer = null;
-            }
-            backend.set_sent_shutdown(true);
         }
 
-        done.* = true;
-        return CURLE_OK;
+        cf.setShutdown(result != CURLE_OK or done.*);
+        return result;
     }
 
     fn schannelClose(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) void {
         const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return));
         const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return));
 
+        if (backend.shutdown_token.pvBuffer) |pv| {
+            if (win_ext.Curl_pSecFn) |sec_fn| {
+                _ = sec_fn.FreeContextBuffer(pv);
+            }
+        }
+        backend.shutdown_token = std.mem.zeroes(SecBuffer);
+        backend.shutdown_offset = 0;
+
         if (backend.ctxt) |ctxt| {
+            if (win_ext.Curl_vtls_acc_conn_get_ssl_context(cf.conn) == @as(?*anyopaque, @ptrCast(&ctxt.ctxt_handle))) {
+                win_ext.Curl_vtls_acc_conn_set_ssl_context(cf.conn, null);
+            }
             if (win_ext.Curl_pSecFn) |sec_fn| {
                 _ = sec_fn.DeleteSecurityContext(&ctxt.ctxt_handle);
-                if (backend.shutdown_token.pvBuffer) |pv| {
-                    _ = sec_fn.FreeContextBuffer(pv);
-                    backend.shutdown_token.pvBuffer = null;
-                }
             }
             mem.free(ctxt);
             backend.ctxt = null;
@@ -3217,16 +4528,23 @@ const schannel_backend = struct {
             var trc_feat: ?*CurlTrcFeat = null;
             c_ext.Curl_vtls_acc_scache_params(data, &scache, &has_share_scache, &trc_feat);
             vtls_scache_asn1.Curl_ssl_scache_lock_zig(data, scache, has_share_scache);
-            schannelCredFree(cred);
+            schannelSessionFree(cred);
             vtls_scache_asn1.Curl_ssl_scache_unlock_zig(data, scache, has_share_scache);
             backend.cred = null;
         }
+
+        if (backend.send_buffer) |b| {
+            mem.free(b);
+            backend.send_buffer = null;
+        }
+        backend.send_buffer_len = 0;
 
         if (backend.encdata.buffer) |b| {
             mem.free(b);
             backend.encdata.buffer = null;
             backend.encdata.length = 0;
             backend.encdata.offset = 0;
+            backend.set_encdata_is_incomplete(false);
         }
         if (backend.decdata.buffer) |b| {
             mem.free(b);
@@ -3234,11 +4552,29 @@ const schannel_backend = struct {
             backend.decdata.length = 0;
             backend.decdata.offset = 0;
         }
-        if (backend.send_buffer) |b| {
-            mem.free(b);
-            backend.send_buffer = null;
-            backend.send_buffer_len = 0;
+    }
+
+    fn schannelInit() callconv(.c) c_int {
+        const WineGetVersionFn = *const fn () callconv(sspi_cc) ?[*:0]const u8;
+        const hmod = win_ext.GetModuleHandleA("ntdll");
+        const proc = if (hmod != null) win_ext.GetProcAddress(hmod, "wine_get_version") else null;
+        if (proc) |p| {
+            const p_wine_get_version: WineGetVersionFn = @ptrCast(@alignCast(p));
+            var ver: i64 = 0;
+            if (p_wine_get_version()) |wv_init| {
+                var wv: [*:0]const u8 = wv_init;
+                _ = win_ext.curlx_str_number(&wv, &ver, 20);
+            }
+            s_win_has_alpn = (ver >= 6);
+        } else {
+            s_win_has_alpn = win_ext.curlx_verify_windows_version(6, 3, 0, PLATFORM_WINNT, VERSION_GREATER_THAN_EQUAL);
         }
+
+        return if (win_ext.Curl_sspi_global_init() == CURLE_OK) 1 else 0;
+    }
+
+    fn schannelCleanup() callconv(.c) void {
+        win_ext.Curl_sspi_global_cleanup();
     }
 
     fn schannelGetInternals(connssl: *SslConnectData, info: c_uint) callconv(.c) ?*anyopaque {
@@ -3261,23 +4597,139 @@ const schannel_backend = struct {
 
     fn schannelRandom(data: ?*CurlEasy, entropy: [*]u8, length: usize) callconv(.c) CURLcode {
         _ = data;
-        var hCryptProv: HCRYPTPROV = 0;
-        if (win_ext.CryptAcquireContextA(&hCryptProv, null, null, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT | CRYPT_SILENT) == 0) {
-            return CURLE_FAILED_INIT;
-        }
-        defer _ = win_ext.CryptReleaseContext(hCryptProv, 0);
-        if (win_ext.CryptGenRandom(hCryptProv, @intCast(length), entropy) == 0) {
-            return CURLE_FAILED_INIT;
-        }
-        return CURLE_OK;
+        return os_leaf.win32.curlx_win32_random(entropy, length);
     }
 
     fn schannelSha256sum(input: [*]const u8, inputlen: usize, sha256sum: [*]u8, sha256len: usize) callconv(.c) CURLcode {
-        if (sha256len < 32) return CURLE_BAD_FUNCTION_ARGUMENT;
-        var digest: [32]u8 = undefined;
+        @memset(sha256sum[0..sha256len], 0);
+        if (sha256len < CURL_SHA256_DIGEST_LENGTH) return CURLE_BAD_FUNCTION_ARGUMENT;
+        var digest: [CURL_SHA256_DIGEST_LENGTH]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(input[0..inputlen], &digest, .{});
-        @memcpy(sha256sum[0..32], &digest);
+        @memcpy(sha256sum[0..CURL_SHA256_DIGEST_LENGTH], &digest);
         return CURLE_OK;
+    }
+
+    pub fn Curl_schannel_get_cached_cert_store(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) HCERTSTORE {
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return null;
+        const proto_hash = win_ext.Curl_vtls_acc_multi_proto_hash(data) orelse return null;
+
+        const raw_share = win_ext.Curl_hash_pick(
+            proto_hash,
+            MPROTO_SCHANNEL_CERT_SHARE_KEY.ptr,
+            MPROTO_SCHANNEL_CERT_SHARE_KEY.len,
+        ) orelse return null;
+        const share: *SchCertShare = @ptrCast(@alignCast(raw_share));
+        if (share.cert_store == null) return null;
+
+        const ca_cache_timeout = c_ext.Curl_vtls_acc_ssl_ca_cache_timeout(data);
+        if (ca_cache_timeout == 0) {
+            return null;
+        }
+
+        const timeout_ms: i64 = @as(i64, ca_cache_timeout) * 1000;
+        if (timeout_ms >= 0) {
+            const elapsed_ms = curlx_time_net.curlx_ptimediff_ms(c_ext.Curl_pgrs_now(data), &share.time);
+            if (elapsed_ms >= timeout_ms) {
+                return null;
+            }
+        }
+
+        if (conn_config.ca_info_blob) |ca_info_blob| {
+            if (share.CAinfo_blob_size != ca_info_blob.len) {
+                return null;
+            }
+            var info_blob_digest: [CURL_SHA256_DIGEST_LENGTH]u8 = undefined;
+            const blob_ptr: [*]const u8 = if (ca_info_blob.data) |d| @ptrCast(d) else (&info_blob_digest);
+            if (schannelSha256sum(blob_ptr, ca_info_blob.len, &info_blob_digest, CURL_SHA256_DIGEST_LENGTH) != CURLE_OK) {
+                return null;
+            }
+            if (!std.mem.eql(u8, &share.CAinfo_blob_digest, &info_blob_digest)) {
+                return null;
+            }
+        } else {
+            if (conn_config.CAfile == null or share.CAfile == null or
+                !std.mem.eql(u8, std.mem.span(share.CAfile.?), std.mem.span(conn_config.CAfile.?)))
+            {
+                return null;
+            }
+        }
+
+        return share.cert_store;
+    }
+
+    fn schannelCertShareFree(key: *const anyopaque, key_len: usize, p: *anyopaque) callconv(.c) void {
+        _ = key;
+        _ = key_len;
+        const share: *SchCertShare = @ptrCast(@alignCast(p));
+        if (share.cert_store) |cs| {
+            _ = win_ext.CertCloseStore(cs, 0);
+        }
+        if (share.CAfile) |caf| {
+            mem.free(caf);
+        }
+        mem.free(share);
+    }
+
+    pub fn Curl_schannel_set_cached_cert_store(cf: *CurlCfilter, data: ?*CurlEasy, cert_store: HCERTSTORE) callconv(.c) bool {
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return false;
+        const proto_hash = win_ext.Curl_vtls_acc_multi_proto_hash(data) orelse return false;
+
+        var digest: [CURL_SHA256_DIGEST_LENGTH]u8 = undefined;
+        var CAfile: ?[*:0]u8 = null;
+
+        if (conn_config.ca_info_blob) |ca_info_blob| {
+            const blob_ptr: [*]const u8 = if (ca_info_blob.data) |d| @ptrCast(d) else (&digest);
+            if (schannelSha256sum(blob_ptr, ca_info_blob.len, &digest, CURL_SHA256_DIGEST_LENGTH) != CURLE_OK) {
+                return false;
+            }
+        } else if (conn_config.CAfile) |caf| {
+            CAfile = mem.strdup(caf) orelse return false;
+        }
+
+        var share: *SchCertShare = undefined;
+        if (win_ext.Curl_hash_pick(
+            proto_hash,
+            MPROTO_SCHANNEL_CERT_SHARE_KEY.ptr,
+            MPROTO_SCHANNEL_CERT_SHARE_KEY.len,
+        )) |raw_share| {
+            share = @ptrCast(@alignCast(raw_share));
+        } else {
+            const raw_new = mem.calloc(1, @sizeOf(SchCertShare)) orelse {
+                if (CAfile) |caf| mem.free(caf);
+                return false;
+            };
+            share = @ptrCast(@alignCast(raw_new));
+            if (win_ext.Curl_hash_add2(
+                proto_hash,
+                MPROTO_SCHANNEL_CERT_SHARE_KEY.ptr,
+                MPROTO_SCHANNEL_CERT_SHARE_KEY.len,
+                share,
+                schannelCertShareFree,
+            ) == null) {
+                mem.free(share);
+                if (CAfile) |caf| mem.free(caf);
+                return false;
+            }
+        }
+
+        if (share.cert_store) |cs| {
+            _ = win_ext.CertCloseStore(cs, 0);
+        }
+        if (share.CAfile) |old_caf| {
+            mem.free(old_caf);
+        }
+
+        if (conn_config.ca_info_blob) |ca_info_blob| {
+            @memcpy(&share.CAinfo_blob_digest, &digest);
+            share.CAinfo_blob_size = ca_info_blob.len;
+        } else {
+            share.CAinfo_blob_size = 0;
+        }
+
+        share.time = curlx_time_net.curlx_now();
+        share.cert_store = cert_store;
+        share.CAfile = CAfile;
+        return true;
     }
 
     fn schannelChannelBinding(data: ?*CurlEasy, sockindex: i8, binding: *DynBuf) callconv(.c) CURLcode {
@@ -3306,41 +4758,12 @@ const schannel_backend = struct {
         return CURLE_OK;
     }
 
-    pub fn Curl_schannel_get_cached_cert_store(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) HCERTSTORE {
-        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return null;
-        const timeout = c_ext.Curl_vtls_acc_ssl_ca_cache_timeout(data);
-        if (timeout == 0 or conn_config.ca_info_blob != null) return null;
-
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return null));
-        const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return null));
-        if (backend.cred) |cred| {
-            return cred.cached_cert_store;
-        }
-        return null;
-    }
-
-    pub fn Curl_schannel_set_cached_cert_store(cf: *CurlCfilter, data: ?*CurlEasy, cert_store: HCERTSTORE) callconv(.c) bool {
-        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return false;
-        const timeout = c_ext.Curl_vtls_acc_ssl_ca_cache_timeout(data);
-        if (timeout == 0 or conn_config.ca_info_blob != null) return false;
-
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return false));
-        const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return false));
-        const cred = backend.cred orelse return false;
-
-        if (cred.cached_cert_store) |old| {
-            _ = win_ext.CertCloseStore(old, 0);
-        }
-        cred.cached_cert_store = cert_store;
-        return true;
-    }
-
     pub const Curl_ssl_schannel = CurlSsl{
         .info = .{ .id = CURLSSLBACKEND_SCHANNEL, .name = "schannel" },
         .supports = SSLSUPP_CERTINFO | SSLSUPP_PINNEDPUBKEY | SSLSUPP_CAINFO_BLOB | SSLSUPP_HTTPS_PROXY | SSLSUPP_CIPHER_LIST | SSLSUPP_CA_CACHE,
         .sizeof_ssl_backend_data = @sizeOf(SchannelSslBackendData),
-        .init = null,
-        .cleanup = null,
+        .init = schannelInit,
+        .cleanup = schannelCleanup,
         .version = schannelVersion,
         .shut_down = schannelShutdown,
         .data_pending = schannelDataPending,

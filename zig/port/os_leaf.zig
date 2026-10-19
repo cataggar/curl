@@ -335,7 +335,7 @@ pub const win32 = struct {
     pub fn curlx_verify_windows_init() callconv(.c) void {
         if (GetModuleHandleA("ntdll")) |hmod| {
             if (GetProcAddress(hmod, "RtlVerifyVersionInfo")) |proc| {
-                s_pRtlVerifyVersionInfo = @ptrCast(proc);
+                s_pRtlVerifyVersionInfo = @ptrCast(@alignCast(proc));
                 return;
             }
         }
