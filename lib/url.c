@@ -4195,3 +4195,513 @@ int Curl_telnet_get_in_fd(const struct Curl_easy *data)
   return -1;
 #endif
 }
+#ifdef USE_SSL
+struct curl_certinfo *Curl_vtls_acc_data_certs(struct Curl_easy *data);
+struct curl_certinfo *Curl_vtls_acc_data_certs(struct Curl_easy *data)
+{
+  return data ? &data->info.certs : NULL;
+}
+
+struct connectdata *Curl_vtls_acc_data_conn(struct Curl_easy *data);
+struct connectdata *Curl_vtls_acc_data_conn(struct Curl_easy *data)
+{
+  return data ? data->conn : NULL;
+}
+
+struct Curl_cfilter *Curl_vtls_acc_conn_cfilter(struct connectdata *conn,
+                                                int8_t sockindex);
+struct Curl_cfilter *Curl_vtls_acc_conn_cfilter(struct connectdata *conn,
+                                                int8_t sockindex)
+{
+  return (conn && sockindex >= 0 && sockindex < 2) ?
+    conn->cfilter[sockindex] : NULL;
+}
+
+struct ssl_easy_config *
+Curl_vtls_acc_data_ssl_easy_config(struct Curl_easy *data, bool is_proxy);
+struct ssl_easy_config *
+Curl_vtls_acc_data_ssl_easy_config(struct Curl_easy *data, bool is_proxy)
+{
+  if(!data)
+    return NULL;
+#ifndef CURL_DISABLE_PROXY
+  if(is_proxy)
+    return &data->set.proxy_ssl;
+#else
+  (void)is_proxy;
+#endif
+  return &data->set.ssl;
+}
+
+struct ssl_filter_config *
+Curl_vtls_acc_conn_ssl_filter_config(struct connectdata *conn, bool is_proxy);
+struct ssl_filter_config *
+Curl_vtls_acc_conn_ssl_filter_config(struct connectdata *conn, bool is_proxy)
+{
+  if(!conn)
+    return NULL;
+#ifndef CURL_DISABLE_PROXY
+  if(is_proxy)
+    return &conn->proxy_ssl_config;
+#else
+  (void)is_proxy;
+#endif
+  return &conn->ssl_config;
+}
+
+struct Curl_peer *Curl_vtls_acc_conn_via_peer(struct connectdata *conn,
+                                              int8_t sockindex);
+struct Curl_peer *Curl_vtls_acc_conn_via_peer(struct connectdata *conn,
+                                              int8_t sockindex)
+{
+  if(!conn)
+    return NULL;
+#ifndef CURL_DISABLE_PROXY
+  return (sockindex == SECONDARYSOCKET) ? conn->via_peer2 : conn->via_peer;
+#else
+  (void)sockindex;
+  return NULL;
+#endif
+}
+
+void Curl_vtls_acc_conn_set_httpversion_seen(struct connectdata *conn,
+                                             unsigned char ver);
+void Curl_vtls_acc_conn_set_httpversion_seen(struct connectdata *conn,
+                                             unsigned char ver)
+{
+  if(conn)
+    conn->httpversion_seen = ver;
+}
+
+void Curl_vtls_acc_conn_set_multiplex(struct connectdata *conn, bool val);
+void Curl_vtls_acc_conn_set_multiplex(struct connectdata *conn, bool val)
+{
+  if(conn)
+    conn->bits.multiplex = val;
+}
+
+void Curl_vtls_acc_cf_ssl_create_params(struct Curl_easy *data,
+                                        struct connectdata *conn,
+                                        uint8_t *wanted,
+                                        uint8_t *preferred,
+                                        bool *only_http_10,
+                                        bool *use_alpn);
+void Curl_vtls_acc_cf_ssl_create_params(struct Curl_easy *data,
+                                        struct connectdata *conn,
+                                        uint8_t *wanted,
+                                        uint8_t *preferred,
+                                        bool *only_http_10,
+                                        bool *use_alpn)
+{
+#ifndef CURL_DISABLE_HTTP
+  *wanted = data ? data->state.http_neg.wanted : 0;
+  *preferred = data ? data->state.http_neg.preferred : 0;
+  *only_http_10 = data ? (bool)data->state.http_neg.only_10 : FALSE;
+  *use_alpn = conn ? (bool)conn->bits.tls_enable_alpn : FALSE;
+#else
+  (void)data;
+  (void)conn;
+  *wanted = 0;
+  *preferred = 0;
+  *only_http_10 = FALSE;
+  *use_alpn = FALSE;
+#endif
+}
+
+void Curl_vtls_acc_cf_proxy_create_params(struct Curl_easy *data,
+                                          struct connectdata *conn,
+                                          uint8_t *wanted,
+                                          bool *use_alpn);
+void Curl_vtls_acc_cf_proxy_create_params(struct Curl_easy *data,
+                                          struct connectdata *conn,
+                                          uint8_t *wanted,
+                                          bool *use_alpn)
+{
+  bool alpn = data ? (bool)data->set.ssl_enable_alpn : FALSE;
+  http_majors w = CURL_HTTP_V1x;
+#if !defined(CURL_DISABLE_PROXY) && defined(USE_HTTP2)
+  if(conn && conn->http_proxy.proxytype == CURLPROXY_HTTPS2) {
+    alpn = TRUE;
+    w = (CURL_HTTP_V1x | CURL_HTTP_V2x);
+  }
+#else
+  (void)conn;
+#endif
+  *wanted = w;
+  *use_alpn = alpn;
+}
+
+void *Curl_vtls_acc_conn_get_ssl_context(struct connectdata *conn);
+void *Curl_vtls_acc_conn_get_ssl_context(struct connectdata *conn)
+{
+#ifdef USE_WINDOWS_SSPI
+  return conn ? conn->sslContext : NULL;
+#else
+  (void)conn;
+  return NULL;
+#endif
+}
+
+void Curl_vtls_acc_conn_set_ssl_context(struct connectdata *conn, void *ctx);
+void Curl_vtls_acc_conn_set_ssl_context(struct connectdata *conn, void *ctx)
+{
+#ifdef USE_WINDOWS_SSPI
+  if(conn)
+    conn->sslContext = ctx;
+#else
+  (void)conn;
+  (void)ctx;
+#endif
+}
+
+struct Curl_hash *Curl_vtls_acc_multi_proto_hash(struct Curl_easy *data);
+struct Curl_hash *Curl_vtls_acc_multi_proto_hash(struct Curl_easy *data)
+{
+  return (data && data->multi) ? &data->multi->proto_hash : NULL;
+}
+
+void Curl_vtls_acc_scache_params(struct Curl_easy *data,
+                                 struct Curl_ssl_scache **pscache,
+                                 bool *has_share_scache,
+                                 struct curl_trc_feat **ptrc_feat);
+void Curl_vtls_acc_scache_params(struct Curl_easy *data,
+                                 struct Curl_ssl_scache **pscache,
+                                 bool *has_share_scache,
+                                 struct curl_trc_feat **ptrc_feat)
+{
+  *pscache = (data && data->share && data->share->ssl_scache) ?
+    data->share->ssl_scache :
+    ((data && data->multi) ? data->multi->ssl_scache : NULL);
+  *has_share_scache =
+    (data && CURL_SHARE_ssl_scache(data)) ? TRUE : FALSE;
+#ifndef CURL_DISABLE_VERBOSE_STRINGS
+  *ptrc_feat = &Curl_trc_feat_ssls;
+#else
+  *ptrc_feat = NULL;
+#endif
+}
+
+const char *Curl_vtls_acc_pinned_pubkey(struct Curl_easy *data, bool is_proxy);
+const char *Curl_vtls_acc_pinned_pubkey(struct Curl_easy *data, bool is_proxy)
+{
+  if(!data)
+    return NULL;
+#ifndef CURL_DISABLE_PROXY
+  if(is_proxy)
+    return CURL_EASY_STR(data, STRING_SSL_PINNEDPUBLICKEY_PROXY);
+#else
+  (void)is_proxy;
+#endif
+  return CURL_EASY_STR(data, STRING_SSL_PINNEDPUBLICKEY);
+}
+
+bool Curl_vtls_acc_ssl_certinfo(struct Curl_easy *data);
+bool Curl_vtls_acc_ssl_certinfo(struct Curl_easy *data)
+{
+  return data ? (bool)data->set.ssl.certinfo : FALSE;
+}
+
+unsigned char Curl_vtls_acc_ssl_fsslctx(struct Curl_easy *data,
+                                        curl_ssl_ctx_callback *pfsslctx,
+                                        void **pfsslctxp);
+unsigned char Curl_vtls_acc_ssl_fsslctx(struct Curl_easy *data,
+                                        curl_ssl_ctx_callback *pfsslctx,
+                                        void **pfsslctxp)
+{
+  if(!data) {
+    *pfsslctx = NULL;
+    *pfsslctxp = NULL;
+    return 0;
+  }
+  *pfsslctx = data->set.ssl_fsslctx;
+  *pfsslctxp = data->set.ssl_fsslctxp;
+  return data->set.ssl_fsslctx ? 1 : 0;
+}
+
+const char *Curl_vtls_acc_ssl_key_passwd(struct Curl_easy *data,
+                                         bool is_proxy);
+const char *Curl_vtls_acc_ssl_key_passwd(struct Curl_easy *data,
+                                         bool is_proxy)
+{
+  if(!data)
+    return NULL;
+#ifndef CURL_DISABLE_PROXY
+  if(is_proxy)
+    return CURL_EASY_STR(data, STRING_KEY_PASSWD_PROXY);
+#else
+  (void)is_proxy;
+#endif
+  return CURL_EASY_STR(data, STRING_KEY_PASSWD);
+}
+
+const char *Curl_vtls_acc_ssl_key(struct Curl_easy *data, bool is_proxy);
+const char *Curl_vtls_acc_ssl_key(struct Curl_easy *data, bool is_proxy)
+{
+  if(!data)
+    return NULL;
+#ifndef CURL_DISABLE_PROXY
+  if(is_proxy)
+    return CURL_EASY_STR(data, STRING_KEY_PROXY);
+#else
+  (void)is_proxy;
+#endif
+  return CURL_EASY_STR(data, STRING_KEY);
+}
+
+const char *Curl_vtls_acc_ssl_key_type(struct Curl_easy *data, bool is_proxy);
+const char *Curl_vtls_acc_ssl_key_type(struct Curl_easy *data, bool is_proxy)
+{
+  if(!data)
+    return NULL;
+#ifndef CURL_DISABLE_PROXY
+  if(is_proxy)
+    return CURL_EASY_STR(data, STRING_KEY_TYPE_PROXY);
+#else
+  (void)is_proxy;
+#endif
+  return CURL_EASY_STR(data, STRING_KEY_TYPE);
+}
+
+const char *Curl_vtls_acc_ssl_cert(struct Curl_easy *data, bool is_proxy);
+const char *Curl_vtls_acc_ssl_cert(struct Curl_easy *data, bool is_proxy)
+{
+  if(!data)
+    return NULL;
+#ifndef CURL_DISABLE_PROXY
+  if(is_proxy)
+    return CURL_EASY_STR(data, STRING_CERT_PROXY);
+#else
+  (void)is_proxy;
+#endif
+  return CURL_EASY_STR(data, STRING_CERT);
+}
+
+const char *Curl_vtls_acc_ssl_cert_type(struct Curl_easy *data, bool is_proxy);
+const char *Curl_vtls_acc_ssl_cert_type(struct Curl_easy *data, bool is_proxy)
+{
+  if(!data)
+    return NULL;
+#ifndef CURL_DISABLE_PROXY
+  if(is_proxy)
+    return CURL_EASY_STR(data, STRING_CERT_TYPE_PROXY);
+#else
+  (void)is_proxy;
+#endif
+  return CURL_EASY_STR(data, STRING_CERT_TYPE);
+}
+
+const struct curl_blob *Curl_vtls_acc_ssl_cert_blob(struct Curl_easy *data,
+                                                    bool is_proxy);
+const struct curl_blob *Curl_vtls_acc_ssl_cert_blob(struct Curl_easy *data,
+                                                    bool is_proxy)
+{
+  if(!data)
+    return NULL;
+#ifndef CURL_DISABLE_PROXY
+  if(is_proxy)
+    return data->set.blobs[BLOB_CERT_PROXY];
+#else
+  (void)is_proxy;
+#endif
+  return data->set.blobs[BLOB_CERT];
+}
+
+const struct curl_blob *Curl_vtls_acc_ssl_ca_info_blob(struct Curl_easy *data,
+                                                       bool is_proxy);
+const struct curl_blob *Curl_vtls_acc_ssl_ca_info_blob(struct Curl_easy *data,
+                                                       bool is_proxy)
+{
+  if(!data)
+    return NULL;
+#ifndef CURL_DISABLE_PROXY
+  if(is_proxy)
+    return data->set.blobs[BLOB_CAINFO_PROXY];
+#else
+  (void)is_proxy;
+#endif
+  return data->set.blobs[BLOB_CAINFO];
+}
+
+const char *Curl_vtls_acc_ssl_cainfo(struct Curl_easy *data, bool is_proxy);
+const char *Curl_vtls_acc_ssl_cainfo(struct Curl_easy *data, bool is_proxy)
+{
+  if(!data)
+    return NULL;
+#ifndef CURL_DISABLE_PROXY
+  if(is_proxy)
+    return CURL_EASY_STR(data, STRING_SSL_CAFILE_PROXY);
+#else
+  (void)is_proxy;
+#endif
+  return CURL_EASY_STR(data, STRING_SSL_CAFILE);
+}
+
+const char *Curl_vtls_acc_ssl_capath(struct Curl_easy *data, bool is_proxy);
+const char *Curl_vtls_acc_ssl_capath(struct Curl_easy *data, bool is_proxy)
+{
+  if(!data)
+    return NULL;
+#ifndef CURL_DISABLE_PROXY
+  if(is_proxy)
+    return CURL_EASY_STR(data, STRING_SSL_CAPATH_PROXY);
+#else
+  (void)is_proxy;
+#endif
+  return CURL_EASY_STR(data, STRING_SSL_CAPATH);
+}
+
+const char *Curl_vtls_acc_ssl_cipher_list(struct Curl_easy *data,
+                                          bool is_proxy);
+const char *Curl_vtls_acc_ssl_cipher_list(struct Curl_easy *data,
+                                          bool is_proxy)
+{
+  if(!data)
+    return NULL;
+#ifndef CURL_DISABLE_PROXY
+  if(is_proxy)
+    return CURL_EASY_STR(data, STRING_SSL_CIPHER_LIST_PROXY);
+#else
+  (void)is_proxy;
+#endif
+  return CURL_EASY_STR(data, STRING_SSL_CIPHER_LIST);
+}
+
+const char *Curl_vtls_acc_ssl_cipher13_list(struct Curl_easy *data,
+                                            bool is_proxy);
+const char *Curl_vtls_acc_ssl_cipher13_list(struct Curl_easy *data,
+                                            bool is_proxy)
+{
+  if(!data)
+    return NULL;
+#ifndef CURL_DISABLE_PROXY
+  if(is_proxy)
+    return CURL_EASY_STR(data, STRING_SSL_CIPHER13_LIST_PROXY);
+#else
+  (void)is_proxy;
+#endif
+  return CURL_EASY_STR(data, STRING_SSL_CIPHER13_LIST);
+}
+
+const char *Curl_vtls_acc_ssl_ec_curves(struct Curl_easy *data);
+const char *Curl_vtls_acc_ssl_ec_curves(struct Curl_easy *data)
+{
+  return data ? CURL_EASY_STR(data, STRING_SSL_EC_CURVES) : NULL;
+}
+
+const char *Curl_vtls_acc_ssl_signature_algorithms(struct Curl_easy *data);
+const char *Curl_vtls_acc_ssl_signature_algorithms(struct Curl_easy *data)
+{
+  return data ? CURL_EASY_STR(data, STRING_SSL_SIGNATURE_ALGORITHMS) : NULL;
+}
+
+const char *Curl_vtls_acc_ssl_crlfile(struct Curl_easy *data, bool is_proxy);
+const char *Curl_vtls_acc_ssl_crlfile(struct Curl_easy *data, bool is_proxy)
+{
+  if(!data)
+    return NULL;
+#ifndef CURL_DISABLE_PROXY
+  if(is_proxy)
+    return CURL_EASY_STR(data, STRING_SSL_CRLFILE_PROXY);
+#else
+  (void)is_proxy;
+#endif
+  return CURL_EASY_STR(data, STRING_SSL_CRLFILE);
+}
+
+const char *Curl_vtls_acc_ssl_issuercert(struct Curl_easy *data,
+                                         bool is_proxy);
+const char *Curl_vtls_acc_ssl_issuercert(struct Curl_easy *data,
+                                         bool is_proxy)
+{
+  if(!data)
+    return NULL;
+#ifndef CURL_DISABLE_PROXY
+  if(is_proxy)
+    return CURL_EASY_STR(data, STRING_SSL_ISSUERCERT_PROXY);
+#else
+  (void)is_proxy;
+#endif
+  return CURL_EASY_STR(data, STRING_SSL_ISSUERCERT);
+}
+
+const struct curl_blob *Curl_vtls_acc_ssl_issuercert_blob(
+  struct Curl_easy *data, bool is_proxy);
+const struct curl_blob *Curl_vtls_acc_ssl_issuercert_blob(
+  struct Curl_easy *data, bool is_proxy)
+{
+  if(!data)
+    return NULL;
+#ifndef CURL_DISABLE_PROXY
+  if(is_proxy)
+    return data->set.blobs[BLOB_SSL_ISSUERCERT_PROXY];
+#else
+  (void)is_proxy;
+#endif
+  return data->set.blobs[BLOB_SSL_ISSUERCERT];
+}
+
+const char *Curl_vtls_acc_ssl_username(struct Curl_easy *data, bool is_proxy);
+const char *Curl_vtls_acc_ssl_username(struct Curl_easy *data, bool is_proxy)
+{
+#ifdef USE_TLS_SRP
+  if(!data)
+    return NULL;
+#ifndef CURL_DISABLE_PROXY
+  if(is_proxy)
+    return CURL_EASY_STR(data, STRING_TLSAUTH_USERNAME_PROXY);
+#else
+  (void)is_proxy;
+#endif
+  return CURL_EASY_STR(data, STRING_TLSAUTH_USERNAME);
+#else
+  (void)data;
+  (void)is_proxy;
+  return NULL;
+#endif
+}
+
+const char *Curl_vtls_acc_ssl_password(struct Curl_easy *data, bool is_proxy);
+const char *Curl_vtls_acc_ssl_password(struct Curl_easy *data, bool is_proxy)
+{
+#ifdef USE_TLS_SRP
+  if(!data)
+    return NULL;
+#ifndef CURL_DISABLE_PROXY
+  if(is_proxy)
+    return CURL_EASY_STR(data, STRING_TLSAUTH_PASSWORD_PROXY);
+#else
+  (void)is_proxy;
+#endif
+  return CURL_EASY_STR(data, STRING_TLSAUTH_PASSWORD);
+#else
+  (void)data;
+  (void)is_proxy;
+  return NULL;
+#endif
+}
+
+const char *Curl_vtls_acc_ssl_engine(struct Curl_easy *data);
+const char *Curl_vtls_acc_ssl_engine(struct Curl_easy *data)
+{
+  return data ? CURL_EASY_STR(data, STRING_SSL_ENGINE) : NULL;
+}
+
+bool Curl_vtls_acc_ssl_engine_default(struct Curl_easy *data);
+bool Curl_vtls_acc_ssl_engine_default(struct Curl_easy *data)
+{
+  (void)data;
+  return FALSE;
+}
+
+int Curl_vtls_acc_ssl_buffer_size(struct Curl_easy *data);
+int Curl_vtls_acc_ssl_buffer_size(struct Curl_easy *data)
+{
+  return data ? (int)data->set.buffer_size : 16384;
+}
+
+int Curl_vtls_acc_ssl_ca_cache_timeout(struct Curl_easy *data);
+int Curl_vtls_acc_ssl_ca_cache_timeout(struct Curl_easy *data)
+{
+  return data ? data->set.ssl_ca_cache_timeout : 0;
+}
+#endif /* USE_SSL */

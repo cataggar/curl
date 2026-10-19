@@ -20,11 +20,6 @@ pub const c_sources = [_][]const u8{
     "lib/multi.c",
     "lib/sendf.c",
     "lib/url.c",
-    // LIB_VTLS_CFILES
-    "lib/vtls/mbedtls.c",
-    "lib/vtls/openssl.c",
-    "lib/vtls/schannel.c",
-    "lib/vtls/vtls.c",
 };
 
 pub fn createConfigHeader(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Step.ConfigHeader {
