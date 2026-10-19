@@ -13259,3 +13259,612 @@ curl_off_t Curl_http_acc_current_time(void)
   return (curl_off_t)time(NULL);
 }
 
+/* =========================================================================
+ * C-Zig ABI & Struct Layout Compile-Time Assertions and Size Helpers
+ * ========================================================================= */
+#include <stddef.h>
+#include "api.h"
+#include "multi_ev.h"
+#include "protocol.h"
+#include "vdns/asyn.h"
+
+/* 1. API recursion stack & guard layouts (lib/api.h) */
+_Static_assert(CURL_EAPI_MAX_RECURSION == 7, "CURL_EAPI_MAX_RECURSION");
+_Static_assert(sizeof(struct Curl_eapi_stack) == 16, "sizeof(Curl_eapi_stack)");
+_Static_assert(_Alignof(struct Curl_eapi_stack) == 2, "alignof(Curl_eapi_stack)");
+_Static_assert(offsetof(struct Curl_eapi_stack, count) == 0, "Curl_eapi_stack.count");
+_Static_assert(offsetof(struct Curl_eapi_stack, calls) == 2, "Curl_eapi_stack.calls");
+
+_Static_assert(sizeof(struct Curl_eapi_guard) == 16, "sizeof(Curl_eapi_guard)");
+_Static_assert(_Alignof(struct Curl_eapi_guard) == 8, "alignof(Curl_eapi_guard)");
+_Static_assert(offsetof(struct Curl_eapi_guard, data) == 0, "Curl_eapi_guard.data");
+_Static_assert(offsetof(struct Curl_eapi_guard, depth) == 8, "Curl_eapi_guard.depth");
+
+_Static_assert(CURL_MAPI_MAX_RECURSION == 15, "CURL_MAPI_MAX_RECURSION");
+_Static_assert(sizeof(struct Curl_mapi_stack) == 16, "sizeof(Curl_mapi_stack)");
+_Static_assert(_Alignof(struct Curl_mapi_stack) == 1, "alignof(Curl_mapi_stack)");
+_Static_assert(offsetof(struct Curl_mapi_stack, count) == 0, "Curl_mapi_stack.count");
+_Static_assert(offsetof(struct Curl_mapi_stack, calls) == 1, "Curl_mapi_stack.calls");
+
+_Static_assert(sizeof(struct Curl_mapi_guard) == 16, "sizeof(Curl_mapi_guard)");
+_Static_assert(_Alignof(struct Curl_mapi_guard) == 8, "alignof(Curl_mapi_guard)");
+_Static_assert(offsetof(struct Curl_mapi_guard, multi) == 0, "Curl_mapi_guard.multi");
+_Static_assert(offsetof(struct Curl_mapi_guard, depth) == 8, "Curl_mapi_guard.depth");
+
+/* 2. Curl_easy prefix layout matching CurlEasyPrefix */
+_Static_assert(_Alignof(struct Curl_easy) == 8, "alignof(Curl_easy)");
+_Static_assert(offsetof(struct Curl_easy, magic) == 0, "Curl_easy.magic");
+_Static_assert(offsetof(struct Curl_easy, mid) == 4, "Curl_easy.mid");
+_Static_assert(offsetof(struct Curl_easy, mstate) == 8, "Curl_easy.mstate");
+_Static_assert(offsetof(struct Curl_easy, result) == 12, "Curl_easy.result");
+_Static_assert(offsetof(struct Curl_easy, conn) == 16, "Curl_easy.conn");
+_Static_assert(offsetof(struct Curl_easy, multi) == 24, "Curl_easy.multi");
+_Static_assert(offsetof(struct Curl_easy, callstack) == 32, "Curl_easy.callstack");
+_Static_assert(offsetof(struct Curl_easy, callstack) +
+               sizeof(struct Curl_eapi_stack) == 48, "sizeof(CurlEasyPrefix)");
+
+/* 3. Curl_multi prefix layout matching CurlMultiPrefix */
+_Static_assert(_Alignof(struct Curl_multi) == 8, "alignof(Curl_multi)");
+_Static_assert(offsetof(struct Curl_multi, magic) == 0, "Curl_multi.magic");
+_Static_assert(offsetof(struct Curl_multi, xfers_alive) == 4, "Curl_multi.xfers_alive");
+_Static_assert(offsetof(struct Curl_multi, xfers_really_alive) == 8, "Curl_multi.xfers_really_alive");
+_Static_assert(offsetof(struct Curl_multi, max_concurrent_streams) == 12, "Curl_multi.max_concurrent_streams");
+_Static_assert(offsetof(struct Curl_multi, xfers_total_ever) == 16, "Curl_multi.xfers_total_ever");
+_Static_assert(offsetof(struct Curl_multi, xfers) == 24, "Curl_multi.xfers");
+_Static_assert(offsetof(struct Curl_multi, process) == 48, "Curl_multi.process");
+_Static_assert(offsetof(struct Curl_multi, dirty) == 64, "Curl_multi.dirty");
+_Static_assert(offsetof(struct Curl_multi, pending) == 80, "Curl_multi.pending");
+_Static_assert(offsetof(struct Curl_multi, msgsent) == 96, "Curl_multi.msgsent");
+_Static_assert(offsetof(struct Curl_multi, callstack) == 112, "Curl_multi.callstack");
+_Static_assert(offsetof(struct Curl_multi, timeouts) == 128, "Curl_multi.timeouts");
+_Static_assert(offsetof(struct Curl_multi, admin) == 144, "Curl_multi.admin");
+_Static_assert(offsetof(struct Curl_multi, socket_cb) == 152, "Curl_multi.socket_cb");
+_Static_assert(offsetof(struct Curl_multi, socket_userp) == 160, "Curl_multi.socket_userp");
+_Static_assert(offsetof(struct Curl_multi, push_cb) == 168, "Curl_multi.push_cb");
+_Static_assert(offsetof(struct Curl_multi, push_userp) == 176, "Curl_multi.push_userp");
+_Static_assert(offsetof(struct Curl_multi, dnscache) == 184, "Curl_multi.dnscache");
+_Static_assert(offsetof(struct Curl_multi, ssl_scache) == 224, "Curl_multi.ssl_scache");
+_Static_assert(offsetof(struct Curl_multi, ssl_scache) +
+               sizeof(struct Curl_ssl_scache *) == 232, "sizeof(CurlMultiPrefix)");
+
+/* 4. PureInfo prefix and Curl_getinfo_ctx layout matching CurlGetinfoCtx */
+_Static_assert(offsetof(struct PureInfo, primary) == 0, "PureInfo.primary");
+_Static_assert(offsetof(struct PureInfo, certs) == 104, "PureInfo.certs");
+_Static_assert(offsetof(struct PureInfo, filetime) == 120, "PureInfo.filetime");
+_Static_assert(offsetof(struct PureInfo, request_size) == 128, "PureInfo.request_size");
+_Static_assert(offsetof(struct PureInfo, numconnects) == 136, "PureInfo.numconnects");
+_Static_assert(offsetof(struct PureInfo, contenttype) == 144, "PureInfo.contenttype");
+_Static_assert(offsetof(struct PureInfo, wouldredirect) == 152, "PureInfo.wouldredirect");
+_Static_assert(offsetof(struct PureInfo, effective_url) == 160, "PureInfo.effective_url");
+_Static_assert(offsetof(struct PureInfo, retry_after) == 168, "PureInfo.retry_after");
+_Static_assert(offsetof(struct PureInfo, conn_scheme) == 176, "PureInfo.conn_scheme");
+_Static_assert(offsetof(struct PureInfo, httpcode) == 184, "PureInfo.httpcode");
+_Static_assert(offsetof(struct PureInfo, httpproxycode) == 188, "PureInfo.httpproxycode");
+_Static_assert(offsetof(struct PureInfo, httpversion) == 192, "PureInfo.httpversion");
+_Static_assert(offsetof(struct PureInfo, conn_protocol) == 196, "PureInfo.conn_protocol");
+_Static_assert(offsetof(struct PureInfo, proxyauthavail) == 200, "PureInfo.proxyauthavail");
+_Static_assert(offsetof(struct PureInfo, httpauthavail) == 204, "PureInfo.httpauthavail");
+_Static_assert(offsetof(struct PureInfo, proxyauthpicked) == 208, "PureInfo.proxyauthpicked");
+_Static_assert(offsetof(struct PureInfo, httpauthpicked) == 212, "PureInfo.httpauthpicked");
+_Static_assert(offsetof(struct PureInfo, header_size) == 216, "PureInfo.header_size");
+_Static_assert(offsetof(struct PureInfo, pxcode) == 220, "PureInfo.pxcode");
+
+_Static_assert(sizeof(struct Curl_getinfo_ctx) == 264 + 2 * sizeof(long), "sizeof(Curl_getinfo_ctx)");
+_Static_assert(_Alignof(struct Curl_getinfo_ctx) == 8, "alignof(Curl_getinfo_ctx)");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, info) == 0, "Curl_getinfo_ctx.info");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, tsi) == 8, "Curl_getinfo_ctx.tsi");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, url_str) == 16, "Curl_getinfo_ctx.url_str");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, referer_str) == 24, "Curl_getinfo_ctx.referer_str");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, custom_request) == 32, "Curl_getinfo_ctx.custom_request");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, ftp_entrypath) == 40, "Curl_getinfo_ctx.ftp_entrypath");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, rtsp_session_id) == 48, "Curl_getinfo_ctx.rtsp_session_id");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, cainfo_default) == 56, "Curl_getinfo_ctx.cainfo_default");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, capath_default) == 64, "Curl_getinfo_ctx.capath_default");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, private_data) == 72, "Curl_getinfo_ctx.private_data");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, xfer_id) == 80, "Curl_getinfo_ctx.xfer_id");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, last_conn_id) == 88, "Curl_getinfo_ctx.last_conn_id");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, deliver) == 96, "Curl_getinfo_ctx.deliver");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, earlydata_sent) == 104, "Curl_getinfo_ctx.earlydata_sent");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, ul_total_size) == 112, "Curl_getinfo_ctx.ul_total_size");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, ul_cur_size) == 120, "Curl_getinfo_ctx.ul_cur_size");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, ul_speed) == 128, "Curl_getinfo_ctx.ul_speed");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, dl_total_size) == 136, "Curl_getinfo_ctx.dl_total_size");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, dl_cur_size) == 144, "Curl_getinfo_ctx.dl_cur_size");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, dl_speed) == 152, "Curl_getinfo_ctx.dl_speed");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, spent_us) == 160, "Curl_getinfo_ctx.spent_us");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, queued_us) == 168, "Curl_getinfo_ctx.queued_us");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, nslookup_us) == 176, "Curl_getinfo_ctx.nslookup_us");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, connect_us) == 184, "Curl_getinfo_ctx.connect_us");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, appconnect_us) == 192, "Curl_getinfo_ctx.appconnect_us");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, pretransfer_us) == 200, "Curl_getinfo_ctx.pretransfer_us");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, starttransfer_us) == 208, "Curl_getinfo_ctx.starttransfer_us");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, posttransfer_us) == 216, "Curl_getinfo_ctx.posttransfer_us");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, startredirect_us) == 224, "Curl_getinfo_ctx.startredirect_us");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, ssl_verifyresult) == 232, "Curl_getinfo_ctx.ssl_verifyresult");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, proxy_ssl_verifyresult) == 232 + sizeof(long), "Curl_getinfo_ctx.proxy_ssl_verifyresult");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, rtsp_next_client_CSeq) == 232 + 2 * sizeof(long), "Curl_getinfo_ctx.rtsp_next_client_CSeq");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, rtsp_next_server_CSeq) == 236 + 2 * sizeof(long), "Curl_getinfo_ctx.rtsp_next_server_CSeq");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, rtsp_CSeq_recv) == 240 + 2 * sizeof(long), "Curl_getinfo_ctx.rtsp_CSeq_recv");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, os_errno) == 244 + 2 * sizeof(long), "Curl_getinfo_ctx.os_errno");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, followlocation) == 248 + 2 * sizeof(long), "Curl_getinfo_ctx.followlocation");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, httpreq) == 250 + 2 * sizeof(long), "Curl_getinfo_ctx.httpreq");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, path_as_is) == 251 + 2 * sizeof(long), "Curl_getinfo_ctx.path_as_is");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, opt_no_body) == 252 + 2 * sizeof(long), "Curl_getinfo_ctx.opt_no_body");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, timecond) == 253 + 2 * sizeof(long), "Curl_getinfo_ctx.timecond");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, used_proxy) == 254 + 2 * sizeof(long), "Curl_getinfo_ctx.used_proxy");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, ul_size_known) == 255 + 2 * sizeof(long), "Curl_getinfo_ctx.ul_size_known");
+_Static_assert(offsetof(struct Curl_getinfo_ctx, dl_size_known) == 256 + 2 * sizeof(long), "Curl_getinfo_ctx.dl_size_known");
+
+/* 5. SingleRequest and Curl_multi_ev layouts */
+_Static_assert(sizeof(struct SingleRequest) == 232, "sizeof(SingleRequest)");
+_Static_assert(_Alignof(struct SingleRequest) == 8, "alignof(SingleRequest)");
+_Static_assert(offsetof(struct SingleRequest, size) == 0, "SingleRequest.size");
+_Static_assert(offsetof(struct SingleRequest, maxdownload) == 8, "SingleRequest.maxdownload");
+_Static_assert(offsetof(struct SingleRequest, bytecount) == 16, "SingleRequest.bytecount");
+_Static_assert(offsetof(struct SingleRequest, writebytecount) == 24, "SingleRequest.writebytecount");
+_Static_assert(offsetof(struct SingleRequest, offset) == 32, "SingleRequest.offset");
+_Static_assert(offsetof(struct SingleRequest, start) == 40, "SingleRequest.start");
+_Static_assert(offsetof(struct SingleRequest, headerbytecount) == 56, "SingleRequest.headerbytecount");
+_Static_assert(offsetof(struct SingleRequest, allheadercount) == 60, "SingleRequest.allheadercount");
+_Static_assert(offsetof(struct SingleRequest, deductheadercount) == 64, "SingleRequest.deductheadercount");
+_Static_assert(offsetof(struct SingleRequest, headerline) == 68, "SingleRequest.headerline");
+_Static_assert(offsetof(struct SingleRequest, httpcode) == 72, "SingleRequest.httpcode");
+_Static_assert(offsetof(struct SingleRequest, httpversion_sent) == 76, "SingleRequest.httpversion_sent");
+_Static_assert(offsetof(struct SingleRequest, httpversion) == 77, "SingleRequest.httpversion");
+_Static_assert(offsetof(struct SingleRequest, upgr101) == 78, "SingleRequest.upgr101");
+_Static_assert(offsetof(struct SingleRequest, io_flags) == 79, "SingleRequest.io_flags");
+_Static_assert(offsetof(struct SingleRequest, writer.stack) == 80, "SingleRequest.writer.stack");
+_Static_assert(offsetof(struct SingleRequest, reader.stack) == 96, "SingleRequest.reader.stack");
+_Static_assert(offsetof(struct SingleRequest, sendbuf) == 104, "SingleRequest.sendbuf");
+_Static_assert(offsetof(struct SingleRequest, sendbuf_hds_len) == 168, "SingleRequest.sendbuf_hds_len");
+_Static_assert(offsetof(struct SingleRequest, timeofdoc) == 176, "SingleRequest.timeofdoc");
+_Static_assert(offsetof(struct SingleRequest, location) == 184, "SingleRequest.location");
+_Static_assert(offsetof(struct SingleRequest, newurl) == 192, "SingleRequest.newurl");
+_Static_assert(offsetof(struct SingleRequest, hd_auth) == 200, "SingleRequest.hd_auth");
+#ifndef CURL_DISABLE_PROXY
+_Static_assert(offsetof(struct SingleRequest, hd_proxy_auth) == 208, "SingleRequest.hd_proxy_auth");
+#endif
+#ifndef CURL_DISABLE_COOKIES
+_Static_assert(offsetof(struct SingleRequest, cookiehost) == 216, "SingleRequest.cookiehost");
+_Static_assert(offsetof(struct SingleRequest, setcookies) == 224, "SingleRequest.setcookies");
+#endif
+
+_Static_assert(sizeof(struct curl_multi_ev) == 40, "sizeof(curl_multi_ev)");
+_Static_assert(_Alignof(struct curl_multi_ev) == 8, "alignof(curl_multi_ev)");
+_Static_assert(offsetof(struct curl_multi_ev, sh_entries) == 0, "curl_multi_ev.sh_entries");
+
+/* 6. Connection filters, writers/readers, progress, cpool, peer, vdns */
+_Static_assert(sizeof(struct Curl_cfilter) == 40, "sizeof(Curl_cfilter)");
+_Static_assert(_Alignof(struct Curl_cfilter) == 8, "alignof(Curl_cfilter)");
+_Static_assert(offsetof(struct Curl_cfilter, cft) == 0, "Curl_cfilter.cft");
+_Static_assert(offsetof(struct Curl_cfilter, next) == 8, "Curl_cfilter.next");
+_Static_assert(offsetof(struct Curl_cfilter, ctx) == 16, "Curl_cfilter.ctx");
+_Static_assert(offsetof(struct Curl_cfilter, conn) == 24, "Curl_cfilter.conn");
+_Static_assert(offsetof(struct Curl_cfilter, sockindex) == 32, "Curl_cfilter.sockindex");
+
+_Static_assert(sizeof(struct Curl_cftype) == 104, "sizeof(Curl_cftype)");
+_Static_assert(_Alignof(struct Curl_cftype) == 8, "alignof(Curl_cftype)");
+_Static_assert(offsetof(struct Curl_cftype, name) == 0, "Curl_cftype.name");
+_Static_assert(offsetof(struct Curl_cftype, flags) == 8, "Curl_cftype.flags");
+_Static_assert(offsetof(struct Curl_cftype, log_level) == 12, "Curl_cftype.log_level");
+_Static_assert(offsetof(struct Curl_cftype, destroy) == 16, "Curl_cftype.destroy");
+_Static_assert(offsetof(struct Curl_cftype, do_connect) == 24, "Curl_cftype.do_connect");
+_Static_assert(offsetof(struct Curl_cftype, do_shutdown) == 32, "Curl_cftype.do_shutdown");
+_Static_assert(offsetof(struct Curl_cftype, adjust_pollset) == 40, "Curl_cftype.adjust_pollset");
+_Static_assert(offsetof(struct Curl_cftype, has_data_pending) == 48, "Curl_cftype.has_data_pending");
+_Static_assert(offsetof(struct Curl_cftype, do_send) == 56, "Curl_cftype.do_send");
+_Static_assert(offsetof(struct Curl_cftype, do_recv) == 64, "Curl_cftype.do_recv");
+_Static_assert(offsetof(struct Curl_cftype, cntrl) == 72, "Curl_cftype.cntrl");
+_Static_assert(offsetof(struct Curl_cftype, is_alive) == 80, "Curl_cftype.is_alive");
+_Static_assert(offsetof(struct Curl_cftype, keep_alive) == 88, "Curl_cftype.keep_alive");
+_Static_assert(offsetof(struct Curl_cftype, query) == 96, "Curl_cftype.query");
+
+_Static_assert(sizeof(struct Curl_cwtype) == 64, "sizeof(Curl_cwtype)");
+_Static_assert(_Alignof(struct Curl_cwtype) == 8, "alignof(Curl_cwtype)");
+_Static_assert(offsetof(struct Curl_cwtype, name) == 0, "Curl_cwtype.name");
+_Static_assert(offsetof(struct Curl_cwtype, alias) == 8, "Curl_cwtype.alias");
+_Static_assert(offsetof(struct Curl_cwtype, flags) == 16, "Curl_cwtype.flags");
+_Static_assert(offsetof(struct Curl_cwtype, do_init) == 24, "Curl_cwtype.do_init");
+_Static_assert(offsetof(struct Curl_cwtype, do_write) == 32, "Curl_cwtype.do_write");
+_Static_assert(offsetof(struct Curl_cwtype, do_flush) == 40, "Curl_cwtype.do_flush");
+_Static_assert(offsetof(struct Curl_cwtype, do_close) == 48, "Curl_cwtype.do_close");
+_Static_assert(offsetof(struct Curl_cwtype, cwriter_size) == 56, "Curl_cwtype.cwriter_size");
+
+_Static_assert(sizeof(struct Curl_cwriter) == 32, "sizeof(Curl_cwriter)");
+_Static_assert(_Alignof(struct Curl_cwriter) == 8, "alignof(Curl_cwriter)");
+_Static_assert(offsetof(struct Curl_cwriter, cwt) == 0, "Curl_cwriter.cwt");
+_Static_assert(offsetof(struct Curl_cwriter, next) == 8, "Curl_cwriter.next");
+_Static_assert(offsetof(struct Curl_cwriter, ctx) == 16, "Curl_cwriter.ctx");
+_Static_assert(offsetof(struct Curl_cwriter, phase) == 24, "Curl_cwriter.phase");
+
+_Static_assert(sizeof(struct Curl_crtype) == 88, "sizeof(Curl_crtype)");
+_Static_assert(_Alignof(struct Curl_crtype) == 8, "alignof(Curl_crtype)");
+_Static_assert(offsetof(struct Curl_crtype, name) == 0, "Curl_crtype.name");
+_Static_assert(offsetof(struct Curl_crtype, do_init) == 8, "Curl_crtype.do_init");
+_Static_assert(offsetof(struct Curl_crtype, do_read) == 16, "Curl_crtype.do_read");
+_Static_assert(offsetof(struct Curl_crtype, do_close) == 24, "Curl_crtype.do_close");
+_Static_assert(offsetof(struct Curl_crtype, needs_rewind) == 32, "Curl_crtype.needs_rewind");
+_Static_assert(offsetof(struct Curl_crtype, total_length) == 40, "Curl_crtype.total_length");
+_Static_assert(offsetof(struct Curl_crtype, resume_from) == 48, "Curl_crtype.resume_from");
+_Static_assert(offsetof(struct Curl_crtype, cntrl) == 56, "Curl_crtype.cntrl");
+_Static_assert(offsetof(struct Curl_crtype, is_paused) == 64, "Curl_crtype.is_paused");
+_Static_assert(offsetof(struct Curl_crtype, done) == 72, "Curl_crtype.done");
+_Static_assert(offsetof(struct Curl_crtype, creader_size) == 80, "Curl_crtype.creader_size");
+
+_Static_assert(sizeof(struct Curl_creader) == 32, "sizeof(Curl_creader)");
+_Static_assert(_Alignof(struct Curl_creader) == 8, "alignof(Curl_creader)");
+_Static_assert(offsetof(struct Curl_creader, crt) == 0, "Curl_creader.crt");
+_Static_assert(offsetof(struct Curl_creader, next) == 8, "Curl_creader.next");
+_Static_assert(offsetof(struct Curl_creader, ctx) == 16, "Curl_creader.ctx");
+_Static_assert(offsetof(struct Curl_creader, phase) == 24, "Curl_creader.phase");
+
+_Static_assert(sizeof(struct Progress) == 472, "sizeof(Progress)");
+_Static_assert(_Alignof(struct Progress) == 8, "alignof(Progress)");
+_Static_assert(offsetof(struct Progress, now) == 0, "Progress.now");
+_Static_assert(offsetof(struct Progress, start) == 16, "Progress.start");
+_Static_assert(offsetof(struct Progress, ul) == 32, "Progress.ul");
+_Static_assert(offsetof(struct Progress, dl) == 136, "Progress.dl");
+_Static_assert(offsetof(struct Progress, deliver) == 240, "Progress.deliver");
+_Static_assert(offsetof(struct Progress, current_speed) == 248, "Progress.current_speed");
+_Static_assert(offsetof(struct Progress, earlydata_sent) == 256, "Progress.earlydata_sent");
+_Static_assert(offsetof(struct Progress, delta) == 264, "Progress.delta");
+_Static_assert(offsetof(struct Progress, total) == 304, "Progress.total");
+_Static_assert(offsetof(struct Progress, speed_amount) == 368, "Progress.speed_amount");
+_Static_assert(offsetof(struct Progress, speed_time) == 416, "Progress.speed_time");
+_Static_assert(offsetof(struct Progress, speeder_c) == 464, "Progress.speeder_c");
+
+_Static_assert(sizeof(struct cpool) == 128, "sizeof(cpool)");
+_Static_assert(_Alignof(struct cpool) == 8, "alignof(cpool)");
+_Static_assert(offsetof(struct cpool, conns) == 0, "cpool.conns");
+_Static_assert(offsetof(struct cpool, idles) == 24, "cpool.idles");
+_Static_assert(offsetof(struct cpool, dest2bundle) == 40, "cpool.dest2bundle");
+_Static_assert(offsetof(struct cpool, next_connection_id) == 80, "cpool.next_connection_id");
+_Static_assert(offsetof(struct cpool, next_easy_id) == 88, "cpool.next_easy_id");
+_Static_assert(offsetof(struct cpool, last_cleanup) == 96, "cpool.last_cleanup");
+_Static_assert(offsetof(struct cpool, share) == 112, "cpool.share");
+
+_Static_assert(_Alignof(struct Curl_peer) == 8, "alignof(Curl_peer)");
+_Static_assert(offsetof(struct Curl_peer, scheme) == 0, "Curl_peer.scheme");
+_Static_assert(offsetof(struct Curl_peer, hostname) == 8, "Curl_peer.hostname");
+_Static_assert(offsetof(struct Curl_peer, zoneid) == 16, "Curl_peer.zoneid");
+_Static_assert(offsetof(struct Curl_peer, refcount) == 24, "Curl_peer.refcount");
+_Static_assert(offsetof(struct Curl_peer, scopeid) == 28, "Curl_peer.scopeid");
+_Static_assert(offsetof(struct Curl_peer, port) == 32, "Curl_peer.port");
+#ifdef _WIN32
+_Static_assert(sizeof(struct Curl_peer) == 48, "sizeof(Curl_peer)");
+_Static_assert(offsetof(struct Curl_peer, user_hostname) == 40, "Curl_peer.user_hostname");
+#else
+_Static_assert(sizeof(struct Curl_peer) == 40, "sizeof(Curl_peer)");
+_Static_assert(offsetof(struct Curl_peer, user_hostname) == 35, "Curl_peer.user_hostname");
+#endif
+
+#ifdef USE_CURL_ASYNC
+_Static_assert(sizeof(struct Curl_resolv_async) == 120, "sizeof(Curl_resolv_async)");
+_Static_assert(_Alignof(struct Curl_resolv_async) == 8, "alignof(Curl_resolv_async)");
+_Static_assert(offsetof(struct Curl_resolv_async, next) == 0, "Curl_resolv_async.next");
+_Static_assert(offsetof(struct Curl_resolv_async, peer) == 8, "Curl_resolv_async.peer");
+_Static_assert(offsetof(struct Curl_resolv_async, ai_A) == 16, "Curl_resolv_async.ai_A");
+_Static_assert(offsetof(struct Curl_resolv_async, ai_AAAA) == 24, "Curl_resolv_async.ai_AAAA");
+_Static_assert(offsetof(struct Curl_resolv_async, thrdd) == 32, "Curl_resolv_async.thrdd");
+_Static_assert(offsetof(struct Curl_resolv_async, doh) == 56, "Curl_resolv_async.doh");
+_Static_assert(offsetof(struct Curl_resolv_async, start) == 64, "Curl_resolv_async.start");
+_Static_assert(offsetof(struct Curl_resolv_async, interval_end) == 80, "Curl_resolv_async.interval_end");
+_Static_assert(offsetof(struct Curl_resolv_async, timeout_ms) == 88, "Curl_resolv_async.timeout_ms");
+_Static_assert(offsetof(struct Curl_resolv_async, result) == 96, "Curl_resolv_async.result");
+_Static_assert(offsetof(struct Curl_resolv_async, poll_interval) == 100, "Curl_resolv_async.poll_interval");
+_Static_assert(offsetof(struct Curl_resolv_async, id) == 104, "Curl_resolv_async.id");
+_Static_assert(offsetof(struct Curl_resolv_async, dns_queries) == 108, "Curl_resolv_async.dns_queries");
+_Static_assert(offsetof(struct Curl_resolv_async, dns_responses) == 109, "Curl_resolv_async.dns_responses");
+_Static_assert(offsetof(struct Curl_resolv_async, transport) == 110, "Curl_resolv_async.transport");
+_Static_assert(offsetof(struct Curl_resolv_async, queries_ongoing) == 111, "Curl_resolv_async.queries_ongoing");
+#endif
+
+_Static_assert(sizeof(struct ip_quadruple) == 98, "sizeof(ip_quadruple)");
+_Static_assert(_Alignof(struct ip_quadruple) == 2, "alignof(ip_quadruple)");
+_Static_assert(offsetof(struct ip_quadruple, remote_ip) == 0, "ip_quadruple.remote_ip");
+_Static_assert(offsetof(struct ip_quadruple, local_ip) == 46, "ip_quadruple.local_ip");
+_Static_assert(offsetof(struct ip_quadruple, remote_port) == 92, "ip_quadruple.remote_port");
+_Static_assert(offsetof(struct ip_quadruple, local_port) == 94, "ip_quadruple.local_port");
+_Static_assert(offsetof(struct ip_quadruple, transport) == 96, "ip_quadruple.transport");
+
+/* 7. Curl_scheme, Curl_protocol, and mime structs */
+_Static_assert(sizeof(struct Curl_scheme) == 40, "sizeof(Curl_scheme)");
+_Static_assert(_Alignof(struct Curl_scheme) == 8, "alignof(Curl_scheme)");
+_Static_assert(offsetof(struct Curl_scheme, name) == 0, "Curl_scheme.name");
+_Static_assert(offsetof(struct Curl_scheme, run) == 8, "Curl_scheme.run");
+_Static_assert(offsetof(struct Curl_scheme, protocol) == 16, "Curl_scheme.protocol");
+_Static_assert(offsetof(struct Curl_scheme, family) == 24, "Curl_scheme.family");
+_Static_assert(offsetof(struct Curl_scheme, flags) == 32, "Curl_scheme.flags");
+_Static_assert(offsetof(struct Curl_scheme, defport) == 36, "Curl_scheme.defport");
+
+_Static_assert(sizeof(struct Curl_protocol) == 136, "sizeof(Curl_protocol)");
+_Static_assert(_Alignof(struct Curl_protocol) == 8, "alignof(Curl_protocol)");
+_Static_assert(offsetof(struct Curl_protocol, setup_connection) == 0, "Curl_protocol.setup_connection");
+_Static_assert(offsetof(struct Curl_protocol, do_it) == 8, "Curl_protocol.do_it");
+_Static_assert(offsetof(struct Curl_protocol, done) == 16, "Curl_protocol.done");
+_Static_assert(offsetof(struct Curl_protocol, do_more) == 24, "Curl_protocol.do_more");
+_Static_assert(offsetof(struct Curl_protocol, connect_it) == 32, "Curl_protocol.connect_it");
+_Static_assert(offsetof(struct Curl_protocol, connecting) == 40, "Curl_protocol.connecting");
+_Static_assert(offsetof(struct Curl_protocol, doing) == 48, "Curl_protocol.doing");
+_Static_assert(offsetof(struct Curl_protocol, proto_pollset) == 56, "Curl_protocol.proto_pollset");
+_Static_assert(offsetof(struct Curl_protocol, doing_pollset) == 64, "Curl_protocol.doing_pollset");
+_Static_assert(offsetof(struct Curl_protocol, domore_pollset) == 72, "Curl_protocol.domore_pollset");
+_Static_assert(offsetof(struct Curl_protocol, perform_pollset) == 80, "Curl_protocol.perform_pollset");
+_Static_assert(offsetof(struct Curl_protocol, disconnect) == 88, "Curl_protocol.disconnect");
+_Static_assert(offsetof(struct Curl_protocol, write_resp) == 96, "Curl_protocol.write_resp");
+_Static_assert(offsetof(struct Curl_protocol, write_resp_hd) == 104, "Curl_protocol.write_resp_hd");
+_Static_assert(offsetof(struct Curl_protocol, connection_is_dead) == 112, "Curl_protocol.connection_is_dead");
+_Static_assert(offsetof(struct Curl_protocol, attach) == 120, "Curl_protocol.attach");
+_Static_assert(offsetof(struct Curl_protocol, follow) == 128, "Curl_protocol.follow");
+
+#if !defined(CURL_DISABLE_MIME) || !defined(CURL_DISABLE_FORM_API)
+_Static_assert(sizeof(struct mime_encoder) == 24, "sizeof(mime_encoder)");
+_Static_assert(offsetof(struct mime_encoder, name) == 0, "mime_encoder.name");
+_Static_assert(offsetof(struct mime_encoder, encodefunc) == 8, "mime_encoder.encodefunc");
+_Static_assert(offsetof(struct mime_encoder, sizefunc) == 16, "mime_encoder.sizefunc");
+
+_Static_assert(sizeof(struct mime_encoder_state) == 280, "sizeof(mime_encoder_state)");
+_Static_assert(offsetof(struct mime_encoder_state, pos) == 0, "mime_encoder_state.pos");
+_Static_assert(offsetof(struct mime_encoder_state, bufbeg) == 8, "mime_encoder_state.bufbeg");
+_Static_assert(offsetof(struct mime_encoder_state, bufend) == 16, "mime_encoder_state.bufend");
+_Static_assert(offsetof(struct mime_encoder_state, buf) == 24, "mime_encoder_state.buf");
+
+_Static_assert(sizeof(struct mime_state) == 24, "sizeof(mime_state)");
+_Static_assert(offsetof(struct mime_state, state) == 0, "mime_state.state");
+_Static_assert(offsetof(struct mime_state, ptr) == 8, "mime_state.ptr");
+_Static_assert(offsetof(struct mime_state, offset) == 16, "mime_state.offset");
+
+_Static_assert(sizeof(struct curl_mime) == 96, "sizeof(curl_mime)");
+_Static_assert(offsetof(struct curl_mime, parent) == 0, "curl_mime.parent");
+_Static_assert(offsetof(struct curl_mime, firstpart) == 8, "curl_mime.firstpart");
+_Static_assert(offsetof(struct curl_mime, lastpart) == 16, "curl_mime.lastpart");
+_Static_assert(offsetof(struct curl_mime, boundary) == 24, "curl_mime.boundary");
+_Static_assert(offsetof(struct curl_mime, state) == 72, "curl_mime.state");
+
+_Static_assert(sizeof(struct curl_mimepart) == 440, "sizeof(curl_mimepart)");
+_Static_assert(offsetof(struct curl_mimepart, parent) == 0, "curl_mimepart.parent");
+_Static_assert(offsetof(struct curl_mimepart, nextpart) == 8, "curl_mimepart.nextpart");
+_Static_assert(offsetof(struct curl_mimepart, kind) == 16, "curl_mimepart.kind");
+_Static_assert(offsetof(struct curl_mimepart, flags) == 20, "curl_mimepart.flags");
+_Static_assert(offsetof(struct curl_mimepart, data) == 24, "curl_mimepart.data");
+_Static_assert(offsetof(struct curl_mimepart, readfunc) == 32, "curl_mimepart.readfunc");
+_Static_assert(offsetof(struct curl_mimepart, seekfunc) == 40, "curl_mimepart.seekfunc");
+_Static_assert(offsetof(struct curl_mimepart, freefunc) == 48, "curl_mimepart.freefunc");
+_Static_assert(offsetof(struct curl_mimepart, arg) == 56, "curl_mimepart.arg");
+_Static_assert(offsetof(struct curl_mimepart, fp) == 64, "curl_mimepart.fp");
+_Static_assert(offsetof(struct curl_mimepart, curlheaders) == 72, "curl_mimepart.curlheaders");
+_Static_assert(offsetof(struct curl_mimepart, userheaders) == 80, "curl_mimepart.userheaders");
+_Static_assert(offsetof(struct curl_mimepart, mimetype) == 88, "curl_mimepart.mimetype");
+_Static_assert(offsetof(struct curl_mimepart, filename) == 96, "curl_mimepart.filename");
+_Static_assert(offsetof(struct curl_mimepart, name) == 104, "curl_mimepart.name");
+_Static_assert(offsetof(struct curl_mimepart, datasize) == 112, "curl_mimepart.datasize");
+_Static_assert(offsetof(struct curl_mimepart, state) == 120, "curl_mimepart.state");
+_Static_assert(offsetof(struct curl_mimepart, encoder) == 144, "curl_mimepart.encoder");
+_Static_assert(offsetof(struct curl_mimepart, encstate) == 152, "curl_mimepart.encstate");
+_Static_assert(offsetof(struct curl_mimepart, lastreadstatus) == 432, "curl_mimepart.lastreadstatus");
+#endif
+
+/* 8. API Enum Value Parity (lib/api.h) */
+_Static_assert(CURL_EAPI_FN_easy_cleanup == 0, "CURL_EAPI_FN_easy_cleanup");
+_Static_assert(CURL_EAPI_FN_easy_duphandle == 1, "CURL_EAPI_FN_easy_duphandle");
+_Static_assert(CURL_EAPI_FN_easy_getinfo == 2, "CURL_EAPI_FN_easy_getinfo");
+_Static_assert(CURL_EAPI_FN_easy_header == 3, "CURL_EAPI_FN_easy_header");
+_Static_assert(CURL_EAPI_FN_easy_nextheader == 4, "CURL_EAPI_FN_easy_nextheader");
+_Static_assert(CURL_EAPI_FN_easy_pause == 5, "CURL_EAPI_FN_easy_pause");
+_Static_assert(CURL_EAPI_FN_easy_perform_ev == 6, "CURL_EAPI_FN_easy_perform_ev");
+_Static_assert(CURL_EAPI_FN_easy_perform == 7, "CURL_EAPI_FN_easy_perform");
+_Static_assert(CURL_EAPI_FN_easy_recv == 8, "CURL_EAPI_FN_easy_recv");
+_Static_assert(CURL_EAPI_FN_easy_reset == 9, "CURL_EAPI_FN_easy_reset");
+_Static_assert(CURL_EAPI_FN_easy_send == 10, "CURL_EAPI_FN_easy_send");
+_Static_assert(CURL_EAPI_FN_easy_setopt == 11, "CURL_EAPI_FN_easy_setopt");
+_Static_assert(CURL_EAPI_FN_easy_ssls_export == 12, "CURL_EAPI_FN_easy_ssls_export");
+_Static_assert(CURL_EAPI_FN_easy_ssls_import == 13, "CURL_EAPI_FN_easy_ssls_import");
+_Static_assert(CURL_EAPI_FN_easy_upkeep == 14, "CURL_EAPI_FN_easy_upkeep");
+_Static_assert(CURL_EAPI_FN_ws_recv == 15, "CURL_EAPI_FN_ws_recv");
+_Static_assert(CURL_EAPI_FN_ws_send == 16, "CURL_EAPI_FN_ws_send");
+_Static_assert(CURL_EAPI_FN_ws_start_frame == 17, "CURL_EAPI_FN_ws_start_frame");
+_Static_assert(CURL_EAPI_FN_LAST == 18, "CURL_EAPI_FN_LAST");
+
+_Static_assert(CURL_MAPI_FN_multi_add_handle == 0, "CURL_MAPI_FN_multi_add_handle");
+_Static_assert(CURL_MAPI_FN_multi_assign == 1, "CURL_MAPI_FN_multi_assign");
+_Static_assert(CURL_MAPI_FN_multi_cleanup == 2, "CURL_MAPI_FN_multi_cleanup");
+_Static_assert(CURL_MAPI_FN_multi_fdset == 3, "CURL_MAPI_FN_multi_fdset");
+_Static_assert(CURL_MAPI_FN_multi_get_handles == 4, "CURL_MAPI_FN_multi_get_handles");
+_Static_assert(CURL_MAPI_FN_multi_get_offt == 5, "CURL_MAPI_FN_multi_get_offt");
+_Static_assert(CURL_MAPI_FN_multi_info_read == 6, "CURL_MAPI_FN_multi_info_read");
+_Static_assert(CURL_MAPI_FN_multi_notify_disable == 7, "CURL_MAPI_FN_multi_notify_disable");
+_Static_assert(CURL_MAPI_FN_multi_notify_enable == 8, "CURL_MAPI_FN_multi_notify_enable");
+_Static_assert(CURL_MAPI_FN_multi_perform == 9, "CURL_MAPI_FN_multi_perform");
+_Static_assert(CURL_MAPI_FN_multi_poll == 10, "CURL_MAPI_FN_multi_poll");
+_Static_assert(CURL_MAPI_FN_multi_remove_handle == 11, "CURL_MAPI_FN_multi_remove_handle");
+_Static_assert(CURL_MAPI_FN_multi_setopt == 12, "CURL_MAPI_FN_multi_setopt");
+_Static_assert(CURL_MAPI_FN_multi_socket_action == 13, "CURL_MAPI_FN_multi_socket_action");
+_Static_assert(CURL_MAPI_FN_multi_socket_all == 14, "CURL_MAPI_FN_multi_socket_all");
+_Static_assert(CURL_MAPI_FN_multi_socket == 15, "CURL_MAPI_FN_multi_socket");
+_Static_assert(CURL_MAPI_FN_multi_timeout == 16, "CURL_MAPI_FN_multi_timeout");
+_Static_assert(CURL_MAPI_FN_multi_wait == 17, "CURL_MAPI_FN_multi_wait");
+_Static_assert(CURL_MAPI_FN_multi_waitfds == 18, "CURL_MAPI_FN_multi_waitfds");
+_Static_assert(CURL_MAPI_FN_LAST == 19, "CURL_MAPI_FN_LAST");
+
+_Static_assert(CURL_CBAPI_FN_START == 128, "CURL_CBAPI_FN_START");
+_Static_assert(CURL_CBAPI_FN_easy_chunk_bgn == 128, "CURL_CBAPI_FN_easy_chunk_bgn");
+_Static_assert(CURL_CBAPI_FN_easy_chunk_end == 129, "CURL_CBAPI_FN_easy_chunk_end");
+_Static_assert(CURL_CBAPI_FN_easy_closesocket == 130, "CURL_CBAPI_FN_easy_closesocket");
+_Static_assert(CURL_CBAPI_FN_easy_cr_in_read == 131, "CURL_CBAPI_FN_easy_cr_in_read");
+_Static_assert(CURL_CBAPI_FN_easy_cr_in_resume_from == 132, "CURL_CBAPI_FN_easy_cr_in_resume_from");
+_Static_assert(CURL_CBAPI_FN_easy_cw_out_cb == 133, "CURL_CBAPI_FN_easy_cw_out_cb");
+_Static_assert(CURL_CBAPI_FN_easy_fdebug == 134, "CURL_CBAPI_FN_easy_fdebug");
+_Static_assert(CURL_CBAPI_FN_easy_fnmatch_data == 135, "CURL_CBAPI_FN_easy_fnmatch_data");
+_Static_assert(CURL_CBAPI_FN_easy_fopensocket == 136, "CURL_CBAPI_FN_easy_fopensocket");
+_Static_assert(CURL_CBAPI_FN_easy_fprereq == 137, "CURL_CBAPI_FN_easy_fprereq");
+_Static_assert(CURL_CBAPI_FN_easy_fprogress == 138, "CURL_CBAPI_FN_easy_fprogress");
+_Static_assert(CURL_CBAPI_FN_easy_fread_func == 139, "CURL_CBAPI_FN_easy_fread_func");
+_Static_assert(CURL_CBAPI_FN_easy_fsockopt == 140, "CURL_CBAPI_FN_easy_fsockopt");
+_Static_assert(CURL_CBAPI_FN_easy_fsslctx == 141, "CURL_CBAPI_FN_easy_fsslctx");
+_Static_assert(CURL_CBAPI_FN_easy_fwrite_rtp == 142, "CURL_CBAPI_FN_easy_fwrite_rtp");
+_Static_assert(CURL_CBAPI_FN_easy_fxferinfo == 143, "CURL_CBAPI_FN_easy_fxferinfo");
+_Static_assert(CURL_CBAPI_FN_easy_ioctl_func == 144, "CURL_CBAPI_FN_easy_ioctl_func");
+_Static_assert(CURL_CBAPI_FN_easy_resolver_start == 145, "CURL_CBAPI_FN_easy_resolver_start");
+_Static_assert(CURL_CBAPI_FN_easy_seek_func == 146, "CURL_CBAPI_FN_easy_seek_func");
+_Static_assert(CURL_CBAPI_FN_easy_ssh_hostkeyfunc == 147, "CURL_CBAPI_FN_easy_ssh_hostkeyfunc");
+_Static_assert(CURL_CBAPI_FN_easy_ssh_keyfunc == 148, "CURL_CBAPI_FN_easy_ssh_keyfunc");
+_Static_assert(CURL_CBAPI_FN_easy_trailer_callback == 149, "CURL_CBAPI_FN_easy_trailer_callback");
+_Static_assert(CURL_CBAPI_FN_multi_ntfy_cb == 150, "CURL_CBAPI_FN_multi_ntfy_cb");
+_Static_assert(CURL_CBAPI_FN_multi_push_cb == 151, "CURL_CBAPI_FN_multi_push_cb");
+_Static_assert(CURL_CBAPI_FN_multi_socket_cb == 152, "CURL_CBAPI_FN_multi_socket_cb");
+_Static_assert(CURL_CBAPI_FN_multi_timer_cb == 153, "CURL_CBAPI_FN_multi_timer_cb");
+_Static_assert(CURL_CBAPI_FN_LAST == 154, "CURL_CBAPI_FN_LAST");
+
+/* 9. Runtime ABI sizeof helpers for Zig unit test cross-checks */
+size_t Curl_zig_abi_sizeof_eapi_stack(void);
+size_t Curl_zig_abi_sizeof_eapi_stack(void)
+{
+  return sizeof(struct Curl_eapi_stack);
+}
+
+size_t Curl_zig_abi_sizeof_eapi_guard(void);
+size_t Curl_zig_abi_sizeof_eapi_guard(void)
+{
+  return sizeof(struct Curl_eapi_guard);
+}
+
+size_t Curl_zig_abi_sizeof_mapi_stack(void);
+size_t Curl_zig_abi_sizeof_mapi_stack(void)
+{
+  return sizeof(struct Curl_mapi_stack);
+}
+
+size_t Curl_zig_abi_sizeof_mapi_guard(void);
+size_t Curl_zig_abi_sizeof_mapi_guard(void)
+{
+  return sizeof(struct Curl_mapi_guard);
+}
+
+size_t Curl_zig_abi_sizeof_easy_prefix(void);
+size_t Curl_zig_abi_sizeof_easy_prefix(void)
+{
+  return offsetof(struct Curl_easy, callstack) + sizeof(struct Curl_eapi_stack);
+}
+
+size_t Curl_zig_abi_sizeof_multi_prefix(void);
+size_t Curl_zig_abi_sizeof_multi_prefix(void)
+{
+  return offsetof(struct Curl_multi, ssl_scache) +
+         sizeof(struct Curl_ssl_scache *);
+}
+
+size_t Curl_zig_abi_sizeof_pureinfo_prefix(void);
+size_t Curl_zig_abi_sizeof_pureinfo_prefix(void)
+{
+  return offsetof(struct PureInfo, pxcode) + 4;
+}
+
+size_t Curl_zig_abi_sizeof_getinfo_ctx(void);
+size_t Curl_zig_abi_sizeof_getinfo_ctx(void)
+{
+  return sizeof(struct Curl_getinfo_ctx);
+}
+
+size_t Curl_zig_abi_sizeof_singlerequest(void);
+size_t Curl_zig_abi_sizeof_singlerequest(void)
+{
+  return sizeof(struct SingleRequest);
+}
+
+size_t Curl_zig_abi_sizeof_multi_ev(void);
+size_t Curl_zig_abi_sizeof_multi_ev(void)
+{
+  return sizeof(struct curl_multi_ev);
+}
+
+size_t Curl_zig_abi_sizeof_cfilter(void);
+size_t Curl_zig_abi_sizeof_cfilter(void)
+{
+  return sizeof(struct Curl_cfilter);
+}
+
+size_t Curl_zig_abi_sizeof_cftype(void);
+size_t Curl_zig_abi_sizeof_cftype(void)
+{
+  return sizeof(struct Curl_cftype);
+}
+
+size_t Curl_zig_abi_sizeof_cwtype(void);
+size_t Curl_zig_abi_sizeof_cwtype(void)
+{
+  return sizeof(struct Curl_cwtype);
+}
+
+size_t Curl_zig_abi_sizeof_cwriter(void);
+size_t Curl_zig_abi_sizeof_cwriter(void)
+{
+  return sizeof(struct Curl_cwriter);
+}
+
+size_t Curl_zig_abi_sizeof_crtype(void);
+size_t Curl_zig_abi_sizeof_crtype(void)
+{
+  return sizeof(struct Curl_crtype);
+}
+
+size_t Curl_zig_abi_sizeof_creader(void);
+size_t Curl_zig_abi_sizeof_creader(void)
+{
+  return sizeof(struct Curl_creader);
+}
+
+size_t Curl_zig_abi_sizeof_progress(void);
+size_t Curl_zig_abi_sizeof_progress(void)
+{
+  return sizeof(struct Progress);
+}
+
+size_t Curl_zig_abi_sizeof_cpool(void);
+size_t Curl_zig_abi_sizeof_cpool(void)
+{
+  return sizeof(struct cpool);
+}
+
+size_t Curl_zig_abi_sizeof_peer(void);
+size_t Curl_zig_abi_sizeof_peer(void)
+{
+  return sizeof(struct Curl_peer);
+}
+
+size_t Curl_zig_abi_sizeof_resolv_async(void);
+size_t Curl_zig_abi_sizeof_resolv_async(void)
+{
+  return sizeof(struct Curl_resolv_async);
+}
+
+size_t Curl_zig_abi_sizeof_ip_quadruple(void);
+size_t Curl_zig_abi_sizeof_ip_quadruple(void)
+{
+  return sizeof(struct ip_quadruple);
+}
+
+size_t Curl_zig_abi_sizeof_scheme(void);
+size_t Curl_zig_abi_sizeof_scheme(void)
+{
+  return sizeof(struct Curl_scheme);
+}
+
+size_t Curl_zig_abi_sizeof_protocol(void);
+size_t Curl_zig_abi_sizeof_protocol(void)
+{
+  return sizeof(struct Curl_protocol);
+}
+
+size_t Curl_zig_abi_sizeof_mime(void);
+size_t Curl_zig_abi_sizeof_mime(void)
+{
+  return sizeof(struct curl_mime);
+}
+
+size_t Curl_zig_abi_sizeof_mimepart(void);
+size_t Curl_zig_abi_sizeof_mimepart(void)
+{
+  return sizeof(struct curl_mimepart);
+}
+
+

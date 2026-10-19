@@ -102,6 +102,28 @@ pub const CURL_MAPI_FN_multi_waitfds: c_uint = 18;
 pub const CURL_MAPI_FN_LAST: c_uint = 19;
 
 pub const CURL_CBAPI_FN_START: c_uint = 128;
+pub const CURL_CBAPI_FN_easy_chunk_bgn: c_uint = 128;
+pub const CURL_CBAPI_FN_easy_chunk_end: c_uint = 129;
+pub const CURL_CBAPI_FN_easy_closesocket: c_uint = 130;
+pub const CURL_CBAPI_FN_easy_cr_in_read: c_uint = 131;
+pub const CURL_CBAPI_FN_easy_cr_in_resume_from: c_uint = 132;
+pub const CURL_CBAPI_FN_easy_cw_out_cb: c_uint = 133;
+pub const CURL_CBAPI_FN_easy_fdebug: c_uint = 134;
+pub const CURL_CBAPI_FN_easy_fnmatch_data: c_uint = 135;
+pub const CURL_CBAPI_FN_easy_fopensocket: c_uint = 136;
+pub const CURL_CBAPI_FN_easy_fprereq: c_uint = 137;
+pub const CURL_CBAPI_FN_easy_fprogress: c_uint = 138;
+pub const CURL_CBAPI_FN_easy_fread_func: c_uint = 139;
+pub const CURL_CBAPI_FN_easy_fsockopt: c_uint = 140;
+pub const CURL_CBAPI_FN_easy_fsslctx: c_uint = 141;
+pub const CURL_CBAPI_FN_easy_fwrite_rtp: c_uint = 142;
+pub const CURL_CBAPI_FN_easy_fxferinfo: c_uint = 143;
+pub const CURL_CBAPI_FN_easy_ioctl_func: c_uint = 144;
+pub const CURL_CBAPI_FN_easy_resolver_start: c_uint = 145;
+pub const CURL_CBAPI_FN_easy_seek_func: c_uint = 146;
+pub const CURL_CBAPI_FN_easy_ssh_hostkeyfunc: c_uint = 147;
+pub const CURL_CBAPI_FN_easy_ssh_keyfunc: c_uint = 148;
+pub const CURL_CBAPI_FN_easy_trailer_callback: c_uint = 149;
 pub const CURL_CBAPI_FN_multi_ntfy_cb: c_uint = 150;
 pub const CURL_CBAPI_FN_multi_push_cb: c_uint = 151;
 pub const CURL_CBAPI_FN_multi_socket_cb: c_uint = 152;
@@ -464,7 +486,8 @@ pub export fn Curl_cbapi_enter(
     fn_id: c_uint,
 ) callconv(.c) void {
     guard.depth = 0;
-    const mh = multi orelse (if (data) |d| d.multi else null) orelse return;
+    const mh = multi orelse (if (data) |d| (if (goodEasyHandle(d)) d.multi else null) else null) orelse return;
+    if (!goodMultiHandle(mh)) return;
     if (fn_id >= CURL_CBAPI_FN_LAST or fn_id < CURL_CBAPI_FN_START) return;
     if (mh.callstack.count >= CURL_MAPI_MAX_RECURSION) return;
 
@@ -2466,4 +2489,194 @@ test "Curl_multi_ev_init, assign on unknown socket, and cleanup" {
     Curl_multi_ev_init_zig(&multi, &ev, 7);
     try std.testing.expectEqual(CURLM_BAD_SOCKET, Curl_multi_ev_assign_zig(&multi, &ev, 42, null));
     Curl_multi_ev_cleanup_zig(&multi, &ev);
+}
+
+// ============================================================================
+// C-Zig ABI & Struct Layout Verification
+// ============================================================================
+
+comptime {
+    // 1. CurlEapiStack, CurlMapiStack, CurlEapiGuard, CurlMapiGuard
+    std.debug.assert(@sizeOf(CurlEapiStack) == 16);
+    std.debug.assert(@alignOf(CurlEapiStack) == 2);
+    std.debug.assert(@offsetOf(CurlEapiStack, "count") == 0);
+    std.debug.assert(@offsetOf(CurlEapiStack, "calls") == 2);
+
+    std.debug.assert(@sizeOf(CurlMapiStack) == 16);
+    std.debug.assert(@alignOf(CurlMapiStack) == 1);
+    std.debug.assert(@offsetOf(CurlMapiStack, "count") == 0);
+    std.debug.assert(@offsetOf(CurlMapiStack, "calls") == 1);
+
+    std.debug.assert(@sizeOf(CurlEapiGuard) == 16);
+    std.debug.assert(@alignOf(CurlEapiGuard) == 8);
+    std.debug.assert(@offsetOf(CurlEapiGuard, "data") == 0);
+    std.debug.assert(@offsetOf(CurlEapiGuard, "depth") == 8);
+
+    std.debug.assert(@sizeOf(CurlMapiGuard) == 16);
+    std.debug.assert(@alignOf(CurlMapiGuard) == 8);
+    std.debug.assert(@offsetOf(CurlMapiGuard, "multi") == 0);
+    std.debug.assert(@offsetOf(CurlMapiGuard, "depth") == 8);
+
+    // 2. CurlEasyPrefix
+    std.debug.assert(@sizeOf(CurlEasyPrefix) == 48);
+    std.debug.assert(@alignOf(CurlEasyPrefix) == 8);
+    std.debug.assert(@offsetOf(CurlEasyPrefix, "magic") == 0);
+    std.debug.assert(@offsetOf(CurlEasyPrefix, "mid") == 4);
+    std.debug.assert(@offsetOf(CurlEasyPrefix, "mstate") == 8);
+    std.debug.assert(@offsetOf(CurlEasyPrefix, "result") == 12);
+    std.debug.assert(@offsetOf(CurlEasyPrefix, "conn") == 16);
+    std.debug.assert(@offsetOf(CurlEasyPrefix, "multi") == 24);
+    std.debug.assert(@offsetOf(CurlEasyPrefix, "callstack") == 32);
+
+    // 3. CurlMultiPrefix
+    std.debug.assert(@sizeOf(CurlMultiPrefix) == 232);
+    std.debug.assert(@alignOf(CurlMultiPrefix) == 8);
+    std.debug.assert(@offsetOf(CurlMultiPrefix, "magic") == 0);
+    std.debug.assert(@offsetOf(CurlMultiPrefix, "xfers_alive") == 4);
+    std.debug.assert(@offsetOf(CurlMultiPrefix, "xfers_really_alive") == 8);
+    std.debug.assert(@offsetOf(CurlMultiPrefix, "max_concurrent_streams") == 12);
+    std.debug.assert(@offsetOf(CurlMultiPrefix, "xfers_total_ever") == 16);
+    std.debug.assert(@offsetOf(CurlMultiPrefix, "xfers") == 24);
+    std.debug.assert(@offsetOf(CurlMultiPrefix, "process") == 48);
+    std.debug.assert(@offsetOf(CurlMultiPrefix, "dirty") == 64);
+    std.debug.assert(@offsetOf(CurlMultiPrefix, "pending") == 80);
+    std.debug.assert(@offsetOf(CurlMultiPrefix, "msgsent") == 96);
+    std.debug.assert(@offsetOf(CurlMultiPrefix, "callstack") == 112);
+    std.debug.assert(@offsetOf(CurlMultiPrefix, "timeouts") == 128);
+    std.debug.assert(@offsetOf(CurlMultiPrefix, "admin") == 144);
+    std.debug.assert(@offsetOf(CurlMultiPrefix, "socket_cb") == 152);
+    std.debug.assert(@offsetOf(CurlMultiPrefix, "socket_userp") == 160);
+    std.debug.assert(@offsetOf(CurlMultiPrefix, "push_cb") == 168);
+    std.debug.assert(@offsetOf(CurlMultiPrefix, "push_userp") == 176);
+    std.debug.assert(@offsetOf(CurlMultiPrefix, "dnscache") == 184);
+    std.debug.assert(@offsetOf(CurlMultiPrefix, "ssl_scache") == 224);
+
+    // 4. PureInfoPrefix & CurlGetinfoCtx
+    std.debug.assert(@sizeOf(PureInfoPrefix) == 224);
+    std.debug.assert(@alignOf(PureInfoPrefix) == 8);
+    std.debug.assert(@offsetOf(PureInfoPrefix, "primary") == 0);
+    std.debug.assert(@offsetOf(PureInfoPrefix, "certs") == 104);
+    std.debug.assert(@offsetOf(PureInfoPrefix, "filetime") == 120);
+    std.debug.assert(@offsetOf(PureInfoPrefix, "request_size") == 128);
+    std.debug.assert(@offsetOf(PureInfoPrefix, "numconnects") == 136);
+    std.debug.assert(@offsetOf(PureInfoPrefix, "contenttype") == 144);
+    std.debug.assert(@offsetOf(PureInfoPrefix, "wouldredirect") == 152);
+    std.debug.assert(@offsetOf(PureInfoPrefix, "effective_url") == 160);
+    std.debug.assert(@offsetOf(PureInfoPrefix, "retry_after") == 168);
+    std.debug.assert(@offsetOf(PureInfoPrefix, "conn_scheme") == 176);
+    std.debug.assert(@offsetOf(PureInfoPrefix, "httpcode") == 184);
+    std.debug.assert(@offsetOf(PureInfoPrefix, "httpproxycode") == 188);
+    std.debug.assert(@offsetOf(PureInfoPrefix, "httpversion") == 192);
+    std.debug.assert(@offsetOf(PureInfoPrefix, "conn_protocol") == 196);
+    std.debug.assert(@offsetOf(PureInfoPrefix, "proxyauthavail") == 200);
+    std.debug.assert(@offsetOf(PureInfoPrefix, "httpauthavail") == 204);
+    std.debug.assert(@offsetOf(PureInfoPrefix, "proxyauthpicked") == 208);
+    std.debug.assert(@offsetOf(PureInfoPrefix, "httpauthpicked") == 212);
+    std.debug.assert(@offsetOf(PureInfoPrefix, "header_size") == 216);
+    std.debug.assert(@offsetOf(PureInfoPrefix, "pxcode") == 220);
+
+    std.debug.assert(@sizeOf(CurlGetinfoCtx) == 264 + 2 * @sizeOf(c_long));
+    std.debug.assert(@alignOf(CurlGetinfoCtx) == 8);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "info") == 0);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "tsi") == 8);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "url_str") == 16);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "referer_str") == 24);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "custom_request") == 32);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "ftp_entrypath") == 40);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "rtsp_session_id") == 48);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "cainfo_default") == 56);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "capath_default") == 64);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "private_data") == 72);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "xfer_id") == 80);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "last_conn_id") == 88);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "deliver") == 96);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "earlydata_sent") == 104);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "ul_total_size") == 112);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "ul_cur_size") == 120);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "ul_speed") == 128);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "dl_total_size") == 136);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "dl_cur_size") == 144);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "dl_speed") == 152);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "spent_us") == 160);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "queued_us") == 168);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "nslookup_us") == 176);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "connect_us") == 184);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "appconnect_us") == 192);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "pretransfer_us") == 200);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "starttransfer_us") == 208);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "posttransfer_us") == 216);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "startredirect_us") == 224);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "ssl_verifyresult") == 232);
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "proxy_ssl_verifyresult") == 232 + @sizeOf(c_long));
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "rtsp_next_client_CSeq") == 232 + 2 * @sizeOf(c_long));
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "rtsp_next_server_CSeq") == 236 + 2 * @sizeOf(c_long));
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "rtsp_CSeq_recv") == 240 + 2 * @sizeOf(c_long));
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "os_errno") == 244 + 2 * @sizeOf(c_long));
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "followlocation") == 248 + 2 * @sizeOf(c_long));
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "httpreq") == 250 + 2 * @sizeOf(c_long));
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "path_as_is") == 251 + 2 * @sizeOf(c_long));
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "opt_no_body") == 252 + 2 * @sizeOf(c_long));
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "timecond") == 253 + 2 * @sizeOf(c_long));
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "used_proxy") == 254 + 2 * @sizeOf(c_long));
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "ul_size_known") == 255 + 2 * @sizeOf(c_long));
+    std.debug.assert(@offsetOf(CurlGetinfoCtx, "dl_size_known") == 256 + 2 * @sizeOf(c_long));
+
+    // 5. SingleRequest
+    std.debug.assert(@sizeOf(SingleRequest) == 232);
+    std.debug.assert(@alignOf(SingleRequest) == 8);
+    std.debug.assert(@offsetOf(SingleRequest, "size") == 0);
+    std.debug.assert(@offsetOf(SingleRequest, "maxdownload") == 8);
+    std.debug.assert(@offsetOf(SingleRequest, "bytecount") == 16);
+    std.debug.assert(@offsetOf(SingleRequest, "writebytecount") == 24);
+    std.debug.assert(@offsetOf(SingleRequest, "offset") == 32);
+    std.debug.assert(@offsetOf(SingleRequest, "start") == 40);
+    std.debug.assert(@offsetOf(SingleRequest, "headerbytecount") == 56);
+    std.debug.assert(@offsetOf(SingleRequest, "allheadercount") == 60);
+    std.debug.assert(@offsetOf(SingleRequest, "deductheadercount") == 64);
+    std.debug.assert(@offsetOf(SingleRequest, "headerline") == 68);
+    std.debug.assert(@offsetOf(SingleRequest, "httpcode") == 72);
+    std.debug.assert(@offsetOf(SingleRequest, "httpversion_sent") == 76);
+    std.debug.assert(@offsetOf(SingleRequest, "httpversion") == 77);
+    std.debug.assert(@offsetOf(SingleRequest, "upgr101") == 78);
+    std.debug.assert(@offsetOf(SingleRequest, "io_flags") == 79);
+    std.debug.assert(@offsetOf(SingleRequest, "writer_stack") == 80);
+    std.debug.assert(@offsetOf(SingleRequest, "reader_stack") == 96);
+    std.debug.assert(@offsetOf(SingleRequest, "sendbuf") == 104);
+    std.debug.assert(@offsetOf(SingleRequest, "sendbuf_hds_len") == 168);
+    std.debug.assert(@offsetOf(SingleRequest, "timeofdoc") == 176);
+    std.debug.assert(@offsetOf(SingleRequest, "location") == 184);
+    std.debug.assert(@offsetOf(SingleRequest, "newurl") == 192);
+    std.debug.assert(@offsetOf(SingleRequest, "hd_auth") == 200);
+    std.debug.assert(@offsetOf(SingleRequest, "hd_proxy_auth") == 208);
+    std.debug.assert(@offsetOf(SingleRequest, "cookiehost") == 216);
+    std.debug.assert(@offsetOf(SingleRequest, "tail") == 224);
+
+    // 6. CurlMultiEv
+    std.debug.assert(@sizeOf(CurlMultiEv) == 40);
+    std.debug.assert(@alignOf(CurlMultiEv) == 8);
+    std.debug.assert(@offsetOf(CurlMultiEv, "sh_entries") == 0);
+}
+
+extern fn Curl_zig_abi_sizeof_eapi_stack() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_eapi_guard() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_mapi_stack() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_mapi_guard() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_easy_prefix() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_multi_prefix() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_pureinfo_prefix() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_getinfo_ctx() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_singlerequest() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_multi_ev() callconv(.c) usize;
+
+test "C-Zig ABI struct sizes in api_getinfo_request" {
+    try std.testing.expectEqual(@sizeOf(CurlEapiStack), Curl_zig_abi_sizeof_eapi_stack());
+    try std.testing.expectEqual(@sizeOf(CurlEapiGuard), Curl_zig_abi_sizeof_eapi_guard());
+    try std.testing.expectEqual(@sizeOf(CurlMapiStack), Curl_zig_abi_sizeof_mapi_stack());
+    try std.testing.expectEqual(@sizeOf(CurlMapiGuard), Curl_zig_abi_sizeof_mapi_guard());
+    try std.testing.expectEqual(@sizeOf(CurlEasyPrefix), Curl_zig_abi_sizeof_easy_prefix());
+    try std.testing.expectEqual(@sizeOf(CurlMultiPrefix), Curl_zig_abi_sizeof_multi_prefix());
+    try std.testing.expectEqual(@sizeOf(PureInfoPrefix), Curl_zig_abi_sizeof_pureinfo_prefix());
+    try std.testing.expectEqual(@sizeOf(CurlGetinfoCtx), Curl_zig_abi_sizeof_getinfo_ctx());
+    try std.testing.expectEqual(@sizeOf(SingleRequest), Curl_zig_abi_sizeof_singlerequest());
+    try std.testing.expectEqual(@sizeOf(CurlMultiEv), Curl_zig_abi_sizeof_multi_ev());
 }

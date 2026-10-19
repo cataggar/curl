@@ -951,6 +951,7 @@ pub export fn curl_version_info(stamp: c_uint) callconv(.c) *curl_version_info_d
 // 3. lib/mime.c + lib/mime.h
 // ============================================================================
 
+pub const MIME_BOUNDARY_DASHES: usize = 24;
 pub const MIME_RAND_BOUNDARY_CHARS: usize = 22;
 pub const MAX_ENCODED_LINE_LENGTH: usize = 76;
 pub const ENCODING_BUFFER_SIZE: usize = 256;
@@ -983,7 +984,7 @@ pub const MIMESTATE_CONTENT: c_uint = 7;
 pub const MIMESTATE_END: c_uint = 8;
 pub const MIMESTATE_LAST: c_uint = 9;
 
-pub const MIME_BOUNDARY_LEN: usize = 40 + MIME_RAND_BOUNDARY_CHARS;
+pub const MIME_BOUNDARY_LEN: usize = MIME_BOUNDARY_DASHES + MIME_RAND_BOUNDARY_CHARS;
 
 const READ_ERROR: usize = std.math.maxInt(usize);
 const STOP_FILLING: usize = std.math.maxInt(usize) - 1;
@@ -2981,4 +2982,125 @@ test "curl_mime_init, curl_mime_addpart, curl_mime_name, curl_mime_data, Curl_mi
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Content-Disposition: form-data; name=\"field1\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "Content-Type: text/plain") != null);
     try std.testing.expect(std.mem.indexOf(u8, rendered, "hello world") != null);
+}
+
+// ============================================================================
+// C-Zig ABI & Struct Layout Verification
+// ============================================================================
+
+pub const Curl_protocol = small_protocols.Curl_protocol;
+
+comptime {
+    std.debug.assert(@sizeOf(Curl_scheme) == 40);
+    std.debug.assert(@alignOf(Curl_scheme) == 8);
+    std.debug.assert(@offsetOf(Curl_scheme, "name") == 0);
+    std.debug.assert(@offsetOf(Curl_scheme, "run") == 8);
+    std.debug.assert(@offsetOf(Curl_scheme, "protocol") == 16);
+    std.debug.assert(@offsetOf(Curl_scheme, "family") == 24);
+    std.debug.assert(@offsetOf(Curl_scheme, "flags") == 32);
+    std.debug.assert(@offsetOf(Curl_scheme, "defport") == 36);
+
+    std.debug.assert(@sizeOf(Curl_protocol) == 136);
+    std.debug.assert(@alignOf(Curl_protocol) == 8);
+    std.debug.assert(@offsetOf(Curl_protocol, "setup_connection") == 0);
+    std.debug.assert(@offsetOf(Curl_protocol, "do_it") == 8);
+    std.debug.assert(@offsetOf(Curl_protocol, "done") == 16);
+    std.debug.assert(@offsetOf(Curl_protocol, "do_more") == 24);
+    std.debug.assert(@offsetOf(Curl_protocol, "connect_it") == 32);
+    std.debug.assert(@offsetOf(Curl_protocol, "connecting") == 40);
+    std.debug.assert(@offsetOf(Curl_protocol, "doing") == 48);
+    std.debug.assert(@offsetOf(Curl_protocol, "proto_pollset") == 56);
+    std.debug.assert(@offsetOf(Curl_protocol, "doing_pollset") == 64);
+    std.debug.assert(@offsetOf(Curl_protocol, "domore_pollset") == 72);
+    std.debug.assert(@offsetOf(Curl_protocol, "perform_pollset") == 80);
+    std.debug.assert(@offsetOf(Curl_protocol, "disconnect") == 88);
+    std.debug.assert(@offsetOf(Curl_protocol, "write_resp") == 96);
+    std.debug.assert(@offsetOf(Curl_protocol, "write_resp_hd") == 104);
+    std.debug.assert(@offsetOf(Curl_protocol, "connection_is_dead") == 112);
+    std.debug.assert(@offsetOf(Curl_protocol, "attach") == 120);
+    std.debug.assert(@offsetOf(Curl_protocol, "follow") == 128);
+
+    std.debug.assert(@sizeOf(Curl_crtype) == 88);
+    std.debug.assert(@alignOf(Curl_crtype) == 8);
+    std.debug.assert(@offsetOf(Curl_crtype, "name") == 0);
+    std.debug.assert(@offsetOf(Curl_crtype, "do_init") == 8);
+    std.debug.assert(@offsetOf(Curl_crtype, "do_read") == 16);
+    std.debug.assert(@offsetOf(Curl_crtype, "do_close") == 24);
+    std.debug.assert(@offsetOf(Curl_crtype, "needs_rewind") == 32);
+    std.debug.assert(@offsetOf(Curl_crtype, "total_length") == 40);
+    std.debug.assert(@offsetOf(Curl_crtype, "resume_from") == 48);
+    std.debug.assert(@offsetOf(Curl_crtype, "cntrl") == 56);
+    std.debug.assert(@offsetOf(Curl_crtype, "is_paused") == 64);
+    std.debug.assert(@offsetOf(Curl_crtype, "done") == 72);
+    std.debug.assert(@offsetOf(Curl_crtype, "creader_size") == 80);
+
+    std.debug.assert(@sizeOf(Curl_creader) == 32);
+    std.debug.assert(@alignOf(Curl_creader) == 8);
+    std.debug.assert(@offsetOf(Curl_creader, "crt") == 0);
+    std.debug.assert(@offsetOf(Curl_creader, "next") == 8);
+    std.debug.assert(@offsetOf(Curl_creader, "ctx") == 16);
+    std.debug.assert(@offsetOf(Curl_creader, "phase") == 24);
+
+    std.debug.assert(@sizeOf(mime_encoder) == 24);
+    std.debug.assert(@offsetOf(mime_encoder, "name") == 0);
+    std.debug.assert(@offsetOf(mime_encoder, "encodefunc") == 8);
+    std.debug.assert(@offsetOf(mime_encoder, "sizefunc") == 16);
+
+    std.debug.assert(@sizeOf(mime_encoder_state) == 280);
+    std.debug.assert(@offsetOf(mime_encoder_state, "pos") == 0);
+    std.debug.assert(@offsetOf(mime_encoder_state, "bufbeg") == 8);
+    std.debug.assert(@offsetOf(mime_encoder_state, "bufend") == 16);
+    std.debug.assert(@offsetOf(mime_encoder_state, "buf") == 24);
+
+    std.debug.assert(@sizeOf(mime_state) == 24);
+    std.debug.assert(@offsetOf(mime_state, "state") == 0);
+    std.debug.assert(@offsetOf(mime_state, "ptr") == 8);
+    std.debug.assert(@offsetOf(mime_state, "offset") == 16);
+
+    std.debug.assert(@sizeOf(curl_mime) == 96);
+    std.debug.assert(@alignOf(curl_mime) == 8);
+    std.debug.assert(@offsetOf(curl_mime, "parent") == 0);
+    std.debug.assert(@offsetOf(curl_mime, "firstpart") == 8);
+    std.debug.assert(@offsetOf(curl_mime, "lastpart") == 16);
+    std.debug.assert(@offsetOf(curl_mime, "boundary") == 24);
+    std.debug.assert(@offsetOf(curl_mime, "state") == 72);
+
+    std.debug.assert(@sizeOf(curl_mimepart) == 440);
+    std.debug.assert(@alignOf(curl_mimepart) == 8);
+    std.debug.assert(@offsetOf(curl_mimepart, "parent") == 0);
+    std.debug.assert(@offsetOf(curl_mimepart, "nextpart") == 8);
+    std.debug.assert(@offsetOf(curl_mimepart, "kind") == 16);
+    std.debug.assert(@offsetOf(curl_mimepart, "flags") == 20);
+    std.debug.assert(@offsetOf(curl_mimepart, "data") == 24);
+    std.debug.assert(@offsetOf(curl_mimepart, "readfunc") == 32);
+    std.debug.assert(@offsetOf(curl_mimepart, "seekfunc") == 40);
+    std.debug.assert(@offsetOf(curl_mimepart, "freefunc") == 48);
+    std.debug.assert(@offsetOf(curl_mimepart, "arg") == 56);
+    std.debug.assert(@offsetOf(curl_mimepart, "fp") == 64);
+    std.debug.assert(@offsetOf(curl_mimepart, "curlheaders") == 72);
+    std.debug.assert(@offsetOf(curl_mimepart, "userheaders") == 80);
+    std.debug.assert(@offsetOf(curl_mimepart, "mimetype") == 88);
+    std.debug.assert(@offsetOf(curl_mimepart, "filename") == 96);
+    std.debug.assert(@offsetOf(curl_mimepart, "name") == 104);
+    std.debug.assert(@offsetOf(curl_mimepart, "datasize") == 112);
+    std.debug.assert(@offsetOf(curl_mimepart, "state") == 120);
+    std.debug.assert(@offsetOf(curl_mimepart, "encoder") == 144);
+    std.debug.assert(@offsetOf(curl_mimepart, "encstate") == 152);
+    std.debug.assert(@offsetOf(curl_mimepart, "lastreadstatus") == 432);
+}
+
+extern fn Curl_zig_abi_sizeof_scheme() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_protocol() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_crtype() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_creader() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_mime() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_mimepart() callconv(.c) usize;
+
+test "C-Zig ABI struct sizes in protocol_version_mime" {
+    try std.testing.expectEqual(@sizeOf(Curl_scheme), Curl_zig_abi_sizeof_scheme());
+    try std.testing.expectEqual(@sizeOf(Curl_protocol), Curl_zig_abi_sizeof_protocol());
+    try std.testing.expectEqual(@sizeOf(Curl_crtype), Curl_zig_abi_sizeof_crtype());
+    try std.testing.expectEqual(@sizeOf(Curl_creader), Curl_zig_abi_sizeof_creader());
+    try std.testing.expectEqual(@sizeOf(curl_mime), Curl_zig_abi_sizeof_mime());
+    try std.testing.expectEqual(@sizeOf(curl_mimepart), Curl_zig_abi_sizeof_mimepart());
 }

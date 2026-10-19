@@ -1557,3 +1557,112 @@ test "Curl_cft_capsule insert_after, encap, process_udp_raw, and destroy" {
     Curl_cft_capsule.destroy(cap_cf, null);
     mem.free(cap_cf);
 }
+
+// ============================================================================
+// C-Zig ABI & Struct Layout Verification
+// ============================================================================
+
+comptime {
+    std.debug.assert(@alignOf(Curl_peer) == 8);
+    std.debug.assert(@offsetOf(Curl_peer, "scheme") == 0);
+    std.debug.assert(@offsetOf(Curl_peer, "hostname") == 8);
+    std.debug.assert(@offsetOf(Curl_peer, "zoneid") == 16);
+    std.debug.assert(@offsetOf(Curl_peer, "refcount") == 24);
+    std.debug.assert(@offsetOf(Curl_peer, "scopeid") == 28);
+    std.debug.assert(@offsetOf(Curl_peer, "port") == 32);
+    if (builtin.os.tag == .windows) {
+        std.debug.assert(@sizeOf(Curl_peer) == 48);
+        std.debug.assert(@offsetOf(Curl_peer, "user_hostname") == 40);
+    } else {
+        std.debug.assert(@sizeOf(Curl_peer) == 40);
+        std.debug.assert(@offsetOf(Curl_peer, "user_hostname") == 35);
+    }
+
+    std.debug.assert(@sizeOf(Curl_resolv_async) == 120);
+    std.debug.assert(@alignOf(Curl_resolv_async) == 8);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "next") == 0);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "peer") == 8);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "ai_A") == 16);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "ai_AAAA") == 24);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "thrdd") == 32);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "doh") == 56);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "start") == 64);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "interval_end") == 80);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "timeout_ms") == 88);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "result") == 96);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "poll_interval") == 100);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "id") == 104);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "dns_queries") == 108);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "dns_responses") == 109);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "transport") == 110);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "queries_ongoing") == 111);
+
+    std.debug.assert(@sizeOf(Curl_cftype) == 104);
+    std.debug.assert(@alignOf(Curl_cftype) == 8);
+    std.debug.assert(@offsetOf(Curl_cftype, "name") == 0);
+    std.debug.assert(@offsetOf(Curl_cftype, "flags") == 8);
+    std.debug.assert(@offsetOf(Curl_cftype, "log_level") == 12);
+    std.debug.assert(@offsetOf(Curl_cftype, "destroy") == 16);
+    std.debug.assert(@offsetOf(Curl_cftype, "do_connect") == 24);
+    std.debug.assert(@offsetOf(Curl_cftype, "do_shutdown") == 32);
+    std.debug.assert(@offsetOf(Curl_cftype, "adjust_pollset") == 40);
+    std.debug.assert(@offsetOf(Curl_cftype, "has_data_pending") == 48);
+    std.debug.assert(@offsetOf(Curl_cftype, "do_send") == 56);
+    std.debug.assert(@offsetOf(Curl_cftype, "do_recv") == 64);
+    std.debug.assert(@offsetOf(Curl_cftype, "cntrl") == 72);
+    std.debug.assert(@offsetOf(Curl_cftype, "is_alive") == 80);
+    std.debug.assert(@offsetOf(Curl_cftype, "keep_alive") == 88);
+    std.debug.assert(@offsetOf(Curl_cftype, "query") == 96);
+
+    std.debug.assert(@sizeOf(Curl_cfilter) == 40);
+    std.debug.assert(@alignOf(Curl_cfilter) == 8);
+    std.debug.assert(@offsetOf(Curl_cfilter, "cft") == 0);
+    std.debug.assert(@offsetOf(Curl_cfilter, "next") == 8);
+    std.debug.assert(@offsetOf(Curl_cfilter, "ctx") == 16);
+    std.debug.assert(@offsetOf(Curl_cfilter, "conn") == 24);
+    std.debug.assert(@offsetOf(Curl_cfilter, "sockindex") == 32);
+
+    std.debug.assert(@sizeOf(ip_quadruple) == 98);
+    std.debug.assert(@alignOf(ip_quadruple) == 2);
+    std.debug.assert(@offsetOf(ip_quadruple, "remote_ip") == 0);
+    std.debug.assert(@offsetOf(ip_quadruple, "local_ip") == 46);
+    std.debug.assert(@offsetOf(ip_quadruple, "remote_port") == 92);
+    std.debug.assert(@offsetOf(ip_quadruple, "local_port") == 94);
+    std.debug.assert(@offsetOf(ip_quadruple, "transport") == 96);
+
+    std.debug.assert(@sizeOf(Curl_cwtype) == 64);
+    std.debug.assert(@alignOf(Curl_cwtype) == 8);
+    std.debug.assert(@offsetOf(Curl_cwtype, "name") == 0);
+    std.debug.assert(@offsetOf(Curl_cwtype, "alias") == 8);
+    std.debug.assert(@offsetOf(Curl_cwtype, "flags") == 16);
+    std.debug.assert(@offsetOf(Curl_cwtype, "do_init") == 24);
+    std.debug.assert(@offsetOf(Curl_cwtype, "do_write") == 32);
+    std.debug.assert(@offsetOf(Curl_cwtype, "do_flush") == 40);
+    std.debug.assert(@offsetOf(Curl_cwtype, "do_close") == 48);
+    std.debug.assert(@offsetOf(Curl_cwtype, "cwriter_size") == 56);
+
+    std.debug.assert(@sizeOf(Curl_cwriter) == 32);
+    std.debug.assert(@alignOf(Curl_cwriter) == 8);
+    std.debug.assert(@offsetOf(Curl_cwriter, "cwt") == 0);
+    std.debug.assert(@offsetOf(Curl_cwriter, "next") == 8);
+    std.debug.assert(@offsetOf(Curl_cwriter, "ctx") == 16);
+    std.debug.assert(@offsetOf(Curl_cwriter, "phase") == 24);
+}
+
+extern fn Curl_zig_abi_sizeof_peer() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_resolv_async() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_cftype() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_cfilter() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_ip_quadruple() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_cwtype() callconv(.c) usize;
+extern fn Curl_zig_abi_sizeof_cwriter() callconv(.c) usize;
+
+test "C-Zig ABI struct sizes in vdns_cfilters" {
+    try std.testing.expectEqual(@sizeOf(Curl_peer), Curl_zig_abi_sizeof_peer());
+    try std.testing.expectEqual(@sizeOf(Curl_resolv_async), Curl_zig_abi_sizeof_resolv_async());
+    try std.testing.expectEqual(@sizeOf(Curl_cftype), Curl_zig_abi_sizeof_cftype());
+    try std.testing.expectEqual(@sizeOf(Curl_cfilter), Curl_zig_abi_sizeof_cfilter());
+    try std.testing.expectEqual(@sizeOf(ip_quadruple), Curl_zig_abi_sizeof_ip_quadruple());
+    try std.testing.expectEqual(@sizeOf(Curl_cwtype), Curl_zig_abi_sizeof_cwtype());
+    try std.testing.expectEqual(@sizeOf(Curl_cwriter), Curl_zig_abi_sizeof_cwriter());
+}
