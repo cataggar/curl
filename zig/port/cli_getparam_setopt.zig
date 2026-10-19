@@ -1223,7 +1223,7 @@ fn cEscape(str_in: [*:0]const u8, len_in: curl_off_t) ?[*:0]u8 {
 
     curlx_dyn_init(&escaped, (4 * @as(usize, @intCast(MAX_STRING_LENGTH_OUTPUT))) + 3);
 
-    var len: usize = if (len_in == ZERO_TERMINATED)
+    var len: usize = if (len_in < 0)
         std.mem.len(str_in)
     else
         @intCast(len_in);
@@ -2591,6 +2591,10 @@ fn dataUrlencode(
             return PARAM_NO_MEM;
         size = 0;
     } else {
+        if (size > std.math.maxInt(c_int)) {
+            c.free(postdata);
+            return PARAM_NO_MEM;
+        }
         const enc = curl_easy_escape(null, postdata.?, @intCast(size));
         c.free(postdata);
         postdata = null;
@@ -3013,6 +3017,8 @@ fn parseLocalport(config: *OperationConfig, nextarg: [*:0]const u8) ParameterErr
     while (isDigit(p[0]))
         p += 1;
     const plen = @intFromPtr(p) - @intFromPtr(nextarg);
+    if (plen >= buffer.len)
+        return PARAM_BAD_USE;
     if (p[0] != 0) {
         var cur = p;
         if (isBlank(cur[0]))

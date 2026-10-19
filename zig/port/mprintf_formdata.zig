@@ -1790,10 +1790,11 @@ fn formaddCheck(
 
         const no_copy_val_mask = CURL_HTTPPOST_FILENAME | CURL_HTTPPOST_READFILE |
             CURL_HTTPPOST_PTRCONTENTS | CURL_HTTPPOST_PTRBUFFER | CURL_HTTPPOST_CALLBACK;
-        if ((f.flags & no_copy_val_mask) == 0 and
-            forminfoCopyfield(&f.value, @intCast(f.contentslength)) != CURLE_OK)
-        {
-            return CURL_FORMADD_MEMORY;
+        if ((f.flags & no_copy_val_mask) == 0) {
+            if (f.contentslength < 0) return CURL_FORMADD_ILLEGAL_ARRAY;
+            if (forminfoCopyfield(&f.value, @intCast(f.contentslength)) != CURLE_OK) {
+                return CURL_FORMADD_MEMORY;
+            }
         }
 
         post = httppostAdd(f, post, httppost, last_post);
@@ -2210,8 +2211,12 @@ pub export fn Curl_getformdata(
                 result = CURLE_OUT_OF_MEMORY;
             }
             if (result == CURLE_OK) {
-                const n_ptr: ?[*]const u8 = if (post.name) |n| @ptrCast(n) else null;
-                result = setname(part.?, n_ptr, @bitCast(@as(isize, post.namelength)));
+                if (post.namelength < 0) {
+                    result = CURLE_BAD_FUNCTION_ARGUMENT;
+                } else {
+                    const n_ptr: ?[*]const u8 = if (post.name) |n| @ptrCast(n) else null;
+                    result = setname(part.?, n_ptr, @intCast(post.namelength));
+                }
             }
             if (result == CURLE_OK) {
                 multipart = curl_mime_init(data);
@@ -2238,8 +2243,12 @@ pub export fn Curl_getformdata(
                 result = curl_mime_type(part.?, file.contenttype);
             }
             if (result == CURLE_OK and post.more == null) {
-                const n_ptr: ?[*]const u8 = if (post.name) |n| @ptrCast(n) else null;
-                result = setname(part.?, n_ptr, @bitCast(@as(isize, post.namelength)));
+                if (post.namelength < 0) {
+                    result = CURLE_BAD_FUNCTION_ARGUMENT;
+                } else {
+                    const n_ptr: ?[*]const u8 = if (post.name) |n| @ptrCast(n) else null;
+                    result = setname(part.?, n_ptr, @intCast(post.namelength));
+                }
             }
             if (result == CURLE_OK) {
                 var clen: i64 = @intCast(post.contentslength);
@@ -2265,14 +2274,16 @@ pub export fn Curl_getformdata(
                         result = curl_mime_filename(part.?, null);
                     }
                 } else if ((post.flags & @as(c_long, CURL_HTTPPOST_BUFFER)) != 0) {
-                    const blen: usize = if (post.bufferlength != 0)
-                        @bitCast(@as(isize, post.bufferlength))
+                    const blen: usize = if (post.bufferlength > 0)
+                        @intCast(post.bufferlength)
                     else
                         CURL_ZERO_TERMINATED;
                     result = curl_mime_data(part.?, post.buffer, blen);
                 } else if ((post.flags & @as(c_long, CURL_HTTPPOST_CALLBACK)) != 0) {
                     if (clen == 0) clen = -1;
                     result = curl_mime_data_cb(part.?, clen, fread_func, null, null, post.userp);
+                } else if (clen < 0) {
+                    result = CURLE_BAD_FUNCTION_ARGUMENT;
                 } else {
                     const uclen: usize = if (clen == 0) CURL_ZERO_TERMINATED else @intCast(clen);
                     const c_ptr: ?[*]const u8 = if (post.contents) |c| @ptrCast(c) else null;
@@ -2731,4 +2742,34 @@ test "curl_formadd, curl_formget, and curl_formfree" {
     Accum.total = 0;
     try std.testing.expectEqual(@as(c_int, 0), curl_formget(post, null, &Accum.cb));
     try std.testing.expect(Accum.total > 0);
+}
+
+test "adversarial mprintf width/precision overflow and positional $ argument bounds" {
+    var buf: [64]u8 = undefined;
+
+    // Out-of-range / gapped positional $ arguments: %2$s (gap at 1), %1$s %129$s (MAX_PARAMETERS = 128), and huge index overflow
+    try std.testing.expectEqual(@as(c_int, 0), curl_msnprintf(&buf, buf.len, "%2$s", @as([*:0]const u8, "x")));
+    try std.testing.expectEqualStrings("", std.mem.sliceTo(&buf, 0));
+
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        curl_msnprintf(&buf, buf.len, "%1$s %129$s", @as([*:0]const u8, "x"), @as([*:0]const u8, "y")),
+    );
+    try std.testing.expectEqualStrings("", std.mem.sliceTo(&buf, 0));
+
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        curl_msnprintf(&buf, buf.len, "%1$s %99999999999$s", @as([*:0]const u8, "x"), @as([*:0]const u8, "y")),
+    );
+    try std.testing.expectEqualStrings("", std.mem.sliceTo(&buf, 0));
+
+    // Extreme width and precision exceeding i32 max must fail safely without panic or OOB
+    try std.testing.expectEqual(@as(c_int, 0), curl_msnprintf(&buf, buf.len, "%2147483648s", @as([*:0]const u8, "x")));
+    try std.testing.expectEqual(@as(c_int, 0), curl_msnprintf(&buf, buf.len, "%.2147483648s", @as([*:0]const u8, "x")));
+
+    // Mixing positional and non-positional parameters must be rejected
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        curl_msnprintf(&buf, buf.len, "%1$s %s", @as([*:0]const u8, "a"), @as([*:0]const u8, "b")),
+    );
 }

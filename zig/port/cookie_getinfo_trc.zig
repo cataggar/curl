@@ -1745,11 +1745,18 @@ fn parseDomain(
 }
 
 fn parseMaxage(co: *Cookie, val: *const curlx_parse.Curl_str, nowp: *i64) void {
-    var maxage = val.str;
-    if (maxage) |m| {
-        if (m[0] == '"') {
-            maxage = m + 1;
-        }
+    const m_start = val.str orelse {
+        co.expires = 1;
+        return;
+    };
+    if (val.len == 0) {
+        co.expires = 1;
+        return;
+    }
+    var maxage: ?[*]const u8 = if (m_start[0] == '"') m_start + 1 else m_start;
+    if (maxage.?[0] == 0) {
+        co.expires = 1;
+        return;
     }
     const rc = curlx_str_number(&maxage, &co.expires, CURL_OFF_T_MAX);
     if (nowp.* == 0) {
@@ -2899,7 +2906,7 @@ test "Curl_failf, Curl_reset_fail, and Curl_infof with bound easy" {
         }
     };
 
-    var dummy_easy: u64 = 0;
+    var dummy_easy: [8]u64 = @splat(0);
     const data: *Curl_easy = @ptrCast(&dummy_easy);
     var easy_id: i64 = 7;
     var mstate: c_uint = 3;
@@ -3034,4 +3041,70 @@ test "Pingpong init, needs_flush, moredata, and disconnect" {
 
     try std.testing.expectEqual(CURLE_OK, Curl_pp_disconnect(&pp));
     try std.testing.expect(!pp.isInitialized());
+}
+
+test "adversarial cookie parsing: oversized attributes, control bytes, max-age and domain/path edge cases" {
+    const ci = Curl_cookie_init() orelse return error.OutOfMemory;
+    defer Curl_cookie_cleanup(ci);
+
+    ci.setRunning(true);
+    var setcookies: u8 = 0;
+
+    // Empty quoted Max-Age="", negative Max-Age, and extreme Max-Age overflow
+    try std.testing.expectEqual(
+        CURLE_OK,
+        Curl_cookie_add(null, ci, "empty_ma=1; Max-Age=\"\"", "example.com", "/", COOKIE_HTTPHEADER | COOKIE_SECURE, &setcookies),
+    );
+    try std.testing.expectEqual(
+        CURLE_OK,
+        Curl_cookie_add(null, ci, "neg_ma=1; Max-Age=-999999", "example.com", "/", COOKIE_HTTPHEADER | COOKIE_SECURE, &setcookies),
+    );
+    try std.testing.expectEqual(
+        CURLE_OK,
+        Curl_cookie_add(null, ci, "huge_ma=1; Max-Age=999999999999999999999999999999", "example.com", "/", COOKIE_HTTPHEADER | COOKIE_SECURE, &setcookies),
+    );
+
+    // Control characters inside cookie name or value must be rejected
+    try std.testing.expectEqual(
+        CURLE_OK,
+        Curl_cookie_add(null, ci, "bad\x01name=val", "example.com", "/", COOKIE_HTTPHEADER | COOKIE_SECURE, &setcookies),
+    );
+    try std.testing.expectEqual(
+        CURLE_OK,
+        Curl_cookie_add(null, ci, "badval=v\x07al", "example.com", "/", COOKIE_HTTPHEADER | COOKIE_SECURE, &setcookies),
+    );
+
+    // Cross-domain tailmatch mismatch and single-label TLD rejection
+    try std.testing.expectEqual(
+        CURLE_OK,
+        Curl_cookie_add(null, ci, "evil=1; Domain=other.com", "example.com", "/", COOKIE_HTTPHEADER | COOKIE_SECURE, &setcookies),
+    );
+    try std.testing.expectEqual(
+        CURLE_OK,
+        Curl_cookie_add(null, ci, "tld=1; Domain=.com", "example.com", "/", COOKIE_HTTPHEADER | COOKIE_SECURE, &setcookies),
+    );
+
+    // Oversized cookie name (> MAX_NAME = 4096) must be rejected
+    var big_line: [4200]u8 = @splat('a');
+    big_line[4100] = '=';
+    big_line[4101] = '1';
+    big_line[4102] = 0;
+    const big_cstr: [*:0]const u8 = @ptrCast(&big_line);
+    try std.testing.expectEqual(
+        CURLE_OK,
+        Curl_cookie_add(null, ci, big_cstr, "example.com", "/", COOKIE_HTTPHEADER | COOKIE_SECURE, &setcookies),
+    );
+
+    // Only huge_ma should be returned as an active cookie (empty_ma and neg_ma expired at expires=1)
+    var okay = false;
+    var llist: containers.Curl_llist = undefined;
+    try std.testing.expectEqual(
+        CURLE_OK,
+        Curl_cookie_getlist(null, ci, "/", &okay, "example.com", &llist),
+    );
+    try std.testing.expect(okay);
+    try std.testing.expectEqual(@as(usize, 1), containers.Curl_llist_count(&llist));
+    const node = containers.Curl_llist_head(&llist).?;
+    const co: *Cookie = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+    try std.testing.expectEqualStrings("huge_ma", std.mem.span(co.name.?));
 }

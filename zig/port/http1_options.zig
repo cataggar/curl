@@ -821,7 +821,7 @@ extern fn curl_url() callconv(.c) ?*anyopaque;
 extern fn curl_url_cleanup(handle: ?*anyopaque) callconv(.c) void;
 extern fn curl_url_set(handle: ?*anyopaque, what: CURLUPart, part: ?[*:0]const u8, flags: c_uint) callconv(.c) c_uint;
 
-extern fn Curl_is_absolute_url(url: [*:0]const u8, buf: ?[*]u8, buflen: usize, guess_scheme: bool) callconv(.c) bool;
+extern fn Curl_is_absolute_url(url: [*:0]const u8, buf: ?[*]u8, buflen: usize, guess_scheme: bool) callconv(.c) usize;
 extern fn Curl_http_req_make(
     preq: *?*httpreq,
     method: [*]const u8,
@@ -879,6 +879,9 @@ fn trim_line(parser: *h1_req_parser, options: c_int) CURLcode {
     }
 
     if (parser.line_len > parser.max_line_len) {
+        return CURLE_URL_MALFORMAT;
+    }
+    if (std.mem.indexOfAny(u8, line[0..parser.line_len], "\r\n\x00") != null) {
         return CURLE_URL_MALFORMAT;
     }
     return CURLE_OK;
@@ -953,12 +956,15 @@ fn start_req(
     if (p_idx + 1 > line_len) return CURLE_URL_MALFORMAT;
     const target: [*]const u8 = line + p_idx + 1;
     var target_len: usize = 0;
+    var hv: ?[*]const u8 = null;
     var hv_len: usize = 0;
 
     var i: usize = line_len;
-    while (i > m_len) : (i -= 1) {
+    while (i > m_len) {
+        i -= 1;
         if (line[i] == ' ') {
-            hv_len = line_len - i;
+            hv = line + i + 1;
+            hv_len = line_len - (i + 1);
             if (i > p_idx + 1) {
                 target_len = i - (p_idx + 1);
             }
@@ -966,6 +972,9 @@ fn start_req(
         }
     }
     if (target_len == 0 or hv_len == 0)
+        return CURLE_URL_MALFORMAT;
+    const hv_slice = hv.?[0..hv_len];
+    if (hv_len != 8 or !std.mem.startsWith(u8, hv_slice, "HTTP/1.") or (hv_slice[7] != '0' and hv_slice[7] != '1'))
         return CURLE_URL_MALFORMAT;
 
     var scheme: ?[*]const u8 = null;
@@ -998,7 +1007,7 @@ fn start_req(
         tmp[target_len] = 0;
         const tmp_z: [*:0]const u8 = tmp[0..target_len :0];
 
-        if (Curl_is_absolute_url(tmp_z, null, 0, false)) {
+        if (Curl_is_absolute_url(tmp_z, null, 0, false) != 0) {
             url = curl_url();
             if (url == null)
                 return CURLE_OUT_OF_MEMORY;
@@ -2089,4 +2098,59 @@ test "Curl_ed25519_sign RFC 8032 test vector 1" {
     try std.testing.expectEqual(CURLE_OK, rc);
     try std.testing.expectEqual(@as(usize, 64), siglen);
     try std.testing.expectEqualSlices(u8, &expected_sig, &sig);
+}
+
+test "adversarial h1_req_parse_read line bounds and smuggling inputs" {
+    // Non-NUL-terminated slice followed immediately by sentinel/garbage bytes
+    const raw_buf = "GET / HTTP/1.1\r\n\r\nZZZZZZZZ";
+    var p: h1_req_parser = undefined;
+    Curl_h1_req_parse_init(&p, 64);
+    defer Curl_h1_req_parse_free(&p);
+
+    var nread: usize = 0;
+    // Slice ends right after first \r\n without NUL terminator
+    const first_line = raw_buf[0..16];
+    const rc1 = Curl_h1_req_parse_read(&p, first_line.ptr, first_line.len, "http", null, H1_PARSE_OPT_STRICT, &nread);
+    if (!in_libcurl) {
+        try std.testing.expectEqual(CURLE_NOT_BUILT_IN, rc1);
+    } else {
+        try std.testing.expectEqual(CURLE_OK, rc1);
+        try std.testing.expectEqual(@as(usize, 16), nread);
+    }
+
+    // Oversized line rejected when exceeding max_line_len
+    Curl_h1_req_parse_free(&p);
+    Curl_h1_req_parse_init(&p, 16);
+    const long_line = "GET /very/long/request/path HTTP/1.1\r\n\r\n";
+    try std.testing.expectEqual(
+        CURLE_URL_MALFORMAT,
+        Curl_h1_req_parse_read(&p, long_line.ptr, long_line.len, null, null, H1_PARSE_OPT_STRICT, &nread),
+    );
+
+    // Bare CR smuggling inside request line must be rejected
+    Curl_h1_req_parse_free(&p);
+    Curl_h1_req_parse_init(&p, 1024);
+    const cr_smuggle = "GET /index.html HTTP/1.1\rHost: evil.example\r\n\r\n";
+    try std.testing.expectEqual(
+        CURLE_URL_MALFORMAT,
+        Curl_h1_req_parse_read(&p, cr_smuggle.ptr, cr_smuggle.len, null, null, H1_PARSE_OPT_STRICT, &nread),
+    );
+
+    // Embedded NUL byte inside request line must be rejected
+    Curl_h1_req_parse_free(&p);
+    Curl_h1_req_parse_init(&p, 1024);
+    const nul_smuggle = "GET /\x00hidden HTTP/1.1\r\n\r\n";
+    try std.testing.expectEqual(
+        CURLE_URL_MALFORMAT,
+        Curl_h1_req_parse_read(&p, nul_smuggle.ptr, nul_smuggle.len, null, null, H1_PARSE_OPT_STRICT, &nread),
+    );
+
+    // Bare LF in strict mode must be rejected
+    Curl_h1_req_parse_free(&p);
+    Curl_h1_req_parse_init(&p, 1024);
+    const bare_lf = "GET / HTTP/1.1\n\n";
+    try std.testing.expectEqual(
+        CURLE_URL_MALFORMAT,
+        Curl_h1_req_parse_read(&p, bare_lf.ptr, bare_lf.len, null, null, H1_PARSE_OPT_STRICT, &nread),
+    );
 }
