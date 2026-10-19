@@ -5,6 +5,9 @@ const backends = @import("zig/backends.zig");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
+    if (b.graph.release_mode == .any) {
+        b.graph.release_mode = .safe;
+    }
     const optimize = b.standardOptimizeOption(.{});
     const shared = b.option(bool, "shared", "Build shared libcurl library instead of static") orelse false;
     const backend_opts = backends.fromBuild(b);
