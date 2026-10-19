@@ -2634,3 +2634,494 @@ CURLcode Curl_1st_fatal(CURLcode r1, CURLcode r2)
     return r2;
   return r1;
 }
+
+#include "pingpong.h"
+#include "curl_sasl.h"
+#include "sendf.h"
+#include "easyif.h"
+#include "cf-recvbuf.h"
+#include "select.h"
+
+void Curl_imap_ws_failf_str(struct Curl_easy *data, const char *msg);
+void Curl_imap_ws_infof_str(struct Curl_easy *data, const char *msg);
+void Curl_imap_ws_trc_ws_str(struct Curl_easy *data, const char *msg);
+void Curl_imap_ws_trc_m_str(struct Curl_easy *data, const char *msg);
+void Curl_imap_ws_trc_write_str(struct Curl_easy *data, const char *msg);
+void Curl_imap_ws_trc_read_str(struct Curl_easy *data, const char *msg);
+bool Curl_imap_ws_infof_enabled(struct Curl_easy *data);
+bool Curl_imap_ws_trc_ws_enabled(struct Curl_easy *data);
+bool Curl_imap_ws_trc_m_enabled(struct Curl_easy *data);
+bool Curl_imap_ws_trc_write_enabled(struct Curl_easy *data);
+bool Curl_imap_ws_trc_read_enabled(struct Curl_easy *data);
+
+void Curl_imap_ws_pp_init(struct Curl_easy *data, struct pingpong *pp);
+CURLcode Curl_imap_ws_pp_statemach(struct Curl_easy *data,
+                                   struct pingpong *pp,
+                                   bool block, bool disconnecting);
+CURLcode Curl_imap_ws_pp_readresp(struct Curl_easy *data,
+                                  int8_t sockindex,
+                                  struct pingpong *pp,
+                                  int *code, size_t *size);
+CURLcode Curl_imap_ws_pp_pollset(struct Curl_easy *data,
+                                 struct pingpong *pp,
+                                 struct easy_pollset *ps);
+CURLcode Curl_imap_ws_pp_send_str(struct Curl_easy *data,
+                                  struct pingpong *pp,
+                                  const char *prefix,
+                                  const char *str);
+
+unsigned short Curl_imap_ws_sasl_get_authmechs(const struct SASL *sasl);
+void Curl_imap_ws_sasl_set_authmechs(struct SASL *sasl, unsigned short val);
+unsigned short Curl_imap_ws_sasl_get_prefmech(const struct SASL *sasl);
+void Curl_imap_ws_sasl_set_prefmech(struct SASL *sasl, unsigned short val);
+unsigned short Curl_imap_ws_sasl_get_authused(const struct SASL *sasl);
+void Curl_imap_ws_sasl_set_authused(struct SASL *sasl, unsigned short val);
+
+struct connectdata *Curl_imap_ws_easy_conn(const struct Curl_easy *data);
+curl_off_t Curl_imap_ws_conn_id(const struct connectdata *conn);
+const char *Curl_imap_ws_conn_options(const struct connectdata *conn);
+bool Curl_imap_ws_conn_protoconnstart(const struct connectdata *conn);
+bool Curl_imap_ws_conn_has_creds(const struct connectdata *conn);
+const char *Curl_imap_ws_conn_creds_user(const struct connectdata *conn);
+const char *Curl_imap_ws_conn_creds_passwd(const struct connectdata *conn);
+void Curl_imap_ws_connclose(struct connectdata *conn);
+CURLcode Curl_imap_ws_upgrade_tls_setup(struct Curl_easy *data,
+                                        struct connectdata *conn);
+CURLcode Curl_imap_ws_prepare_append(struct Curl_easy *data,
+                                     curl_off_t *pinfilesize,
+                                     bool *pcrlf,
+                                     unsigned char *pupload_flags);
+curl_off_t Curl_imap_ws_get_infilesize(const struct Curl_easy *data);
+unsigned char Curl_imap_ws_get_use_ssl(const struct Curl_easy *data);
+bool Curl_imap_ws_get_connect_only(const struct Curl_easy *data);
+bool Curl_imap_ws_is_upload_or_mime(const struct Curl_easy *data);
+curl_off_t Curl_imap_ws_get_req_bytecount(const struct Curl_easy *data);
+curl_off_t Curl_imap_ws_get_req_maxdownload(const struct Curl_easy *data);
+void Curl_imap_ws_set_req_maxdownload(struct Curl_easy *data, curl_off_t val);
+void Curl_imap_ws_set_req_size(struct Curl_easy *data, curl_off_t val);
+bool Curl_imap_ws_get_req_no_body(const struct Curl_easy *data);
+const char *Curl_imap_ws_get_up_path(const struct Curl_easy *data);
+CURLU *Curl_imap_ws_get_uh(const struct Curl_easy *data);
+const char *Curl_imap_ws_get_customrequest(struct Curl_easy *data);
+
+bool Curl_imap_ws_get_raw_mode(const struct Curl_easy *data);
+bool Curl_imap_ws_get_no_auto_pong(const struct Curl_easy *data);
+bool Curl_imap_ws_cwriter_is_paused(const struct Curl_easy *data);
+void Curl_imap_ws_mark_request_upgrade(struct Curl_easy *data);
+void Curl_imap_ws_set_req_header(struct Curl_easy *data, bool val);
+void Curl_imap_ws_clear_req_recv(struct Curl_easy *data);
+bool Curl_imap_ws_is_method_put(const struct Curl_easy *data);
+void Curl_imap_ws_restart_req_send(struct Curl_easy *data);
+void Curl_imap_ws_set_upgr101_received(struct Curl_easy *data);
+curl_socket_t Curl_imap_ws_conn_firstsocket(const struct Curl_easy *data);
+void Curl_imap_ws_setup_http_neg(struct Curl_easy *data);
+bool Curl_imap_ws_good_easy_handle(const struct Curl_easy *data);
+
+void Curl_imap_ws_failf_str(struct Curl_easy *data, const char *msg)
+{
+  if(data && msg)
+    failf(data, "%s", msg);
+}
+
+void Curl_imap_ws_infof_str(struct Curl_easy *data, const char *msg)
+{
+  if(data && msg)
+    infof(data, "%s", msg);
+}
+
+void Curl_imap_ws_trc_ws_str(struct Curl_easy *data, const char *msg)
+{
+  if(data && msg)
+    CURL_TRC_WS(data, "%s", msg);
+}
+
+void Curl_imap_ws_trc_m_str(struct Curl_easy *data, const char *msg)
+{
+  if(data && msg)
+    CURL_TRC_M(data, "%s", msg);
+}
+
+void Curl_imap_ws_trc_write_str(struct Curl_easy *data, const char *msg)
+{
+  if(data && msg)
+    CURL_TRC_WRITE(data, "%s", msg);
+}
+
+void Curl_imap_ws_trc_read_str(struct Curl_easy *data, const char *msg)
+{
+  if(data && msg)
+    CURL_TRC_READ(data, "%s", msg);
+}
+
+bool Curl_imap_ws_infof_enabled(struct Curl_easy *data)
+{
+#ifdef CURLVERBOSE
+  return data && Curl_trc_is_verbose(data);
+#else
+  (void)data;
+  return FALSE;
+#endif
+}
+
+bool Curl_imap_ws_trc_ws_enabled(struct Curl_easy *data)
+{
+#ifdef CURLVERBOSE
+  return data && Curl_trc_ft_is_verbose(data, &Curl_trc_feat_ws);
+#else
+  (void)data;
+  return FALSE;
+#endif
+}
+
+bool Curl_imap_ws_trc_m_enabled(struct Curl_easy *data)
+{
+#ifdef CURLVERBOSE
+  return data && Curl_trc_ft_is_verbose(data, &Curl_trc_feat_multi);
+#else
+  (void)data;
+  return FALSE;
+#endif
+}
+
+bool Curl_imap_ws_trc_write_enabled(struct Curl_easy *data)
+{
+#ifdef CURLVERBOSE
+  return data && Curl_trc_ft_is_verbose(data, &Curl_trc_feat_write);
+#else
+  (void)data;
+  return FALSE;
+#endif
+}
+
+bool Curl_imap_ws_trc_read_enabled(struct Curl_easy *data)
+{
+#ifdef CURLVERBOSE
+  return data && Curl_trc_ft_is_verbose(data, &Curl_trc_feat_read);
+#else
+  (void)data;
+  return FALSE;
+#endif
+}
+
+CURLcode Curl_imap_ws_pp_statemach(struct Curl_easy *data,
+                                   struct pingpong *pp,
+                                   bool block, bool disconnecting)
+{
+  return Curl_pp_statemach(data, pp, block, disconnecting);
+}
+
+CURLcode Curl_imap_ws_pp_readresp(struct Curl_easy *data,
+                                  int8_t sockindex,
+                                  struct pingpong *pp,
+                                  int *code, size_t *size)
+{
+  return Curl_pp_readresp(data, sockindex, pp, code, size);
+}
+
+CURLcode Curl_imap_ws_pp_pollset(struct Curl_easy *data,
+                                 struct pingpong *pp,
+                                 struct easy_pollset *ps)
+{
+  return Curl_pp_pollset(data, pp, ps);
+}
+
+static CURLcode imap_ws_pp_vsendf_fmt(struct Curl_easy *data,
+                                      struct pingpong *pp,
+                                      const char *prefix,
+                                      const char *fmt, ...) CURL_PRINTF(4, 5);
+static CURLcode imap_ws_pp_vsendf_fmt(struct Curl_easy *data,
+                                      struct pingpong *pp,
+                                      const char *prefix,
+                                      const char *fmt, ...)
+{
+  va_list ap;
+  CURLcode result;
+  va_start(ap, fmt);
+  result = Curl_pp_vsendf(data, pp, prefix, fmt, ap);
+  va_end(ap);
+  return result;
+}
+
+void Curl_imap_ws_pp_init(struct Curl_easy *data, struct pingpong *pp)
+{
+  Curl_pp_init(pp, Curl_pgrs_now(data));
+}
+
+CURLcode Curl_imap_ws_pp_send_str(struct Curl_easy *data,
+                                  struct pingpong *pp,
+                                  const char *prefix,
+                                  const char *str)
+{
+  if(prefix)
+    return imap_ws_pp_vsendf_fmt(data, pp, prefix, "%s", str);
+  return Curl_pp_sendf(data, pp, "%s", str);
+}
+
+unsigned short Curl_imap_ws_sasl_get_authmechs(const struct SASL *sasl)
+{
+  return sasl ? sasl->authmechs : 0;
+}
+
+void Curl_imap_ws_sasl_set_authmechs(struct SASL *sasl, unsigned short val)
+{
+  if(sasl)
+    sasl->authmechs = val;
+}
+
+unsigned short Curl_imap_ws_sasl_get_prefmech(const struct SASL *sasl)
+{
+  return sasl ? sasl->prefmech : 0;
+}
+
+void Curl_imap_ws_sasl_set_prefmech(struct SASL *sasl, unsigned short val)
+{
+  if(sasl)
+    sasl->prefmech = val;
+}
+
+unsigned short Curl_imap_ws_sasl_get_authused(const struct SASL *sasl)
+{
+  return sasl ? sasl->authused : 0;
+}
+
+void Curl_imap_ws_sasl_set_authused(struct SASL *sasl, unsigned short val)
+{
+  if(sasl)
+    sasl->authused = val;
+}
+
+struct connectdata *Curl_imap_ws_easy_conn(const struct Curl_easy *data)
+{
+  return data ? data->conn : NULL;
+}
+
+curl_off_t Curl_imap_ws_conn_id(const struct connectdata *conn)
+{
+  return conn ? conn->connection_id : 0;
+}
+
+const char *Curl_imap_ws_conn_options(const struct connectdata *conn)
+{
+  return conn ? conn->options : NULL;
+}
+
+bool Curl_imap_ws_conn_protoconnstart(const struct connectdata *conn)
+{
+  return conn ? (bool)conn->bits.protoconnstart : FALSE;
+}
+
+bool Curl_imap_ws_conn_has_creds(const struct connectdata *conn)
+{
+  return conn && conn->creds != NULL;
+}
+
+const char *Curl_imap_ws_conn_creds_user(const struct connectdata *conn)
+{
+  return conn ? Curl_creds_user(conn->creds) : "";
+}
+
+const char *Curl_imap_ws_conn_creds_passwd(const struct connectdata *conn)
+{
+  return conn ? Curl_creds_passwd(conn->creds) : "";
+}
+
+void Curl_imap_ws_connclose(struct connectdata *conn)
+{
+  if(conn)
+    connclose(conn);
+}
+
+CURLcode Curl_imap_ws_upgrade_tls_setup(struct Curl_easy *data,
+                                        struct connectdata *conn)
+{
+#ifdef USE_SSL
+  if(!Curl_conn_is_ssl(conn, FIRSTSOCKET)) {
+    CURLcode result = Curl_ssl_cfilter_add(
+      data, Curl_conn_get_origin(conn, FIRSTSOCKET), conn, FIRSTSOCKET);
+    if(result)
+      return result;
+    conn->scheme = &Curl_scheme_imaps;
+  }
+  return CURLE_OK;
+#else
+  (void)data;
+  (void)conn;
+  return CURLE_NOT_BUILT_IN;
+#endif
+}
+
+CURLcode Curl_imap_ws_prepare_append(struct Curl_easy *data,
+                                     curl_off_t *pinfilesize,
+                                     bool *pcrlf,
+                                     unsigned char *pupload_flags)
+{
+  CURLcode result = CURLE_OK;
+#ifndef CURL_DISABLE_MIME
+  if(IS_MIME_POST(data)) {
+    curl_mimepart *postp = data->set.mimepostp;
+    postp->flags &= ~(unsigned int)MIME_BODY_ONLY;
+    curl_mime_headers(postp, data->set.headers, 0);
+    result = Curl_mime_prepare_headers(data, postp, NULL,
+                                       NULL, MIMESTRATEGY_MAIL);
+    if(!result && !Curl_checkheaders(data, STRCONST("Mime-Version")))
+      result = Curl_mime_add_header(&postp->curlheaders, "Mime-Version: 1.0");
+    if(!result)
+      result = Curl_creader_set_mime(data, postp);
+    if(result)
+      return result;
+  }
+  else
+#endif
+  {
+    result = Curl_creader_set_fread(data, data->state.infilesize);
+    if(result)
+      return result;
+  }
+
+  data->state.infilesize = Curl_creader_total_length(data);
+  *pinfilesize = data->state.infilesize;
+  *pcrlf = (bool)data->set.crlf;
+  *pupload_flags = data->set.upload_flags;
+  return CURLE_OK;
+}
+
+curl_off_t Curl_imap_ws_get_infilesize(const struct Curl_easy *data)
+{
+  return data ? data->state.infilesize : -1;
+}
+
+unsigned char Curl_imap_ws_get_use_ssl(const struct Curl_easy *data)
+{
+  return data ? data->set.use_ssl : 0;
+}
+
+bool Curl_imap_ws_get_connect_only(const struct Curl_easy *data)
+{
+  return data ? (bool)data->set.connect_only : FALSE;
+}
+
+bool Curl_imap_ws_is_upload_or_mime(const struct Curl_easy *data)
+{
+  return data ? (bool)(data->state.upload || IS_MIME_POST(data)) : FALSE;
+}
+
+curl_off_t Curl_imap_ws_get_req_bytecount(const struct Curl_easy *data)
+{
+  return data ? data->req.bytecount : 0;
+}
+
+curl_off_t Curl_imap_ws_get_req_maxdownload(const struct Curl_easy *data)
+{
+  return data ? data->req.maxdownload : -1;
+}
+
+void Curl_imap_ws_set_req_maxdownload(struct Curl_easy *data, curl_off_t val)
+{
+  if(data)
+    data->req.maxdownload = val;
+}
+
+void Curl_imap_ws_set_req_size(struct Curl_easy *data, curl_off_t val)
+{
+  if(data)
+    data->req.size = val;
+}
+
+bool Curl_imap_ws_get_req_no_body(const struct Curl_easy *data)
+{
+  return data ? (bool)data->req.no_body : FALSE;
+}
+
+const char *Curl_imap_ws_get_up_path(const struct Curl_easy *data)
+{
+  return data ? data->state.up.path : NULL;
+}
+
+CURLU *Curl_imap_ws_get_uh(const struct Curl_easy *data)
+{
+  return data ? data->state.uh : NULL;
+}
+
+const char *Curl_imap_ws_get_customrequest(struct Curl_easy *data)
+{
+  return data ? CURL_EASY_STR(data, STRING_CUSTOMREQUEST) : NULL;
+}
+
+bool Curl_imap_ws_get_raw_mode(const struct Curl_easy *data)
+{
+  return data ? (bool)data->set.ws_raw_mode : FALSE;
+}
+
+bool Curl_imap_ws_get_no_auto_pong(const struct Curl_easy *data)
+{
+  return data ? (bool)data->set.ws_no_auto_pong : FALSE;
+}
+
+bool Curl_imap_ws_cwriter_is_paused(const struct Curl_easy *data)
+{
+  return data ? Curl_cwriter_is_paused(data) : FALSE;
+}
+
+void Curl_imap_ws_mark_request_upgrade(struct Curl_easy *data)
+{
+  if(data) {
+    data->state.http_hd_upgrade = TRUE;
+    data->req.upgr101 = UPGR101_WS;
+    if(data->conn)
+      data->conn->bits.upgrade_in_progress = TRUE;
+  }
+}
+
+void Curl_imap_ws_set_req_header(struct Curl_easy *data, bool val)
+{
+  if(data)
+    data->req.header = val;
+}
+
+void Curl_imap_ws_clear_req_recv(struct Curl_easy *data)
+{
+  if(data)
+    CURL_REQ_CLEAR_RECV(data);
+}
+
+bool Curl_imap_ws_is_method_put(const struct Curl_easy *data)
+{
+  return data ? (data->set.method == HTTPREQ_PUT) : FALSE;
+}
+
+void Curl_imap_ws_restart_req_send(struct Curl_easy *data)
+{
+  if(data) {
+    data->req.eos_read = FALSE;
+    data->req.upload_done = FALSE;
+    CURL_REQ_SET_SEND(data);
+  }
+}
+
+void Curl_imap_ws_set_upgr101_received(struct Curl_easy *data)
+{
+  if(data)
+    data->req.upgr101 = UPGR101_RECEIVED;
+}
+
+curl_socket_t Curl_imap_ws_conn_firstsocket(const struct Curl_easy *data)
+{
+  return (data && data->conn) ? data->conn->sock[FIRSTSOCKET] :
+                                CURL_SOCKET_BAD;
+}
+
+void Curl_imap_ws_setup_http_neg(struct Curl_easy *data)
+{
+  if(data) {
+    data->state.http_neg.accept_09 = FALSE;
+    data->state.http_neg.only_10 = FALSE;
+    data->state.http_neg.wanted = CURL_HTTP_V1x;
+    data->state.http_neg.allowed = CURL_HTTP_V1x;
+  }
+}
+
+bool Curl_imap_ws_good_easy_handle(const struct Curl_easy *data)
+{
+  return GOOD_EASY_HANDLE(data);
+}
+
