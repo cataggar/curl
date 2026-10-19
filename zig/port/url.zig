@@ -18,7 +18,7 @@ const ftp = @import("ftp.zig");
 
 const is_windows = builtin.os.tag == .windows;
 const has_ssl_backend = switch (backend_options.ssl) {
-    .openssl, .mbedtls, .schannel => true,
+    .openssl, .mbedtls, .schannel, .gnutls, .rustls, .wolfssl => true,
     .none => false,
 };
 

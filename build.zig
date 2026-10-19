@@ -98,6 +98,9 @@ pub fn build(b: *std.Build) void {
     });
     const run_backend_tests = b.addRunArtifact(backend_tests);
 
+    const test_backends_step = b.step("test-backends", "Run backend tests");
+    test_backends_step.dependOn(&run_backend_tests.step);
+
     const port_test_mod = b.createModule(.{
         .root_source_file = b.path("zig/port/root.zig"),
         .target = target,

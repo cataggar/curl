@@ -870,7 +870,10 @@ const effective_ca_bundle: ?[*:0]const u8 = blk: {
     if (backend_options.ca_bundle) |bundle| {
         break :blk (bundle ++ "\x00")[0..bundle.len :0].ptr;
     }
-    if (backend_options.ssl == .openssl and !backend_options.ca_fallback and builtin.os.tag == .linux) {
+    if (switch (backend_options.ssl) {
+        .openssl, .mbedtls, .gnutls, .rustls, .wolfssl => true,
+        .none, .schannel => false,
+    } and !backend_options.ca_fallback and builtin.os.tag == .linux) {
         break :blk "/etc/ssl/certs/ca-certificates.crt";
     }
     break :blk null;

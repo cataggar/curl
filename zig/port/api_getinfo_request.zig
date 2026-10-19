@@ -9,7 +9,7 @@ const io_buffers = @import("io_buffers.zig");
 const os_leaf = @import("os_leaf.zig");
 
 const use_ssl = switch (backend_options.ssl) {
-    .openssl, .mbedtls, .schannel => true,
+    .openssl, .mbedtls, .schannel, .gnutls, .rustls, .wolfssl => true,
     .none => false,
 };
 

@@ -555,11 +555,11 @@ pub const Curl_ssl_gnutls_desc = OptionalSslBackendDescriptor{
         SSLSUPP_CERTINFO |
         SSLSUPP_PINNEDPUBKEY |
         SSLSUPP_HTTPS_PROXY |
-        SSLSUPP_CA_CACHE |
+        SSLSUPP_CAINFO_BLOB |
         SSLSUPP_CIPHER_LIST |
+        SSLSUPP_CA_CACHE |
         SSLSUPP_ISSUERCERT |
-        SSLSUPP_CRLFILE |
-        SSLSUPP_TLS13_CIPHERSUITES,
+        SSLSUPP_CRLFILE,
 };
 
 /// Rustls backend descriptor (`Curl_ssl_rustls` in `lib/vtls/rustls.c`).
@@ -569,13 +569,11 @@ pub const Curl_ssl_rustls_desc = OptionalSslBackendDescriptor{
         .name = "rustls",
     },
     .supports = SSLSUPP_CAINFO_BLOB |
-        SSLSUPP_CA_PATH |
-        SSLSUPP_CERTINFO |
         SSLSUPP_HTTPS_PROXY |
         SSLSUPP_CIPHER_LIST |
         SSLSUPP_TLS13_CIPHERSUITES |
-        SSLSUPP_SSL_EC_CURVES |
-        SSLSUPP_PINNEDPUBKEY,
+        SSLSUPP_CERTINFO |
+        SSLSUPP_CRLFILE,
 };
 
 /// wolfSSL backend descriptor (`Curl_ssl_wolfssl` in `lib/vtls/wolfssl.c`).
@@ -584,17 +582,15 @@ pub const Curl_ssl_wolfssl_desc = OptionalSslBackendDescriptor{
         .id = .CURLSSLBACKEND_WOLFSSL,
         .name = "wolfssl",
     },
-    .supports = SSLSUPP_CA_PATH |
+    .supports = SSLSUPP_PINNEDPUBKEY |
+        SSLSUPP_HTTPS_PROXY |
+        SSLSUPP_CA_PATH |
         SSLSUPP_CAINFO_BLOB |
-        SSLSUPP_ISSUERCERT_BLOB |
-        SSLSUPP_PINNEDPUBKEY |
         SSLSUPP_SSL_CTX |
         SSLSUPP_TLS13_CIPHERSUITES |
-        SSLSUPP_HTTPS_PROXY |
-        SSLSUPP_CIPHER_LIST |
         SSLSUPP_CA_CACHE |
-        SSLSUPP_CRLFILE |
-        SSLSUPP_ECH,
+        SSLSUPP_CIPHER_LIST |
+        SSLSUPP_SSL_EC_CURVES,
 };
 
 // ============================================================================
@@ -670,15 +666,27 @@ test "SFTP error string and CURLcode mapping" {
 test "Optional VTLS and VQUIC backend descriptors" {
     try std.testing.expectEqual(curl_sslbackend.CURLSSLBACKEND_GNUTLS, Curl_ssl_gnutls_desc.info.id);
     try std.testing.expectEqualStrings("gnutls", std.mem.span(Curl_ssl_gnutls_desc.info.name));
-    try std.testing.expect((Curl_ssl_gnutls_desc.supports & SSLSUPP_CERTINFO) != 0);
+    try std.testing.expectEqual(
+        SSLSUPP_CA_PATH | SSLSUPP_CERTINFO | SSLSUPP_PINNEDPUBKEY | SSLSUPP_HTTPS_PROXY |
+            SSLSUPP_CAINFO_BLOB | SSLSUPP_CIPHER_LIST | SSLSUPP_CA_CACHE | SSLSUPP_ISSUERCERT | SSLSUPP_CRLFILE,
+        Curl_ssl_gnutls_desc.supports,
+    );
 
     try std.testing.expectEqual(curl_sslbackend.CURLSSLBACKEND_RUSTLS, Curl_ssl_rustls_desc.info.id);
     try std.testing.expectEqualStrings("rustls", std.mem.span(Curl_ssl_rustls_desc.info.name));
-    try std.testing.expect((Curl_ssl_rustls_desc.supports & SSLSUPP_TLS13_CIPHERSUITES) != 0);
+    try std.testing.expectEqual(
+        SSLSUPP_CAINFO_BLOB | SSLSUPP_HTTPS_PROXY | SSLSUPP_CIPHER_LIST |
+            SSLSUPP_TLS13_CIPHERSUITES | SSLSUPP_CERTINFO | SSLSUPP_CRLFILE,
+        Curl_ssl_rustls_desc.supports,
+    );
 
     try std.testing.expectEqual(curl_sslbackend.CURLSSLBACKEND_WOLFSSL, Curl_ssl_wolfssl_desc.info.id);
     try std.testing.expectEqualStrings("wolfssl", std.mem.span(Curl_ssl_wolfssl_desc.info.name));
-    try std.testing.expect((Curl_ssl_wolfssl_desc.supports & SSLSUPP_SSL_CTX) != 0);
+    try std.testing.expectEqual(
+        SSLSUPP_PINNEDPUBKEY | SSLSUPP_HTTPS_PROXY | SSLSUPP_CA_PATH | SSLSUPP_CAINFO_BLOB |
+            SSLSUPP_SSL_CTX | SSLSUPP_TLS13_CIPHERSUITES | SSLSUPP_CA_CACHE | SSLSUPP_CIPHER_LIST | SSLSUPP_SSL_EC_CURVES,
+        Curl_ssl_wolfssl_desc.supports,
+    );
 
     try std.testing.expectEqualStrings("HTTP/3", std.mem.span(Curl_cft_http3_desc.name));
     try std.testing.expectEqualStrings("H3-PROXY", std.mem.span(Curl_cft_h3_proxy_desc.name));

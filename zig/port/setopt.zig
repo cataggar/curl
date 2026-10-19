@@ -40,7 +40,7 @@ pub const curl_blob = extern struct {
 };
 
 const use_ssl = switch (backend_options.ssl) {
-    .openssl, .mbedtls, .schannel => true,
+    .openssl, .mbedtls, .schannel, .gnutls, .rustls, .wolfssl => true,
     .none => false,
 };
 const use_openssl = backend_options.ssl == .openssl;

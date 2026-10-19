@@ -79,8 +79,11 @@ const c = struct {
 
     pub const CURLSSLBACKEND_NONE: c_uint = 0;
     pub const CURLSSLBACKEND_OPENSSL: c_uint = 1;
+    pub const CURLSSLBACKEND_GNUTLS: c_uint = 2;
+    pub const CURLSSLBACKEND_WOLFSSL: c_uint = 7;
     pub const CURLSSLBACKEND_SCHANNEL: c_uint = 8;
     pub const CURLSSLBACKEND_MBEDTLS: c_uint = 11;
+    pub const CURLSSLBACKEND_RUSTLS: c_uint = 14;
 
     pub const curl_ssl_backend = extern struct {
         id: c_uint,
@@ -130,8 +133,16 @@ const c = struct {
     pub const CURLINFO = c_uint;
     pub const CURLINFO_LONG: CURLINFO = 0x200000;
     pub const CURLINFO_SLIST: CURLINFO = 0x400000;
+    pub const CURLINFO_PTR: CURLINFO = 0x400000;
     pub const CURLINFO_RESPONSE_CODE: CURLINFO = CURLINFO_LONG + 2;
     pub const CURLINFO_CERTINFO: CURLINFO = CURLINFO_SLIST + 34;
+    pub const CURLINFO_TLS_SESSION: CURLINFO = CURLINFO_PTR + 43;
+    pub const CURLINFO_TLS_SSL_PTR: CURLINFO = CURLINFO_PTR + 45;
+
+    pub const curl_tlssessioninfo = extern struct {
+        backend: c_uint,
+        internals: ?*anyopaque,
+    };
 
     pub const CURL_BLOB_COPY: c_uint = 1;
     pub const curl_blob = extern struct {
@@ -191,6 +202,9 @@ test "curl_version_info feature bits match backend_options" {
             .openssl => "OpenSSL",
             .mbedtls => "mbedTLS",
             .schannel => "Schannel",
+            .gnutls => "GnuTLS",
+            .rustls => "rustls-ffi",
+            .wolfssl => "wolfSSL",
             .none => unreachable,
         };
         try testing.expect(std.mem.startsWith(u8, ssl_ver, expected_prefix));
@@ -235,12 +249,18 @@ test "curl_global_sslset and curl_easy_setopt TLS capability matrix" {
             .openssl => c.CURLSSLBACKEND_OPENSSL,
             .mbedtls => c.CURLSSLBACKEND_MBEDTLS,
             .schannel => c.CURLSSLBACKEND_SCHANNEL,
+            .gnutls => c.CURLSSLBACKEND_GNUTLS,
+            .rustls => c.CURLSSLBACKEND_RUSTLS,
+            .wolfssl => c.CURLSSLBACKEND_WOLFSSL,
             .none => unreachable,
         };
         const expected_name: [*:0]const u8 = switch (backend_options.ssl) {
             .openssl => "openssl",
             .mbedtls => "mbedtls",
             .schannel => "schannel",
+            .gnutls => "gnutls",
+            .rustls => "rustls",
+            .wolfssl => "wolfssl",
             .none => unreachable,
         };
 
@@ -261,18 +281,42 @@ test "curl_global_sslset and curl_easy_setopt TLS capability matrix" {
     defer curl_easy_cleanup(easy);
 
     // Verify backend capability bitmask matches expected backend table
-    const expect_ca_path = backend_options.ssl == .openssl or backend_options.ssl == .mbedtls;
-    const expect_certinfo = backend_options.ssl != .none;
-    const expect_pinnedpubkey = backend_options.ssl != .none;
-    const expect_ssl_ctx = backend_options.ssl == .openssl or backend_options.ssl == .mbedtls;
+    const expect_ca_path = switch (backend_options.ssl) {
+        .openssl, .mbedtls, .gnutls, .wolfssl => true,
+        .none, .schannel, .rustls => false,
+    };
+    const expect_certinfo = switch (backend_options.ssl) {
+        .openssl, .mbedtls, .schannel, .gnutls, .rustls => true,
+        .none, .wolfssl => false,
+    };
+    const expect_pinnedpubkey = switch (backend_options.ssl) {
+        .openssl, .mbedtls, .schannel, .gnutls, .wolfssl => true,
+        .none, .rustls => false,
+    };
+    const expect_ssl_ctx = switch (backend_options.ssl) {
+        .openssl, .mbedtls, .wolfssl => true,
+        .none, .schannel, .gnutls, .rustls => false,
+    };
     const expect_https_proxy = backend_options.ssl != .none;
-    const expect_tls13_ciphers = backend_options.ssl == .openssl or backend_options.ssl == .mbedtls;
+    const expect_tls13_ciphers = switch (backend_options.ssl) {
+        .openssl, .mbedtls, .rustls, .wolfssl => true,
+        .none, .schannel, .gnutls => false,
+    };
     const expect_cainfo_blob = backend_options.ssl != .none;
     const expect_cipher_list = backend_options.ssl != .none;
-    const expect_ec_curves = backend_options.ssl == .openssl or backend_options.ssl == .mbedtls;
+    const expect_ec_curves = switch (backend_options.ssl) {
+        .openssl, .mbedtls, .wolfssl => true,
+        .none, .schannel, .gnutls, .rustls => false,
+    };
     const expect_sig_algs = backend_options.ssl == .openssl;
-    const expect_crlfile = backend_options.ssl != .none;
-    const expect_issuercert = backend_options.ssl == .openssl;
+    const expect_crlfile = switch (backend_options.ssl) {
+        .openssl, .mbedtls, .schannel, .gnutls, .rustls => true,
+        .none, .wolfssl => false,
+    };
+    const expect_issuercert = switch (backend_options.ssl) {
+        .openssl, .gnutls => true,
+        .none, .mbedtls, .schannel, .rustls, .wolfssl => false,
+    };
 
     try testing.expectEqual(expect_ca_path, Curl_ssl_supports(easy, c.SSLSUPP_CA_PATH));
     try testing.expectEqual(expect_certinfo, Curl_ssl_supports(easy, c.SSLSUPP_CERTINFO));
@@ -347,10 +391,25 @@ test "curl_global_sslset and curl_easy_setopt TLS capability matrix" {
         cptrExpected(expect_issuercert),
         curl_easy_setopt(easy, c.CURLOPT_ISSUERCERT, @as([*:0]const u8, "dummy-issuer.pem")),
     );
+
+    var tls_info: ?*const c.curl_tlssessioninfo = null;
+    try testing.expectEqual(c.CURLE_OK, curl_easy_getinfo(easy, c.CURLINFO_TLS_SSL_PTR, &tls_info));
+    try testing.expect(tls_info != null);
+    const expected_tls_backend: c_uint = switch (backend_options.ssl) {
+        .none => c.CURLSSLBACKEND_NONE,
+        .openssl => c.CURLSSLBACKEND_OPENSSL,
+        .mbedtls => c.CURLSSLBACKEND_MBEDTLS,
+        .schannel => c.CURLSSLBACKEND_SCHANNEL,
+        .gnutls => c.CURLSSLBACKEND_GNUTLS,
+        .rustls => c.CURLSSLBACKEND_RUSTLS,
+        .wolfssl => c.CURLSSLBACKEND_WOLFSSL,
+    };
+    try testing.expectEqual(expected_tls_backend, tls_info.?.backend);
+    try testing.expectEqual(@as(?*anyopaque, null), tls_info.?.internals);
 }
 
 test "SslBackend and Apple SecTrust target validation" {
-    try testing.expectEqual(@as(usize, 4), std.enums.values(backends.SslBackend).len);
+    try testing.expectEqual(@as(usize, 7), std.enums.values(backends.SslBackend).len);
 
     const default_openssl = backends.Options{ .ssl = .openssl };
     try testing.expect(default_openssl.useAppleSectrust(.macos));
@@ -373,6 +432,13 @@ test "SslBackend and Apple SecTrust target validation" {
     try testing.expect(schannel_opts.isValidForTarget(.windows));
     try testing.expect(!schannel_opts.isValidForTarget(.linux));
     try testing.expect(!schannel_opts.isValidForTarget(.macos));
+
+    inline for (.{ backends.SslBackend.gnutls, backends.SslBackend.rustls, backends.SslBackend.wolfssl }) |ssl_backend| {
+        const opts = backends.Options{ .ssl = ssl_backend };
+        try testing.expect(opts.isValidForTarget(.linux));
+        try testing.expect(opts.isValidForTarget(.macos));
+        try testing.expect(!opts.useAppleSectrust(.macos));
+    }
 }
 
 const loopback_tls = struct {
