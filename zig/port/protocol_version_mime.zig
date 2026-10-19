@@ -9,6 +9,7 @@ const small_protocols = @import("small_protocols.zig");
 const imap_ws = @import("imap_ws.zig");
 const pop3_smtp = @import("pop3_smtp.zig");
 const ftp = @import("ftp.zig");
+const http_mod = @import("http.zig");
 
 pub const CURLcode = c_uint;
 pub const CURLE_OK: CURLcode = 0;
@@ -133,7 +134,7 @@ const Curl_protocol_file = small_protocols.Curl_protocol_file;
 const Curl_protocol_ftp = ftp.Curl_protocol_ftp;
 const Curl_protocol_gopher = small_protocols.Curl_protocol_gopher;
 const Curl_protocol_gophers = small_protocols.Curl_protocol_gophers;
-extern const Curl_protocol_http: Curl_protocol_opaque;
+const Curl_protocol_http = http_mod.Curl_protocol_http;
 const Curl_protocol_mqtt = small_protocols.Curl_protocol_mqtt;
 const Curl_protocol_mqtts = small_protocols.Curl_protocol_mqtts;
 extern const Curl_protocol_rtsp: Curl_protocol_opaque;

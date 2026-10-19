@@ -46,6 +46,7 @@ pub const sendf = @import("sendf.zig");
 pub const ftp = @import("ftp.zig");
 pub const url = @import("url.zig");
 pub const multi = @import("multi.zig");
+pub const http = @import("http.zig");
 
 // C executables (such as src/tool_main.c) provide their own C main().
 pub extern fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int;
@@ -98,6 +99,7 @@ comptime {
     _ = ftp;
     _ = url;
     _ = multi;
+    _ = http;
 }
 
 test {

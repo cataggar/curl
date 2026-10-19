@@ -237,7 +237,7 @@ comptime {
     @export(&addf_impl.curlx_dyn_addf, .{ .name = "curlx_dyn_addf", .linkage = .strong });
 }
 
-extern fn curlx_dyn_addf(s: *dynbuf, fmt: [*:0]const u8, ...) callconv(.c) CURLcode;
+pub extern fn curlx_dyn_addf(s: *dynbuf, fmt: [*:0]const u8, ...) callconv(.c) CURLcode;
 
 pub export fn curlx_dyn_ptr(s: *const dynbuf) callconv(.c) ?[*:0]u8 {
     return if (s.bufr) |b| @ptrCast(b) else null;

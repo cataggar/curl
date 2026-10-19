@@ -15,7 +15,6 @@ pub const c_flags = [_][]const u8{
 
 pub const c_sources = [_][]const u8{
     // LIB_CFILES
-    "lib/http.c",
     "zig/port/urldata_shim.c",
 };
 

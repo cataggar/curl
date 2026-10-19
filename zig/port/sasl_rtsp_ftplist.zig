@@ -281,6 +281,7 @@ const c_ext = struct {
         request: [*:0]const u8,
         httpreq: u8,
         path: [*:0]const u8,
+        query: ?[*:0]const u8,
         proxytunnel: bool,
     ) callconv(.c) CURLcode;
     extern fn Curl_xfer_setup_recv(
@@ -2582,6 +2583,7 @@ fn rtspSetupRequest(data: ?*Curl_easy, b: *RtspBlocks, rtspreq: u8) CURLcode {
         b.request orelse "",
         HTTPREQ_GET,
         b.stream_uri,
+        null,
         false,
     );
     if (result != CURLE_OK)
