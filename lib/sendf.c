@@ -2623,3 +2623,376 @@ void Curl_cpool_return(struct Curl_easy *data,
                         CURL_CPOOL_INSTANCE(data),
                         &data->state.last_conn_id, &data->state.last_cpid);
 }
+
+#include "pingpong.h"
+#include "curl_sasl.h"
+#include "mime.h"
+#include "vtls/vtls.h"
+
+struct connectdata *Curl_pop3_smtp_get_conn(struct Curl_easy *data)
+{
+  return data->conn;
+}
+
+const char *Curl_pop3_smtp_get_conn_options(const struct connectdata *conn)
+{
+  return conn->options;
+}
+
+bool Curl_pop3_smtp_conn_has_creds(const struct connectdata *conn)
+{
+  return conn->creds != NULL;
+}
+
+bool Curl_pop3_smtp_easy_has_creds(const struct Curl_easy *data)
+{
+  return data->state.creds != NULL;
+}
+
+const char *Curl_pop3_smtp_get_conn_user(const struct connectdata *conn)
+{
+  return Curl_creds_user(conn->creds);
+}
+
+const char *Curl_pop3_smtp_get_conn_passwd(const struct connectdata *conn)
+{
+  return Curl_creds_passwd(conn->creds);
+}
+
+bool Curl_pop3_smtp_get_protoconnstart(const struct connectdata *conn)
+{
+  return (bool)conn->bits.protoconnstart;
+}
+
+void Curl_pop3_smtp_connclose(struct connectdata *conn)
+{
+  connclose(conn);
+}
+
+bool Curl_pop3_smtp_conn_is_ssl(struct connectdata *conn)
+{
+  return Curl_conn_is_ssl(conn, FIRSTSOCKET);
+}
+
+bool Curl_pop3_smtp_conn_is_connected(struct connectdata *conn)
+{
+  return Curl_conn_is_connected(conn, FIRSTSOCKET);
+}
+
+CURLcode Curl_pop3_smtp_upgrade_tls(struct Curl_easy *data,
+                                    struct connectdata *conn,
+                                    bool is_smtp,
+                                    bool *ssldone)
+{
+#ifdef USE_SSL
+  CURLcode result;
+  *ssldone = FALSE;
+  if(!Curl_conn_is_ssl(conn, FIRSTSOCKET)) {
+    result = Curl_ssl_cfilter_add(
+      data, Curl_conn_get_origin(conn, FIRSTSOCKET), conn, FIRSTSOCKET);
+    if(result)
+      return result;
+    conn->scheme = is_smtp ? &Curl_scheme_smtps : &Curl_scheme_pop3s;
+  }
+  result = Curl_conn_connect(data, FIRSTSOCKET, FALSE, ssldone);
+  return result;
+#else
+  (void)data;
+  (void)conn;
+  (void)is_smtp;
+  *ssldone = FALSE;
+  return CURLE_NOT_BUILT_IN;
+#endif
+}
+
+const char *Curl_pop3_smtp_get_up_path(const struct Curl_easy *data)
+{
+  return data->state.up.path;
+}
+
+const char *Curl_pop3_smtp_get_customrequest(const struct Curl_easy *data)
+{
+  return CURL_EASY_STR(data, STRING_CUSTOMREQUEST);
+}
+
+const char *Curl_pop3_smtp_get_mail_from(const struct Curl_easy *data)
+{
+  return CURL_EASY_STR(data, STRING_MAIL_FROM);
+}
+
+const char *Curl_pop3_smtp_get_mail_auth(const struct Curl_easy *data)
+{
+  return CURL_EASY_STR(data, STRING_MAIL_AUTH);
+}
+
+bool Curl_pop3_smtp_get_list_only(const struct Curl_easy *data)
+{
+  return (bool)data->set.list_only;
+}
+
+unsigned char Curl_pop3_smtp_get_use_ssl(const struct Curl_easy *data)
+{
+  return (unsigned char)data->set.use_ssl;
+}
+
+bool Curl_pop3_smtp_get_connect_only(const struct Curl_easy *data)
+{
+  return (bool)data->set.connect_only;
+}
+
+struct curl_slist *Curl_pop3_smtp_get_mail_rcpt(const struct Curl_easy *data)
+{
+  return data->set.mail_rcpt;
+}
+
+bool Curl_pop3_smtp_get_mail_rcpt_allowfails(const struct Curl_easy *data)
+{
+  return (bool)data->set.mail_rcpt_allowfails;
+}
+
+bool Curl_pop3_smtp_get_req_no_body(const struct Curl_easy *data)
+{
+  return (bool)data->req.no_body;
+}
+
+void Curl_pop3_smtp_set_req_no_body(struct Curl_easy *data, bool val)
+{
+  data->req.no_body = val;
+}
+
+void Curl_pop3_smtp_set_req_size(struct Curl_easy *data, curl_off_t size)
+{
+  data->req.size = size;
+}
+
+void Curl_pop3_smtp_req_clear_recv(struct Curl_easy *data)
+{
+  CURL_REQ_CLEAR_RECV(data);
+}
+
+curl_off_t Curl_pop3_smtp_get_infilesize(const struct Curl_easy *data)
+{
+  return data->state.infilesize;
+}
+
+void Curl_pop3_smtp_inc_infilesize(struct Curl_easy *data)
+{
+  if(data->state.infilesize > 0)
+    data->state.infilesize++;
+}
+
+void Curl_pop3_smtp_set_httpcode(struct Curl_easy *data, int code)
+{
+  data->info.httpcode = code;
+}
+
+bool Curl_pop3_smtp_is_upload_or_mime(const struct Curl_easy *data)
+{
+  return (bool)(data->state.upload || IS_MIME_POST(data));
+}
+
+CURLcode Curl_pop3_smtp_prepare_mail_reader(struct Curl_easy *data)
+{
+  CURLcode result = CURLE_OK;
+#ifndef CURL_DISABLE_MIME
+  if(IS_MIME_POST(data)) {
+    curl_mimepart *postp = data->set.mimepostp;
+    postp->flags &= ~(unsigned int)MIME_BODY_ONLY;
+    curl_mime_headers(postp, data->set.headers, 0);
+    result = Curl_mime_prepare_headers(data, postp, NULL,
+                                       NULL, MIMESTRATEGY_MAIL);
+    if(!result && !Curl_checkheaders(data, STRCONST("Mime-Version")))
+      result = Curl_mime_add_header(&postp->curlheaders, "Mime-Version: 1.0");
+    if(!result)
+      result = Curl_creader_set_mime(data, postp);
+    if(result)
+      return result;
+    data->state.infilesize = Curl_creader_total_length(data);
+  }
+  else
+#endif
+  {
+    result = Curl_creader_set_fread(data, data->state.infilesize);
+  }
+  return result;
+}
+
+void Curl_pop3_smtp_pp_init(struct Curl_easy *data, struct pingpong *pp)
+{
+  Curl_pp_init(pp, Curl_pgrs_now(data));
+}
+
+CURLcode Curl_pop3_smtp_pp_statemach(struct Curl_easy *data,
+                                     struct pingpong *pp,
+                                     bool block,
+                                     bool disconnecting)
+{
+  return Curl_pp_statemach(data, pp, block, disconnecting);
+}
+
+CURLcode Curl_pop3_smtp_pp_readresp(struct Curl_easy *data,
+                                    int sockindex,
+                                    struct pingpong *pp,
+                                    int *code,
+                                    size_t *size)
+{
+  return Curl_pp_readresp(data, (int8_t)sockindex, pp, code, size);
+}
+
+CURLcode Curl_pop3_smtp_pp_pollset(struct Curl_easy *data,
+                                   struct pingpong *pp,
+                                   struct easy_pollset *ps)
+{
+  return Curl_pp_pollset(data, pp, ps);
+}
+
+void Curl_pop3_smtp_sasl_init(struct SASL *sasl,
+                              struct Curl_easy *data,
+                              const struct SASLproto *params)
+{
+  Curl_sasl_init(sasl, data, params);
+}
+
+bool Curl_pop3_smtp_sasl_can_authenticate(struct SASL *sasl,
+                                          struct Curl_easy *data)
+{
+  return Curl_sasl_can_authenticate(sasl, data);
+}
+
+CURLcode Curl_pop3_smtp_sasl_start(struct SASL *sasl,
+                                   struct Curl_easy *data,
+                                   bool force_ir,
+                                   saslprogress *progress)
+{
+  return Curl_sasl_start(sasl, data, force_ir, progress);
+}
+
+CURLcode Curl_pop3_smtp_sasl_continue(struct SASL *sasl,
+                                      struct Curl_easy *data,
+                                      int code,
+                                      saslprogress *progress)
+{
+  return Curl_sasl_continue(sasl, data, code, progress);
+}
+
+CURLcode Curl_pop3_smtp_sasl_is_blocked(struct SASL *sasl,
+                                        struct Curl_easy *data)
+{
+  return Curl_sasl_is_blocked(sasl, data);
+}
+
+unsigned short Curl_pop3_smtp_sasl_decode_mech(const char *ptr,
+                                               size_t maxlen,
+                                               size_t *len)
+{
+  return Curl_sasl_decode_mech(ptr, maxlen, len);
+}
+
+CURLcode Curl_pop3_smtp_sasl_parse_url_auth_option(struct SASL *sasl,
+                                                   const char *value,
+                                                   size_t len)
+{
+  return Curl_sasl_parse_url_auth_option(sasl, value, len);
+}
+
+unsigned short Curl_pop3_smtp_sasl_get_prefmech(const struct SASL *sasl)
+{
+  return sasl->prefmech;
+}
+
+void Curl_pop3_smtp_sasl_set_prefmech(struct SASL *sasl,
+                                      unsigned short prefmech)
+{
+  sasl->prefmech = prefmech;
+}
+
+void Curl_pop3_smtp_sasl_set_authmechs(struct SASL *sasl,
+                                       unsigned short authmechs)
+{
+  sasl->authmechs = authmechs;
+}
+
+void Curl_pop3_smtp_sasl_or_authmechs(struct SASL *sasl,
+                                      unsigned short mech)
+{
+  sasl->authmechs |= mech;
+}
+
+unsigned short Curl_pop3_smtp_sasl_get_authused(const struct SASL *sasl)
+{
+  return sasl->authused;
+}
+
+void Curl_pop3_smtp_sasl_set_authused(struct SASL *sasl,
+                                      unsigned short authused)
+{
+  sasl->authused = authused;
+}
+
+void Curl_pop3_smtp_failf_msg(struct Curl_easy *data, const char *msg)
+{
+  failf(data, "%s", msg);
+}
+
+void Curl_pop3_smtp_failf_int(struct Curl_easy *data,
+                              const char *fmt,
+                              int arg)
+{
+  failf(data, fmt, arg);
+}
+
+void Curl_pop3_smtp_trc_m(struct Curl_easy *data, const char *msg)
+{
+  CURL_TRC_M(data, "%s", msg);
+}
+
+void Curl_pop3_smtp_trc_smtp_msg(struct Curl_easy *data, const char *msg)
+{
+  CURL_TRC_SMTP(data, "%s", msg);
+}
+
+void Curl_pop3_smtp_trc_smtp_state(struct Curl_easy *data,
+                                   const char *from,
+                                   const char *to)
+{
+  CURL_TRC_SMTP(data, "state change from %s to %s", from, to);
+}
+
+void Curl_pop3_smtp_trc_smtp_int(struct Curl_easy *data,
+                                 const char *fmt,
+                                 int a1)
+{
+  CURL_TRC_SMTP(data, fmt, a1);
+}
+
+void Curl_pop3_smtp_trc_smtp_int_int(struct Curl_easy *data,
+                                     const char *fmt,
+                                     int a1,
+                                     int a2)
+{
+  CURL_TRC_SMTP(data, fmt, a1, a2);
+}
+
+void Curl_pop3_smtp_trc_smtp_int_int_int(struct Curl_easy *data,
+                                         const char *fmt,
+                                         int a1,
+                                         int a2,
+                                         int a3)
+{
+  CURL_TRC_SMTP(data, fmt, a1, a2, a3);
+}
+
+void Curl_pop3_smtp_trc_smtp_read(struct Curl_easy *data,
+                                  size_t blen,
+                                  int res,
+                                  size_t nread,
+                                  int eos)
+{
+  CURL_TRC_SMTP(data, "cr_eob_read, next_read(len=%zu) -> %d, %zu eos=%d",
+                blen, res, nread, eos);
+}
+
+void Curl_pop3_smtp_infof_msg(struct Curl_easy *data, const char *msg)
+{
+  infof(data, "%s", msg);
+}

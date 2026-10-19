@@ -22,10 +22,8 @@ pub const c_sources = [_][]const u8{
     "lib/http.c",
     "lib/http2.c",
     "lib/multi.c",
-    "lib/pop3.c",
     "lib/sendf.c",
     "lib/setopt.c",
-    "lib/smtp.c",
     "lib/transfer.c",
     "lib/url.c",
     // LIB_VDNS_CFILES
