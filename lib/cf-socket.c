@@ -2511,3 +2511,283 @@ CURLcode Curl_cf_socket_peek(struct Curl_cfilter *cf,
   }
   return CURLE_FAILED_INIT;
 }
+
+#include "cf-setup.h"
+#include "thrdqueue.h"
+
+void Curl_zig_connect_timeleft_info(struct Curl_easy *data,
+                                    bool *in_shutdown,
+                                    timediff_t *connecttimeout_ms,
+                                    timediff_t *timeout_ms,
+                                    uint8_t *connect_only)
+{
+  *in_shutdown = (data->conn &&
+                  CURL_CONN_IN_SHUTDOWN(data->conn, FIRSTSOCKET)) ?
+                 TRUE : FALSE;
+  *connecttimeout_ms = data->set.connecttimeout;
+  *timeout_ms = data->set.timeout;
+  *connect_only = data->set.connect_only;
+}
+
+struct connectdata *Curl_zig_data_get_conn(struct Curl_easy *data)
+{
+  return data ? data->conn : NULL;
+}
+
+curl_socket_t Curl_zig_conn_get_sock(const struct connectdata *conn,
+                                     int8_t sockindex)
+{
+  return conn->sock[sockindex];
+}
+
+void Curl_zig_conn_set_close(struct connectdata *conn, bool close_it)
+{
+  conn->bits.close = close_it ? TRUE : FALSE;
+}
+
+struct Curl_cfilter *Curl_zig_conn_get_cfilter(const struct connectdata *conn,
+                                               int8_t sockindex)
+{
+  return conn ? conn->cfilter[sockindex] : NULL;
+}
+
+bool Curl_zig_conn_is_https(const struct connectdata *conn)
+{
+  return (conn && conn->scheme &&
+          (conn->scheme->protocol == CURLPROTO_HTTPS)) ? TRUE : FALSE;
+}
+
+uint8_t Curl_zig_conn_get_ip_version(const struct connectdata *conn)
+{
+  return conn->ip_version;
+}
+
+CURLcode Curl_zig_cf_setup_add(struct Curl_easy *data,
+                               struct connectdata *conn,
+                               int8_t sockindex,
+                               int ssl_mode)
+{
+  return Curl_cf_setup_add(data, conn, sockindex,
+                           conn->transport_wanted, ssl_mode);
+}
+
+CURLcode Curl_zig_cf_setup_insert_after(struct Curl_cfilter *cf,
+                                        struct Curl_easy *data,
+                                        uint8_t transport,
+                                        int ssl_mode)
+{
+  return Curl_cf_setup_insert_after(cf, data, transport, ssl_mode);
+}
+
+const char *Curl_zig_conn_host_dispname(const struct connectdata *conn)
+{
+  return CURL_CONN_HOST_DISPNAME(conn);
+}
+
+unsigned int Curl_zig_conn_scheme_flags(const struct connectdata *conn)
+{
+  return conn->scheme->flags;
+}
+
+unsigned int Curl_zig_data_origin_scheme_flags(const struct Curl_easy *data)
+{
+  return (data && data->state.origin && data->state.origin->scheme) ?
+         data->state.origin->scheme->flags : 0;
+}
+
+void Curl_zig_conn_set_multiplex(struct connectdata *conn,
+                                 struct Curl_multi **out_multi)
+{
+  if(!conn->bits.multiplex) {
+    conn->bits.multiplex = TRUE;
+    *out_multi = conn->attached_multi;
+  }
+  else
+    *out_multi = NULL;
+}
+
+struct Curl_peer *Curl_zig_conn_get_origin(
+  struct connectdata *conn, int8_t sockindex)
+{
+  return (sockindex == SECONDARYSOCKET) ? conn->origin2 : conn->origin;
+}
+
+struct Curl_peer *Curl_zig_conn_get_destination(
+  struct connectdata *conn, int8_t sockindex)
+{
+  return (sockindex == SECONDARYSOCKET) ?
+    (conn->via_peer2 ? conn->via_peer2 : conn->origin2) :
+    (conn->via_peer ? conn->via_peer : conn->origin);
+}
+
+struct Curl_peer *Curl_zig_conn_get_first_peer(
+  struct connectdata *conn, int8_t sockindex)
+{
+#ifndef CURL_DISABLE_PROXY
+  if(conn->socks_proxy.peer)
+    return conn->socks_proxy.peer;
+  if(conn->http_proxy.peer)
+    return conn->http_proxy.peer;
+#endif
+  return (sockindex == SECONDARYSOCKET) ?
+    (conn->via_peer2 ? conn->via_peer2 : conn->origin2) :
+    (conn->via_peer ? conn->via_peer : conn->origin);
+}
+
+void Curl_zig_data_get_http_neg(const struct Curl_easy *data,
+                                uint8_t *wanted,
+                                uint8_t *allowed,
+                                uint8_t *preferred)
+{
+  *wanted = data->state.http_neg.wanted;
+  *allowed = data->state.http_neg.allowed;
+  *preferred = data->state.http_neg.preferred;
+}
+
+void Curl_zig_data_set_http_neg_wanted(struct Curl_easy *data,
+                                       uint8_t wanted)
+{
+  data->state.http_neg.wanted = wanted;
+}
+
+timediff_t Curl_zig_data_happy_eyeballs_timeout(const struct Curl_easy *data)
+{
+  return data->set.happy_eyeballs_timeout;
+}
+
+bool Curl_zig_conn_should_https_setup(const struct connectdata *conn)
+{
+  return (conn->scheme->protocol == CURLPROTO_HTTPS) &&
+#ifndef CURL_DISABLE_PROXY
+         !conn->bits.origin_is_proxy &&
+#endif
+         conn->bits.tls_enable_alpn;
+}
+
+uint8_t Curl_zig_conn_get_transport_wanted(const struct connectdata *conn)
+{
+  return conn->transport_wanted;
+}
+
+void Curl_zig_conn_get_peers(const struct connectdata *conn,
+                             struct Curl_peer **origin,
+                             struct Curl_peer **socks_proxy_peer,
+                             struct Curl_peer **http_proxy_peer)
+{
+  *origin = conn->origin;
+#ifndef CURL_DISABLE_PROXY
+  *socks_proxy_peer = conn->socks_proxy.peer;
+  *http_proxy_peer = conn->http_proxy.peer;
+#else
+  *socks_proxy_peer = NULL;
+  *http_proxy_peer = NULL;
+#endif
+}
+
+bool Curl_zig_data_is_os_errno_timedout(const struct Curl_easy *data)
+{
+#ifdef SOCKETIMEDOUT
+  return (SOCKETIMEDOUT == data->state.os_errno) ? TRUE : FALSE;
+#else
+  (void)data;
+  return FALSE;
+#endif
+}
+
+bool Curl_zig_conn_is_ssh(const struct connectdata *conn)
+{
+  return (conn->scheme->protocol & PROTO_FAMILY_SSH) != 0;
+}
+
+void Curl_zig_data_inc_numconnects(struct Curl_easy *data)
+{
+  data->info.numconnects++;
+}
+
+uint32_t Curl_zig_data_get_mid(const struct Curl_easy *data)
+{
+  return data->mid;
+}
+
+curl_off_t Curl_zig_data_get_id(const struct Curl_easy *data)
+{
+  return data->id;
+}
+
+struct Curl_multi *Curl_zig_data_get_multi(const struct Curl_easy *data)
+{
+  return data ? data->multi : NULL;
+}
+
+struct curl_thrdq **Curl_zig_multi_get_resolv_thrdq_ptr(
+  struct Curl_multi *multi)
+{
+  return &multi->resolv_thrdq;
+}
+
+struct curl_thrdq *Curl_zig_multi_get_resolv_thrdq(
+  const struct Curl_multi *multi)
+{
+  return multi ? multi->resolv_thrdq : NULL;
+}
+
+void Curl_zig_multi_set_resolv_thrdq(struct Curl_multi *multi,
+                                     struct curl_thrdq *thrdq)
+{
+  multi->resolv_thrdq = thrdq;
+}
+
+struct Curl_easy *Curl_zig_multi_get_admin(const struct Curl_multi *multi)
+{
+  return multi ? multi->admin : NULL;
+}
+
+unsigned int Curl_zig_data_get_conn_scope_id(const struct Curl_easy *data)
+{
+  return (data && data->conn) ? data->conn->scope_id : 0;
+}
+
+bool Curl_zig_trc_is_verbose(struct Curl_easy *data)
+{
+  return Curl_trc_is_verbose(data) ? TRUE : FALSE;
+}
+
+bool Curl_zig_trc_cf_is_verbose(const struct Curl_cfilter *cf,
+                                struct Curl_easy *data)
+{
+  return Curl_trc_cf_is_verbose(cf, data) ? TRUE : FALSE;
+}
+
+bool Curl_zig_trc_dns_is_verbose(struct Curl_easy *data)
+{
+  return CURL_TRC_DNS_is_verbose(data) ? TRUE : FALSE;
+}
+
+void Curl_zig_thrdq_trace(struct curl_thrdq *tqueue, struct Curl_easy *data)
+{
+  CURL_THRDQ_TRACE(tqueue, data);
+}
+
+void Curl_zig_async_thrdd_classify_gai_error(int rc,
+                                             int *out_sockerr,
+                                             bool *out_negative)
+{
+  int sockerr = SOCKERRNO ? SOCKERRNO : rc;
+  if(sockerr == 0)
+    sockerr = EAI_MEMORY;
+  *out_sockerr = sockerr;
+  switch(rc) {
+#ifdef EAI_NONAME
+  case EAI_NONAME:
+#endif
+#if defined(EAI_NODATA) && \
+  (!defined(EAI_NONAME) || (EAI_NODATA != EAI_NONAME))
+  case EAI_NODATA:
+#endif
+    *out_negative = TRUE;
+    break;
+  default:
+    *out_negative = FALSE;
+    break;
+  }
+}
