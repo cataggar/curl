@@ -2559,3 +2559,970 @@ CURLcode operate(int argc, argv_item_t argv[])
 
   return result;
 }
+
+/* =========================================================================
+ * C helpers and variadic shims for zig/port/cli_callbacks.zig
+ * ========================================================================= */
+#include "toolx/tool_time.h"
+
+#ifdef HAVE_SYS_IOCTL_H
+#include <sys/ioctl.h>
+#endif
+#ifdef HAVE_TERMIOS_H
+#include <termios.h>
+#elif defined(HAVE_TERMIO_H)
+#include <termio.h>
+#endif
+#ifdef HAVE_POLL_H
+#include <poll.h>
+#elif defined(HAVE_SYS_POLL_H)
+#include <sys/poll.h>
+#endif
+
+extern void tool_voutf_zig(struct GlobalConfig *global_cfg,
+                           const char *prefix,
+                           const char *msg);
+extern void tool_helpf_zig(const char *msg);
+
+void notef(const char *fmt, ...)
+{
+  if(global && global->tracetype && !global->silent) {
+    va_list ap;
+    char *msg;
+    va_start(ap, fmt);
+    msg = curl_mvaprintf(fmt, ap);
+    va_end(ap);
+    if(msg) {
+      tool_voutf_zig(global, "Note: ", msg);
+      curl_free(msg);
+    }
+  }
+}
+
+void warnf(const char *fmt, ...)
+{
+  if(!global || !global->silent) {
+    va_list ap;
+    char *msg;
+    va_start(ap, fmt);
+    msg = curl_mvaprintf(fmt, ap);
+    va_end(ap);
+    if(msg) {
+      tool_voutf_zig(global, "Warning: ", msg);
+      curl_free(msg);
+    }
+  }
+}
+
+void helpf(const char *fmt, ...)
+{
+  char *msg = NULL;
+  if(fmt) {
+    va_list ap;
+    va_start(ap, fmt);
+    msg = curl_mvaprintf(fmt, ap);
+    va_end(ap);
+  }
+  tool_helpf_zig(msg);
+  curl_free(msg);
+}
+
+void errorf(const char *fmt, ...)
+{
+  if(!global || !global->silent || global->showerror) {
+    va_list ap;
+    char *msg;
+    va_start(ap, fmt);
+    msg = curl_mvaprintf(fmt, ap);
+    va_end(ap);
+    if(msg) {
+      tool_voutf_zig(global, "curl: ", msg);
+      curl_free(msg);
+    }
+  }
+}
+
+const char *tool_zig_manual_help_hint(void)
+{
+#ifdef USE_MANUAL
+  return "or 'curl --manual' ";
+#else
+  return "";
+#endif
+}
+
+struct GlobalConfig *tool_zig_get_global(void)
+{
+  return global;
+}
+
+struct per_transfer *tool_zig_get_transfers(void)
+{
+  return transfers;
+}
+
+FILE *tool_zig_get_stdout(void)
+{
+  return stdout;
+}
+
+FILE *tool_zig_get_stderr(void)
+{
+  /* !checksrc! disable STDERR 1 */
+  return stderr;
+}
+
+const char *tool_zig_fopen_writetext(void)
+{
+  return FOPEN_WRITETEXT;
+}
+
+const char *tool_zig_fopen_appendtext(void)
+{
+  return FOPEN_APPENDTEXT;
+}
+
+FILE *tool_zig_fopen(const char *fname, const char *mode)
+{
+  return curlx_fopen(fname, mode);
+}
+
+FILE *tool_zig_freopen(const char *fname, const char *mode, FILE *stream)
+{
+  return curlx_freopen(fname, mode, stream);
+}
+
+int tool_zig_fclose(FILE *stream)
+{
+  return curlx_fclose(stream);
+}
+
+int tool_zig_os_terminal_cols(void)
+{
+  int cols = 0;
+#ifdef TIOCGSIZE
+  struct ttysize ts;
+  if(!ioctl(STDIN_FILENO, TIOCGSIZE, &ts))
+    cols = ts.ts_cols;
+#elif defined(TIOCGWINSZ)
+  struct winsize ts;
+  if(!ioctl(STDIN_FILENO, TIOCGWINSZ, &ts))
+    cols = (int)ts.ws_col;
+  else if(!ioctl(STDOUT_FILENO, TIOCGWINSZ, &ts))
+    cols = (int)ts.ws_col;
+  else if(!ioctl(STDERR_FILENO, TIOCGWINSZ, &ts))
+    cols = (int)ts.ws_col;
+#elif defined(_WIN32) && !defined(CURL_WINDOWS_UWP)
+  {
+    HANDLE stderr_hnd = GetStdHandle(STD_ERROR_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO console_info;
+
+    if((stderr_hnd != INVALID_HANDLE_VALUE) &&
+       GetConsoleScreenBufferInfo(stderr_hnd, &console_info)) {
+      cols = (int)(console_info.srWindow.Right - console_info.srWindow.Left);
+    }
+  }
+#endif
+  return cols;
+}
+
+void tool_zig_tvrealnow(curl_off_t *sec, long *usec)
+{
+  struct timeval tv = tvrealnow();
+  *sec = (curl_off_t)tv.tv_sec;
+  *usec = (long)tv.tv_usec;
+}
+
+void tool_zig_localtime_hms(curl_off_t tv_sec, int *hour, int *min, int *sec)
+{
+  struct tm now;
+  CURLcode result = toolx_localtime((time_t)tv_sec, &now);
+  if(result)
+    memset(&now, 0, sizeof(now));
+  *hour = now.tm_hour;
+  *min = now.tm_min;
+  *sec = now.tm_sec;
+}
+
+bool tool_zig_global_tracetime(const struct GlobalConfig *g)
+{
+  return g ? (bool)g->tracetime : FALSE;
+}
+
+bool tool_zig_global_traceids(const struct GlobalConfig *g)
+{
+  return g ? (bool)g->traceids : FALSE;
+}
+
+FILE *tool_zig_global_trace_stream(const struct GlobalConfig *g)
+{
+  return g ? g->trace_stream : NULL;
+}
+
+void tool_zig_global_set_trace_stream(struct GlobalConfig *g, FILE *s)
+{
+  if(g)
+    g->trace_stream = s;
+}
+
+const char *tool_zig_global_trace_dump(const struct GlobalConfig *g)
+{
+  return g ? g->trace_dump : NULL;
+}
+
+void tool_zig_global_set_trace_fopened(struct GlobalConfig *g, bool v)
+{
+  if(g)
+    g->trace_fopened = v;
+}
+
+unsigned int tool_zig_global_tracetype(const struct GlobalConfig *g)
+{
+  return g ? (unsigned int)g->tracetype : 0;
+}
+
+bool tool_zig_global_isatty(const struct GlobalConfig *g)
+{
+  return g ? (bool)g->isatty : FALSE;
+}
+
+bool tool_zig_global_styled_output(const struct GlobalConfig *g)
+{
+  return g ? (bool)g->styled_output : FALSE;
+}
+
+bool tool_zig_global_noprogress(const struct GlobalConfig *g)
+{
+  return g ? (bool)g->noprogress : FALSE;
+}
+
+bool tool_zig_global_silent(const struct GlobalConfig *g)
+{
+  return g ? (bool)g->silent : FALSE;
+}
+
+bool tool_zig_global_showerror(const struct GlobalConfig *g)
+{
+  return g ? (bool)g->showerror : FALSE;
+}
+
+bool tool_zig_term_has_bold(void)
+{
+#ifdef _WIN32
+  return tool_term_has_bold;
+#else
+  return TRUE;
+#endif
+}
+
+const char *tool_zig_config_output_dir(const struct OperationConfig *c)
+{
+  return c->output_dir;
+}
+
+const char *tool_zig_config_headerfile(const struct OperationConfig *c)
+{
+  return c->headerfile;
+}
+
+const char *tool_zig_config_etag_save_file(const struct OperationConfig *c)
+{
+  return c->etag_save_file;
+}
+
+const char *tool_zig_config_writeout(const struct OperationConfig *c)
+{
+  return c->writeout;
+}
+
+bool tool_zig_config_show_headers(const struct OperationConfig *c)
+{
+  return (bool)c->show_headers;
+}
+
+bool tool_zig_config_readbusy(const struct OperationConfig *c)
+{
+  return (bool)c->readbusy;
+}
+
+void tool_zig_config_set_readbusy(struct OperationConfig *c, bool v)
+{
+  c->readbusy = v;
+}
+
+bool tool_zig_config_use_resume(const struct OperationConfig *c)
+{
+  return (bool)c->use_resume;
+}
+
+curl_off_t tool_zig_config_resume_from(const struct OperationConfig *c)
+{
+  return c->resume_from;
+}
+
+long tool_zig_config_timeout_ms(const struct OperationConfig *c)
+{
+  return c->timeout_ms;
+}
+
+unsigned int tool_zig_config_file_clobber_mode(const struct OperationConfig *c)
+{
+  return (unsigned int)c->file_clobber_mode;
+}
+
+bool tool_zig_config_terminal_binary_ok(const struct OperationConfig *c)
+{
+  return (bool)c->terminal_binary_ok;
+}
+
+bool tool_zig_config_nobuffer(const struct OperationConfig *c)
+{
+  return (bool)c->nobuffer;
+}
+
+char *tool_zig_outs_filename(const struct OutStruct *o)
+{
+  return o->filename;
+}
+
+void tool_zig_outs_set_filename(struct OutStruct *o, char *f)
+{
+  o->filename = f;
+}
+
+FILE *tool_zig_outs_stream(const struct OutStruct *o)
+{
+  return o->stream;
+}
+
+void tool_zig_outs_set_stream(struct OutStruct *o, FILE *s)
+{
+  o->stream = s;
+}
+
+curl_off_t tool_zig_outs_bytes(const struct OutStruct *o)
+{
+  return o->bytes;
+}
+
+void tool_zig_outs_set_bytes(struct OutStruct *o, curl_off_t b)
+{
+  o->bytes = b;
+}
+
+void tool_zig_outs_set_init(struct OutStruct *o, curl_off_t i)
+{
+  o->init = i;
+}
+
+bool tool_zig_outs_alloc_filename(const struct OutStruct *o)
+{
+  return (bool)o->alloc_filename;
+}
+
+void tool_zig_outs_set_alloc_filename(struct OutStruct *o, bool v)
+{
+  o->alloc_filename = v;
+}
+
+bool tool_zig_outs_is_cd_filename(const struct OutStruct *o)
+{
+  return (bool)o->is_cd_filename;
+}
+
+void tool_zig_outs_set_is_cd_filename(struct OutStruct *o, bool v)
+{
+  o->is_cd_filename = v;
+}
+
+bool tool_zig_outs_regular_file(const struct OutStruct *o)
+{
+  return (bool)o->regular_file;
+}
+
+void tool_zig_outs_set_regular_file(struct OutStruct *o, bool v)
+{
+  o->regular_file = v;
+}
+
+bool tool_zig_outs_fopened(const struct OutStruct *o)
+{
+  return (bool)o->fopened;
+}
+
+void tool_zig_outs_set_fopened(struct OutStruct *o, bool v)
+{
+  o->fopened = v;
+}
+
+bool tool_zig_outs_out_null(const struct OutStruct *o)
+{
+  return (bool)o->out_null;
+}
+
+void tool_zig_outs_reset_utf8seq(struct OutStruct *o)
+{
+#ifdef _WIN32
+  if(o->utf8seq[0])
+    memset(o->utf8seq, 0, sizeof(o->utf8seq));
+#else
+  (void)o;
+#endif
+}
+
+struct OperationConfig *tool_zig_hdrcb_config(const struct HdrCbData *h)
+{
+  return h->config;
+}
+
+struct slist_wc *tool_zig_hdrcb_headlist(const struct HdrCbData *h)
+{
+  return h->headlist;
+}
+
+void tool_zig_hdrcb_set_headlist(struct HdrCbData *h, struct slist_wc *l)
+{
+  h->headlist = l;
+}
+
+bool tool_zig_hdrcb_honor_cd_filename(const struct HdrCbData *h)
+{
+  return h->honor_cd_filename;
+}
+
+void tool_zig_hdrcb_set_honor_cd_filename(struct HdrCbData *h, bool v)
+{
+  h->honor_cd_filename = v;
+}
+
+struct per_transfer *tool_zig_per_next(const struct per_transfer *p)
+{
+  return p->next;
+}
+
+struct OperationConfig *tool_zig_per_config(const struct per_transfer *p)
+{
+  return p->config;
+}
+
+const struct curl_certinfo *tool_zig_per_certinfo(const struct per_transfer *p)
+{
+  return p->certinfo;
+}
+
+void tool_zig_per_set_certinfo(struct per_transfer *p,
+                               const struct curl_certinfo *ci)
+{
+  p->certinfo = ci;
+}
+
+CURL *tool_zig_per_curl(const struct per_transfer *p)
+{
+  return p->curl;
+}
+
+const char *tool_zig_per_uploadfile(const struct per_transfer *p)
+{
+  return p->uploadfile;
+}
+
+long tool_zig_per_num_retries(const struct per_transfer *p)
+{
+  return p->num_retries;
+}
+
+const struct curltime *tool_zig_per_start_ptr(const struct per_transfer *p)
+{
+  return &p->start;
+}
+
+const char *tool_zig_per_url(const struct per_transfer *p)
+{
+  return p->url;
+}
+
+curl_off_t tool_zig_per_urlnum(const struct per_transfer *p)
+{
+  return p->urlnum;
+}
+
+const char *tool_zig_per_out_scheme(const struct per_transfer *p)
+{
+  return p->out_scheme;
+}
+
+void tool_zig_per_set_out_scheme(struct per_transfer *p, const char *s)
+{
+  p->out_scheme = s;
+}
+
+int tool_zig_per_infd(const struct per_transfer *p)
+{
+  return p->infd;
+}
+
+struct ProgressData *tool_zig_per_progressbar(struct per_transfer *p)
+{
+  return &p->progressbar;
+}
+
+struct OutStruct *tool_zig_per_outs(struct per_transfer *p)
+{
+  return &p->outs;
+}
+
+struct OutStruct *tool_zig_per_heads(struct per_transfer *p)
+{
+  return &p->heads;
+}
+
+struct OutStruct *tool_zig_per_etag_save(struct per_transfer *p)
+{
+  return &p->etag_save;
+}
+
+struct HdrCbData *tool_zig_per_hdrcbdata(struct per_transfer *p)
+{
+  return &p->hdrcbdata;
+}
+
+long tool_zig_per_num_headers(const struct per_transfer *p)
+{
+  return p->num_headers;
+}
+
+void tool_zig_per_set_num_headers(struct per_transfer *p, long n)
+{
+  p->num_headers = n;
+}
+
+curl_off_t tool_zig_per_dltotal(const struct per_transfer *p)
+{
+  return p->dltotal;
+}
+
+void tool_zig_per_set_dltotal(struct per_transfer *p, curl_off_t v)
+{
+  p->dltotal = v;
+}
+
+curl_off_t tool_zig_per_dlnow(const struct per_transfer *p)
+{
+  return p->dlnow;
+}
+
+void tool_zig_per_set_dlnow(struct per_transfer *p, curl_off_t v)
+{
+  p->dlnow = v;
+}
+
+curl_off_t tool_zig_per_ultotal(const struct per_transfer *p)
+{
+  return p->ultotal;
+}
+
+void tool_zig_per_set_ultotal(struct per_transfer *p, curl_off_t v)
+{
+  p->ultotal = v;
+}
+
+curl_off_t tool_zig_per_ulnow(const struct per_transfer *p)
+{
+  return p->ulnow;
+}
+
+void tool_zig_per_set_ulnow(struct per_transfer *p, curl_off_t v)
+{
+  p->ulnow = v;
+}
+
+curl_off_t tool_zig_per_uploadfilesize(const struct per_transfer *p)
+{
+  return p->uploadfilesize;
+}
+
+curl_off_t tool_zig_per_uploadedsofar(const struct per_transfer *p)
+{
+  return p->uploadedsofar;
+}
+
+bool tool_zig_per_dltotal_added(const struct per_transfer *p)
+{
+  return (bool)p->dltotal_added;
+}
+
+void tool_zig_per_set_dltotal_added(struct per_transfer *p, bool v)
+{
+  p->dltotal_added = v;
+}
+
+bool tool_zig_per_ultotal_added(const struct per_transfer *p)
+{
+  return (bool)p->ultotal_added;
+}
+
+void tool_zig_per_set_ultotal_added(struct per_transfer *p, bool v)
+{
+  p->ultotal_added = v;
+}
+
+bool tool_zig_per_noprogress(const struct per_transfer *p)
+{
+  return (bool)p->noprogress;
+}
+
+bool tool_zig_per_was_last_header_empty(const struct per_transfer *p)
+{
+  return (bool)p->was_last_header_empty;
+}
+
+void tool_zig_per_set_was_last_header_empty(struct per_transfer *p, bool v)
+{
+  p->was_last_header_empty = v;
+}
+
+bool tool_zig_per_abort(const struct per_transfer *p)
+{
+  return (bool)p->abort;
+}
+
+const char *tool_zig_per_errorbuffer(const struct per_transfer *p)
+{
+  return p->errorbuffer;
+}
+
+bool tool_zig_scheme_is_http_or_https(const char *scheme)
+{
+  return (scheme == proto_http || scheme == proto_https);
+}
+
+bool tool_zig_scheme_is_header_shown(const char *scheme)
+{
+  return (scheme == proto_http || scheme == proto_https ||
+          scheme == proto_rtsp || scheme == proto_file);
+}
+
+char *tool_zig_sanitize_filename(char *copy)
+{
+#if defined(_WIN32) || defined(MSDOS)
+  char *sanitized;
+  SANITIZEcode sc = sanitize_file_name(&sanitized, copy, 0);
+  curlx_safefree(copy);
+  if(sc)
+    return NULL;
+  return sanitized;
+#else
+  return copy;
+#endif
+}
+
+bool tool_zig_truncate_regular_stream(FILE *stream)
+{
+  curlx_struct_stat file;
+  int fd = fileno(stream);
+  if((fd != -1) &&
+     !curlx_fstat(fd, &file) &&
+     (S_ISREG(file.st_mode) &&
+      toolx_ftruncate(fd, 0)))
+    return FALSE;
+  return TRUE;
+}
+
+void tool_zig_waitfd(int waitms, int fd)
+{
+#ifndef _WIN32
+#ifdef HAVE_POLL
+  struct pollfd set;
+  set.fd = fd;
+  set.events = POLLIN;
+  set.revents = 0;
+  poll(&set, 1, waitms);
+#else
+  fd_set bits;
+  struct timeval timeout;
+  if(fd < FD_SETSIZE) {
+    timeout.tv_sec = waitms / 1000;
+    timeout.tv_usec = (int)((waitms % 1000) * 1000);
+    FD_ZERO(&bits);
+    FD_SET(fd, &bits);
+    select(fd + 1, &bits, NULL, NULL, &timeout);
+  }
+#endif
+#else
+  (void)waitms;
+  (void)fd;
+#endif
+}
+
+ssize_t tool_zig_read_fd(struct per_transfer *per, char *buffer,
+                         size_t nbytes, bool *is_eagain)
+{
+  ssize_t rc = 0;
+  *is_eagain = FALSE;
+#ifdef _WIN32
+  if(per->uploadfile && !strcmp(per->uploadfile, ".") && per->infd > 0) {
+#ifndef CURL_WINDOWS_UWP
+    rc = sread(per->infd, buffer, curlx_uztosi(nbytes));
+    if(rc < 0) {
+      if(SOCK_EAGAIN(SOCKERRNO)) {
+        errno = 0;
+        *is_eagain = TRUE;
+        return -1;
+      }
+      rc = 0;
+    }
+#else
+    warnf("per->infd != 0: FD == %d. "
+          "This behavior is only supported on desktop Windows", per->infd);
+#endif
+  }
+  else
+#endif
+  {
+    rc = read(per->infd, buffer, nbytes);
+    if(rc < 0) {
+      if(errno == EAGAIN) {
+        errno = 0;
+        *is_eagain = TRUE;
+        return -1;
+      }
+      rc = 0;
+    }
+  }
+  return rc;
+}
+
+int tool_zig_seek_fd(int fd, curl_off_t offset, int whence)
+{
+#if (SIZEOF_CURL_OFF_T > SIZEOF_OFF_T) && !defined(_WIN32)
+#define OUR_MAX_SEEK_L (2147483647L - 1L)
+#define OUR_MAX_SEEK_O (0x7FFFFFFF - 0x1)
+  if(offset > OUR_MAX_SEEK_O) {
+    curl_off_t left = offset;
+    if(whence != SEEK_SET)
+      return CURL_SEEKFUNC_FAIL;
+    if(curl_lseek(fd, 0, SEEK_SET) == LSEEK_ERROR)
+      return CURL_SEEKFUNC_FAIL;
+    while(left) {
+      long step = (left > OUR_MAX_SEEK_O) ? OUR_MAX_SEEK_L : (long)left;
+      if(curl_lseek(fd, step, SEEK_CUR) == LSEEK_ERROR)
+        return CURL_SEEKFUNC_FAIL;
+      left -= step;
+    }
+    return CURL_SEEKFUNC_OK;
+  }
+#endif
+  if(curl_lseek(fd, offset, whence) == LSEEK_ERROR)
+    return CURL_SEEKFUNC_CANTSEEK;
+  return CURL_SEEKFUNC_OK;
+}
+
+int tool_zig_ftruncate64(int fd, curl_off_t where)
+{
+  return toolx_ftruncate(fd, where);
+}
+
+curl_socket_t tool_zig_open_socket(int family, int socktype, int protocol)
+{
+  return CURL_SOCKET(family, socktype, protocol);
+}
+
+#ifdef _WIN32
+#define TOOL_ZIG_OPENMODE (_S_IREAD | _S_IWRITE)
+#else
+#define TOOL_ZIG_OPENMODE (S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | \
+                           S_IROTH | S_IWOTH)
+#endif
+
+int tool_zig_open_excl(const char *fname, bool *is_exist_or_isdir)
+{
+  int fd;
+  do {
+    fd = curlx_open(fname, O_CREAT | O_WRONLY | O_EXCL | CURL_O_BINARY,
+                    TOOL_ZIG_OPENMODE);
+    /* !checksrc! disable ERRNOVAR 1 */
+  } while(fd == -1 && errno == EINTR);
+  *is_exist_or_isdir = (fd == -1 && (errno == EEXIST || errno == EISDIR));
+  return fd;
+}
+
+FILE *tool_zig_fdopen_wb(int fd)
+{
+  FILE *file = curlx_fdopen(fd, "wb");
+  if(!file)
+    curlx_close(fd);
+  return file;
+}
+
+const char *tool_zig_strerror_errno(char *buf, size_t len)
+{
+  return curlx_strerror(errno, buf, len);
+}
+
+int tool_zig_win_console_write(FILE *stream, struct OutStruct *outs,
+                               char *buffer, size_t bytes, size_t *rc_out)
+{
+#ifdef _WIN32
+  CONSOLE_SCREEN_BUFFER_INFO console_info;
+  intptr_t fhnd = _get_osfhandle(fileno(stream));
+  if(isatty(fileno(stream)) &&
+     GetConsoleScreenBufferInfo((HANDLE)fhnd, &console_info)) {
+    DWORD chars_written;
+    unsigned char *rbuf = (unsigned char *)buffer;
+    DWORD rlen = (DWORD)bytes;
+
+    if(outs->utf8seq[0] && rlen) {
+      bool complete = FALSE;
+      if(0xC0 <= outs->utf8seq[0] && outs->utf8seq[0] < 0xE0) {
+        outs->utf8seq[1] = *rbuf++;
+        --rlen;
+        complete = TRUE;
+      }
+      else if(0xE0 <= outs->utf8seq[0] && outs->utf8seq[0] < 0xF0) {
+        if(!outs->utf8seq[1]) {
+          outs->utf8seq[1] = *rbuf++;
+          --rlen;
+        }
+        if(rlen && !outs->utf8seq[2]) {
+          outs->utf8seq[2] = *rbuf++;
+          --rlen;
+          complete = TRUE;
+        }
+      }
+      else if(0xF0 <= outs->utf8seq[0] && outs->utf8seq[0] < 0xF8) {
+        if(!outs->utf8seq[1]) {
+          outs->utf8seq[1] = *rbuf++;
+          --rlen;
+        }
+        if(rlen && !outs->utf8seq[2]) {
+          outs->utf8seq[2] = *rbuf++;
+          --rlen;
+        }
+        if(rlen && !outs->utf8seq[3]) {
+          outs->utf8seq[3] = *rbuf++;
+          --rlen;
+          complete = TRUE;
+        }
+      }
+
+      if(complete) {
+        WCHAR prefix[3] = { 0 };
+        if(MultiByteToWideChar(CP_UTF8, 0, (LPCSTR)outs->utf8seq, -1,
+                               prefix, CURL_ARRAYSIZE(prefix))) {
+          if(!WriteConsoleW((HANDLE)fhnd, prefix, prefix[1] ? 2 : 1,
+                            &chars_written, NULL))
+            return -1;
+        }
+        memset(outs->utf8seq, 0, sizeof(outs->utf8seq));
+      }
+    }
+
+    if(!outs->utf8seq[0] && rlen && (rbuf[rlen - 1] & 0x80)) {
+      if(0xC0 <= rbuf[rlen - 1] && rbuf[rlen - 1] < 0xF8) {
+        outs->utf8seq[0] = rbuf[rlen - 1];
+        rlen -= 1;
+      }
+      else if(rlen >= 2 && (0x80 <= rbuf[rlen - 1] && rbuf[rlen - 1] < 0xC0)) {
+        if(0xE0 <= rbuf[rlen - 2] && rbuf[rlen - 2] < 0xF8) {
+          outs->utf8seq[0] = rbuf[rlen - 2];
+          outs->utf8seq[1] = rbuf[rlen - 1];
+          rlen -= 2;
+        }
+        else if(rlen >= 3 &&
+                (0x80 <= rbuf[rlen - 2] && rbuf[rlen - 2] < 0xC0)) {
+          if(0xF0 <= rbuf[rlen - 3] && rbuf[rlen - 3] < 0xF8) {
+            outs->utf8seq[0] = rbuf[rlen - 3];
+            outs->utf8seq[1] = rbuf[rlen - 2];
+            outs->utf8seq[2] = rbuf[rlen - 1];
+            rlen -= 3;
+          }
+        }
+      }
+    }
+
+    if(rlen) {
+      DWORD len = (DWORD)MultiByteToWideChar(CP_UTF8, 0, (LPCSTR)rbuf,
+                                             (int)rlen, NULL, 0);
+      if(!len)
+        return -1;
+      if(len > global->term.len) {
+        wchar_t *buf = curlx_realloc(global->term.buf, len * sizeof(wchar_t));
+        if(!buf)
+          return -1;
+        global->term.len = len;
+        global->term.buf = buf;
+      }
+      len = (DWORD)MultiByteToWideChar(CP_UTF8, 0, (LPCSTR)rbuf, (int)rlen,
+                                       global->term.buf, (int)len);
+      if(!len)
+        return -1;
+      if(!WriteConsoleW((HANDLE)fhnd, global->term.buf,
+                        len, &chars_written, NULL))
+        return -1;
+    }
+
+    *rc_out = bytes;
+    return 1;
+  }
+#else
+  (void)stream;
+  (void)outs;
+  (void)buffer;
+  (void)bytes;
+  (void)rc_out;
+#endif
+  return 0;
+}
+
+bool tool_zig_fflush_retry(FILE *stream)
+{
+  int res;
+  do {
+    res = fflush(stream);
+    /* !checksrc! disable ERRNOVAR 1 */
+  } while(res && errno == EINTR);
+  return (res == 0);
+}
+
+void tool_zig_gettime_now(curl_off_t *secs, unsigned int *usecs)
+{
+#ifdef HAVE_GETTIMEOFDAY
+  struct timeval cnow;
+  gettimeofday(&cnow, NULL);
+  *secs = (curl_off_t)cnow.tv_sec;
+  *usecs = (unsigned int)cnow.tv_usec;
+#else
+  *secs = (curl_off_t)time(NULL);
+  *usecs = 0;
+#endif
+#ifdef DEBUGBUILD
+  {
+    const char *timestr = getenv("CURL_TIME");
+    if(timestr) {
+      curl_off_t val;
+      curlx_str_number(&timestr, &val, TIME_T_MAX);
+      *secs = val;
+      *usecs = (unsigned int)(val % 1000000);
+    }
+  }
+#endif
+}
+
+bool tool_zig_strftime_utc(curl_off_t secs, const char *fmt,
+                           char *output, size_t outsize)
+{
+  struct tm utc;
+  if(curlx_gmtime((time_t)secs, &utc))
+    return FALSE;
+#ifdef CURL_HAVE_DIAG
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
+  if(!strftime(output, outsize, fmt, &utc))
+    return FALSE;
+#ifdef CURL_HAVE_DIAG
+#pragma GCC diagnostic pop
+#endif
+  return TRUE;
+}
+
