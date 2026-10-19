@@ -421,3 +421,84 @@ test "cli_help_params: ipfs_gateway URL rewrite with --ipfs-gateway" {
         ) != null,
     );
 }
+
+test "cli_getparam_setopt: --help category listing and --help all" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+
+    const help_default = try std.process.run(gpa, io, .{
+        .argv = &.{ build_options.curl_exe_path, "--help" },
+    });
+    defer gpa.free(help_default.stdout);
+    defer gpa.free(help_default.stderr);
+
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, help_default.term);
+    try std.testing.expect(std.mem.find(u8, help_default.stdout, "--data <data>") != null);
+    try std.testing.expect(std.mem.find(u8, help_default.stdout, "--user-agent <name>") != null);
+
+    const help_http = try std.process.run(gpa, io, .{
+        .argv = &.{ build_options.curl_exe_path, "--help", "http" },
+    });
+    defer gpa.free(help_http.stdout);
+    defer gpa.free(help_http.stderr);
+
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, help_http.term);
+    try std.testing.expect(std.mem.find(u8, help_http.stdout, "--cookie <data|filename>") != null);
+    try std.testing.expect(std.mem.find(u8, help_http.stdout, "--location") != null);
+}
+
+test "cli_getparam_setopt: --libcurl generates C source and parse_args handles --next" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(io, .{ .sub_path = "part1.txt", .data = "first-" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "part2.txt", .data = "second" });
+
+    const dir_path = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir_path);
+
+    const base_url = try makeFileUrl(gpa, dir_path);
+    defer gpa.free(base_url);
+
+    const url1 = try std.fmt.allocPrint(gpa, "{s}/part1.txt", .{base_url});
+    defer gpa.free(url1);
+    const url2 = try std.fmt.allocPrint(gpa, "{s}/part2.txt", .{base_url});
+    defer gpa.free(url2);
+    const libcurl_c = try std.fmt.allocPrint(gpa, "{s}/gen.c", .{dir_path});
+    defer gpa.free(libcurl_c);
+
+    const result = try std.process.run(gpa, io, .{
+        .argv = &.{
+            build_options.curl_exe_path,
+            "-sS",
+            "-A",
+            "ZigAgent/1.0",
+            "-H",
+            "X-Test: one\ttwo",
+            "--max-filesize",
+            "10K",
+            "--libcurl",
+            libcurl_c,
+            url1,
+            "-:",
+            "-s",
+            url2,
+        },
+    });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, result.term);
+    try std.testing.expectEqualStrings("first-second", result.stdout);
+
+    const generated = try tmp.dir.readFileAlloc(io, "gen.c", gpa, .limited(16384));
+    defer gpa.free(generated);
+
+    try std.testing.expect(std.mem.find(u8, generated, "CURLOPT_USERAGENT, \"ZigAgent/1.0\"") != null);
+    try std.testing.expect(std.mem.find(u8, generated, "curl_slist_append(slist1, \"X-Test: one\\ttwo\")") != null);
+    try std.testing.expect(std.mem.find(u8, generated, "CURLOPT_HTTPHEADER, slist1") != null);
+    try std.testing.expect(std.mem.find(u8, generated, "CURLOPT_MAXFILESIZE_LARGE, (curl_off_t)10240") != null);
+}
