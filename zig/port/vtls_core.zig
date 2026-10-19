@@ -1249,62 +1249,30 @@ pub const CurlBlob = extern struct {
 // ============================================================================
 
 const apple = struct {
-    const CFTypeRef = *const anyopaque;
-    const CFDataRef = *const anyopaque;
-    const CFStringRef = *const anyopaque;
-    const CFErrorRef = *const anyopaque;
-    const CFMutableArrayRef = *anyopaque;
-    const SecTrustRef = *anyopaque;
-    const SecPolicyRef = *anyopaque;
-    const SecCertificateRef = *anyopaque;
-    const CFIndex = isize;
-    const CFStringEncoding = u32;
-    const CFOptionFlags = usize;
-    const OSStatus = i32;
+    pub const SslFilterConfig = @import("vtls_scache_asn1.zig").SslFilterConfig;
 
-    const kCFStringEncodingUTF8: CFStringEncoding = 0x08000100;
-    const noErr: OSStatus = 0;
-    const kSecRevocationOCSPMethod: CFOptionFlags = (1 << 0);
-    const kSecRevocationCRLMethod: CFOptionFlags = (1 << 1);
-    const kSecRevocationUseAnyAvailableMethod: CFOptionFlags = kSecRevocationOCSPMethod | kSecRevocationCRLMethod;
-    const kSecRevocationRequirePositiveResponse: CFOptionFlags = (1 << 3);
-    const errSecIncompleteCertRevocationCheck: CFIndex = -67635;
+    pub const CFTypeRef = *const anyopaque;
+    pub const CFDataRef = *const anyopaque;
+    pub const CFStringRef = *const anyopaque;
+    pub const CFErrorRef = *const anyopaque;
+    pub const CFMutableArrayRef = *anyopaque;
+    pub const SecTrustRef = *anyopaque;
+    pub const SecPolicyRef = *anyopaque;
+    pub const SecCertificateRef = *anyopaque;
+    pub const CFIndex = isize;
+    pub const CFStringEncoding = u32;
+    pub const CFOptionFlags = usize;
+    pub const OSStatus = i32;
 
-    // On Darwin (SysV ABI), `uint8_t ssl_options; uint8_t version; BIT(...)` packs the bitfields
-    // into the upper 16 bits of the 32-bit word starting at `ssl_options`.
-    const SslFilterConfigDarwin = extern struct {
-        CApath: ?[*:0]u8,
-        CAfile: ?[*:0]u8,
-        issuercert: ?[*:0]u8,
-        clientcert: ?[*:0]u8,
-        cipher_list: ?[*:0]u8,
-        cipher_list13: ?[*:0]u8,
-        signature_algorithms: ?[*:0]u8,
-        pinned_key: ?[*:0]u8,
-        CRLfile: ?[*:0]u8,
-        cert_type: ?[*:0]u8,
-        key: ?[*:0]u8,
-        key_type: ?[*:0]u8,
-        key_passwd: ?[*:0]u8,
-        cert_blob: ?*CurlBlob,
-        ca_info_blob: ?*CurlBlob,
-        issuercert_blob: ?*CurlBlob,
-        key_blob: ?*CurlBlob,
-        curves: ?[*:0]u8,
-        version_max: u32,
-        ssl_options: u8,
-        version: u8,
-        flags: u16,
+    pub const kCFStringEncodingUTF8: CFStringEncoding = 0x08000100;
+    pub const noErr: OSStatus = 0;
+    pub const kSecRevocationOCSPMethod: CFOptionFlags = (1 << 0);
+    pub const kSecRevocationCRLMethod: CFOptionFlags = (1 << 1);
+    pub const kSecRevocationUseAnyAvailableMethod: CFOptionFlags = kSecRevocationOCSPMethod | kSecRevocationCRLMethod;
+    pub const kSecRevocationRequirePositiveResponse: CFOptionFlags = (1 << 3);
+    pub const errSecIncompleteCertRevocationCheck: CFIndex = -67635;
 
-        fn verifyhost(self: *const SslFilterConfigDarwin) bool {
-            return (self.flags & (1 << 1)) != 0;
-        }
-        fn no_revoke(self: *const SslFilterConfigDarwin) bool {
-            return (self.flags & (1 << 10)) != 0;
-        }
-    };
-
-    const CurlVtlsGetCertDerFn = *const fn (
+    pub const CurlVtlsGetCertDerFn = *const fn (
         cf: *CurlCfilter,
         data: ?*anyopaque,
         cb_user_data: ?*anyopaque,
@@ -1313,14 +1281,138 @@ const apple = struct {
         out_der_len: *usize,
     ) callconv(.c) c_uint;
 
+    pub const SecTrustApi = struct {
+        get_filter_config: *const fn (*CurlCfilter) callconv(.c) ?*SslFilterConfig,
+        CFStringCreateWithCString: *const fn (?*const anyopaque, [*:0]const u8, CFStringEncoding) callconv(.c) ?CFStringRef,
+        CFArrayCreateMutable: *const fn (?*const anyopaque, CFIndex, ?*const anyopaque) callconv(.c) ?CFMutableArrayRef,
+        CFArrayAppendValue: *const fn (CFMutableArrayRef, *const anyopaque) callconv(.c) void,
+        CFRelease: *const fn (*const anyopaque) callconv(.c) void,
+        CFDataCreate: *const fn (?*const anyopaque, ?[*]const u8, CFIndex) callconv(.c) ?CFDataRef,
+        CFErrorGetCode: *const fn (CFErrorRef) callconv(.c) CFIndex,
+        CFErrorCopyDescription: *const fn (CFErrorRef) callconv(.c) ?CFStringRef,
+        CFStringGetLength: *const fn (CFStringRef) callconv(.c) CFIndex,
+        CFStringGetMaximumSizeForEncoding: *const fn (CFIndex, CFStringEncoding) callconv(.c) CFIndex,
+        CFStringGetCString: *const fn (CFStringRef, [*]u8, CFIndex, CFStringEncoding) callconv(.c) u8,
+        SecPolicyCreateSSL: *const fn (bool, ?CFStringRef) callconv(.c) ?SecPolicyRef,
+        SecPolicyCreateRevocation: *const fn (CFOptionFlags) callconv(.c) ?SecPolicyRef,
+        SecCertificateCreateWithData: *const fn (?*const anyopaque, CFDataRef) callconv(.c) ?SecCertificateRef,
+        SecTrustCreateWithCertificates: *const fn (*const anyopaque, *const anyopaque, *?SecTrustRef) callconv(.c) OSStatus,
+        SecTrustSetOCSPResponse: *const fn (SecTrustRef, *const anyopaque) callconv(.c) OSStatus,
+        SecTrustEvaluateWithError: *const fn (SecTrustRef, *?CFErrorRef) callconv(.c) bool,
+        kCFTypeArrayCallBacks: ?*const anyopaque,
+        failf_hook: ?*const fn (data: ?*anyopaque, msg: []const u8) void = null,
+    };
+
+    pub var mock_api: ?SecTrustApi = null;
+
+    const darwin_extern = struct {
+        extern "c" fn Curl_ssl_cf_get_filter_config(cf: *CurlCfilter) ?*SslFilterConfig;
+        extern "c" fn CFStringCreateWithCString(alloc: ?*const anyopaque, cStr: [*:0]const u8, encoding: CFStringEncoding) ?CFStringRef;
+        extern "c" fn CFArrayCreateMutable(allocator: ?*const anyopaque, capacity: CFIndex, callBacks: ?*const anyopaque) ?CFMutableArrayRef;
+        extern "c" fn CFArrayAppendValue(theArray: CFMutableArrayRef, value: *const anyopaque) void;
+        extern "c" fn CFRelease(cf: *const anyopaque) void;
+        extern "c" fn CFDataCreate(allocator: ?*const anyopaque, bytes: ?[*]const u8, length: CFIndex) ?CFDataRef;
+        extern "c" fn CFErrorGetCode(err: CFErrorRef) CFIndex;
+        extern "c" fn CFErrorCopyDescription(err: CFErrorRef) ?CFStringRef;
+        extern "c" fn CFStringGetLength(theString: CFStringRef) CFIndex;
+        extern "c" fn CFStringGetMaximumSizeForEncoding(length: CFIndex, encoding: CFStringEncoding) CFIndex;
+        extern "c" fn CFStringGetCString(theString: CFStringRef, buffer: [*]u8, bufferSize: CFIndex, encoding: CFStringEncoding) u8;
+        extern "c" fn SecPolicyCreateSSL(server: bool, hostname: ?CFStringRef) ?SecPolicyRef;
+        extern "c" fn SecPolicyCreateRevocation(revocationFlags: CFOptionFlags) ?SecPolicyRef;
+        extern "c" fn SecCertificateCreateWithData(allocator: ?*const anyopaque, data: CFDataRef) ?SecCertificateRef;
+        extern "c" fn SecTrustCreateWithCertificates(certificates: *const anyopaque, policies: *const anyopaque, trust: *?SecTrustRef) OSStatus;
+        extern "c" fn SecTrustSetOCSPResponse(trust: SecTrustRef, responseData: *const anyopaque) OSStatus;
+        extern "c" fn SecTrustEvaluateWithError(trust: SecTrustRef, @"error": *?CFErrorRef) bool;
+        extern "c" const kCFTypeArrayCallBacks: anyopaque;
+    };
+
+    extern "c" fn dlopen(path: ?[*:0]const u8, mode: c_int) ?*anyopaque;
     extern "c" fn dlsym(handle: ?*anyopaque, symbol: [*:0]const u8) ?*anyopaque;
     extern "c" fn Curl_failf(data: ?*anyopaque, fmt: [*:0]const u8, ...) void;
 
+    const RTLD_LAZY: c_int = 1;
     const RTLD_DEFAULT: ?*anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -2))));
 
+    fn lookupRawSym(name: [*:0]const u8) ?*anyopaque {
+        if (dlsym(RTLD_DEFAULT, name)) |p| return p;
+        if (builtin.os.tag.isDarwin()) {
+            const S = struct {
+                var sec_handle: ?*anyopaque = null;
+                var cf_handle: ?*anyopaque = null;
+            };
+            if (S.sec_handle == null) {
+                S.sec_handle = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY);
+            }
+            if (S.sec_handle) |h| {
+                if (dlsym(h, name)) |p| return p;
+            }
+            if (S.cf_handle == null) {
+                S.cf_handle = dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", RTLD_LAZY);
+            }
+            if (S.cf_handle) |h| {
+                if (dlsym(h, name)) |p| return p;
+            }
+        }
+        return null;
+    }
+
     fn sym(comptime T: type, name: [*:0]const u8) ?T {
-        const p = dlsym(RTLD_DEFAULT, name) orelse return null;
+        const p = lookupRawSym(name) orelse return null;
         return @ptrCast(@alignCast(p));
+    }
+
+    fn resolveApi() ?SecTrustApi {
+        if (mock_api) |api| return api;
+        if (!builtin.os.tag.isDarwin()) return null;
+
+        if (builtin.output_mode == .Lib and backend_options.ssl == .sectransport) {
+            return .{
+                .get_filter_config = &darwin_extern.Curl_ssl_cf_get_filter_config,
+                .CFStringCreateWithCString = &darwin_extern.CFStringCreateWithCString,
+                .CFArrayCreateMutable = &darwin_extern.CFArrayCreateMutable,
+                .CFArrayAppendValue = &darwin_extern.CFArrayAppendValue,
+                .CFRelease = &darwin_extern.CFRelease,
+                .CFDataCreate = &darwin_extern.CFDataCreate,
+                .CFErrorGetCode = &darwin_extern.CFErrorGetCode,
+                .CFErrorCopyDescription = &darwin_extern.CFErrorCopyDescription,
+                .CFStringGetLength = &darwin_extern.CFStringGetLength,
+                .CFStringGetMaximumSizeForEncoding = &darwin_extern.CFStringGetMaximumSizeForEncoding,
+                .CFStringGetCString = &darwin_extern.CFStringGetCString,
+                .SecPolicyCreateSSL = &darwin_extern.SecPolicyCreateSSL,
+                .SecPolicyCreateRevocation = &darwin_extern.SecPolicyCreateRevocation,
+                .SecCertificateCreateWithData = &darwin_extern.SecCertificateCreateWithData,
+                .SecTrustCreateWithCertificates = &darwin_extern.SecTrustCreateWithCertificates,
+                .SecTrustSetOCSPResponse = &darwin_extern.SecTrustSetOCSPResponse,
+                .SecTrustEvaluateWithError = &darwin_extern.SecTrustEvaluateWithError,
+                .kCFTypeArrayCallBacks = &darwin_extern.kCFTypeArrayCallBacks,
+            };
+        }
+
+        const get_filter_config = if (builtin.output_mode == .Lib and backend_options.ssl != .none)
+            &darwin_extern.Curl_ssl_cf_get_filter_config
+        else
+            (sym(*const fn (*CurlCfilter) callconv(.c) ?*SslFilterConfig, "Curl_ssl_cf_get_filter_config") orelse return null);
+
+        return .{
+            .get_filter_config = get_filter_config,
+            .CFStringCreateWithCString = sym(*const fn (?*const anyopaque, [*:0]const u8, CFStringEncoding) callconv(.c) ?CFStringRef, "CFStringCreateWithCString") orelse return null,
+            .CFArrayCreateMutable = sym(*const fn (?*const anyopaque, CFIndex, ?*const anyopaque) callconv(.c) ?CFMutableArrayRef, "CFArrayCreateMutable") orelse return null,
+            .CFArrayAppendValue = sym(*const fn (CFMutableArrayRef, *const anyopaque) callconv(.c) void, "CFArrayAppendValue") orelse return null,
+            .CFRelease = sym(*const fn (*const anyopaque) callconv(.c) void, "CFRelease") orelse return null,
+            .CFDataCreate = sym(*const fn (?*const anyopaque, ?[*]const u8, CFIndex) callconv(.c) ?CFDataRef, "CFDataCreate") orelse return null,
+            .CFErrorGetCode = sym(*const fn (CFErrorRef) callconv(.c) CFIndex, "CFErrorGetCode") orelse return null,
+            .CFErrorCopyDescription = sym(*const fn (CFErrorRef) callconv(.c) ?CFStringRef, "CFErrorCopyDescription") orelse return null,
+            .CFStringGetLength = sym(*const fn (CFStringRef) callconv(.c) CFIndex, "CFStringGetLength") orelse return null,
+            .CFStringGetMaximumSizeForEncoding = sym(*const fn (CFIndex, CFStringEncoding) callconv(.c) CFIndex, "CFStringGetMaximumSizeForEncoding") orelse return null,
+            .CFStringGetCString = sym(*const fn (CFStringRef, [*]u8, CFIndex, CFStringEncoding) callconv(.c) u8, "CFStringGetCString") orelse return null,
+            .SecPolicyCreateSSL = sym(*const fn (bool, ?CFStringRef) callconv(.c) ?SecPolicyRef, "SecPolicyCreateSSL") orelse return null,
+            .SecPolicyCreateRevocation = sym(*const fn (CFOptionFlags) callconv(.c) ?SecPolicyRef, "SecPolicyCreateRevocation") orelse return null,
+            .SecCertificateCreateWithData = sym(*const fn (?*const anyopaque, CFDataRef) callconv(.c) ?SecCertificateRef, "SecCertificateCreateWithData") orelse return null,
+            .SecTrustCreateWithCertificates = sym(*const fn (*const anyopaque, *const anyopaque, *?SecTrustRef) callconv(.c) OSStatus, "SecTrustCreateWithCertificates") orelse return null,
+            .SecTrustSetOCSPResponse = sym(*const fn (SecTrustRef, *const anyopaque) callconv(.c) OSStatus, "SecTrustSetOCSPResponse") orelse return null,
+            .SecTrustEvaluateWithError = sym(*const fn (SecTrustRef, *?CFErrorRef) callconv(.c) bool, "SecTrustEvaluateWithError") orelse return null,
+            .kCFTypeArrayCallBacks = lookupRawSym("kCFTypeArrayCallBacks"),
+        };
     }
 
     pub fn Curl_vtls_apple_verify(
@@ -1334,26 +1426,8 @@ const apple = struct {
         ocsp_len: usize,
         require_ocsp: bool,
     ) callconv(.c) c_uint {
-        const get_filter_config = sym(*const fn (*CurlCfilter) callconv(.c) ?*SslFilterConfigDarwin, "Curl_ssl_cf_get_filter_config") orelse return CURLE_NOT_BUILT_IN;
-        const CFStringCreateWithCString = sym(*const fn (?*const anyopaque, [*:0]const u8, CFStringEncoding) callconv(.c) ?CFStringRef, "CFStringCreateWithCString") orelse return CURLE_NOT_BUILT_IN;
-        const CFArrayCreateMutable = sym(*const fn (?*const anyopaque, CFIndex, ?*const anyopaque) callconv(.c) ?CFMutableArrayRef, "CFArrayCreateMutable") orelse return CURLE_NOT_BUILT_IN;
-        const CFArrayAppendValue = sym(*const fn (CFMutableArrayRef, *const anyopaque) callconv(.c) void, "CFArrayAppendValue") orelse return CURLE_NOT_BUILT_IN;
-        const CFRelease = sym(*const fn (*const anyopaque) callconv(.c) void, "CFRelease") orelse return CURLE_NOT_BUILT_IN;
-        const CFDataCreate = sym(*const fn (?*const anyopaque, ?[*]const u8, CFIndex) callconv(.c) ?CFDataRef, "CFDataCreate") orelse return CURLE_NOT_BUILT_IN;
-        const CFErrorGetCode = sym(*const fn (CFErrorRef) callconv(.c) CFIndex, "CFErrorGetCode") orelse return CURLE_NOT_BUILT_IN;
-        const CFErrorCopyDescription = sym(*const fn (CFErrorRef) callconv(.c) ?CFStringRef, "CFErrorCopyDescription") orelse return CURLE_NOT_BUILT_IN;
-        const CFStringGetLength = sym(*const fn (CFStringRef) callconv(.c) CFIndex, "CFStringGetLength") orelse return CURLE_NOT_BUILT_IN;
-        const CFStringGetMaximumSizeForEncoding = sym(*const fn (CFIndex, CFStringEncoding) callconv(.c) CFIndex, "CFStringGetMaximumSizeForEncoding") orelse return CURLE_NOT_BUILT_IN;
-        const CFStringGetCString = sym(*const fn (CFStringRef, [*]u8, CFIndex, CFStringEncoding) callconv(.c) u8, "CFStringGetCString") orelse return CURLE_NOT_BUILT_IN;
-        const SecPolicyCreateSSL = sym(*const fn (bool, ?CFStringRef) callconv(.c) ?SecPolicyRef, "SecPolicyCreateSSL") orelse return CURLE_NOT_BUILT_IN;
-        const SecPolicyCreateRevocation = sym(*const fn (CFOptionFlags) callconv(.c) ?SecPolicyRef, "SecPolicyCreateRevocation") orelse return CURLE_NOT_BUILT_IN;
-        const SecCertificateCreateWithData = sym(*const fn (?*const anyopaque, CFDataRef) callconv(.c) ?SecCertificateRef, "SecCertificateCreateWithData") orelse return CURLE_NOT_BUILT_IN;
-        const SecTrustCreateWithCertificates = sym(*const fn (*const anyopaque, *const anyopaque, *?SecTrustRef) callconv(.c) OSStatus, "SecTrustCreateWithCertificates") orelse return CURLE_NOT_BUILT_IN;
-        const SecTrustSetOCSPResponse = sym(*const fn (SecTrustRef, *const anyopaque) callconv(.c) OSStatus, "SecTrustSetOCSPResponse") orelse return CURLE_NOT_BUILT_IN;
-        const SecTrustEvaluateWithError = sym(*const fn (SecTrustRef, *?CFErrorRef) callconv(.c) bool, "SecTrustEvaluateWithError") orelse return CURLE_NOT_BUILT_IN;
-        const kCFTypeArrayCallBacks = dlsym(RTLD_DEFAULT, "kCFTypeArrayCallBacks");
-
-        const conn_config = get_filter_config(cf) orelse return CURLE_BAD_FUNCTION_ARGUMENT;
+        const api = resolveApi() orelse return CURLE_NOT_BUILT_IN;
+        const conn_config = api.get_filter_config(cf) orelse return CURLE_BAD_FUNCTION_ARGUMENT;
         var result: c_uint = CURLE_OK;
         var trust: ?SecTrustRef = null;
         var policy: ?SecPolicyRef = null;
@@ -1366,49 +1440,51 @@ const apple = struct {
 
         defer {
             if (err_desc) |p| mem.free(p);
-            if (error_ref) |r| CFRelease(r);
-            if (err) |r| CFRelease(r);
-            if (host_str) |r| CFRelease(r);
-            if (policies) |r| CFRelease(r);
-            if (policy) |r| CFRelease(r);
-            if (cert_array) |r| CFRelease(r);
-            if (trust) |r| CFRelease(r);
+            if (error_ref) |r| api.CFRelease(r);
+            if (err) |r| api.CFRelease(r);
+            if (host_str) |r| api.CFRelease(r);
+            if (policies) |r| api.CFRelease(r);
+            if (policy) |r| api.CFRelease(r);
+            if (cert_array) |r| api.CFRelease(r);
+            if (trust) |r| api.CFRelease(r);
         }
 
         if (conn_config.verifyhost()) {
             const hname = peer.sni orelse peer.origin.hostname;
-            host_str = CFStringCreateWithCString(null, hname, kCFStringEncodingUTF8);
+            host_str = api.CFStringCreateWithCString(null, hname, kCFStringEncodingUTF8);
             if (host_str == null) {
                 return CURLE_OUT_OF_MEMORY;
             }
         }
 
-        policies = CFArrayCreateMutable(null, 2, kCFTypeArrayCallBacks);
+        policies = api.CFArrayCreateMutable(null, 2, api.kCFTypeArrayCallBacks);
         if (policies == null) {
             return CURLE_OUT_OF_MEMORY;
         }
 
-        policy = SecPolicyCreateSSL(true, host_str);
+        policy = api.SecPolicyCreateSSL(true, host_str);
         if (policy == null) {
             return CURLE_OUT_OF_MEMORY;
         }
 
-        CFArrayAppendValue(policies.?, policy.?);
-        CFRelease(policy.?);
+        api.CFArrayAppendValue(policies.?, policy.?);
+        api.CFRelease(policy.?);
         policy = null;
 
         if (!conn_config.no_revoke()) {
             var revocation_flags: CFOptionFlags = kSecRevocationUseAnyAvailableMethod;
             if (require_ocsp)
                 revocation_flags |= kSecRevocationRequirePositiveResponse;
-            policy = SecPolicyCreateRevocation(revocation_flags);
+            policy = api.SecPolicyCreateRevocation(revocation_flags);
             if (policy == null) {
                 return CURLE_OUT_OF_MEMORY;
             }
-            CFArrayAppendValue(policies.?, policy.?);
+            api.CFArrayAppendValue(policies.?, policy.?);
+            api.CFRelease(policy.?);
+            policy = null;
         }
 
-        cert_array = CFArrayCreateMutable(null, @intCast(num_certs), kCFTypeArrayCallBacks);
+        cert_array = api.CFArrayCreateMutable(null, @intCast(num_certs), api.kCFTypeArrayCallBacks);
         if (cert_array == null) {
             return CURLE_OUT_OF_MEMORY;
         }
@@ -1421,46 +1497,56 @@ const apple = struct {
             if (result != CURLE_OK)
                 return result;
 
-            const certdata = CFDataCreate(null, der, @intCast(der_len)) orelse return CURLE_OUT_OF_MEMORY;
-            const cert = SecCertificateCreateWithData(null, certdata);
-            CFRelease(certdata);
+            const certdata = api.CFDataCreate(null, der, @intCast(der_len)) orelse return CURLE_OUT_OF_MEMORY;
+            const cert = api.SecCertificateCreateWithData(null, certdata);
+            api.CFRelease(certdata);
             if (cert == null) {
                 return CURLE_OUT_OF_MEMORY;
             }
-            CFArrayAppendValue(cert_array.?, cert.?);
-            CFRelease(cert.?);
+            api.CFArrayAppendValue(cert_array.?, cert.?);
+            api.CFRelease(cert.?);
         }
 
-        var status = SecTrustCreateWithCertificates(cert_array.?, policies.?, &trust);
+        var status = api.SecTrustCreateWithCertificates(cert_array.?, policies.?, &trust);
         if (status != noErr or trust == null) {
-            Curl_failf(data, "Apple SecTrust: failed to create validation trust");
+            if (api.failf_hook) |hook| {
+                hook(data, "Apple SecTrust: failed to create validation trust");
+            } else if (builtin.output_mode == .Lib) {
+                Curl_failf(data, "Apple SecTrust: failed to create validation trust");
+            }
             return CURLE_PEER_FAILED_VERIFICATION;
         }
 
-        if (ocsp_len > 0) {
-            const ocspdata = CFDataCreate(null, ocsp_buf, @intCast(ocsp_len)) orelse return CURLE_OUT_OF_MEMORY;
-            status = SecTrustSetOCSPResponse(trust.?, ocspdata);
-            CFRelease(ocspdata);
+        if (ocsp_len > 0 and ocsp_buf != null) {
+            const ocspdata = api.CFDataCreate(null, ocsp_buf, @intCast(ocsp_len)) orelse return CURLE_OUT_OF_MEMORY;
+            status = api.SecTrustSetOCSPResponse(trust.?, ocspdata);
+            api.CFRelease(ocspdata);
             if (status != noErr) {
-                Curl_failf(data, "Apple SecTrust: failed to set OCSP response: %d", @as(c_int, status));
+                if (api.failf_hook) |hook| {
+                    var msg_buf: [128]u8 = undefined;
+                    const msg = std.fmt.bufPrint(&msg_buf, "Apple SecTrust: failed to set OCSP response: {d}", .{status}) catch "Apple SecTrust: failed to set OCSP response";
+                    hook(data, msg);
+                } else if (builtin.output_mode == .Lib) {
+                    Curl_failf(data, "Apple SecTrust: failed to set OCSP response: %d", @as(c_int, status));
+                }
                 return CURLE_PEER_FAILED_VERIFICATION;
             }
         }
 
-        result = if (SecTrustEvaluateWithError(trust.?, &err))
+        result = if (api.SecTrustEvaluateWithError(trust.?, &err))
             CURLE_OK
         else
             CURLE_PEER_FAILED_VERIFICATION;
 
         if (err) |e| {
-            const code = CFErrorGetCode(e);
-            error_ref = CFErrorCopyDescription(e);
+            const code = api.CFErrorGetCode(e);
+            error_ref = api.CFErrorCopyDescription(e);
             if (error_ref) |eref| {
-                const size = CFStringGetMaximumSizeForEncoding(CFStringGetLength(eref), kCFStringEncodingUTF8);
+                const size = api.CFStringGetMaximumSizeForEncoding(api.CFStringGetLength(eref), kCFStringEncodingUTF8);
                 if (size >= 0) {
                     if (mem.malloc(@intCast(size + 1))) |raw_buf| {
                         const buf_ptr: [*]u8 = @ptrCast(raw_buf);
-                        if (CFStringGetCString(eref, buf_ptr, size, kCFStringEncodingUTF8) != 0) {
+                        if (api.CFStringGetCString(eref, buf_ptr, size, kCFStringEncodingUTF8) != 0) {
                             err_desc = buf_ptr;
                         } else {
                             mem.free(raw_buf);
@@ -1470,7 +1556,13 @@ const apple = struct {
             }
             const sep: [*:0]const u8 = if (err_desc != null) ": " else "";
             const desc: [*:0]const u8 = if (err_desc) |p| @ptrCast(p) else "";
-            Curl_failf(data, "Apple SecTrust failure %ld%s%s", @as(c_long, code), sep, desc);
+            if (api.failf_hook) |hook| {
+                var msg_buf: [512]u8 = undefined;
+                const msg = std.fmt.bufPrint(&msg_buf, "Apple SecTrust failure {d}{s}{s}", .{ code, std.mem.span(sep), std.mem.span(desc) }) catch "Apple SecTrust failure";
+                hook(data, msg);
+            } else if (builtin.output_mode == .Lib) {
+                Curl_failf(data, "Apple SecTrust failure %ld%s%s", @as(c_long, code), sep, desc);
+            }
             if (code == errSecIncompleteCertRevocationCheck)
                 result = CURLE_SSL_INVALIDCERTSTATUS;
         }
@@ -2792,4 +2884,603 @@ test "Curl_tls_keylog write_line and write" {
     const content = rbuf[0..nread];
     try std.testing.expect(std.mem.startsWith(u8, content, "LINE_ONE\nLINE_TWO\nCLIENT_RANDOM 00010203"));
     try std.testing.expect(std.mem.endsWith(u8, content, " ABCDEF01\n"));
+}
+
+const apple_test_harness = struct {
+    const ObjKind = enum {
+        string,
+        array,
+        ssl_policy,
+        rev_policy,
+        data,
+        cert,
+        trust,
+        err,
+    };
+
+    const CfObj = struct {
+        kind: ObjKind = .string,
+        refcount: isize = 0,
+        str_buf: [128]u8 = @splat(0),
+        str_len: usize = 0,
+        items: [16]*CfObj = undefined,
+        item_count: usize = 0,
+        retains_items: bool = false,
+        ssl_server: bool = false,
+        ssl_host: ?*CfObj = null,
+        rev_flags: apple.CFOptionFlags = 0,
+        data_buf: [128]u8 = @splat(0),
+        data_len: usize = 0,
+        err_code: apple.CFIndex = 0,
+        err_desc: []const u8 = "",
+    };
+
+    var objs: [64]CfObj = undefined;
+    var obj_count: usize = 0;
+    var refcount_underflow: bool = false;
+    var callbacks_sentinel: u8 = 0xAA;
+
+    const BIT_VERIFYHOST: @FieldType(apple.SslFilterConfig, "flags") = 1 << 1;
+    const BIT_NO_REVOKE: @FieldType(apple.SslFilterConfig, "flags") = 1 << 10;
+
+    var conn_config: apple.SslFilterConfig = std.mem.zeroes(apple.SslFilterConfig);
+    var return_null_config: bool = false;
+    var cert_create_calls: usize = 0;
+    var fail_cert_create_at: ?usize = null;
+    var trust_create_status: apple.OSStatus = apple.noErr;
+    var ocsp_set_status: apple.OSStatus = apple.noErr;
+    var eval_succeeds: bool = true;
+    var eval_error_code: ?apple.CFIndex = null;
+    var eval_error_desc: ?[]const u8 = null;
+
+    var last_ssl_policy_server: bool = false;
+    var last_ssl_policy_has_host: bool = false;
+    var last_ssl_policy_host_buf: [128]u8 = @splat(0);
+    var last_ssl_policy_host_len: usize = 0;
+    var revocation_policy_count: usize = 0;
+    var last_revocation_flags: apple.CFOptionFlags = 0;
+    var trust_policy_count: usize = 0;
+    var trust_cert_count: usize = 0;
+    var ocsp_set_called: bool = false;
+    var last_ocsp_buf: [128]u8 = @splat(0);
+    var last_ocsp_len: usize = 0;
+    var last_failf_buf: [256]u8 = @splat(0);
+    var last_failf_len: usize = 0;
+
+    fn reset() void {
+        obj_count = 0;
+        refcount_underflow = false;
+        conn_config = std.mem.zeroes(apple.SslFilterConfig);
+        return_null_config = false;
+        cert_create_calls = 0;
+        fail_cert_create_at = null;
+        trust_create_status = apple.noErr;
+        ocsp_set_status = apple.noErr;
+        eval_succeeds = true;
+        eval_error_code = null;
+        eval_error_desc = null;
+
+        last_ssl_policy_server = false;
+        last_ssl_policy_has_host = false;
+        last_ssl_policy_host_buf = @splat(0);
+        last_ssl_policy_host_len = 0;
+        revocation_policy_count = 0;
+        last_revocation_flags = 0;
+        trust_policy_count = 0;
+        trust_cert_count = 0;
+        ocsp_set_called = false;
+        last_ocsp_buf = @splat(0);
+        last_ocsp_len = 0;
+        last_failf_buf = @splat(0);
+        last_failf_len = 0;
+    }
+
+    fn allocObj(kind: ObjKind) ?*CfObj {
+        if (obj_count >= objs.len) return null;
+        const o = &objs[obj_count];
+        obj_count += 1;
+        o.* = .{
+            .kind = kind,
+            .refcount = 1,
+        };
+        return o;
+    }
+
+    fn fromOpaque(ptr: *const anyopaque) *CfObj {
+        return @ptrCast(@alignCast(@constCast(ptr)));
+    }
+
+    fn releaseObj(o: *CfObj) void {
+        if (o.refcount <= 0) {
+            refcount_underflow = true;
+            return;
+        }
+        o.refcount -= 1;
+        if (o.refcount == 0 and o.kind == .array and o.retains_items) {
+            for (o.items[0..o.item_count]) |item| {
+                releaseObj(item);
+            }
+        }
+    }
+
+    fn expectZeroLeaks() !void {
+        try std.testing.expect(!refcount_underflow);
+        try std.testing.expect(obj_count > 0);
+        for (objs[0..obj_count]) |o| {
+            try std.testing.expectEqual(@as(isize, 0), o.refcount);
+        }
+    }
+
+    fn lastSslHost() ?[]const u8 {
+        if (!last_ssl_policy_has_host) return null;
+        return last_ssl_policy_host_buf[0..last_ssl_policy_host_len];
+    }
+
+    fn lastFailf() []const u8 {
+        return last_failf_buf[0..last_failf_len];
+    }
+
+    fn mockGetFilterConfig(cf: *CurlCfilter) callconv(.c) ?*apple.SslFilterConfig {
+        _ = cf;
+        if (return_null_config) return null;
+        return &conn_config;
+    }
+
+    fn mockCFStringCreateWithCString(
+        alloc: ?*const anyopaque,
+        c_str: [*:0]const u8,
+        encoding: apple.CFStringEncoding,
+    ) callconv(.c) ?apple.CFStringRef {
+        _ = alloc;
+        if (encoding != apple.kCFStringEncodingUTF8) return null;
+        const o = allocObj(.string) orelse return null;
+        const slice = std.mem.span(c_str);
+        const n = @min(slice.len, o.str_buf.len);
+        @memcpy(o.str_buf[0..n], slice[0..n]);
+        o.str_len = n;
+        return @ptrCast(o);
+    }
+
+    fn mockCFArrayCreateMutable(
+        alloc: ?*const anyopaque,
+        capacity: apple.CFIndex,
+        callbacks: ?*const anyopaque,
+    ) callconv(.c) ?apple.CFMutableArrayRef {
+        _ = alloc;
+        _ = capacity;
+        const o = allocObj(.array) orelse return null;
+        o.retains_items = (callbacks != null);
+        return @ptrCast(o);
+    }
+
+    fn mockCFArrayAppendValue(arr_ref: apple.CFMutableArrayRef, val_ref: *const anyopaque) callconv(.c) void {
+        const arr = fromOpaque(arr_ref);
+        const val = fromOpaque(val_ref);
+        if (arr.item_count < arr.items.len) {
+            arr.items[arr.item_count] = val;
+            arr.item_count += 1;
+            if (arr.retains_items) {
+                val.refcount += 1;
+            }
+        }
+    }
+
+    fn mockCFRelease(cf_ref: *const anyopaque) callconv(.c) void {
+        releaseObj(fromOpaque(cf_ref));
+    }
+
+    fn mockCFDataCreate(
+        alloc: ?*const anyopaque,
+        bytes: ?[*]const u8,
+        length: apple.CFIndex,
+    ) callconv(.c) ?apple.CFDataRef {
+        _ = alloc;
+        if (length < 0) return null;
+        const o = allocObj(.data) orelse return null;
+        const ulen: usize = @intCast(length);
+        const n = @min(ulen, o.data_buf.len);
+        if (bytes) |b| {
+            @memcpy(o.data_buf[0..n], b[0..n]);
+        }
+        o.data_len = n;
+        return @ptrCast(o);
+    }
+
+    fn mockCFErrorGetCode(err_ref: apple.CFErrorRef) callconv(.c) apple.CFIndex {
+        return fromOpaque(err_ref).err_code;
+    }
+
+    fn mockCFErrorCopyDescription(err_ref: apple.CFErrorRef) callconv(.c) ?apple.CFStringRef {
+        const err_obj = fromOpaque(err_ref);
+        const s = allocObj(.string) orelse return null;
+        const n = @min(err_obj.err_desc.len, s.str_buf.len);
+        @memcpy(s.str_buf[0..n], err_obj.err_desc[0..n]);
+        s.str_len = n;
+        return @ptrCast(s);
+    }
+
+    fn mockCFStringGetLength(str_ref: apple.CFStringRef) callconv(.c) apple.CFIndex {
+        return @intCast(fromOpaque(str_ref).str_len);
+    }
+
+    fn mockCFStringGetMaximumSizeForEncoding(
+        length: apple.CFIndex,
+        encoding: apple.CFStringEncoding,
+    ) callconv(.c) apple.CFIndex {
+        _ = encoding;
+        return length * 4 + 1;
+    }
+
+    fn mockCFStringGetCString(
+        str_ref: apple.CFStringRef,
+        buffer: [*]u8,
+        buffer_size: apple.CFIndex,
+        encoding: apple.CFStringEncoding,
+    ) callconv(.c) u8 {
+        _ = encoding;
+        const s = fromOpaque(str_ref);
+        if (buffer_size <= @as(apple.CFIndex, @intCast(s.str_len))) return 0;
+        @memcpy(buffer[0..s.str_len], s.str_buf[0..s.str_len]);
+        buffer[s.str_len] = 0;
+        return 1;
+    }
+
+    fn mockSecPolicyCreateSSL(
+        server: bool,
+        hostname: ?apple.CFStringRef,
+    ) callconv(.c) ?apple.SecPolicyRef {
+        const o = allocObj(.ssl_policy) orelse return null;
+        o.ssl_server = server;
+        last_ssl_policy_server = server;
+        if (hostname) |h_ref| {
+            const h_obj = fromOpaque(h_ref);
+            o.ssl_host = h_obj;
+            last_ssl_policy_has_host = true;
+            @memcpy(last_ssl_policy_host_buf[0..h_obj.str_len], h_obj.str_buf[0..h_obj.str_len]);
+            last_ssl_policy_host_len = h_obj.str_len;
+        } else {
+            last_ssl_policy_has_host = false;
+            last_ssl_policy_host_len = 0;
+        }
+        return @ptrCast(o);
+    }
+
+    fn mockSecPolicyCreateRevocation(flags: apple.CFOptionFlags) callconv(.c) ?apple.SecPolicyRef {
+        const o = allocObj(.rev_policy) orelse return null;
+        o.rev_flags = flags;
+        revocation_policy_count += 1;
+        last_revocation_flags = flags;
+        return @ptrCast(o);
+    }
+
+    fn mockSecCertificateCreateWithData(
+        alloc: ?*const anyopaque,
+        data_ref: apple.CFDataRef,
+    ) callconv(.c) ?apple.SecCertificateRef {
+        _ = alloc;
+        const call_idx = cert_create_calls;
+        cert_create_calls += 1;
+        if (fail_cert_create_at) |fail_idx| {
+            if (call_idx == fail_idx) return null;
+        }
+        const d_obj = fromOpaque(data_ref);
+        if (d_obj.data_len == 0) return null;
+        const c_obj = allocObj(.cert) orelse return null;
+        @memcpy(c_obj.data_buf[0..d_obj.data_len], d_obj.data_buf[0..d_obj.data_len]);
+        c_obj.data_len = d_obj.data_len;
+        return @ptrCast(c_obj);
+    }
+
+    fn mockSecTrustCreateWithCertificates(
+        certs_ref: *const anyopaque,
+        policies_ref: *const anyopaque,
+        out_trust: *?apple.SecTrustRef,
+    ) callconv(.c) apple.OSStatus {
+        if (trust_create_status != apple.noErr) {
+            out_trust.* = null;
+            return trust_create_status;
+        }
+        const certs_arr = fromOpaque(certs_ref);
+        const policies_arr = fromOpaque(policies_ref);
+        trust_cert_count = certs_arr.item_count;
+        trust_policy_count = policies_arr.item_count;
+        const t_obj = allocObj(.trust) orelse {
+            out_trust.* = null;
+            return -1;
+        };
+        out_trust.* = @ptrCast(t_obj);
+        return apple.noErr;
+    }
+
+    fn mockSecTrustSetOCSPResponse(
+        trust_ref: apple.SecTrustRef,
+        ocsp_ref: *const anyopaque,
+    ) callconv(.c) apple.OSStatus {
+        _ = trust_ref;
+        ocsp_set_called = true;
+        const d_obj = fromOpaque(ocsp_ref);
+        @memcpy(last_ocsp_buf[0..d_obj.data_len], d_obj.data_buf[0..d_obj.data_len]);
+        last_ocsp_len = d_obj.data_len;
+        return ocsp_set_status;
+    }
+
+    fn mockSecTrustEvaluateWithError(
+        trust_ref: apple.SecTrustRef,
+        out_err: *?apple.CFErrorRef,
+    ) callconv(.c) bool {
+        _ = trust_ref;
+        if (eval_succeeds) {
+            out_err.* = null;
+            return true;
+        }
+        if (eval_error_code) |code| {
+            if (allocObj(.err)) |e_obj| {
+                e_obj.err_code = code;
+                e_obj.err_desc = eval_error_desc orelse "mock SecTrust evaluation error";
+                out_err.* = @ptrCast(e_obj);
+            } else {
+                out_err.* = null;
+            }
+        } else {
+            out_err.* = null;
+        }
+        return false;
+    }
+
+    fn mockFailf(data: ?*anyopaque, msg: []const u8) void {
+        _ = data;
+        const n = @min(msg.len, last_failf_buf.len);
+        @memcpy(last_failf_buf[0..n], msg[0..n]);
+        last_failf_len = n;
+    }
+
+    fn api() apple.SecTrustApi {
+        return .{
+            .get_filter_config = &mockGetFilterConfig,
+            .CFStringCreateWithCString = &mockCFStringCreateWithCString,
+            .CFArrayCreateMutable = &mockCFArrayCreateMutable,
+            .CFArrayAppendValue = &mockCFArrayAppendValue,
+            .CFRelease = &mockCFRelease,
+            .CFDataCreate = &mockCFDataCreate,
+            .CFErrorGetCode = &mockCFErrorGetCode,
+            .CFErrorCopyDescription = &mockCFErrorCopyDescription,
+            .CFStringGetLength = &mockCFStringGetLength,
+            .CFStringGetMaximumSizeForEncoding = &mockCFStringGetMaximumSizeForEncoding,
+            .CFStringGetCString = &mockCFStringGetCString,
+            .SecPolicyCreateSSL = &mockSecPolicyCreateSSL,
+            .SecPolicyCreateRevocation = &mockSecPolicyCreateRevocation,
+            .SecCertificateCreateWithData = &mockSecCertificateCreateWithData,
+            .SecTrustCreateWithCertificates = &mockSecTrustCreateWithCertificates,
+            .SecTrustSetOCSPResponse = &mockSecTrustSetOCSPResponse,
+            .SecTrustEvaluateWithError = &mockSecTrustEvaluateWithError,
+            .kCFTypeArrayCallBacks = @ptrCast(&callbacks_sentinel),
+            .failf_hook = &mockFailf,
+        };
+    }
+
+    const CertChainCtx = struct {
+        ders: []const []const u8,
+        fail_at_index: ?usize = null,
+        fail_code: c_uint = CURLE_SSL_CACERT_BADFILE,
+        calls: usize = 0,
+    };
+
+    fn testDerCallback(
+        cf: *CurlCfilter,
+        data: ?*anyopaque,
+        cb_user_data: ?*anyopaque,
+        cert_index: usize,
+        out_der: *?[*]u8,
+        out_der_len: *usize,
+    ) callconv(.c) c_uint {
+        _ = cf;
+        _ = data;
+        const ctx: *CertChainCtx = @ptrCast(@alignCast(cb_user_data.?));
+        ctx.calls += 1;
+        if (ctx.fail_at_index) |fail_idx| {
+            if (cert_index == fail_idx) return ctx.fail_code;
+        }
+        const slice = ctx.ders[cert_index];
+        out_der.* = @constCast(slice.ptr);
+        out_der_len.* = slice.len;
+        return CURLE_OK;
+    }
+};
+
+test "Curl_vtls_apple_verify host selection, revocation policy flags, OCSP stapling, and leak-free error paths" {
+    apple.mock_api = apple_test_harness.api();
+    defer apple.mock_api = null;
+
+    var cf: CurlCfilter = std.mem.zeroes(CurlCfilter);
+    var origin: CurlPeer = std.mem.zeroes(CurlPeer);
+    origin.hostname = "origin.example.com";
+    var peer: SslPeer = std.mem.zeroes(SslPeer);
+    peer.origin = &origin;
+
+    const cert0 = [_]u8{ 0x30, 0x82, 0x01, 0x0A, 0x01 };
+    const cert1 = [_]u8{ 0x30, 0x82, 0x01, 0x0B, 0x02 };
+    const cert_slices = [_][]const u8{ &cert0, &cert1 };
+
+    // 1. Trusted chain with verifyhost = true (prefers peer.sni over origin.hostname) and no_revoke = false
+    {
+        apple_test_harness.reset();
+        apple_test_harness.conn_config.setFlag(apple_test_harness.BIT_VERIFYHOST, true);
+        apple_test_harness.conn_config.setFlag(apple_test_harness.BIT_NO_REVOKE, false);
+        try std.testing.expect(apple_test_harness.conn_config.verifyhost());
+        try std.testing.expect(!apple_test_harness.conn_config.no_revoke());
+        peer.sni = "sni.example.com";
+
+        var chain_ctx = apple_test_harness.CertChainCtx{ .ders = &cert_slices };
+        const rc = apple.Curl_vtls_apple_verify(
+            &cf,
+            null,
+            &peer,
+            cert_slices.len,
+            &apple_test_harness.testDerCallback,
+            &chain_ctx,
+            null,
+            0,
+            false,
+        );
+        try std.testing.expectEqual(CURLE_OK, rc);
+        try std.testing.expect(apple_test_harness.last_ssl_policy_server);
+        try std.testing.expectEqualStrings("sni.example.com", apple_test_harness.lastSslHost().?);
+        try std.testing.expectEqual(@as(usize, 1), apple_test_harness.revocation_policy_count);
+        try std.testing.expectEqual(apple.kSecRevocationUseAnyAvailableMethod, apple_test_harness.last_revocation_flags);
+        try std.testing.expectEqual(@as(usize, 2), apple_test_harness.trust_policy_count);
+        try std.testing.expectEqual(@as(usize, 2), apple_test_harness.trust_cert_count);
+        try std.testing.expect(!apple_test_harness.ocsp_set_called);
+        try apple_test_harness.expectZeroLeaks();
+    }
+
+    // 2. Fallback to origin.hostname when peer.sni is null, and verifyhost = false passes null host_str
+    {
+        apple_test_harness.reset();
+        apple_test_harness.conn_config.setFlag(apple_test_harness.BIT_VERIFYHOST, true);
+        peer.sni = null;
+
+        var chain_ctx = apple_test_harness.CertChainCtx{ .ders = &cert_slices };
+        try std.testing.expectEqual(
+            CURLE_OK,
+            apple.Curl_vtls_apple_verify(&cf, null, &peer, cert_slices.len, &apple_test_harness.testDerCallback, &chain_ctx, null, 0, false),
+        );
+        try std.testing.expectEqualStrings("origin.example.com", apple_test_harness.lastSslHost().?);
+        try apple_test_harness.expectZeroLeaks();
+
+        apple_test_harness.reset();
+        apple_test_harness.conn_config.setFlag(apple_test_harness.BIT_VERIFYHOST, false);
+        peer.sni = "ignored-sni.example.com";
+        chain_ctx.calls = 0;
+        try std.testing.expectEqual(
+            CURLE_OK,
+            apple.Curl_vtls_apple_verify(&cf, null, &peer, cert_slices.len, &apple_test_harness.testDerCallback, &chain_ctx, null, 0, false),
+        );
+        try std.testing.expect(apple_test_harness.lastSslHost() == null);
+        try apple_test_harness.expectZeroLeaks();
+    }
+
+    // 3. Revocation policy flags: require_ocsp = true adds kSecRevocationRequirePositiveResponse; no_revoke = true omits revocation policy
+    {
+        apple_test_harness.reset();
+        apple_test_harness.conn_config.setFlag(apple_test_harness.BIT_VERIFYHOST, true);
+        apple_test_harness.conn_config.setFlag(apple_test_harness.BIT_NO_REVOKE, false);
+        peer.sni = "ocsp.example.com";
+
+        var chain_ctx = apple_test_harness.CertChainCtx{ .ders = &cert_slices };
+        try std.testing.expectEqual(
+            CURLE_OK,
+            apple.Curl_vtls_apple_verify(&cf, null, &peer, cert_slices.len, &apple_test_harness.testDerCallback, &chain_ctx, null, 0, true),
+        );
+        try std.testing.expectEqual(@as(usize, 1), apple_test_harness.revocation_policy_count);
+        try std.testing.expectEqual(
+            apple.kSecRevocationUseAnyAvailableMethod | apple.kSecRevocationRequirePositiveResponse,
+            apple_test_harness.last_revocation_flags,
+        );
+        try std.testing.expectEqual(@as(usize, 2), apple_test_harness.trust_policy_count);
+        try apple_test_harness.expectZeroLeaks();
+
+        apple_test_harness.reset();
+        apple_test_harness.conn_config.setFlag(apple_test_harness.BIT_VERIFYHOST, true);
+        apple_test_harness.conn_config.setFlag(apple_test_harness.BIT_NO_REVOKE, true);
+        try std.testing.expect(apple_test_harness.conn_config.no_revoke());
+        chain_ctx.calls = 0;
+        try std.testing.expectEqual(
+            CURLE_OK,
+            apple.Curl_vtls_apple_verify(&cf, null, &peer, cert_slices.len, &apple_test_harness.testDerCallback, &chain_ctx, null, 0, true),
+        );
+        try std.testing.expectEqual(@as(usize, 0), apple_test_harness.revocation_policy_count);
+        try std.testing.expectEqual(@as(usize, 1), apple_test_harness.trust_policy_count);
+        try apple_test_harness.expectZeroLeaks();
+    }
+
+    // 4. Stapled OCSP response attachment and SecTrustSetOCSPResponse error handling
+    {
+        const ocsp_staple = [_]u8{ 0x30, 0x03, 0x0A, 0x01, 0x00 };
+        apple_test_harness.reset();
+        apple_test_harness.conn_config.setFlag(apple_test_harness.BIT_VERIFYHOST, true);
+
+        var chain_ctx = apple_test_harness.CertChainCtx{ .ders = &cert_slices };
+        try std.testing.expectEqual(
+            CURLE_OK,
+            apple.Curl_vtls_apple_verify(&cf, null, &peer, cert_slices.len, &apple_test_harness.testDerCallback, &chain_ctx, &ocsp_staple, ocsp_staple.len, true),
+        );
+        try std.testing.expect(apple_test_harness.ocsp_set_called);
+        try std.testing.expectEqualSlices(u8, &ocsp_staple, apple_test_harness.last_ocsp_buf[0..apple_test_harness.last_ocsp_len]);
+        try apple_test_harness.expectZeroLeaks();
+
+        apple_test_harness.reset();
+        apple_test_harness.conn_config.setFlag(apple_test_harness.BIT_VERIFYHOST, true);
+        apple_test_harness.ocsp_set_status = -50;
+        chain_ctx.calls = 0;
+        try std.testing.expectEqual(
+            CURLE_PEER_FAILED_VERIFICATION,
+            apple.Curl_vtls_apple_verify(&cf, null, &peer, cert_slices.len, &apple_test_harness.testDerCallback, &chain_ctx, &ocsp_staple, ocsp_staple.len, true),
+        );
+        try std.testing.expect(apple_test_harness.ocsp_set_called);
+        try std.testing.expectEqualStrings("Apple SecTrust: failed to set OCSP response: -50", apple_test_harness.lastFailf());
+        try apple_test_harness.expectZeroLeaks();
+    }
+
+    // 5. errSecIncompleteCertRevocationCheck (-67635) -> CURLE_SSL_INVALIDCERTSTATUS vs untrusted root -> CURLE_PEER_FAILED_VERIFICATION
+    {
+        apple_test_harness.reset();
+        apple_test_harness.conn_config.setFlag(apple_test_harness.BIT_VERIFYHOST, true);
+        apple_test_harness.eval_succeeds = false;
+        apple_test_harness.eval_error_code = apple.errSecIncompleteCertRevocationCheck;
+        apple_test_harness.eval_error_desc = "Incomplete revocation check";
+
+        var chain_ctx = apple_test_harness.CertChainCtx{ .ders = &cert_slices };
+        try std.testing.expectEqual(
+            CURLE_SSL_INVALIDCERTSTATUS,
+            apple.Curl_vtls_apple_verify(&cf, null, &peer, cert_slices.len, &apple_test_harness.testDerCallback, &chain_ctx, null, 0, true),
+        );
+        try std.testing.expectEqualStrings("Apple SecTrust failure -67635: Incomplete revocation check", apple_test_harness.lastFailf());
+        try apple_test_harness.expectZeroLeaks();
+
+        apple_test_harness.reset();
+        apple_test_harness.conn_config.setFlag(apple_test_harness.BIT_VERIFYHOST, true);
+        apple_test_harness.eval_succeeds = false;
+        apple_test_harness.eval_error_code = -67843; // errSecNotTrusted
+        apple_test_harness.eval_error_desc = "Root certificate is not trusted";
+        chain_ctx.calls = 0;
+        try std.testing.expectEqual(
+            CURLE_PEER_FAILED_VERIFICATION,
+            apple.Curl_vtls_apple_verify(&cf, null, &peer, cert_slices.len, &apple_test_harness.testDerCallback, &chain_ctx, null, 0, false),
+        );
+        try std.testing.expectEqualStrings("Apple SecTrust failure -67843: Root certificate is not trusted", apple_test_harness.lastFailf());
+        try apple_test_harness.expectZeroLeaks();
+    }
+
+    // 6. der_cb error propagation and SecCertificateCreateWithData failure cleanup with zero CF object leaks
+    {
+        apple_test_harness.reset();
+        apple_test_harness.conn_config.setFlag(apple_test_harness.BIT_VERIFYHOST, true);
+
+        var failing_chain = apple_test_harness.CertChainCtx{
+            .ders = &cert_slices,
+            .fail_at_index = 1,
+            .fail_code = CURLE_SSL_CACERT_BADFILE,
+        };
+        try std.testing.expectEqual(
+            CURLE_SSL_CACERT_BADFILE,
+            apple.Curl_vtls_apple_verify(&cf, null, &peer, cert_slices.len, &apple_test_harness.testDerCallback, &failing_chain, null, 0, false),
+        );
+        try std.testing.expectEqual(@as(usize, 2), failing_chain.calls);
+        try apple_test_harness.expectZeroLeaks();
+
+        apple_test_harness.reset();
+        apple_test_harness.conn_config.setFlag(apple_test_harness.BIT_VERIFYHOST, true);
+        apple_test_harness.fail_cert_create_at = 1;
+
+        var ok_chain = apple_test_harness.CertChainCtx{ .ders = &cert_slices };
+        try std.testing.expectEqual(
+            CURLE_OUT_OF_MEMORY,
+            apple.Curl_vtls_apple_verify(&cf, null, &peer, cert_slices.len, &apple_test_harness.testDerCallback, &ok_chain, null, 0, false),
+        );
+        try std.testing.expectEqual(@as(usize, 2), ok_chain.calls);
+        try apple_test_harness.expectZeroLeaks();
+    }
+
+    // 7. Curl_vtls_apple_verifies_ocsp returns true
+    try std.testing.expect(apple.Curl_vtls_apple_verifies_ocsp(&cf, null));
 }
