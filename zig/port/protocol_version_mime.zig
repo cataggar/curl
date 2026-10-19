@@ -7,6 +7,7 @@ const os_leaf = @import("os_leaf.zig");
 const io_buffers = @import("io_buffers.zig");
 const small_protocols = @import("small_protocols.zig");
 const imap_ws = @import("imap_ws.zig");
+const pop3_smtp = @import("pop3_smtp.zig");
 
 pub const CURLcode = c_uint;
 pub const CURLE_OK: CURLcode = 0;
@@ -134,9 +135,7 @@ const Curl_protocol_gophers = small_protocols.Curl_protocol_gophers;
 extern const Curl_protocol_http: Curl_protocol_opaque;
 const Curl_protocol_mqtt = small_protocols.Curl_protocol_mqtt;
 const Curl_protocol_mqtts = small_protocols.Curl_protocol_mqtts;
-extern const Curl_protocol_pop3: Curl_protocol_opaque;
 extern const Curl_protocol_rtsp: Curl_protocol_opaque;
-extern const Curl_protocol_smtp: Curl_protocol_opaque;
 extern const Curl_protocol_telnet: Curl_protocol_opaque;
 extern const Curl_protocol_tftp: Curl_protocol_opaque;
 
@@ -279,7 +278,7 @@ pub export const Curl_scheme_mqtts: Curl_scheme = .{
 
 pub export const Curl_scheme_pop3: Curl_scheme = .{
     .name = "pop3",
-    .run = @ptrCast(&Curl_protocol_pop3),
+    .run = @ptrCast(&pop3_smtp.Curl_protocol_pop3),
     .protocol = CURLPROTO_POP3,
     .family = CURLPROTO_POP3,
     .flags = PROTOPT_CLOSEACTION | PROTOPT_NOURLQUERY |
@@ -289,7 +288,7 @@ pub export const Curl_scheme_pop3: Curl_scheme = .{
 
 pub export const Curl_scheme_pop3s: Curl_scheme = .{
     .name = "pop3s",
-    .run = if (use_ssl) @ptrCast(&Curl_protocol_pop3) else null,
+    .run = if (use_ssl) @ptrCast(&pop3_smtp.Curl_protocol_pop3) else null,
     .protocol = CURLPROTO_POP3S,
     .family = CURLPROTO_POP3,
     .flags = PROTOPT_CLOSEACTION | PROTOPT_SSL |
@@ -328,7 +327,7 @@ pub export const Curl_scheme_scp: Curl_scheme = .{
 
 pub export const Curl_scheme_smtp: Curl_scheme = .{
     .name = "smtp",
-    .run = @ptrCast(&Curl_protocol_smtp),
+    .run = @ptrCast(&pop3_smtp.Curl_protocol_smtp),
     .protocol = CURLPROTO_SMTP,
     .family = CURLPROTO_SMTP,
     .flags = PROTOPT_CLOSEACTION | PROTOPT_NOURLQUERY |
@@ -338,7 +337,7 @@ pub export const Curl_scheme_smtp: Curl_scheme = .{
 
 pub export const Curl_scheme_smtps: Curl_scheme = .{
     .name = "smtps",
-    .run = if (use_ssl) @ptrCast(&Curl_protocol_smtp) else null,
+    .run = if (use_ssl) @ptrCast(&pop3_smtp.Curl_protocol_smtp) else null,
     .protocol = CURLPROTO_SMTPS,
     .family = CURLPROTO_SMTP,
     .flags = PROTOPT_CLOSEACTION | PROTOPT_SSL |
