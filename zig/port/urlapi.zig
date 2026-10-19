@@ -348,21 +348,22 @@ pub export fn Curl_is_absolute_url(
     buflen: usize,
     do_guess_scheme: bool,
 ) callconv(.c) usize {
-    _ = buflen;
     if (buf) |b| {
+        if (buflen == 0) return 0;
         b[0] = 0;
     }
     if (builtin.os.tag == .windows) {
         if (do_guess_scheme and startsWithDrivePrefix(url))
             return 0;
     }
+    const max_len: usize = if (buf != null) @min(MAX_SCHEME_LEN, buflen -| 1) else MAX_SCHEME_LEN;
     var i: usize = 0;
-    if (isAlpha(url[0])) {
+    if (max_len > 0 and isAlpha(url[0])) {
         if (buf) |b| {
             b[0] = primitives.rawTolower(url[0]);
         }
         i = 1;
-        while (i < MAX_SCHEME_LEN) : (i += 1) {
+        while (i < max_len) : (i += 1) {
             const s = url[i];
             if (s != 0 and isSchemeChar(s)) {
                 if (buf) |b| {
@@ -588,7 +589,7 @@ const invalid_host_char: [256]bool = blk: {
 // place and it sets u->zoneid if present.
 pub fn ipv6_parse(u: *Curl_URL, hostname: [*:0]u8, hlen_in: usize) CURLUcode {
     var hlen = hlen_in;
-    if (hlen < 4) // '[::]' is the shortest possible valid string
+    if (hlen < 4 or hostname[0] != '[' or hostname[hlen - 1] != ']') // '[::]' is the shortest possible valid string
         return .CURLUE_BAD_IPV6;
     const host_inner: [*:0]u8 = hostname + 1;
     hlen -= 2;
@@ -613,10 +614,11 @@ pub fn ipv6_parse(u: *Curl_URL, hostname: [*:0]u8, hlen_in: usize) CURLUcode {
                 i += 1;
                 h += 1;
             }
-            if (i == 0 or h[0] != ']')
+            if (i == 0 or h[0] != ']' or h[1] != 0)
                 return .CURLUE_BAD_IPV6;
             zoneid[i] = 0;
             const zdup = mem.strdup(@ptrCast(&zoneid)) orelse return .CURLUE_OUT_OF_MEMORY;
+            mem.free(u.zoneid);
             u.zoneid = zdup;
             host_inner[len] = ']'; // insert end bracket
             host_inner[len + 1] = 0; // terminate the hostname
@@ -1300,8 +1302,11 @@ fn redirect_url(base: [*:0]const u8, relurl: [*:0]const u8, u: *Curl_URL, flags:
     var useurl: [*:0]const u8 = relurl;
     var cutoff: ?[*]const u8 = null;
     const scheme: [*:0]const u8 = u.scheme orelse DEFAULT_SCHEME;
+    const sep_off = cStrLen(scheme) + 3;
+    if (cStrLen(base) < sep_off)
+        return .CURLUE_MALFORMED_INPUT;
 
-    const protsep: [*:0]const u8 = base + cStrLen(scheme) + 3;
+    const protsep: [*:0]const u8 = base + sep_off;
 
     switch (relurl[0]) {
         '/' => {
@@ -2456,4 +2461,61 @@ test "curl_url_set, curl_url_get, curl_url_dup, query appending, and same_origin
     // Clear URL
     try std.testing.expectEqual(CURLUcode.CURLUE_OK, curl_url_set(u, .CURLUPART_URL, null, 0));
     try expectPart(u, .CURLUPART_HOST, 0, .CURLUE_NO_HOST, null);
+}
+
+test "adversarial urlapi inputs: ipv6 brackets/zones, port overflow, percent escapes, control chars" {
+    const u = curl_url() orelse return error.OutOfMemory;
+    defer curl_url_cleanup(u);
+
+    // Malformed IPv6 brackets and zone IDs
+    const bad_ipv6_urls = [_][*:0]const u8{
+        "http://[::1/path",
+        "http://[::1x]/path",
+        "http://[]/path",
+        "http://[fe80::1%]/path",
+        "http://[fe80::1%25]/path",
+        "http://[fe80::1%eth0%extra]/path",
+    };
+    for (bad_ipv6_urls) |bad_url| {
+        try std.testing.expectEqual(CURLUcode.CURLUE_BAD_IPV6, curl_url_set(u, .CURLUPART_URL, bad_url, 0));
+    }
+    try std.testing.expectEqual(CURLUcode.CURLUE_BAD_PORT_NUMBER, curl_url_set(u, .CURLUPART_URL, "http://[fe80::1%eth0]extra]/path", 0));
+
+    // Valid IPv6 with zone ID
+    try std.testing.expectEqual(CURLUcode.CURLUE_OK, curl_url_set(u, .CURLUPART_URL, "http://[fe80::1%25eth0]:8080/p", 0));
+    try expectPart(u, .CURLUPART_HOST, 0, .CURLUE_OK, "[fe80::1]");
+    try expectPart(u, .CURLUPART_ZONEID, 0, .CURLUE_OK, "eth0");
+    try expectPart(u, .CURLUPART_PORT, 0, .CURLUE_OK, "8080");
+
+    // Port overflow: 65536 and 99999999999 and trailing garbage
+    try std.testing.expectEqual(CURLUcode.CURLUE_BAD_PORT_NUMBER, curl_url_set(u, .CURLUPART_URL, "http://example.com:65536/p", 0));
+    try std.testing.expectEqual(CURLUcode.CURLUE_BAD_PORT_NUMBER, curl_url_set(u, .CURLUPART_URL, "http://example.com:99999999999/p", 0));
+    try std.testing.expectEqual(CURLUcode.CURLUE_BAD_PORT_NUMBER, curl_url_set(u, .CURLUPART_URL, "http://example.com:80abc/p", 0));
+    try std.testing.expectEqual(CURLUcode.CURLUE_BAD_PORT_NUMBER, curl_url_set(u, .CURLUPART_PORT, "65536", 0));
+    try std.testing.expectEqual(CURLUcode.CURLUE_BAD_PORT_NUMBER, curl_url_set(u, .CURLUPART_PORT, "99999999999", 0));
+
+    // Truncated / malformed percent escapes in hostname and URL-decoded parts
+    try std.testing.expectEqual(CURLUcode.CURLUE_BAD_HOSTNAME, curl_url_set(u, .CURLUPART_URL, "http://exam%ple.com/", 0));
+    try std.testing.expectEqual(CURLUcode.CURLUE_BAD_HOSTNAME, curl_url_set(u, .CURLUPART_URL, "http://exam%4.com/", 0));
+    try std.testing.expectEqual(CURLUcode.CURLUE_BAD_HOSTNAME, curl_url_set(u, .CURLUPART_URL, "http://exam%GGple.com/", 0));
+    // Percent-encoded NUL or control char in hostname must fail
+    try std.testing.expectEqual(CURLUcode.CURLUE_BAD_HOSTNAME, curl_url_set(u, .CURLUPART_URL, "http://exam%00ple.com/", 0));
+    try std.testing.expectEqual(CURLUcode.CURLUE_BAD_HOSTNAME, curl_url_set(u, .CURLUPART_URL, "http://exam%0d%0aple.com/", 0));
+
+    // Truncated percent escapes in path are preserved literally when not hex, or rejected if decoded to NUL
+    try std.testing.expectEqual(CURLUcode.CURLUE_OK, curl_url_set(u, .CURLUPART_URL, "http://example.com/a%2fb%4%GG%", 0));
+    try expectPart(u, .CURLUPART_PATH, 0, .CURLUE_OK, "/a%2fb%4%GG%");
+    try expectPart(u, .CURLUPART_PATH, CURLU_URLDECODE, .CURLUE_OK, "/a/b%4%GG%");
+    try std.testing.expectEqual(CURLUcode.CURLUE_OK, curl_url_set(u, .CURLUPART_URL, "http://example.com/nul%00byte", 0));
+    try expectPart(u, .CURLUPART_PATH, CURLU_URLDECODE, .CURLUE_URLDECODE, null);
+
+    // Control characters in URL path must be rejected with CURLUE_BAD_PATH
+    try std.testing.expectEqual(CURLUcode.CURLUE_BAD_PATH, curl_url_set(u, .CURLUPART_URL, "http://example.com/path\r\ninjected", 0));
+    try std.testing.expectEqual(CURLUcode.CURLUE_BAD_PATH, curl_url_set(u, .CURLUPART_URL, "http://example.com/path\x01", 0));
+    try std.testing.expectEqual(CURLUcode.CURLUE_BAD_PATH, curl_url_set(u, .CURLUPART_URL, "http://example.com/path with space", 0));
+
+    // Curl_is_absolute_url respects small buflen
+    var small_buf: [3]u8 = .{ 0xAA, 0xAA, 0xAA };
+    try std.testing.expectEqual(@as(usize, 0), Curl_is_absolute_url("https://example.com", &small_buf, small_buf.len, false));
+    try std.testing.expectEqual(@as(u8, 0), small_buf[0]);
 }

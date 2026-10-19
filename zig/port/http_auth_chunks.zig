@@ -467,6 +467,8 @@ export fn Curl_input_negotiate(
     const ctx = neg_ctx orelse return CURLE_OUT_OF_MEMORY;
     const st = state orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     const hdr = header orelse return CURLE_BAD_FUNCTION_ARGUMENT;
+    if (curl_strnequal(hdr, "Negotiate", "Negotiate".len) == 0)
+        return CURLE_BAD_FUNCTION_ARGUMENT;
 
     var p: [*:0]const u8 = hdr + "Negotiate".len;
     while (p[0] != 0 and isBlank(p[0])) : (p += 1) {}
@@ -1062,7 +1064,7 @@ fn httpchunk_readwrite(
 
             .CHUNK_DATA => {
                 piece = length;
-                if (ch.datasize < @as(i64, @intCast(length))) {
+                if (ch.datasize >= 0 and @as(usize, @intCast(ch.datasize)) < length) {
                     piece = @intCast(ch.datasize);
                 }
 
@@ -2252,4 +2254,50 @@ test "Curl_output_httpsig generates RFC 9421 HMAC-SHA256 signature headers" {
         "Signature-Input: sig1=(\"@method\" \"@authority\" \"@path\");created=1618884473;keyid=\"test-key-1\";alg=\"hmac-sha256\"\r\n",
     ) != null);
     try std.testing.expect(std.mem.indexOf(u8, out_str, "Signature: sig1=:") != null);
+}
+
+test "adversarial chunked transfer-encoding overflow and digest unquoting edge cases" {
+    var ch: Curl_chunker = undefined;
+    Curl_httpchunk_init(null, &ch, true, false);
+    defer Curl_httpchunk_free(null, &ch);
+
+    // 1. Hex size exceeding CHUNK_MAXNUM_LEN (17 hex digits) -> CHUNKE_TOO_LONG_HEX
+    var consumed: usize = 0;
+    var too_long_hex = "ffffffffffffffffff\r\n".*;
+    try std.testing.expectEqual(
+        CURLE_RECV_ERROR,
+        Curl_httpchunk_read(null, &ch, &too_long_hex, too_long_hex.len, &consumed),
+    );
+    try std.testing.expectEqual(CHUNKcode.CHUNKE_TOO_LONG_HEX, ch.last_code);
+
+    // 2. 16 hex digits overflowing i64 max (0x8000000000000000) -> CHUNKE_ILLEGAL_HEX
+    Curl_httpchunk_reset(null, &ch, true);
+    var i64_overflow_hex = "8000000000000000\r\n".*;
+    try std.testing.expectEqual(
+        CURLE_RECV_ERROR,
+        Curl_httpchunk_read(null, &ch, &i64_overflow_hex, i64_overflow_hex.len, &consumed),
+    );
+    try std.testing.expectEqual(CHUNKcode.CHUNKE_ILLEGAL_HEX, ch.last_code);
+
+    // 3. Valid hex with chunk extension followed by data and bad post-data byte (missing CR/LF)
+    Curl_httpchunk_reset(null, &ch, true);
+    var bad_ext_term = "4;ext=val\r\nABCDX\n".*;
+    try std.testing.expectEqual(
+        CURLE_RECV_ERROR,
+        Curl_httpchunk_read(null, &ch, &bad_ext_term, bad_ext_term.len, &consumed),
+    );
+    try std.testing.expectEqual(CHUNKcode.CHUNKE_BAD_CHUNK, ch.last_code);
+
+    // 4. Digest auth header with trailing backslash before NUL and unterminated quotes
+    var digest_bytes: [128]u8 align(@alignOf(DigestDataPrefix)) = std.mem.zeroes([128]u8);
+    const dig: *DigestDataPrefix = @ptrCast(&digest_bytes[0]);
+    defer Curl_http_auth_cleanup_digest(null, dig, null);
+
+    const malformed_digest = "Digest realm=\"test\\";
+    try std.testing.expectEqual(CURLE_BAD_CONTENT_ENCODING, Curl_input_digest(null, false, malformed_digest, dig, null));
+
+    const escaped_quote_digest = "Digest realm=\"te\\\"st\", nonce=\"abc\\\\def\", opaque=\"unterminated";
+    try std.testing.expectEqual(CURLE_OK, Curl_input_digest(null, false, escaped_quote_digest, dig, null));
+    try std.testing.expect(dig.nonce_or_input_token != null);
+    try std.testing.expectEqualStrings("abc\\def", std.mem.span(@as([*:0]const u8, @ptrCast(dig.nonce_or_input_token.?))));
 }
