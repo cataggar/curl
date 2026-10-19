@@ -599,6 +599,157 @@ const loopback_tls = struct {
         }
     };
 
+    const gtls = struct {
+        const GNUTLS_SERVER: c_uint = 1;
+        const GNUTLS_CRD_CERTIFICATE: c_uint = 1;
+        const GNUTLS_X509_FMT_PEM: c_uint = 1;
+        const GNUTLS_SHUT_WR: c_uint = 1;
+        const GNUTLS_E_AGAIN: c_int = -28;
+        const GNUTLS_E_INTERRUPTED: c_int = -52;
+
+        const gnutls_datum_t = extern struct {
+            data: ?[*]u8 = null,
+            size: c_uint = 0,
+        };
+
+        extern fn gnutls_certificate_allocate_credentials(res: *?*anyopaque) callconv(.c) c_int;
+        extern fn gnutls_certificate_free_credentials(sc: ?*anyopaque) callconv(.c) void;
+        extern fn gnutls_certificate_set_x509_key_mem(
+            res: ?*anyopaque,
+            cert: *const gnutls_datum_t,
+            key: *const gnutls_datum_t,
+            fmt: c_uint,
+        ) callconv(.c) c_int;
+        extern fn gnutls_init(session: *?*anyopaque, flags: c_uint) callconv(.c) c_int;
+        extern fn gnutls_deinit(session: ?*anyopaque) callconv(.c) void;
+        extern fn gnutls_priority_set_direct(
+            session: ?*anyopaque,
+            priorities: [*:0]const u8,
+            err_pos: ?*?[*:0]const u8,
+        ) callconv(.c) c_int;
+        extern fn gnutls_credentials_set(session: ?*anyopaque, cred_type: c_uint, cred: ?*anyopaque) callconv(.c) c_int;
+        extern fn gnutls_transport_set_int2(session: ?*anyopaque, r: c_int, s: c_int) callconv(.c) void;
+        extern fn gnutls_handshake(session: ?*anyopaque) callconv(.c) c_int;
+        extern fn gnutls_record_recv(session: ?*anyopaque, data: ?*anyopaque, data_size: usize) callconv(.c) isize;
+        extern fn gnutls_record_send(session: ?*anyopaque, data: ?*const anyopaque, data_size: usize) callconv(.c) isize;
+        extern fn gnutls_bye(session: ?*anyopaque, how: c_uint) callconv(.c) c_int;
+    };
+
+    const rls = struct {
+        const RUSTLS_RESULT_OK: c_uint = 7000;
+        const RUSTLS_RESULT_PLAINTEXT_EMPTY: c_uint = 7011;
+        const EINVAL_VAL: c_int = 22;
+
+        const ReadCb = ?*const fn (userdata: ?*anyopaque, buf: [*]u8, n: usize, out_n: *usize) callconv(.c) c_int;
+        const WriteCb = ?*const fn (userdata: ?*anyopaque, buf: [*]const u8, n: usize, out_n: *usize) callconv(.c) c_int;
+
+        extern fn rustls_certified_key_build(
+            cert_chain: [*]const u8,
+            cert_chain_len: usize,
+            private_key: [*]const u8,
+            private_key_len: usize,
+            certified_key_out: *?*const anyopaque,
+        ) callconv(.c) c_uint;
+        extern fn rustls_certified_key_free(key: ?*const anyopaque) callconv(.c) void;
+        extern fn rustls_server_config_builder_new() callconv(.c) ?*anyopaque;
+        extern fn rustls_server_config_builder_free(config: ?*anyopaque) callconv(.c) void;
+        extern fn rustls_server_config_builder_set_certified_keys(
+            builder: *anyopaque,
+            certified_keys: [*]const *const anyopaque,
+            certified_keys_len: usize,
+        ) callconv(.c) c_uint;
+        extern fn rustls_server_config_builder_build(
+            builder: *anyopaque,
+            config_out: *?*const anyopaque,
+        ) callconv(.c) c_uint;
+        extern fn rustls_server_config_free(config: ?*const anyopaque) callconv(.c) void;
+        extern fn rustls_server_connection_new(
+            config: *const anyopaque,
+            conn_out: *?*anyopaque,
+        ) callconv(.c) c_uint;
+        extern fn rustls_connection_free(conn: ?*anyopaque) callconv(.c) void;
+        extern fn rustls_connection_is_handshaking(conn: *const anyopaque) callconv(.c) bool;
+        extern fn rustls_connection_wants_read(conn: *const anyopaque) callconv(.c) bool;
+        extern fn rustls_connection_wants_write(conn: *const anyopaque) callconv(.c) bool;
+        extern fn rustls_connection_read_tls(
+            conn: *anyopaque,
+            cb: ReadCb,
+            userdata: ?*anyopaque,
+            out_n: *usize,
+        ) callconv(.c) c_int;
+        extern fn rustls_connection_write_tls(
+            conn: *anyopaque,
+            cb: WriteCb,
+            userdata: ?*anyopaque,
+            out_n: *usize,
+        ) callconv(.c) c_int;
+        extern fn rustls_connection_process_new_packets(conn: *anyopaque) callconv(.c) c_uint;
+        extern fn rustls_connection_read(
+            conn: *anyopaque,
+            buf: [*]u8,
+            count: usize,
+            out_n: *usize,
+        ) callconv(.c) c_uint;
+        extern fn rustls_connection_write(
+            conn: *anyopaque,
+            buf: [*]const u8,
+            count: usize,
+            out_n: *usize,
+        ) callconv(.c) c_uint;
+        extern fn rustls_connection_send_close_notify(conn: *anyopaque) callconv(.c) void;
+
+        fn srvReadCb(userdata: ?*anyopaque, buf: [*]u8, n: usize, out_n: *usize) callconv(.c) c_int {
+            const fd_ptr: *const c_int = @ptrCast(@alignCast(userdata.?));
+            const r = sock_c.recv(fd_ptr.*, buf, n, 0);
+            if (r < 0) {
+                out_n.* = 0;
+                return EINVAL_VAL;
+            }
+            out_n.* = @intCast(r);
+            return 0;
+        }
+
+        fn srvWriteCb(userdata: ?*anyopaque, buf: [*]const u8, n: usize, out_n: *usize) callconv(.c) c_int {
+            const fd_ptr: *const c_int = @ptrCast(@alignCast(userdata.?));
+            const w = sock_c.send(fd_ptr.*, buf, n, 0);
+            if (w < 0) {
+                out_n.* = 0;
+                return EINVAL_VAL;
+            }
+            out_n.* = @intCast(w);
+            return 0;
+        }
+    };
+
+    const wssl = struct {
+        const SSL_FILETYPE_PEM: c_int = 1;
+        const WOLFSSL_SUCCESS: c_int = 1;
+
+        extern fn wolfSSL_Init() callconv(.c) c_int;
+        extern fn wolfSSLv23_server_method() callconv(.c) ?*anyopaque;
+        extern fn wolfSSL_CTX_new(method: ?*anyopaque) callconv(.c) ?*anyopaque;
+        extern fn wolfSSL_CTX_free(ctx: ?*anyopaque) callconv(.c) void;
+        extern fn wolfSSL_CTX_use_certificate_buffer(
+            ctx: ?*anyopaque,
+            in: [*]const u8,
+            sz: c_long,
+            format: c_int,
+        ) callconv(.c) c_int;
+        extern fn wolfSSL_CTX_use_PrivateKey_buffer(
+            ctx: ?*anyopaque,
+            in: [*]const u8,
+            sz: c_long,
+            format: c_int,
+        ) callconv(.c) c_int;
+        extern fn wolfSSL_new(ctx: ?*anyopaque) callconv(.c) ?*anyopaque;
+        extern fn wolfSSL_free(ssl: ?*anyopaque) callconv(.c) void;
+        extern fn wolfSSL_set_fd(ssl: ?*anyopaque, fd: c_int) callconv(.c) c_int;
+        extern fn wolfSSL_accept(ssl: ?*anyopaque) callconv(.c) c_int;
+        extern fn wolfSSL_read(ssl: ?*anyopaque, data: [*]u8, sz: c_int) callconv(.c) c_int;
+        extern fn wolfSSL_write(ssl: ?*anyopaque, data: [*]const u8, sz: c_int) callconv(.c) c_int;
+        extern fn wolfSSL_shutdown(ssl: ?*anyopaque) callconv(.c) c_int;
+    };
+
     const sock_c = struct {
         const AF_INET: c_int = 2;
         const SOCK_STREAM: c_int = 1;
@@ -754,10 +905,175 @@ const loopback_tls = struct {
         }
     }
 
+    fn serveGnuTlsOnce(listen_fd: c_int) void {
+        const client_fd = sock_c.accept(listen_fd, null, null);
+        if (client_fd < 0) return;
+        defer _ = sock_c.close(client_fd);
+        setSocketTimeouts(client_fd);
+
+        var creds: ?*anyopaque = null;
+        if (gtls.gnutls_certificate_allocate_credentials(&creds) != 0) return;
+        defer gtls.gnutls_certificate_free_credentials(creds);
+
+        const cert_d = gtls.gnutls_datum_t{
+            .data = @constCast(test_server_cert_pem.ptr),
+            .size = @intCast(test_server_cert_pem.len),
+        };
+        const key_d = gtls.gnutls_datum_t{
+            .data = @constCast(test_server_key_pem.ptr),
+            .size = @intCast(test_server_key_pem.len),
+        };
+        if (gtls.gnutls_certificate_set_x509_key_mem(creds, &cert_d, &key_d, gtls.GNUTLS_X509_FMT_PEM) < 0) return;
+
+        var session: ?*anyopaque = null;
+        if (gtls.gnutls_init(&session, gtls.GNUTLS_SERVER) != 0) return;
+        defer gtls.gnutls_deinit(session);
+
+        if (gtls.gnutls_priority_set_direct(session, "NORMAL", null) != 0) return;
+        if (gtls.gnutls_credentials_set(session, gtls.GNUTLS_CRD_CERTIFICATE, creds) != 0) return;
+
+        gtls.gnutls_transport_set_int2(session, client_fd, client_fd);
+
+        while (true) {
+            const rc = gtls.gnutls_handshake(session);
+            if (rc == 0) break;
+            if (rc == gtls.GNUTLS_E_AGAIN or rc == gtls.GNUTLS_E_INTERRUPTED) continue;
+            return;
+        }
+
+        var req_buf: [1024]u8 = undefined;
+        const nread = gtls.gnutls_record_recv(session, &req_buf, req_buf.len);
+        if (nread > 0) {
+            _ = gtls.gnutls_record_send(session, http_response.ptr, http_response.len);
+            _ = gtls.gnutls_bye(session, gtls.GNUTLS_SHUT_WR);
+        }
+    }
+
+    fn serveRustlsOnce(listen_fd: c_int) void {
+        var client_fd = sock_c.accept(listen_fd, null, null);
+        if (client_fd < 0) return;
+        defer _ = sock_c.close(client_fd);
+        setSocketTimeouts(client_fd);
+
+        var ckey: ?*const anyopaque = null;
+        if (rls.rustls_certified_key_build(
+            test_server_cert_pem.ptr,
+            test_server_cert_pem.len,
+            test_server_key_pem.ptr,
+            test_server_key_pem.len,
+            &ckey,
+        ) != rls.RUSTLS_RESULT_OK or ckey == null) return;
+        defer rls.rustls_certified_key_free(ckey);
+
+        const sbuilder = rls.rustls_server_config_builder_new() orelse return;
+        const ckeys = [1]*const anyopaque{ckey.?};
+        if (rls.rustls_server_config_builder_set_certified_keys(sbuilder, &ckeys, 1) != rls.RUSTLS_RESULT_OK) {
+            rls.rustls_server_config_builder_free(sbuilder);
+            return;
+        }
+
+        var sconfig: ?*const anyopaque = null;
+        if (rls.rustls_server_config_builder_build(sbuilder, &sconfig) != rls.RUSTLS_RESULT_OK or sconfig == null) {
+            return;
+        }
+        defer rls.rustls_server_config_free(sconfig);
+
+        var sconn: ?*anyopaque = null;
+        if (rls.rustls_server_connection_new(sconfig.?, &sconn) != rls.RUSTLS_RESULT_OK or sconn == null) return;
+        defer rls.rustls_connection_free(sconn);
+
+        const conn = sconn.?;
+        while (rls.rustls_connection_is_handshaking(conn)) {
+            while (rls.rustls_connection_wants_write(conn)) {
+                var nw: usize = 0;
+                if (rls.rustls_connection_write_tls(conn, rls.srvWriteCb, &client_fd, &nw) != 0) return;
+            }
+            if (rls.rustls_connection_wants_read(conn)) {
+                var nr: usize = 0;
+                if (rls.rustls_connection_read_tls(conn, rls.srvReadCb, &client_fd, &nr) != 0 or nr == 0) return;
+                if (rls.rustls_connection_process_new_packets(conn) != rls.RUSTLS_RESULT_OK) {
+                    while (rls.rustls_connection_wants_write(conn)) {
+                        var nw: usize = 0;
+                        _ = rls.rustls_connection_write_tls(conn, rls.srvWriteCb, &client_fd, &nw);
+                    }
+                    return;
+                }
+            }
+        }
+        while (rls.rustls_connection_wants_write(conn)) {
+            var nw: usize = 0;
+            if (rls.rustls_connection_write_tls(conn, rls.srvWriteCb, &client_fd, &nw) != 0) return;
+        }
+
+        var req_buf: [512]u8 = undefined;
+        var req_n: usize = 0;
+        while (req_n == 0) {
+            if (rls.rustls_connection_wants_read(conn)) {
+                var nr: usize = 0;
+                if (rls.rustls_connection_read_tls(conn, rls.srvReadCb, &client_fd, &nr) != 0 or nr == 0) return;
+                if (rls.rustls_connection_process_new_packets(conn) != rls.RUSTLS_RESULT_OK) return;
+            }
+            const rr = rls.rustls_connection_read(conn, &req_buf, req_buf.len, &req_n);
+            if (rr == rls.RUSTLS_RESULT_PLAINTEXT_EMPTY) continue;
+            if (rr != rls.RUSTLS_RESULT_OK) return;
+        }
+
+        var plain_nw: usize = 0;
+        if (rls.rustls_connection_write(conn, http_response.ptr, http_response.len, &plain_nw) != rls.RUSTLS_RESULT_OK) return;
+        rls.rustls_connection_send_close_notify(conn);
+        while (rls.rustls_connection_wants_write(conn)) {
+            var nw: usize = 0;
+            if (rls.rustls_connection_write_tls(conn, rls.srvWriteCb, &client_fd, &nw) != 0) return;
+        }
+    }
+
+    fn serveWolfSslOnce(listen_fd: c_int) void {
+        const client_fd = sock_c.accept(listen_fd, null, null);
+        if (client_fd < 0) return;
+        defer _ = sock_c.close(client_fd);
+        setSocketTimeouts(client_fd);
+
+        _ = wssl.wolfSSL_Init();
+
+        const method = wssl.wolfSSLv23_server_method() orelse return;
+        const ctx = wssl.wolfSSL_CTX_new(method) orelse return;
+        defer wssl.wolfSSL_CTX_free(ctx);
+
+        if (wssl.wolfSSL_CTX_use_certificate_buffer(
+            ctx,
+            test_server_cert_pem.ptr,
+            @intCast(test_server_cert_pem.len),
+            wssl.SSL_FILETYPE_PEM,
+        ) != wssl.WOLFSSL_SUCCESS) return;
+
+        if (wssl.wolfSSL_CTX_use_PrivateKey_buffer(
+            ctx,
+            test_server_key_pem.ptr,
+            @intCast(test_server_key_pem.len),
+            wssl.SSL_FILETYPE_PEM,
+        ) != wssl.WOLFSSL_SUCCESS) return;
+
+        const ssl = wssl.wolfSSL_new(ctx) orelse return;
+        defer wssl.wolfSSL_free(ssl);
+        if (wssl.wolfSSL_set_fd(ssl, client_fd) != wssl.WOLFSSL_SUCCESS) return;
+
+        if (wssl.wolfSSL_accept(ssl) != wssl.WOLFSSL_SUCCESS) return;
+
+        var req_buf: [1024]u8 = undefined;
+        const nread = wssl.wolfSSL_read(ssl, &req_buf, @intCast(req_buf.len));
+        if (nread > 0) {
+            _ = wssl.wolfSSL_write(ssl, http_response.ptr, @intCast(http_response.len));
+            _ = wssl.wolfSSL_shutdown(ssl);
+        }
+    }
+
     fn serveOnce(listen_fd: c_int) void {
         switch (backend_options.ssl) {
             .openssl => serveOpenSslOnce(listen_fd),
             .mbedtls => serveMbedTlsOnce(listen_fd),
+            .gnutls => serveGnuTlsOnce(listen_fd),
+            .rustls => serveRustlsOnce(listen_fd),
+            .wolfssl => serveWolfSslOnce(listen_fd),
             else => unreachable,
         }
     }
@@ -880,19 +1196,22 @@ const loopback_tls = struct {
 };
 
 test "local loopback HTTPS handshake and certificate verification matrix" {
-    if (comptime (backend_options.ssl != .openssl and backend_options.ssl != .mbedtls)) return;
+    if (comptime (backend_options.ssl == .none or backend_options.ssl == .schannel)) return;
 
     // 1a. Trusted CA via CURLOPT_CAINFO_BLOB + CURLOPT_CERTINFO -> CURLE_OK & populated certinfo chain
     {
+        const want_certinfo = backend_options.ssl != .wolfssl;
         const res = try loopback_tls.runLoopbackTransfer(.{
             .ca_pem_blob = loopback_tls.test_ca_cert_pem,
-            .certinfo = true,
+            .certinfo = want_certinfo,
         });
         try testing.expectEqual(c.CURLE_OK, res.code);
         try testing.expectEqual(@as(c_long, 200), res.status_code);
         try testing.expect(res.body_ok);
-        try testing.expect(res.certinfo_certs >= 1);
-        try testing.expect(res.certinfo_has_subject);
+        if (want_certinfo) {
+            try testing.expect(res.certinfo_certs >= 1);
+            try testing.expect(res.certinfo_has_subject);
+        }
     }
 
     // 1b. Trusted CA via CURLOPT_CAINFO file -> CURLE_OK
@@ -950,7 +1269,7 @@ test "local loopback HTTPS handshake and certificate verification matrix" {
     }
 
     // 4a. CURLOPT_PINNEDPUBLICKEY with matching sha256//... pin -> CURLE_OK
-    {
+    if (backend_options.ssl != .rustls) {
         const res = try loopback_tls.runLoopbackTransfer(.{
             .ca_pem_blob = loopback_tls.test_ca_cert_pem,
             .pinnedpubkey = loopback_tls.test_server_pubkey_pin,
@@ -961,7 +1280,7 @@ test "local loopback HTTPS handshake and certificate verification matrix" {
     }
 
     // 4b. CURLOPT_PINNEDPUBLICKEY with mismatched sha256//... pin -> CURLE_SSL_PINNEDPUBKEYNOTMATCH
-    {
+    if (backend_options.ssl != .rustls) {
         const res = try loopback_tls.runLoopbackTransfer(.{
             .ca_pem_blob = loopback_tls.test_ca_cert_pem,
             .pinnedpubkey = loopback_tls.test_wrong_pubkey_pin,

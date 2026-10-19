@@ -147,6 +147,9 @@ pub fn linkBackends(mod: *std.Build.Module, target: std.Build.ResolvedTarget, op
         },
         .rustls => {
             mod.linkSystemLibrary("rustls", .{});
+            if (target.result.os.tag == .linux) {
+                mod.linkSystemLibrary("gcc_s", .{});
+            }
         },
         .wolfssl => {
             mod.linkSystemLibrary("wolfssl", .{});

@@ -32,7 +32,11 @@ jobs:
       - name: Install TLS system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libssl-dev libmbedtls-dev
+          sudo apt-get install -y --no-install-recommends libssl-dev libmbedtls-dev libgnutls28-dev nettle-dev libwolfssl-dev
+          git clone --depth 1 --branch v0.15.5 https://github.com/rustls/rustls-ffi.git /tmp/rustls-ffi
+          cargo build --release --manifest-path /tmp/rustls-ffi/Cargo.toml
+          sudo cp /tmp/rustls-ffi/target/release/librustls_ffi.a /usr/lib/x86_64-linux-gnu/librustls.a
+          rm -rf /tmp/rustls-ffi
 
       - name: Format check
         run: zig fmt --check build.zig build.zig.zon zig/
@@ -48,6 +52,15 @@ jobs:
 
       - name: Build and test (-Dssl=mbedtls)
         run: zig build test -Dssl=mbedtls --summary all
+
+      - name: Build and test (-Dssl=gnutls)
+        run: zig build test -Dssl=gnutls --summary all
+
+      - name: Build and test (-Dssl=rustls)
+        run: zig build test -Dssl=rustls --summary all
+
+      - name: Build and test (-Dssl=wolfssl)
+        run: zig build test -Dssl=wolfssl --summary all
 
       - name: Build and test (-Dzstd=true)
         run: zig build test -Dzstd=true --summary all
