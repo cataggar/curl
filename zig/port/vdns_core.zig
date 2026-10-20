@@ -50,9 +50,11 @@ pub const CURLE_COULDNT_CONNECT: CURLcode = 7;
 pub const CURLE_OUT_OF_MEMORY: CURLcode = 27;
 pub const CURLE_OPERATION_TIMEDOUT: CURLcode = 28;
 pub const CURLE_BAD_FUNCTION_ARGUMENT: CURLcode = 43;
+pub const CURLE_ABORTED_BY_CALLBACK: CURLcode = 42;
 pub const CURLE_BAD_CONTENT_ENCODING: CURLcode = 61;
 pub const CURLE_AGAIN: CURLcode = 81;
 pub const CURLE_SETOPT_OPTION_SYNTAX: CURLcode = 98;
+pub const CURLE_UNRECOVERABLE_POLL: CURLcode = 99;
 
 pub const timediff_t = i64;
 pub const Curltime = curlx_time_net.Curltime;
@@ -109,7 +111,9 @@ const CF_CTRL_DATA_DONE: c_int = 7;
 // Timers and expirations (lib/progress.h & lib/urldata.h)
 const TIMER_STARTSINGLE: c_uint = 2;
 const TIMER_NAMELOOKUP: c_uint = 4;
+const EXPIRE_ASYNC_NAME: c_uint = 1;
 const EXPIRE_HAPPY_EYEBALLS: c_uint = 3;
+const CURL_TIMEOUT_RESOLVE_MS: timediff_t = 300 * 1000;
 
 const TRNSPRT_TCP: u8 = 3;
 const CURL_HE_AAAA_AWAIT_MS: timediff_t = 25;
@@ -118,8 +122,11 @@ const CURL_HE_AAAA_AWAIT_MS: timediff_t = 25;
 const use_ipv6 = true;
 const use_unix_sockets = true;
 const use_curl_async = true;
-const use_httpsrr = false;
-const use_resolv_ares = false;
+pub const use_ares = vdns_cfilters.use_ares;
+pub const use_httpsrr = vdns_cfilters.use_httpsrr;
+pub const use_resolv_ares = vdns_cfilters.use_resolv_ares;
+pub const Curl_resolv_async = vdns_cfilters.Curl_resolv_async;
+pub const async_ares_ctx = vdns_cfilters.async_ares_ctx;
 
 // ============================================================================
 // External C / Zig helpers
@@ -294,7 +301,7 @@ extern fn Curl_vdns_data_clear_resolve(data: ?*Curl_easy) callconv(.c) void;
 // ============================================================================
 
 pub const CURL_MAXLEN_HOST_NAME: usize = 253;
-pub const MAX_HTTPSRR_ALPNS: usize = 4;
+pub const MAX_HTTPSRR_ALPNS = vdns_cfilters.MAX_HTTPSRR_ALPNS;
 
 pub const HTTPS_RR_CODE_MANDATORY: u16 = 0x00;
 pub const HTTPS_RR_CODE_ALPN: u16 = 0x01;
@@ -304,44 +311,7 @@ pub const HTTPS_RR_CODE_IPV4: u16 = 0x04;
 pub const HTTPS_RR_CODE_ECH: u16 = 0x05;
 pub const HTTPS_RR_CODE_IPV6: u16 = 0x06;
 
-pub const Curl_https_rrinfo = extern struct {
-    target: ?[*:0]u8,
-    ipv4hints: ?[*]u8,
-    ipv4hints_len: usize,
-    echconfiglist: ?[*]u8,
-    echconfiglist_len: usize,
-    ipv6hints: ?[*]u8,
-    ipv6hints_len: usize,
-    alpns: [MAX_HTTPSRR_ALPNS]u8,
-    port: u16,
-    priority: u16,
-    flags: u32,
-    _pad: u32 = 0,
-
-    pub inline fn noDefAlpn(self: *const Curl_https_rrinfo) bool {
-        return (self.flags & 1) != 0;
-    }
-
-    pub inline fn setNoDefAlpn(self: *Curl_https_rrinfo, val: bool) void {
-        if (val) self.flags |= 1 else self.flags &= ~@as(u32, 1);
-    }
-
-    pub inline fn mandatory(self: *const Curl_https_rrinfo) bool {
-        return (self.flags & 2) != 0;
-    }
-
-    pub inline fn setMandatory(self: *Curl_https_rrinfo, val: bool) void {
-        if (val) self.flags |= 2 else self.flags &= ~@as(u32, 2);
-    }
-
-    pub inline fn portSet(self: *const Curl_https_rrinfo) bool {
-        return (self.flags & 4) != 0;
-    }
-
-    pub inline fn setPortSet(self: *Curl_https_rrinfo, val: bool) void {
-        if (val) self.flags |= 4 else self.flags &= ~@as(u32, 4);
-    }
-};
+pub const Curl_https_rrinfo = vdns_cfilters.Curl_https_rrinfo;
 
 fn httpsrr_decode_alpn(
     cp_opt: ?[*]const u8,
@@ -574,6 +544,89 @@ pub export fn Curl_httpsrr_is_for_peer(
     else
         true;
     return target_ok and (!rr.portSet() or rr.port == peer.port);
+}
+
+const ARES_SECTION_ANSWER: c_uint = 1;
+const ARES_CLASS_IN: c_uint = 1;
+const ARES_REC_TYPE_HTTPS: c_uint = 65;
+const ARES_RR_HTTPS_PRIORITY: c_uint = 6501;
+const ARES_RR_HTTPS_TARGET: c_uint = 6502;
+const ARES_RR_HTTPS_PARAMS: c_uint = 6503;
+
+const ares_dns_c = struct {
+    extern fn ares_dns_record_rr_cnt(dnsrec: ?*const anyopaque, sect: c_uint) callconv(.c) usize;
+    extern fn ares_dns_record_rr_get_const(dnsrec: ?*const anyopaque, sect: c_uint, idx: usize) callconv(.c) ?*const anyopaque;
+    extern fn ares_dns_rr_get_type(dns_rr: ?*const anyopaque) callconv(.c) c_uint;
+    extern fn ares_dns_rr_get_str(dns_rr: ?*const anyopaque, key: c_uint) callconv(.c) ?[*:0]const u8;
+    extern fn ares_dns_rr_get_u16(dns_rr: ?*const anyopaque, key: c_uint) callconv(.c) u16;
+    extern fn ares_dns_rr_get_opt_cnt(dns_rr: ?*const anyopaque, key: c_uint) callconv(.c) usize;
+    extern fn ares_dns_rr_get_opt(
+        dns_rr: ?*const anyopaque,
+        key: c_uint,
+        idx: usize,
+        val: *?[*]const u8,
+        val_len: *usize,
+    ) callconv(.c) u16;
+};
+
+fn httpsrr_opt(
+    rr: ?*const anyopaque,
+    key: c_uint,
+    idx: usize,
+    hinfo: *Curl_https_rrinfo,
+) CURLcode {
+    var val: ?[*]const u8 = null;
+    var len: usize = 0;
+    const code = ares_dns_c.ares_dns_rr_get_opt(rr, key, idx, &val, &len);
+    return Curl_httpsrr_set(hinfo, code, val, len);
+}
+
+pub fn Curl_httpsrr_from_ares(
+    dnsrec: ?*const anyopaque,
+    phinfo: *?*Curl_https_rrinfo,
+) callconv(.c) CURLcode {
+    const raw = mem.calloc(1, @sizeOf(Curl_https_rrinfo)) orelse {
+        phinfo.* = null;
+        return CURLE_OUT_OF_MEMORY;
+    };
+    const hinfo: *Curl_https_rrinfo = @ptrCast(@alignCast(raw));
+    var result: CURLcode = CURLE_OUT_OF_MEMORY;
+
+    const rr_cnt = ares_dns_c.ares_dns_record_rr_cnt(dnsrec, ARES_SECTION_ANSWER);
+    for (0..rr_cnt) |i| {
+        const rr = ares_dns_c.ares_dns_record_rr_get_const(dnsrec, ARES_SECTION_ANSWER, i);
+        if (ares_dns_c.ares_dns_rr_get_type(rr) != ARES_REC_TYPE_HTTPS)
+            continue;
+        if (ares_dns_c.ares_dns_rr_get_str(rr, ARES_RR_HTTPS_TARGET)) |target| {
+            if (target[0] != 0) {
+                mem.free(@ptrCast(hinfo.target));
+                hinfo.target = mem.strdup(target);
+                if (hinfo.target == null) {
+                    phinfo.* = null;
+                    Curl_httpsrr_destroy(hinfo);
+                    return CURLE_OUT_OF_MEMORY;
+                }
+            }
+        }
+        hinfo.priority = ares_dns_c.ares_dns_rr_get_u16(rr, ARES_RR_HTTPS_PRIORITY);
+        const opt_cnt = ares_dns_c.ares_dns_rr_get_opt_cnt(rr, ARES_RR_HTTPS_PARAMS);
+        for (0..opt_cnt) |opt| {
+            result = httpsrr_opt(rr, ARES_RR_HTTPS_PARAMS, opt, hinfo);
+            if (result != CURLE_OK) {
+                phinfo.* = null;
+                Curl_httpsrr_destroy(hinfo);
+                return result;
+            }
+        }
+    }
+    phinfo.* = hinfo;
+    return CURLE_OK;
+}
+
+comptime {
+    if (use_ares and use_httpsrr) {
+        @export(&Curl_httpsrr_from_ares, .{ .name = "Curl_httpsrr_from_ares" });
+    }
 }
 
 // ============================================================================
@@ -2162,28 +2215,700 @@ pub export fn Curl_conn_dns_resolved_https(
 // 4. lib/vdns/asyn-ares.c — c-ares Asynchronous DNS Resolver (when USE_RESOLV_ARES)
 // ============================================================================
 
-comptime {
-    if (use_resolv_ares) {
-        _ = asyn_ares_impl;
-    }
-}
+const ARES_SUCCESS: c_int = 0;
+const ARES_ENODATA: c_int = 1;
+const ARES_ENOTFOUND: c_int = 4;
+const ARES_EBADSTR: c_int = 10;
+const ARES_ENOMEM: c_int = 15;
+const ARES_EDESTRUCTION: c_int = 16;
+const ARES_ENOTINITIALIZED: c_int = 23;
+const ARES_LIB_INIT_ALL: c_int = 1;
+const ARES_AI_NUMERICSERV: c_int = 1 << 3;
+const CARES_MAX_ADDRS: c_uint = 256;
 
-const asyn_ares_impl = struct {
-    const ARES_SUCCESS: c_int = 0;
-    const ARES_ENODATA: c_int = 1;
-    const ARES_ENOTFOUND: c_int = 4;
-    const ARES_ENOMEM: c_int = 15;
-    const ARES_EDESTRUCTION: c_int = 16;
-    const ARES_LIB_INIT_ALL: c_int = 1;
+const SockaddrInSize: usize = 16;
+const SockaddrIn6Size: usize = 28;
 
+const ares_addrinfo_node = extern struct {
+    ai_ttl: c_int,
+    ai_flags: c_int,
+    ai_family: c_int,
+    ai_socktype: c_int,
+    ai_protocol: c_int,
+    ai_addrlen: c_uint,
+    ai_addr: ?*const anyopaque,
+    ai_next: ?*ares_addrinfo_node,
+};
+
+const ares_addrinfo = extern struct {
+    cnames: ?*anyopaque,
+    nodes: ?*ares_addrinfo_node,
+    name: ?[*:0]u8,
+};
+
+const ares_addrinfo_hints = extern struct {
+    ai_flags: c_int = 0,
+    ai_family: c_int = 0,
+    ai_socktype: c_int = 0,
+    ai_protocol: c_int = 0,
+};
+
+const ares_addrinfo_callback = *const fn (
+    arg: ?*anyopaque,
+    status: c_int,
+    timeouts: c_int,
+    res: ?*ares_addrinfo,
+) callconv(.c) void;
+
+const ares_callback_dnsrec = *const fn (
+    arg: ?*anyopaque,
+    status: c_int,
+    timeouts: usize,
+    dnsrec: ?*const anyopaque,
+) callconv(.c) void;
+
+const asyn_ares_c = struct {
     extern fn ares_library_init(flags: c_int) callconv(.c) c_int;
     extern fn ares_library_cleanup() callconv(.c) void;
     extern fn ares_version(version: ?*c_int) callconv(.c) [*:0]const u8;
+    extern fn ares_destroy(channel: ?*anyopaque) callconv(.c) void;
+    extern fn ares_cancel(channel: ?*anyopaque) callconv(.c) void;
+    extern fn ares_strerror(code: c_int) callconv(.c) [*:0]const u8;
+    extern fn ares_timeout(
+        channel: ?*const anyopaque,
+        maxtv: ?*vdns_cfilters.AresTimeval,
+        tv: *vdns_cfilters.AresTimeval,
+    ) callconv(.c) ?*vdns_cfilters.AresTimeval;
+    extern fn ares_getaddrinfo(
+        channel: ?*anyopaque,
+        node: [*:0]const u8,
+        service: [*:0]const u8,
+        hints: *const ares_addrinfo_hints,
+        callback: ares_addrinfo_callback,
+        arg: ?*anyopaque,
+    ) callconv(.c) void;
+    extern fn ares_freeaddrinfo(ai: ?*ares_addrinfo) callconv(.c) void;
+    extern fn ares_query_dnsrec(
+        channel: ?*anyopaque,
+        name: [*:0]const u8,
+        dnsclass: c_uint,
+        rec_type: c_uint,
+        callback: ares_callback_dnsrec,
+        arg: ?*anyopaque,
+        qid: ?*c_ushort,
+    ) callconv(.c) c_int;
+    extern fn ares_set_servers_ports_csv(channel: ?*anyopaque, servers: [*:0]const u8) callconv(.c) c_int;
+    extern fn ares_set_local_dev(channel: ?*anyopaque, local_dev_name: [*:0]const u8) callconv(.c) void;
+    extern fn ares_set_local_ip4(channel: ?*anyopaque, local_ip: c_uint) callconv(.c) void;
+    extern fn ares_set_local_ip6(channel: ?*anyopaque, local_ip6: *const [16]u8) callconv(.c) void;
+    extern fn ares_get_servers_csv(channel: ?*const anyopaque) callconv(.c) ?[*:0]u8;
+    extern fn ares_free_string(str: ?*anyopaque) callconv(.c) void;
 
-    pub export fn Curl_async_ares_ver() callconv(.c) [*:0]const u8 {
-        return ares_version(null);
-    }
+    extern fn Curl_zig_ares_init_channel(
+        data: ?*Curl_easy,
+        ares_ver: c_int,
+        channel_out: *?*anyopaque,
+    ) callconv(.c) c_int;
+    extern fn Curl_zig_easy_get_dns_servers(data: ?*const Curl_easy) callconv(.c) ?[*:0]const u8;
+    extern fn Curl_zig_easy_get_dns_interface(data: ?*const Curl_easy) callconv(.c) ?[*:0]const u8;
+    extern fn Curl_zig_easy_get_dns_local_ip4(data: ?*const Curl_easy) callconv(.c) ?[*:0]const u8;
+    extern fn Curl_zig_easy_get_dns_local_ip6(data: ?*const Curl_easy) callconv(.c) ?[*:0]const u8;
+
+    extern fn Curl_resolv_announce_start(data: ?*Curl_easy, resolver: ?*anyopaque) callconv(.c) CURLcode;
+    extern fn Curl_async_get(data: ?*Curl_easy, resolv_id: u32) callconv(.c) ?*Curl_resolv_async;
+    extern fn Curl_async_failed(data: ?*Curl_easy, async_ctx: *Curl_resolv_async, detail: ?[*:0]const u8) callconv(.c) CURLcode;
+    extern fn Curl_pgrsUpdate(data: ?*Curl_easy) callconv(.c) c_int;
+    extern fn curl_msnprintf(buffer: [*]u8, maxlength: usize, format: [*:0]const u8, ...) callconv(.c) c_int;
+    extern fn curl_maprintf(format: [*:0]const u8, ...) callconv(.c) ?[*:0]u8;
+    extern fn Curl_conn_get_transport(data: ?*Curl_easy, conn: ?*connectdata) callconv(.c) u8;
+    extern fn getenv(name: [*:0]const u8) callconv(.c) ?[*:0]const u8;
 };
+
+var ares_ver_global: c_int = 0;
+
+pub fn Curl_async_ares_ver() callconv(.c) [*:0]const u8 {
+    return asyn_ares_c.ares_version(null);
+}
+
+fn ares_global_init() callconv(.c) c_int {
+    if (asyn_ares_c.ares_library_init(ARES_LIB_INIT_ALL) != 0) {
+        return @intCast(CURLE_FAILED_INIT);
+    }
+    _ = asyn_ares_c.ares_version(&ares_ver_global);
+    return @intCast(CURLE_OK);
+}
+
+fn ares_global_cleanup() callconv(.c) void {
+    asyn_ares_c.ares_library_cleanup();
+}
+
+fn async_ares_set_dns_servers(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) CURLcode {
+    var servers = asyn_ares_c.Curl_zig_easy_get_dns_servers(data);
+    if (asyn_ares_c.getenv("CURL_DNS_SERVER")) |env_servers| {
+        servers = env_servers;
+    }
+    const srv = servers orelse return CURLE_OK;
+
+    var ares_result: c_int = ARES_SUCCESS;
+    if (async_ctx) |a| {
+        if (a.ares.channel) |ch| {
+            ares_result = asyn_ares_c.ares_set_servers_ports_csv(ch, srv);
+        }
+    }
+    return switch (ares_result) {
+        ARES_SUCCESS => CURLE_OK,
+        ARES_ENOMEM => CURLE_OUT_OF_MEMORY,
+        else => CURLE_BAD_FUNCTION_ARGUMENT,
+    };
+}
+
+fn async_ares_set_dns_interface(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) CURLcode {
+    const interf = asyn_ares_c.Curl_zig_easy_get_dns_interface(data) orelse "";
+    if (async_ctx) |a| {
+        if (a.ares.channel) |ch| {
+            asyn_ares_c.ares_set_local_dev(ch, interf);
+        }
+    }
+    return CURLE_OK;
+}
+
+fn async_ares_set_dns_local_ip4(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) CURLcode {
+    var a4: u32 = 0;
+    if (asyn_ares_c.Curl_zig_easy_get_dns_local_ip4(data)) |local_ip4| {
+        if (local_ip4[0] != 0) {
+            if (curlx_time_net.curlx_inet_pton(AF_INET, local_ip4, @ptrCast(&a4)) != 1) {
+                return CURLE_BAD_FUNCTION_ARGUMENT;
+            }
+        }
+    }
+    if (async_ctx) |a| {
+        if (a.ares.channel) |ch| {
+            asyn_ares_c.ares_set_local_ip4(ch, std.mem.bigToNative(u32, a4));
+        }
+    }
+    return CURLE_OK;
+}
+
+fn async_ares_set_dns_local_ip6(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) CURLcode {
+    if (!use_ipv6) return CURLE_NOT_BUILT_IN;
+    var a6: [16]u8 = @splat(0);
+    if (asyn_ares_c.Curl_zig_easy_get_dns_local_ip6(data)) |local_ip6| {
+        if (local_ip6[0] != 0) {
+            if (curlx_time_net.curlx_inet_pton(AF_INET6, local_ip6, @ptrCast(&a6)) != 1) {
+                return CURLE_BAD_FUNCTION_ARGUMENT;
+            }
+        }
+    }
+    if (async_ctx) |a| {
+        if (a.ares.channel) |ch| {
+            asyn_ares_c.ares_set_local_ip6(ch, &a6);
+        }
+    }
+    return CURLE_OK;
+}
+
+fn async_ares_init(data: ?*Curl_easy, async_ctx: *Curl_resolv_async) CURLcode {
+    const ares = &async_ctx.ares;
+    var result: CURLcode = CURLE_OK;
+
+    ares.ares_status = ARES_ENOTFOUND;
+    async_ctx.queries_ongoing = 0;
+
+    if (ares_ver_global == 0) {
+        _ = asyn_ares_c.ares_version(&ares_ver_global);
+    }
+
+    const status = asyn_ares_c.Curl_zig_ares_init_channel(data, ares_ver_global, &ares.channel);
+    if (status != ARES_SUCCESS) {
+        ares.channel = null;
+        return if (status == ARES_ENOMEM) CURLE_OUT_OF_MEMORY else CURLE_FAILED_INIT;
+    }
+
+    blk: {
+        result = async_ares_set_dns_servers(data, async_ctx);
+        if (result != CURLE_OK and result != CURLE_NOT_BUILT_IN) break :blk;
+
+        result = async_ares_set_dns_interface(data, async_ctx);
+        if (result != CURLE_OK and result != CURLE_NOT_BUILT_IN) break :blk;
+
+        result = async_ares_set_dns_local_ip4(data, async_ctx);
+        if (result != CURLE_OK and result != CURLE_NOT_BUILT_IN) break :blk;
+
+        result = async_ares_set_dns_local_ip6(data, async_ctx);
+        if (result != CURLE_OK and result != CURLE_NOT_BUILT_IN) break :blk;
+
+        result = CURLE_OK;
+    }
+
+    if (result != CURLE_OK) {
+        if (ares.channel) |ch| {
+            asyn_ares_c.ares_destroy(ch);
+            ares.channel = null;
+        }
+    }
+    return result;
+}
+
+fn ares_shutdown(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) callconv(.c) void {
+    ares_destroy_fn(data, async_ctx);
+}
+
+fn ares_destroy_fn(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) callconv(.c) void {
+    _ = data;
+    const a = async_ctx orelse return;
+    if (a.ares.channel) |ch| {
+        asyn_ares_c.ares_destroy(ch);
+        a.ares.channel = null;
+    }
+}
+
+fn ares_pollset_fn(
+    data: ?*Curl_easy,
+    async_ctx: ?*Curl_resolv_async,
+    ps: *easy_pollset,
+) callconv(.c) CURLcode {
+    const a = async_ctx orelse return CURLE_OK;
+    var result: CURLcode = CURLE_OK;
+    if (a.ares.channel) |ch| {
+        result = vdns_cfilters.Curl_ares_pollset(data, ch, ps);
+        if (result == CURLE_OK) {
+            const ms = vdns_cfilters.Curl_ares_timeout_ms(data, a, ch);
+            Curl_expire_set(data, EXPIRE_ASYNC_NAME, ms, Curl_pgrs_now(data));
+        }
+    }
+    return result;
+}
+
+fn ares_take_result_fn(
+    data: ?*Curl_easy,
+    async_ctx: ?*Curl_resolv_async,
+    pdns: *?*Curl_dns_entry,
+) callconv(.c) CURLcode {
+    pdns.* = null;
+    const a = async_ctx orelse return CURLE_FAILED_INIT;
+    const ares = &a.ares;
+    var dns: ?*Curl_dns_entry = null;
+    var result: CURLcode = CURLE_OK;
+
+    out: {
+        if (vdns_cfilters.Curl_ares_perform(ares.channel, 0) < 0) {
+            result = CURLE_UNRECOVERABLE_POLL;
+            break :out;
+        }
+
+        if (a.queries_ongoing != 0) {
+            result = CURLE_AGAIN;
+            break :out;
+        }
+
+        result = ares.result;
+        if (ares.ares_status == ARES_SUCCESS and result == CURLE_OK) {
+            if (curlDnsqIsAddr(a.dns_queries) != 0) {
+                dns = Curl_dnsc_mk_addr2(data, a.dns_queries, &a.ai_AAAA, &a.ai_A, a.peer.?);
+                if (dns == null) {
+                    result = CURLE_OUT_OF_MEMORY;
+                    break :out;
+                }
+            }
+
+            if (use_httpsrr) {
+                if (dns == null and (a.dns_queries & CURL_DNSQ_HTTPS) != 0) {
+                    dns = Curl_dnsc_mk_https(data, &a.httpsrr, a.peer.?);
+                    if (dns == null) {
+                        result = CURLE_OUT_OF_MEMORY;
+                        break :out;
+                    }
+                }
+            }
+        }
+
+        if (result == CURLE_OK and dns == null) {
+            var msg: ?[*:0]const u8 = null;
+            a.setNegativeAnswer(
+                !ares.transientErr() and
+                    (ares.ares_status == ARES_ENOTFOUND or ares.ares_status == ARES_ENODATA),
+            );
+            if (ares.ares_status != ARES_SUCCESS) {
+                msg = asyn_ares_c.ares_strerror(ares.ares_status);
+            }
+            result = asyn_ares_c.Curl_async_failed(data, a, msg);
+        }
+
+        if (Curl_vdns_trc_dns_is_verbose(data)) {
+            const found_prefix: [*:0]const u8 = if (dns != null) "" else "not ";
+            Curl_trc_dns(
+                data,
+                "[%s] ares_take_result, result=%d, ares_result=%d, ares_status=%d, dns=%sfound",
+                Curl_resolv_query_str(a.dns_queries),
+                @as(c_int, @intCast(result)),
+                @as(c_int, @intCast(ares.result)),
+                ares.ares_status,
+                found_prefix,
+            );
+        }
+    }
+
+    if (result != CURLE_AGAIN) {
+        ares.result = result;
+    }
+    pdns.* = if (result != CURLE_OK) null else dns;
+    return result;
+}
+
+fn async_ares_poll_timeout(ares: *async_ares_ctx, timeout_ms: timediff_t) timediff_t {
+    var time_buf: vdns_cfilters.AresTimeval = undefined;
+    var max_timeout: vdns_cfilters.AresTimeval = undefined;
+    const itimeout_ms: c_int = if (timeout_ms > std.math.maxInt(c_int))
+        std.math.maxInt(c_int)
+    else if (timeout_ms < 0)
+        -1
+    else
+        @intCast(timeout_ms);
+
+    max_timeout.tv_sec = @intCast(@divTrunc(itimeout_ms, 1000));
+    max_timeout.tv_usec = @intCast(@rem(itimeout_ms, 1000) * 1000);
+
+    const ares_calced = asyn_ares_c.ares_timeout(ares.channel, &max_timeout, &time_buf) orelse return 1000;
+    if (ares_calced.tv_sec == 0) {
+        return @intCast(@divTrunc(ares_calced.tv_usec, 1000));
+    }
+    return 1000;
+}
+
+fn ares_await_fn(
+    data: ?*Curl_easy,
+    resolv_id: u32,
+    pdns: *?*Curl_dns_entry,
+) callconv(.c) CURLcode {
+    pdns.* = null;
+    const a = asyn_ares_c.Curl_async_get(data, resolv_id) orelse return CURLE_FAILED_INIT;
+    const ares = &a.ares;
+    const start = Curl_pgrs_now(data).*;
+    var result: CURLcode = CURLE_OK;
+
+    while (result == CURLE_OK) {
+        var timeout_ms = Curl_timeleft_ms(data);
+        if (timeout_ms == 0) {
+            const elapsed_ms = curlx_time_net.curlx_ptimediff_ms(Curl_pgrs_now(data), &start);
+            if (elapsed_ms < CURL_TIMEOUT_RESOLVE_MS) {
+                timeout_ms = CURL_TIMEOUT_RESOLVE_MS - elapsed_ms;
+            } else {
+                timeout_ms = -1;
+            }
+        }
+
+        if (timeout_ms < 0) {
+            result = CURLE_OPERATION_TIMEDOUT;
+            break;
+        }
+
+        if (vdns_cfilters.Curl_ares_perform(ares.channel, async_ares_poll_timeout(ares, timeout_ms)) < 0) {
+            result = CURLE_UNRECOVERABLE_POLL;
+            break;
+        }
+
+        result = ares_take_result_fn(data, a, pdns);
+        if (result == CURLE_AGAIN) {
+            result = CURLE_OK;
+        } else if (result != CURLE_OK or pdns.* != null) {
+            break;
+        }
+
+        if (asyn_ares_c.Curl_pgrsUpdate(data) != 0) {
+            result = CURLE_ABORTED_BY_CALLBACK;
+            break;
+        }
+    }
+
+    if (result != CURLE_OK) {
+        asyn_ares_c.ares_cancel(ares.channel);
+    }
+    return result;
+}
+
+fn async_ares_addr_seen(
+    cafirst: ?*const Curl_addrinfo,
+    family: c_int,
+    ss_size: usize,
+    addr: *const anyopaque,
+) bool {
+    var ca = cafirst;
+    const addr_bytes: [*]const u8 = @ptrCast(addr);
+    while (ca) |cur| : (ca = cur.ai_next) {
+        if (cur.ai_family == family and @as(usize, cur.ai_addrlen) == ss_size) {
+            if (cur.ai_addr) |cur_addr| {
+                const cur_bytes: [*]const u8 = @ptrCast(cur_addr);
+                if (std.mem.eql(u8, cur_bytes[0..ss_size], addr_bytes[0..ss_size])) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+fn async_ares_node2addr(node: ?*ares_addrinfo_node) ?*Curl_addrinfo {
+    var ai = node;
+    var cafirst: ?*Curl_addrinfo = null;
+    var calast: ?*Curl_addrinfo = null;
+    var had_error = false;
+    var naddrs: c_uint = 0;
+
+    while (ai != null and naddrs < CARES_MAX_ADDRS) : (ai = ai.?.ai_next) {
+        const cur = ai.?;
+        const ss_size: usize = if (cur.ai_family == AF_INET)
+            SockaddrInSize
+        else if (use_ipv6 and cur.ai_family == AF_INET6)
+            SockaddrIn6Size
+        else
+            continue;
+
+        const cur_addr = cur.ai_addr orelse continue;
+        if (cur.ai_addrlen == 0 or @as(usize, cur.ai_addrlen) < ss_size)
+            continue;
+
+        if (async_ares_addr_seen(cafirst, cur.ai_family, ss_size, cur_addr))
+            continue;
+
+        const raw = mem.malloc(@sizeOf(Curl_addrinfo) + ss_size) orelse {
+            had_error = true;
+            break;
+        };
+        const ca: *Curl_addrinfo = @ptrCast(@alignCast(raw));
+        const addr_dst = raw + @sizeOf(Curl_addrinfo);
+        const addr_src: [*]const u8 = @ptrCast(cur_addr);
+
+        ca.ai_flags = cur.ai_flags;
+        ca.ai_family = cur.ai_family;
+        ca.ai_socktype = cur.ai_socktype;
+        ca.ai_protocol = cur.ai_protocol;
+        ca.ai_addrlen = @intCast(ss_size);
+        ca.ai_addr = @ptrCast(addr_dst);
+        ca.ai_canonname = null;
+        ca.ai_next = null;
+        @memcpy(addr_dst[0..ss_size], addr_src[0..ss_size]);
+
+        if (cafirst == null) {
+            cafirst = ca;
+        }
+        if (calast) |last| {
+            last.ai_next = ca;
+        }
+        calast = ca;
+        naddrs += 1;
+    }
+
+    if (had_error) {
+        Curl_freeaddrinfo(cafirst);
+        cafirst = null;
+    }
+    return cafirst;
+}
+
+fn async_ares_A_cb(
+    user_data: ?*anyopaque,
+    status: c_int,
+    timeouts: c_int,
+    ares_ai: ?*ares_addrinfo,
+) callconv(.c) void {
+    _ = timeouts;
+    const a: *Curl_resolv_async = @ptrCast(@alignCast(user_data orelse return));
+    const ares = &a.ares;
+
+    a.dns_responses |= CURL_DNSQ_A;
+    a.queries_ongoing -= 1;
+    a.setDone(a.queries_ongoing == 0);
+    if (status == ARES_SUCCESS) {
+        ares.ares_status = ARES_SUCCESS;
+        if (ares_ai) |ai| {
+            a.ai_A = async_ares_node2addr(ai.nodes);
+            asyn_ares_c.ares_freeaddrinfo(ai);
+        }
+    } else {
+        if (status != ARES_ENOTFOUND and status != ARES_ENODATA) {
+            ares.setTransientErr(true);
+        }
+        if (ares.ares_status != ARES_SUCCESS) {
+            ares.ares_status = status;
+        }
+    }
+}
+
+fn async_ares_AAAA_cb(
+    user_data: ?*anyopaque,
+    status: c_int,
+    timeouts: c_int,
+    ares_ai: ?*ares_addrinfo,
+) callconv(.c) void {
+    _ = timeouts;
+    const a: *Curl_resolv_async = @ptrCast(@alignCast(user_data orelse return));
+    const ares = &a.ares;
+
+    a.dns_responses |= CURL_DNSQ_AAAA;
+    a.queries_ongoing -= 1;
+    a.setDone(a.queries_ongoing == 0);
+    if (status == ARES_SUCCESS) {
+        ares.ares_status = ARES_SUCCESS;
+        if (ares_ai) |ai| {
+            a.ai_AAAA = async_ares_node2addr(ai.nodes);
+            asyn_ares_c.ares_freeaddrinfo(ai);
+        }
+    } else {
+        if (status != ARES_ENOTFOUND and status != ARES_ENODATA) {
+            ares.setTransientErr(true);
+        }
+        if (ares.ares_status != ARES_SUCCESS) {
+            ares.ares_status = status;
+        }
+    }
+}
+
+fn async_ares_rr_done(
+    user_data: ?*anyopaque,
+    status: c_int,
+    timeouts: usize,
+    dnsrec: ?*const anyopaque,
+) callconv(.c) void {
+    _ = timeouts;
+    if (!use_httpsrr) return;
+    const a: *Curl_resolv_async = @ptrCast(@alignCast(user_data orelse return));
+    const ares = &a.ares;
+
+    a.dns_responses |= CURL_DNSQ_HTTPS;
+    a.queries_ongoing -= 1;
+    a.setDone(a.queries_ongoing == 0);
+    ares.ares_status = status;
+    if (status != ARES_ENOTFOUND and status != ARES_ENODATA) {
+        ares.setTransientErr(true);
+    }
+    if (status != ARES_SUCCESS or dnsrec == null) {
+        return;
+    }
+    ares.result = Curl_httpsrr_from_ares(dnsrec, &a.httpsrr);
+}
+
+fn ares_getaddrinfo_fn(
+    data: ?*Curl_easy,
+    async_ctx: ?*Curl_resolv_async,
+) callconv(.c) CURLcode {
+    const a = async_ctx orelse return CURLE_FAILED_INIT;
+    const ares = &a.ares;
+    var service: [12]u8 = undefined;
+    var result: CURLcode = CURLE_OK;
+
+    out: {
+        if (ares.channel != null) {
+            result = CURLE_FAILED_INIT;
+            break :out;
+        }
+
+        result = async_ares_init(data, a);
+        if (result != CURLE_OK) break :out;
+
+        result = asyn_ares_c.Curl_resolv_announce_start(data, ares.channel);
+        if (result != CURLE_OK) break :out;
+
+        if (Curl_vdns_trc_dns_is_verbose(data)) {
+            if (asyn_ares_c.ares_get_servers_csv(ares.channel)) |csv| {
+                Curl_trc_dns(data, "ares: servers=%s", csv);
+                asyn_ares_c.ares_free_string(@ptrCast(csv));
+            }
+        }
+
+        const peer = a.peer.?;
+        const hostname = peer.hostname.?;
+        _ = asyn_ares_c.curl_msnprintf(&service, service.len, "%d", @as(c_int, peer.port));
+        const service_str: [*:0]const u8 = @ptrCast(&service);
+        const socktype: c_int = if (asyn_ares_c.Curl_conn_get_transport(data, Curl_vdns_data_conn(data)) == TRNSPRT_TCP)
+            vdns_cfilters.SOCK_STREAM
+        else
+            vdns_cfilters.SOCK_DGRAM;
+
+        if (use_ipv6 and (a.dns_queries & CURL_DNSQ_AAAA) != 0) {
+            var hints: ares_addrinfo_hints = .{
+                .ai_family = PF_INET6,
+                .ai_socktype = socktype,
+                .ai_flags = ARES_AI_NUMERICSERV,
+            };
+            if (Curl_vdns_trc_dns_is_verbose(data)) {
+                Curl_trc_dns(data, "[AAAA] ares: query records for %s", hostname);
+            }
+            a.queries_ongoing += 1;
+            asyn_ares_c.ares_getaddrinfo(
+                ares.channel,
+                hostname,
+                service_str,
+                &hints,
+                async_ares_AAAA_cb,
+                a,
+            );
+        }
+
+        if ((a.dns_queries & CURL_DNSQ_A) != 0) {
+            var hints: ares_addrinfo_hints = .{
+                .ai_family = PF_INET,
+                .ai_socktype = socktype,
+                .ai_flags = ARES_AI_NUMERICSERV,
+            };
+            if (Curl_vdns_trc_dns_is_verbose(data)) {
+                Curl_trc_dns(data, "[A] ares: query records for %s", hostname);
+            }
+            a.queries_ongoing += 1;
+            asyn_ares_c.ares_getaddrinfo(
+                ares.channel,
+                hostname,
+                service_str,
+                &hints,
+                async_ares_A_cb,
+                a,
+            );
+        }
+
+        if (use_httpsrr and (a.dns_queries & CURL_DNSQ_HTTPS) != 0) {
+            var https_name: ?[*:0]u8 = null;
+            if (peer.port != 443) {
+                https_name = asyn_ares_c.curl_maprintf("_%u._https.%s", @as(c_uint, peer.port), hostname);
+                if (https_name == null) {
+                    return CURLE_OUT_OF_MEMORY;
+                }
+            }
+            const qname: [*:0]const u8 = if (https_name) |hn| hn else hostname;
+            if (Curl_vdns_trc_dns_is_verbose(data)) {
+                Curl_trc_dns(data, "[HTTPS] ares: query records for %s", qname);
+            }
+            a.queries_ongoing += 1;
+            _ = asyn_ares_c.ares_query_dnsrec(
+                ares.channel,
+                qname,
+                ARES_CLASS_IN,
+                ARES_REC_TYPE_HTTPS,
+                async_ares_rr_done,
+                a,
+                null,
+            );
+            mem.free(@ptrCast(https_name));
+        }
+    }
+
+    ares.result = result;
+    return if (result != CURLE_OK) result else (if (a.queries_ongoing != 0) CURLE_AGAIN else CURLE_OK);
+}
+
+comptime {
+    if (use_ares) {
+        @export(&Curl_async_ares_ver, .{ .name = "Curl_async_ares_ver" });
+    }
+    if (use_resolv_ares) {
+        @export(&ares_global_init, .{ .name = "Curl_async_global_init" });
+        @export(&ares_global_cleanup, .{ .name = "Curl_async_global_cleanup" });
+        @export(&ares_shutdown, .{ .name = "Curl_async_ares_shutdown" });
+        @export(&ares_destroy_fn, .{ .name = "Curl_async_ares_destroy" });
+        @export(&ares_pollset_fn, .{ .name = "Curl_async_pollset" });
+        @export(&ares_take_result_fn, .{ .name = "Curl_async_take_result" });
+        @export(&ares_await_fn, .{ .name = "Curl_async_await" });
+        @export(&ares_getaddrinfo_fn, .{ .name = "Curl_async_getaddrinfo" });
+    }
+}
 
 // ============================================================================
 // Unit Tests
@@ -2257,4 +2982,118 @@ test "Curl_dnscache_init and Curl_dnscache_destroy" {
     Curl_dnscache_init(&cache, 7);
     try std.testing.expectEqual(@as(usize, 0), Curl_hash_count(&cache.entries));
     Curl_dnscache_destroy(&cache);
+}
+
+test "async_ares_node2addr deduplicates and converts ares_addrinfo_node" {
+    var sa1: [16]u8 = @splat(0);
+    sa1[0] = 2; // AF_INET
+    sa1[2] = 0x01;
+    sa1[3] = 0xbb; // 443
+    sa1[4] = 127;
+    sa1[5] = 0;
+    sa1[6] = 0;
+    sa1[7] = 1;
+
+    var node2: ares_addrinfo_node = .{
+        .ai_ttl = 60,
+        .ai_flags = 0,
+        .ai_family = AF_INET,
+        .ai_socktype = vdns_cfilters.SOCK_STREAM,
+        .ai_protocol = 6,
+        .ai_addrlen = 16,
+        .ai_addr = &sa1,
+        .ai_next = null,
+    };
+    var node1: ares_addrinfo_node = .{
+        .ai_ttl = 60,
+        .ai_flags = 0,
+        .ai_family = AF_INET,
+        .ai_socktype = vdns_cfilters.SOCK_STREAM,
+        .ai_protocol = 6,
+        .ai_addrlen = 16,
+        .ai_addr = &sa1,
+        .ai_next = &node2,
+    };
+
+    const ca = async_ares_node2addr(&node1);
+    try std.testing.expect(ca != null);
+    defer Curl_freeaddrinfo(ca);
+    try std.testing.expectEqual(AF_INET, ca.?.ai_family);
+    try std.testing.expect(ca.?.ai_next == null);
+}
+
+test "Curl_httpsrr_from_ares decodes c-ares HTTPS DNS record" {
+    if (use_ares and use_httpsrr) {
+        const ares_test_c = struct {
+            extern fn ares_dns_record_create(
+                dnsrec: *?*anyopaque,
+                id: u16,
+                flags: u16,
+                opcode: c_uint,
+                rcode: c_uint,
+            ) callconv(.c) c_int;
+            extern fn ares_dns_record_destroy(dnsrec: ?*anyopaque) callconv(.c) void;
+            extern fn ares_dns_record_rr_add(
+                rr_out: *?*anyopaque,
+                dnsrec: ?*anyopaque,
+                sect: c_uint,
+                name: [*:0]const u8,
+                rec_type: c_uint,
+                rclass: c_uint,
+                ttl: c_uint,
+            ) callconv(.c) c_int;
+            extern fn ares_dns_rr_set_u16(dns_rr: ?*anyopaque, key: c_uint, val: u16) callconv(.c) c_int;
+            extern fn ares_dns_rr_set_str(dns_rr: ?*anyopaque, key: c_uint, val: [*:0]const u8) callconv(.c) c_int;
+            extern fn ares_dns_rr_set_opt(
+                dns_rr: ?*anyopaque,
+                key: c_uint,
+                opt: u16,
+                val: ?[*]const u8,
+                val_len: usize,
+            ) callconv(.c) c_int;
+        };
+
+        var dnsrec: ?*anyopaque = null;
+        try std.testing.expectEqual(@as(c_int, 0), ares_test_c.ares_dns_record_create(&dnsrec, 1, 0, 0, 0));
+        defer ares_test_c.ares_dns_record_destroy(dnsrec);
+
+        var rr: ?*anyopaque = null;
+        try std.testing.expectEqual(
+            @as(c_int, 0),
+            ares_test_c.ares_dns_record_rr_add(
+                &rr,
+                dnsrec,
+                ARES_SECTION_ANSWER,
+                "example.com",
+                ARES_REC_TYPE_HTTPS,
+                ARES_CLASS_IN,
+                300,
+            ),
+        );
+        try std.testing.expectEqual(@as(c_int, 0), ares_test_c.ares_dns_rr_set_u16(rr, ARES_RR_HTTPS_PRIORITY, 1));
+        try std.testing.expectEqual(@as(c_int, 0), ares_test_c.ares_dns_rr_set_str(rr, ARES_RR_HTTPS_TARGET, "."));
+
+        const alpn_wire = "\x02h2\x02h3";
+        try std.testing.expectEqual(
+            @as(c_int, 0),
+            ares_test_c.ares_dns_rr_set_opt(rr, ARES_RR_HTTPS_PARAMS, HTTPS_RR_CODE_ALPN, alpn_wire.ptr, alpn_wire.len),
+        );
+        const port_wire = [_]u8{ 0x20, 0xfb };
+        try std.testing.expectEqual(
+            @as(c_int, 0),
+            ares_test_c.ares_dns_rr_set_opt(rr, ARES_RR_HTTPS_PARAMS, HTTPS_RR_CODE_PORT, &port_wire, port_wire.len),
+        );
+
+        var hinfo: ?*Curl_https_rrinfo = null;
+        try std.testing.expectEqual(CURLE_OK, Curl_httpsrr_from_ares(dnsrec, &hinfo));
+        try std.testing.expect(hinfo != null);
+        defer Curl_httpsrr_destroy(hinfo);
+
+        try std.testing.expectEqual(@as(u16, 1), hinfo.?.priority);
+        try std.testing.expectEqualStrings(".", std.mem.span(hinfo.?.target.?));
+        try std.testing.expectEqual(@as(u8, @intCast(ALPN_h2)), hinfo.?.alpns[0]);
+        try std.testing.expectEqual(@as(u8, @intCast(ALPN_h3)), hinfo.?.alpns[1]);
+        try std.testing.expect(hinfo.?.portSet());
+        try std.testing.expectEqual(@as(u16, 8443), hinfo.?.port);
+    }
 }

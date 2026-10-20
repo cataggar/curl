@@ -114,6 +114,9 @@ pub fn build(b: *std.Build) void {
     });
     const run_port_tests = b.addRunArtifact(port_tests);
 
+    const test_port_step = b.step("test-port", "Run Zig port unit tests");
+    test_port_step.dependOn(&run_port_tests.step);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(b.getInstallStep());
     test_step.dependOn(&run_unit_tests.step);

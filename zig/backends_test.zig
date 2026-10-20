@@ -128,6 +128,10 @@ const c = struct {
     pub const CURLOPT_ISSUERCERT: CURLoption = CURLOPTTYPE_OBJECTPOINT + 170;
     pub const CURLOPT_CERTINFO: CURLoption = CURLOPTTYPE_LONG + 172;
     pub const CURLOPT_RESOLVE: CURLoption = CURLOPTTYPE_OBJECTPOINT + 203;
+    pub const CURLOPT_DNS_SERVERS: CURLoption = CURLOPTTYPE_OBJECTPOINT + 211;
+    pub const CURLOPT_DNS_INTERFACE: CURLoption = CURLOPTTYPE_OBJECTPOINT + 221;
+    pub const CURLOPT_DNS_LOCAL_IP4: CURLoption = CURLOPTTYPE_OBJECTPOINT + 222;
+    pub const CURLOPT_DNS_LOCAL_IP6: CURLoption = CURLOPTTYPE_OBJECTPOINT + 223;
     pub const CURLOPT_PINNEDPUBLICKEY: CURLoption = CURLOPTTYPE_OBJECTPOINT + 230;
     pub const CURLOPT_TLS13_CIPHERS: CURLoption = CURLOPTTYPE_OBJECTPOINT + 276;
     pub const CURLOPT_SSL_EC_CURVES: CURLoption = CURLOPTTYPE_OBJECTPOINT + 298;
@@ -274,6 +278,13 @@ test "curl_version_info feature flags match build options" {
         try testing.expect(info.*.nghttp2_version != null);
         try testing.expect(info.*.nghttp2_ver_num != 0);
     }
+    if (backend_options.ares) {
+        try testing.expect(info.*.ares != null);
+        try testing.expect(info.*.ares_num > 0);
+    } else {
+        try testing.expect(info.*.ares == null);
+        try testing.expectEqual(@as(c_int, 0), info.*.ares_num);
+    }
 }
 
 test "curl_version_info feature_names list matches build options" {
@@ -293,6 +304,15 @@ test "curl_version_info feature_names list matches build options" {
     try testing.expectEqual(backend_options.psl, hasFeature(names, "PSL"));
     try testing.expectEqual(backend_options.idn != .none, hasFeature(names, "IDN"));
     try testing.expectEqual(backend_options.nghttp2, hasFeature(names, "HTTP2"));
+    try testing.expectEqual(backend_options.httpsrr, hasFeature(names, "HTTPSRR"));
+    try testing.expectEqual(
+        backend_options.ares and backend_options.httpsrr and backend_options.use_resolv_threaded,
+        hasFeature(names, "asyn-rr"),
+    );
+    try testing.expectEqual(
+        backend_options.use_resolv_ares or backend_options.use_resolv_threaded,
+        hasFeature(names, "AsynchDNS"),
+    );
 }
 
 test "curl_version string reflects enabled backends" {
@@ -307,6 +327,18 @@ test "curl_version string reflects enabled backends" {
     try testing.expectEqual(backend_options.zlib, std.mem.indexOf(u8, ver, "zlib/") != null);
     try testing.expectEqual(backend_options.zstd, std.mem.indexOf(u8, ver, "zstd/") != null);
     try testing.expectEqual(backend_options.nghttp2, std.mem.indexOf(u8, ver, "nghttp2/") != null);
+    try testing.expectEqual(backend_options.ares, std.mem.indexOf(u8, ver, "c-ares/") != null);
+}
+
+test "c-ares CURLOPT_DNS_* options match use_resolv_ares" {
+    const easy = curl_easy_init() orelse return error.EasyInitFailed;
+    defer curl_easy_cleanup(easy);
+
+    const expected: c.CURLcode = if (backend_options.use_resolv_ares) c.CURLE_OK else c.CURLE_UNKNOWN_OPTION;
+    try testing.expectEqual(expected, curl_easy_setopt(easy, c.CURLOPT_DNS_SERVERS, @as([*:0]const u8, "127.0.0.1")));
+    try testing.expectEqual(expected, curl_easy_setopt(easy, c.CURLOPT_DNS_INTERFACE, @as([*:0]const u8, "lo")));
+    try testing.expectEqual(expected, curl_easy_setopt(easy, c.CURLOPT_DNS_LOCAL_IP4, @as([*:0]const u8, "127.0.0.1")));
+    try testing.expectEqual(expected, curl_easy_setopt(easy, c.CURLOPT_DNS_LOCAL_IP6, @as([*:0]const u8, "::1")));
 }
 
 test "curl_global_sslset and curl_easy_setopt TLS capability matrix" {
