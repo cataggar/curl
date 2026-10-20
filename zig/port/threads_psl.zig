@@ -1128,7 +1128,7 @@ pub export fn Curl_psl_destroy(pslcache: ?*PslCache) callconv(.c) void {
         if (cache.psl) |psl| {
             if (comptime backend_options.psl) {
                 if ((cache.flags & 1) != 0) {
-                    psl_free(@constCast(@ptrCast(psl)));
+                    psl_free(@ptrCast(@constCast(psl)));
                 }
             }
             cache.psl = null;
