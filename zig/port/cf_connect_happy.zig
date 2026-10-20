@@ -102,6 +102,15 @@ pub const PF_INET6: c_int = AF_INET6;
 
 pub const CURL_DNSQ_A: u8 = 1 << 0;
 pub const CURL_DNSQ_AAAA: u8 = 1 << 1;
+pub const CURL_DNSQ_HTTPS: u8 = 1 << 2;
+
+pub const use_ares = vdns_cfilters.use_ares;
+pub const use_httpsrr = vdns_cfilters.use_httpsrr;
+pub const use_resolv_ares = vdns_cfilters.use_resolv_ares;
+pub const use_resolv_threaded = vdns_cfilters.use_resolv_threaded;
+pub const use_httpsrr_ares = use_httpsrr and use_ares and use_resolv_threaded;
+
+pub const Curl_https_rrinfo = vdns_cfilters.Curl_https_rrinfo;
 
 pub const MAX_IPADR_LEN: usize = 46;
 
@@ -138,6 +147,11 @@ extern fn Curl_resolv_dns_queries(data: ?*Curl_easy, ip_version: u8) callconv(.c
 extern fn Curl_conn_dns_add_addr_resolve(data: ?*Curl_easy, conn: ?*connectdata, sockindex: i8, peer: *Curl_peer, dns_queries: u8, transport: u8) callconv(.c) CURLcode;
 extern fn Curl_conn_dns_addr_result(conn: ?*connectdata, sockindex: i8, peer: ?*Curl_peer) callconv(.c) CURLcode;
 extern fn Curl_conn_dns_get_ai(data: ?*Curl_easy, peer: ?*Curl_peer, sockindex: i8, ai_family: c_int, index: c_uint) callconv(.c) ?*const Curl_addrinfo;
+extern fn Curl_conn_dns_get_https(data: ?*Curl_easy, sockindex: i8, peer: ?*Curl_peer) callconv(.c) ?*const Curl_https_rrinfo;
+extern fn Curl_conn_dns_resolved_https(data: ?*Curl_easy, sockindex: i8, peer: ?*Curl_peer) callconv(.c) bool;
+extern fn Curl_conn_dns_add_https_resolve(data: ?*Curl_easy, conn: ?*connectdata, sockindex: i8, peer: ?*Curl_peer) callconv(.c) CURLcode;
+extern fn Curl_httpsrr_applicable(data: ?*Curl_easy, rr: ?*const Curl_https_rrinfo) callconv(.c) bool;
+extern fn getenv(name: [*:0]const u8) callconv(.c) ?[*:0]const u8;
 extern fn Curl_conn_cntrl_report_stats(data: ?*Curl_easy, conn: ?*connectdata, sockindex: c_int) callconv(.c) void;
 extern fn Curl_conn_cntrl_update_info(data: ?*Curl_easy, conn: ?*connectdata) callconv(.c) void;
 extern fn Curl_conn_cf_cntrl(cf: ?*Curl_cfilter, data: ?*Curl_easy, ignore_result: bool, event: c_int, arg1: c_int, arg2: ?*anyopaque) callconv(.c) CURLcode;
@@ -840,9 +854,42 @@ fn cf_hc_may_h3(cf: *Curl_cfilter, data: ?*Curl_easy) bool {
 }
 
 fn cf_hc_get_httpsrr_alpn(cf: *Curl_cfilter, data: ?*Curl_easy, not_this_one: c_uint) c_uint {
-    _ = cf;
-    _ = data;
-    _ = not_this_one;
+    if (comptime use_httpsrr) {
+        const ctx: *cf_hc_ctx = @ptrCast(@alignCast(cf.ctx));
+        const d = data orelse return ALPN_none;
+        const rr = Curl_conn_dns_get_https(data, cf.sockindex, ctx.destination);
+        const avail_prefix: [*:0]const u8 = if (rr != null) "" else "not ";
+        trcCf(data, cf, "HTTPS-RR %savailable", .{avail_prefix});
+        if (Curl_httpsrr_applicable(data, rr) and !rr.?.noDefAlpn()) {
+            var wanted: u8 = 0;
+            var allowed: u8 = 0;
+            var preferred: u8 = 0;
+            Curl_zig_data_get_http_neg(d, &wanted, &allowed, &preferred);
+
+            for (rr.?.alpns) |alpn_u8| {
+                const alpn_rr: c_uint = alpn_u8;
+                if (alpn_rr == not_this_one) continue;
+                switch (alpn_rr) {
+                    ALPN_h3 => {
+                        if ((allowed & CURL_HTTP_V3x) != 0 and cf_hc_may_h3(cf, data)) {
+                            return alpn_rr;
+                        }
+                    },
+                    ALPN_h2 => {
+                        if ((allowed & CURL_HTTP_V2x) != 0) {
+                            return alpn_rr;
+                        }
+                    },
+                    ALPN_h1 => {
+                        if ((allowed & CURL_HTTP_V1x) != 0) {
+                            return alpn_rr;
+                        }
+                    },
+                    else => {},
+                }
+            }
+        }
+    }
     return ALPN_none;
 }
 
@@ -980,7 +1027,11 @@ fn cf_hc_connect(cf: *Curl_cfilter, data: ?*Curl_easy, done: *bool) callconv(.c)
     done.* = false;
 
     if (!ctx.httpsrr_resolved) {
-        ctx.httpsrr_resolved = true;
+        ctx.httpsrr_resolved = Curl_conn_dns_resolved_https(data, cf.sockindex, ctx.destination);
+        if (!ctx.httpsrr_resolved and getenv("CURL_DBG_AWAIT_HTTPSRR") != null) {
+            trcCf(data, cf, "awaiting HTTPS-RR", .{});
+            return CURLE_OK;
+        }
     }
 
     if (ctx.state == .CF_HC_RESOLV) {
@@ -1264,12 +1315,15 @@ fn cf_hc_add(
     def_transport: u8,
 ) CURLcode {
     var cf: ?*Curl_cfilter = null;
-    const result = cf_hc_create(&cf, data, destination, def_transport);
+    var result = cf_hc_create(&cf, data, destination, def_transport);
     if (result != CURLE_OK) {
         return result;
     }
     Curl_conn_cf_add(data, conn, sockindex, cf.?);
-    return CURLE_OK;
+    if (comptime use_httpsrr) {
+        result = Curl_conn_dns_add_https_resolve(data, cf.?.conn, cf.?.sockindex, destination);
+    }
+    return result;
 }
 
 export fn Curl_cf_https_setup(
@@ -2259,7 +2313,49 @@ extern fn Curl_dnsc_mk_addr2(
     pai_AAAA: *?*Curl_addrinfo,
     peer: ?*Curl_peer,
 ) callconv(.c) ?*Curl_dns_entry;
+extern fn Curl_dnsc_mk_https(
+    data: ?*Curl_easy,
+    phinfo: ?*?*Curl_https_rrinfo,
+    peer: ?*Curl_peer,
+) callconv(.c) ?*Curl_dns_entry;
 extern fn Curl_dns_entry_unlink(data: ?*Curl_easy, pdns: *?*Curl_dns_entry) callconv(.c) void;
+extern fn Curl_httpsrr_destroy(hinfo: ?*Curl_https_rrinfo) callconv(.c) void;
+extern fn Curl_httpsrr_trace(data: ?*Curl_easy, rr: ?*Curl_https_rrinfo) callconv(.c) void;
+extern fn Curl_httpsrr_from_ares(dnsrec: ?*const anyopaque, phinfo: *?*Curl_https_rrinfo) callconv(.c) CURLcode;
+extern fn curl_maprintf(format: [*:0]const u8, ...) callconv(.c) ?[*:0]u8;
+
+const ARES_SUCCESS: c_int = 0;
+const ARES_LIB_INIT_ALL: c_int = 1;
+const ARES_CLASS_IN: c_uint = 1;
+const ARES_REC_TYPE_HTTPS: c_uint = 65;
+
+const ares_c = if (use_ares) struct {
+    const ares_callback_dnsrec = *const fn (
+        arg: ?*anyopaque,
+        status: c_int,
+        timeouts: usize,
+        dnsrec: ?*const anyopaque,
+    ) callconv(.c) void;
+
+    extern fn ares_library_init(flags: c_int) callconv(.c) c_int;
+    extern fn ares_library_cleanup() callconv(.c) void;
+    extern fn ares_init_options(
+        channelptr: *?*anyopaque,
+        options: ?*const anyopaque,
+        optmask: c_int,
+    ) callconv(.c) c_int;
+    extern fn ares_destroy(channel: ?*anyopaque) callconv(.c) void;
+    extern fn ares_set_servers_ports_csv(channel: ?*anyopaque, servers: [*:0]const u8) callconv(.c) c_int;
+    extern fn ares_query_dnsrec(
+        channel: ?*anyopaque,
+        name: [*:0]const u8,
+        dnsclass: c_uint,
+        rec_type: c_uint,
+        callback: ares_callback_dnsrec,
+        arg: ?*anyopaque,
+        qid: ?*c_ushort,
+    ) callconv(.c) c_int;
+} else struct {};
 
 extern fn curlx_dyn_init(s: *containers.dynbuf, toobig: usize) callconv(.c) void;
 extern fn curlx_dyn_free(s: *containers.dynbuf) callconv(.c) void;
@@ -2272,10 +2368,87 @@ pub const async_thrdd_ctx = vdns_cfilters.async_thrdd_ctx;
 pub const Curl_resolv_async = vdns_cfilters.Curl_resolv_async;
 
 fn Curl_async_global_init() callconv(.c) c_int {
+    if (comptime use_ares) {
+        if (ares_c.ares_library_init(ARES_LIB_INIT_ALL) != 0) {
+            return @intCast(CURLE_FAILED_INIT);
+        }
+    }
     return @intCast(CURLE_OK);
 }
 
-fn Curl_async_global_cleanup() callconv(.c) void {}
+fn Curl_async_global_cleanup() callconv(.c) void {
+    if (comptime use_ares) {
+        ares_c.ares_library_cleanup();
+    }
+}
+
+fn async_thrdd_rr_done(
+    user_data: ?*anyopaque,
+    status: c_int,
+    timeouts: usize,
+    dnsrec: ?*const anyopaque,
+) callconv(.c) void {
+    _ = timeouts;
+    if (comptime use_httpsrr_ares) {
+        const a: *Curl_resolv_async = @ptrCast(@alignCast(user_data orelse return));
+        a.queries_ongoing &= ~CURL_DNSQ_HTTPS;
+        a.dns_responses |= CURL_DNSQ_HTTPS;
+        if (status == ARES_SUCCESS) {
+            var rr: ?*Curl_https_rrinfo = null;
+            const result = Curl_httpsrr_from_ares(dnsrec, &rr);
+            if (result == CURLE_OK) {
+                Curl_httpsrr_destroy(a.httpsrr);
+                a.httpsrr = rr;
+            }
+        }
+    }
+}
+
+fn async_rr_init(data: *Curl_easy, a: *Curl_resolv_async) CURLcode {
+    _ = data;
+    if (comptime use_httpsrr_ares) {
+        const thrdd = &a.thrdd;
+        var status = ares_c.ares_init_options(&thrdd.rr.channel, null, 0);
+        if (status != ARES_SUCCESS) {
+            thrdd.rr.channel = null;
+            return CURLE_FAILED_INIT;
+        }
+        if (getenv("CURL_DNS_SERVER")) |servers| {
+            status = ares_c.ares_set_servers_ports_csv(thrdd.rr.channel, servers);
+            if (status != 0) {
+                return CURLE_FAILED_INIT;
+            }
+        }
+    }
+    return CURLE_OK;
+}
+
+fn async_rr_start(data: *Curl_easy, a: *Curl_resolv_async) void {
+    if (comptime use_httpsrr_ares) {
+        const thrdd = &a.thrdd;
+        const peer = a.peer orelse return;
+        var hostname: [*:0]const u8 = peer.hostname orelse return;
+        var rrname: ?[*:0]u8 = null;
+
+        if (peer.port != 443) {
+            rrname = curl_maprintf("_%d_.https.%s", @as(c_int, peer.port), hostname);
+            if (rrname == null) return;
+            hostname = rrname.?;
+        }
+        trcDns(data, "[%u] starting HTTPS-RR for %s", .{ a.id, hostname });
+        a.queries_ongoing |= CURL_DNSQ_HTTPS;
+        _ = ares_c.ares_query_dnsrec(
+            thrdd.rr.channel,
+            hostname,
+            ARES_CLASS_IN,
+            ARES_REC_TYPE_HTTPS,
+            async_thrdd_rr_done,
+            a,
+            null,
+        );
+        mem.free(@ptrCast(rrname));
+    }
+}
 
 fn async_thrdd_item_destroy(item_opt: ?*async_thrdd_item) void {
     const item = item_opt orelse return;
@@ -2355,6 +2528,12 @@ fn Curl_async_thrdd_destroy(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) c
     a.thrdd.res_A = null;
     async_thrdd_item_destroy(a.thrdd.res_AAAA);
     a.thrdd.res_AAAA = null;
+    if (comptime use_httpsrr_ares) {
+        if (a.thrdd.rr.channel) |ch| {
+            ares_c.ares_destroy(ch);
+            a.thrdd.rr.channel = null;
+        }
+    }
 }
 
 fn Curl_async_await(data: ?*Curl_easy, resolv_id: u32, pdns: *?*Curl_dns_entry) callconv(.c) CURLcode {
@@ -2497,7 +2676,8 @@ fn Curl_async_thrdd_multi_process(multi: ?*Curl_multi) callconv(.c) void {
         const data = Curl_multi_get_easy(m, item.?.mid);
         const a: ?*Curl_resolv_async = if (data != null) Curl_async_get(data, item.?.resolv_id) else null;
         if (a) |async_ctx| {
-            const pdest: *?*async_thrdd_item = if ((item.?.dns_queries & CURL_DNSQ_AAAA) != 0)
+            const q = item.?.dns_queries;
+            const pdest: *?*async_thrdd_item = if ((q & CURL_DNSQ_AAAA) != 0)
                 &async_ctx.thrdd.res_AAAA
             else
                 &async_ctx.thrdd.res_A;
@@ -2505,7 +2685,7 @@ fn Curl_async_thrdd_multi_process(multi: ?*Curl_multi) callconv(.c) void {
                 pdest.* = item;
                 item = null;
             }
-            async_ctx.queries_ongoing -= 1;
+            async_ctx.queries_ongoing &= ~q;
             Curl_multi_mark_dirty(data);
         }
         async_thrdd_item_free(item);
@@ -2544,7 +2724,7 @@ fn async_thrdd_query(data: *Curl_easy, async_ctx: *Curl_resolv_async, dns_querie
     const result = Curl_thrdq_send(thrdq, item, item.descriptionPtr(), async_ctx.timeout_ms);
     if (result == CURLE_OK) {
         item = undefined;
-        async_ctx.queries_ongoing += 1;
+        async_ctx.queries_ongoing |= dns_queries;
     } else {
         async_thrdd_item_free(item);
     }
@@ -2559,9 +2739,35 @@ fn Curl_async_getaddrinfo(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) cal
         return CURLE_FAILED_INIT;
     }
 
-    var result = Curl_resolv_announce_start(d, null);
+    var resolver: ?*anyopaque = null;
+    if (comptime use_httpsrr_ares) {
+        if ((a.dns_queries & CURL_DNSQ_HTTPS) != 0 and !a.isIpaddr()) {
+            const init_res = async_rr_init(d, a);
+            if (init_res != CURLE_OK) {
+                if (a.peer) |peer| {
+                    if (peer.hostname) |hostname| {
+                        trcDns(
+                            d,
+                            "error queueing query %s:%d -> %d",
+                            .{ hostname, @as(c_int, peer.port), @as(c_int, @intCast(init_res)) },
+                        );
+                    }
+                }
+                return init_res;
+            }
+            resolver = a.thrdd.rr.channel;
+        }
+    }
+
+    var result = Curl_resolv_announce_start(d, resolver);
     if (result != CURLE_OK) {
         return result;
+    }
+
+    if (comptime use_httpsrr_ares) {
+        if (resolver != null) {
+            async_rr_start(d, a);
+        }
     }
 
     blk: {
@@ -2601,9 +2807,16 @@ fn Curl_async_pollset(
     async_ctx: ?*Curl_resolv_async,
     ps: *easy_pollset,
 ) callconv(.c) CURLcode {
-    _ = ps;
     const a = async_ctx orelse return CURLE_OK;
     var timeout_ms = Curl_async_timeleft_ms(data, a);
+
+    if (comptime use_httpsrr_ares) {
+        if (a.thrdd.rr.channel) |ch| {
+            const result = vdns_cfilters.Curl_ares_pollset(data, ch, @ptrCast(ps));
+            if (result != CURLE_OK) return result;
+            timeout_ms = vdns_cfilters.Curl_ares_timeout_ms(data, a, ch);
+        }
+    }
 
     if (!a.isDone()) {
         const pnow = Curl_pgrs_now(data);
@@ -2620,7 +2833,7 @@ fn Curl_async_pollset(
             timeout_ms = @min(stutter_ms, timeout_ms);
         } else {
             const thrdq = Curl_zig_multi_get_resolv_thrdq(Curl_zig_data_get_multi(data));
-            if (a.queries_ongoing != 0 and !Curl_thrdq_check_started(thrdq)) {
+            if ((a.queries_ongoing & ~CURL_DNSQ_HTTPS) != 0 and !Curl_thrdq_check_started(thrdq)) {
                 trcDns(data, "resolver thread start failed again, retrying", .{});
                 timeout_ms = @min(@as(timediff_t, 100), timeout_ms);
             }
@@ -2695,7 +2908,7 @@ fn async_thrdd_check_done(data: ?*Curl_easy, async_ctx: *Curl_resolv_async) CURL
                     async_thrdd_item_free(item);
                     return result;
                 }
-                async_ctx.queries_ongoing += 1;
+                async_ctx.queries_ongoing |= item.dns_queries;
                 return CURLE_AGAIN;
             }
             async_thrdd_item_strip_results(res_aaaa, AF_INET);
@@ -2722,6 +2935,12 @@ fn Curl_async_take_result(
     pdns.* = null;
     const a = async_ctx orelse return CURLE_FAILED_INIT;
     const thrdd = &a.thrdd;
+
+    if (comptime use_httpsrr_ares) {
+        if (thrdd.rr.channel) |ch| {
+            _ = vdns_cfilters.Curl_ares_perform(ch, 0);
+        }
+    }
 
     if (builtin.os.tag == .windows) {
         Curl_async_thrdd_multi_process(Curl_zig_data_get_multi(data));
@@ -2765,6 +2984,16 @@ fn Curl_async_take_result(
             if (dns == null) {
                 result = CURLE_OUT_OF_MEMORY;
                 break :blk;
+            }
+        }
+        if (comptime use_httpsrr_ares) {
+            if (dns == null and thrdd.rr.channel != null) {
+                Curl_httpsrr_trace(data, a.httpsrr);
+                dns = Curl_dnsc_mk_https(data, &a.httpsrr, a.peer);
+                if (dns == null) {
+                    result = CURLE_OUT_OF_MEMORY;
+                    break :blk;
+                }
             }
         }
 

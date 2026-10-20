@@ -21,6 +21,11 @@ const use_c_vastart = switch (builtin.cpu.arch) {
     else => false,
 };
 
+pub const use_ares = vdns_cfilters.use_ares;
+pub const use_httpsrr = vdns_cfilters.use_httpsrr;
+pub const use_resolv_ares = vdns_cfilters.use_resolv_ares;
+pub const use_resolv_threaded = vdns_cfilters.use_resolv_threaded;
+
 pub const CURLcode = c_uint;
 pub const CURLMcode = c_int;
 pub const CURLsslset = c_uint;
@@ -37,11 +42,13 @@ pub const CURLE_UNSUPPORTED_PROTOCOL: CURLcode = 1;
 pub const CURLE_FAILED_INIT: CURLcode = 2;
 pub const CURLE_COULDNT_RESOLVE_PROXY: CURLcode = 5;
 pub const CURLE_COULDNT_RESOLVE_HOST: CURLcode = 6;
+pub const CURLE_WEIRD_SERVER_REPLY: CURLcode = 8;
 pub const CURLE_OUT_OF_MEMORY: CURLcode = 27;
 pub const CURLE_OPERATION_TIMEDOUT: CURLcode = 28;
 pub const CURLE_ABORTED_BY_CALLBACK: CURLcode = 42;
 pub const CURLE_BAD_FUNCTION_ARGUMENT: CURLcode = 43;
 pub const CURLE_SEND_ERROR: CURLcode = 55;
+pub const CURLE_BAD_CONTENT_ENCODING: CURLcode = 61;
 pub const CURLE_AGAIN: CURLcode = 81;
 pub const CURLE_RECURSIVE_API_CALL: CURLcode = 93;
 pub const CURLE_UNRECOVERABLE_POLL: CURLcode = 99;
@@ -102,13 +109,17 @@ pub const DOH_OOM: DOHcode = 16;
 
 pub const DOH_SLOT_IPV4: usize = 0;
 pub const DOH_SLOT_IPV6: usize = 1;
-pub const DOH_SLOT_COUNT: usize = 2;
+pub const DOH_SLOT_HTTPS_RR: usize = 2;
+pub const DOH_SLOT_COUNT: usize = if (use_httpsrr) 3 else 2;
 
 pub const DOH_MAX_ADDR: usize = 24;
+pub const DOH_MAX_HTTPS: usize = 4;
 pub const DOH_MAX_CNAME: usize = 4;
 pub const DOH_MAX_DNSREQ_SIZE: usize = 256 + 16;
 pub const DYN_DOH_RESPONSE: usize = 3000;
 pub const MAX_DNS_TTL: u32 = 86400;
+pub const PORT_HTTPS: u16 = 443;
+pub const TRNSPRT_TCP: u8 = 3;
 
 pub const CURL_TIMEOUT_RESOLVE_MS: timediff_t = 300 * 1000;
 pub const CURL_MAX_HTTP_HEADER: usize = 100 * 1024;
@@ -147,6 +158,10 @@ pub const CURLOPT_TIMEOUT_MS: c_uint = 155;
 pub const CURLOPT_CRLFILE: c_uint = 10169;
 pub const CURLOPT_CERTINFO: c_uint = 172;
 pub const CURLOPT_PROTOCOLS: c_uint = 181;
+pub const CURLOPT_DNS_SERVERS: c_uint = 10211;
+pub const CURLOPT_DNS_INTERFACE: c_uint = 10221;
+pub const CURLOPT_DNS_LOCAL_IP4: c_uint = 10222;
+pub const CURLOPT_DNS_LOCAL_IP6: c_uint = 10223;
 pub const CURLOPT_SSL_OPTIONS: c_uint = 216;
 pub const CURLOPT_SSL_VERIFYSTATUS: c_uint = 232;
 pub const CURLOPT_PIPEWAIT: c_uint = 237;
@@ -231,12 +246,21 @@ pub const dohaddr = extern struct {
     ip: dohaddr_ip,
 };
 
-pub const dohentry = extern struct {
-    cname: [DOH_MAX_CNAME]Dynbuf,
+pub const dohhttps_rr = extern struct {
+    len: u16,
+    val: ?[*]u8,
+};
+
+pub const dohentry = if (use_httpsrr) extern struct {
     addr: [DOH_MAX_ADDR]dohaddr,
     numaddr: c_int,
     ttl: c_uint,
-    numcname: c_int,
+    https_rrs: [DOH_MAX_HTTPS]dohhttps_rr,
+    numhttps_rrs: c_int,
+} else extern struct {
+    addr: [DOH_MAX_ADDR]dohaddr,
+    numaddr: c_int,
+    ttl: c_uint,
 };
 
 pub const doh_request = extern struct {
@@ -393,6 +417,13 @@ extern fn Curl_hash_clean(h: ?*Curl_hash) callconv(.c) void;
 extern fn Curl_u8_strset_init(s: *anyopaque) callconv(.c) void;
 extern fn Curl_u8_strset_copy(dst: *anyopaque, src: *const anyopaque) callconv(.c) CURLcode;
 extern fn curlx_memdup0(src: ?[*]const u8, length: usize) callconv(.c) ?[*:0]u8;
+extern fn curlx_memdup(src: ?[*]const u8, length: usize) callconv(.c) ?*anyopaque;
+extern fn curl_maprintf(format: [*:0]const u8, ...) callconv(.c) ?[*:0]u8;
+
+extern fn Curl_zig_easy_get_dns_servers(data: ?*const Curl_easy) callconv(.c) ?[*:0]const u8;
+extern fn Curl_zig_easy_get_dns_interface(data: ?*const Curl_easy) callconv(.c) ?[*:0]const u8;
+extern fn Curl_zig_easy_get_dns_local_ip4(data: ?*const Curl_easy) callconv(.c) ?[*:0]const u8;
+extern fn Curl_zig_easy_get_dns_local_ip6(data: ?*const Curl_easy) callconv(.c) ?[*:0]const u8;
 
 extern fn Curl_failf(data: ?*Curl_easy, fmt: [*:0]const u8, ...) callconv(.c) void;
 extern fn Curl_infof(data: ?*Curl_easy, fmt: [*:0]const u8, ...) callconv(.c) void;
@@ -581,6 +612,7 @@ fn doh_type2name(dnstype: DNStype) [*:0]const u8 {
     return switch (dnstype) {
         CURL_DNS_TYPE_A => "A",
         CURL_DNS_TYPE_AAAA => "AAAA",
+        CURL_DNS_TYPE_HTTPS => if (use_httpsrr) "HTTPS" else "unknown",
         else => "unknown",
     };
 }
@@ -768,6 +800,21 @@ fn doh_probe_run(
         if (!setoptChecked(doh_h, CURLOPT_DEBUGDATA, debugdata, &result)) return doh_probe_run_error(&doh, doh_req, result);
     }
 
+    if (use_resolv_ares) {
+        if (Curl_zig_easy_get_dns_servers(data)) |dns_servers| {
+            if (!setoptChecked(doh_h, CURLOPT_DNS_SERVERS, dns_servers, &result)) return doh_probe_run_error(&doh, doh_req, result);
+        }
+        if (Curl_zig_easy_get_dns_interface(data)) |dns_interface| {
+            if (!setoptChecked(doh_h, CURLOPT_DNS_INTERFACE, dns_interface, &result)) return doh_probe_run_error(&doh, doh_req, result);
+        }
+        if (Curl_zig_easy_get_dns_local_ip4(data)) |dns_local_ip4| {
+            if (!setoptChecked(doh_h, CURLOPT_DNS_LOCAL_IP4, dns_local_ip4, &result)) return doh_probe_run_error(&doh, doh_req, result);
+        }
+        if (Curl_zig_easy_get_dns_local_ip6(data)) |dns_local_ip6| {
+            if (!setoptChecked(doh_h, CURLOPT_DNS_LOCAL_IP6, dns_local_ip6, &result)) return doh_probe_run_error(&doh, doh_req, result);
+        }
+    }
+
     if (maybe_https) {
         if (!setoptChecked(doh_h, CURLOPT_SSL_VERIFYHOST, @as(c_long, if (Curl_doh_data_verifyhost(data)) 2 else 0), &result))
             return doh_probe_run_error(&doh, doh_req, result);
@@ -837,8 +884,14 @@ pub export fn Curl_doh(
 
     if (async_ctx.dns_queries == 0)
         return CURLE_BAD_FUNCTION_ARGUMENT;
-    if ((async_ctx.dns_queries & CURL_DNSQ_HTTPS) != 0)
-        return CURLE_NOT_BUILT_IN;
+    if (use_httpsrr) {
+        if ((async_ctx.dns_queries & CURL_DNSQ_ADDR) != 0 and
+            (async_ctx.dns_queries & CURL_DNSQ_HTTPS) != 0)
+            return CURLE_BAD_FUNCTION_ARGUMENT;
+    } else {
+        if ((async_ctx.dns_queries & CURL_DNSQ_HTTPS) != 0)
+            return CURLE_NOT_BUILT_IN;
+    }
 
     const raw_dohp = mem.calloc(1, @sizeOf(doh_probes)) orelse return CURLE_OUT_OF_MEMORY;
     const dohp: *doh_probes = @ptrCast(@alignCast(raw_dohp));
@@ -889,6 +942,32 @@ pub export fn Curl_doh(
             async_ctx.id,
             &dohp.probe_mid[DOH_SLOT_IPV4],
         );
+        if (result != CURLE_OK) {
+            Curl_doh_cleanup(data, async_ctx);
+            return result;
+        }
+        async_ctx.queries_ongoing += 1;
+    }
+
+    if (use_httpsrr and (async_ctx.dns_queries & CURL_DNSQ_HTTPS) != 0) {
+        var qname: ?[*:0]u8 = null;
+        if (peer.port != PORT_HTTPS) {
+            qname = curl_maprintf("_%u._https.%s", @as(c_uint, peer.port), peer.hostname orelse "");
+            if (qname == null) {
+                Curl_doh_cleanup(data, async_ctx);
+                return CURLE_OUT_OF_MEMORY;
+            }
+        }
+        const result = doh_probe_run(
+            data,
+            CURL_DNS_TYPE_HTTPS,
+            if (qname) |qn| qn else (peer.hostname orelse ""),
+            doh_url,
+            multi,
+            async_ctx.id,
+            &dohp.probe_mid[DOH_SLOT_HTTPS_RR],
+        );
+        mem.free(@ptrCast(qname));
         if (result != CURLE_OK) {
             Curl_doh_cleanup(data, async_ctx);
             return result;
@@ -949,6 +1028,19 @@ fn doh_store_aaaa(doh: [*]const u8, index: usize, d: *dohentry) void {
     }
 }
 
+fn doh_store_https(doh: [*]const u8, index: usize, d: *dohentry, len: u16) DOHcode {
+    if (comptime use_httpsrr) {
+        if (d.numhttps_rrs < DOH_MAX_HTTPS) {
+            const h = &d.https_rrs[@intCast(d.numhttps_rrs)];
+            const dup_raw = curlx_memdup(doh + index, len) orelse return DOH_OUT_OF_MEM;
+            h.val = @ptrCast(dup_raw);
+            h.len = len;
+            d.numhttps_rrs += 1;
+        }
+    }
+    return DOH_OK;
+}
+
 fn doh_rdata(
     doh: [*]const u8,
     rdlength: u16,
@@ -966,6 +1058,13 @@ fn doh_rdata(
             if (rdlength != 16)
                 return DOH_DNS_RDATA_LEN;
             doh_store_aaaa(doh, index, d);
+        },
+        CURL_DNS_TYPE_HTTPS => {
+            if (comptime use_httpsrr) {
+                if (rdlength < 3)
+                    return DOH_DNS_RDATA_LEN;
+                return doh_store_https(doh, index, d, rdlength);
+            }
         },
         else => {},
     }
@@ -1150,7 +1249,136 @@ fn doh2ai(
 }
 
 pub export fn de_cleanup(d: *dohentry) callconv(.c) void {
-    _ = d;
+    if (comptime use_httpsrr) {
+        const count: usize = @intCast(@max(d.numhttps_rrs, 0));
+        for (0..count) |i| {
+            mem.free(@ptrCast(d.https_rrs[i].val));
+            d.https_rrs[i].val = null;
+        }
+    }
+}
+
+fn doh_decode_rdata_name(
+    buf: *[*]const u8,
+    len: *usize,
+    dnsname: *?[*:0]u8,
+) CURLcode {
+    if (len.* < 1)
+        return CURLE_OUT_OF_MEMORY;
+
+    var thename: Dynbuf = undefined;
+    containers.curlx_dyn_init(&thename, vdns_core.CURL_MAXLEN_HOST_NAME);
+    var rem = len.*;
+    var cp = buf.*;
+    var clen = cp[0];
+    cp += 1;
+    if (clen > 63)
+        return CURLE_WEIRD_SERVER_REPLY;
+    if (clen == 0) {
+        if (containers.curlx_dyn_addn(&thename, ".", 1) != CURLE_OK)
+            return CURLE_OUT_OF_MEMORY;
+    }
+    while (clen != 0) {
+        if (clen >= rem) {
+            containers.curlx_dyn_free(&thename);
+            return CURLE_OUT_OF_MEMORY;
+        }
+        if (containers.curlx_dyn_addn(&thename, cp, clen) != CURLE_OK or
+            containers.curlx_dyn_addn(&thename, ".", 1) != CURLE_OK)
+            return CURLE_TOO_LARGE;
+        cp += clen;
+        rem -= (@as(usize, clen) + 1);
+        if (rem == 0) {
+            containers.curlx_dyn_free(&thename);
+            return CURLE_OUT_OF_MEMORY;
+        }
+        clen = cp[0];
+        cp += 1;
+        if (clen > 63) {
+            containers.curlx_dyn_free(&thename);
+            return CURLE_WEIRD_SERVER_REPLY;
+        }
+    }
+    buf.* = cp;
+    len.* = rem - 1;
+    dnsname.* = containers.curlx_dyn_ptr(&thename);
+    return CURLE_OK;
+}
+
+inline fn goodchar(x: u8) bool {
+    return (x > 0x20 and x != 0x7f);
+}
+
+fn junkscan(name_opt: ?[*:0]const u8) CURLcode {
+    var name = name_opt orelse return CURLE_WEIRD_SERVER_REPLY;
+    while (name[0] != 0) : (name += 1) {
+        if (!goodchar(name[0]))
+            return CURLE_WEIRD_SERVER_REPLY;
+    }
+    return CURLE_OK;
+}
+
+pub fn doh_resp_decode_httpsrr(
+    data: ?*Curl_easy,
+    cp_opt: ?[*]const u8,
+    len_in: usize,
+    hrr: *?*vdns_core.Curl_https_rrinfo,
+) callconv(.c) CURLcode {
+    hrr.* = null;
+    if (len_in <= 2)
+        return CURLE_BAD_FUNCTION_ARGUMENT;
+    const cp_start = cp_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
+
+    const raw = mem.calloc(1, @sizeOf(vdns_core.Curl_https_rrinfo)) orelse return CURLE_OUT_OF_MEMORY;
+    const lhrr: *vdns_core.Curl_https_rrinfo = @ptrCast(@alignCast(raw));
+    var dnsname: ?[*:0]u8 = null;
+    var result: CURLcode = CURLE_OUT_OF_MEMORY;
+
+    var cp = cp_start;
+    var len = len_in;
+    lhrr.priority = doh_get16bit(cp, 0);
+    cp += 2;
+    len -= 2;
+    if (doh_decode_rdata_name(&cp, &len, &dnsname) != CURLE_OK) {
+        vdns_core.Curl_httpsrr_destroy(lhrr);
+        return result;
+    }
+    lhrr.target = dnsname;
+    result = junkscan(dnsname);
+    if (result != CURLE_OK) {
+        vdns_core.Curl_httpsrr_destroy(lhrr);
+        return result;
+    }
+
+    var expected_min_pcode: u32 = 0;
+    while (len >= 4) {
+        const pcode = doh_get16bit(cp, 0);
+        const plen = doh_get16bit(cp, 2);
+        cp += 4;
+        len -= 4;
+        if (pcode < expected_min_pcode or plen > len) {
+            result = CURLE_WEIRD_SERVER_REPLY;
+            vdns_core.Curl_httpsrr_destroy(lhrr);
+            return result;
+        }
+        result = vdns_core.Curl_httpsrr_set(lhrr, pcode, cp, plen);
+        if (result != CURLE_OK) {
+            vdns_core.Curl_httpsrr_destroy(lhrr);
+            return result;
+        }
+        vdns_core.Curl_httpsrr_trace(data, lhrr);
+        cp += plen;
+        len -= plen;
+        expected_min_pcode = @as(u32, pcode) + 1;
+    }
+    hrr.* = lhrr;
+    return CURLE_OK;
+}
+
+comptime {
+    if (use_httpsrr) {
+        @export(&doh_resp_decode_httpsrr, .{ .name = "doh_resp_decode_httpsrr" });
+    }
 }
 
 fn doh_probe_done(doh: *Curl_easy, master: *Curl_easy, result_in: CURLcode) callconv(.c) void {
@@ -1195,13 +1423,18 @@ fn doh_probe_done(doh: *Curl_easy, master: *Curl_easy, result_in: CURLcode) call
     switch (slot) {
         DOH_SLOT_IPV4 => async_ctx.dns_responses |= CURL_DNSQ_A,
         DOH_SLOT_IPV6 => async_ctx.dns_responses |= CURL_DNSQ_AAAA,
+        DOH_SLOT_HTTPS_RR => {
+            if (comptime use_httpsrr) {
+                async_ctx.dns_responses |= CURL_DNSQ_HTTPS;
+            }
+        },
         else => {},
     }
 
     if (result != CURLE_OK) {
         dohp.probe_rc[slot] = DOH_HTTP_FAILED;
-        if (trcIsVerbose(doh)) {
-            Curl_infof(
+        if (trcDnsVerbose(doh)) {
+            Curl_trc_dns(
                 doh,
                 "[DoH] [%s] error: %s",
                 doh_type2name(doh_req.dnstype),
@@ -1211,8 +1444,8 @@ fn doh_probe_done(doh: *Curl_easy, master: *Curl_easy, result_in: CURLcode) call
         return;
     } else if (httpcode < 200 or httpcode >= 300) {
         dohp.probe_rc[slot] = DOH_HTTP_FAILED;
-        if (trcIsVerbose(doh)) {
-            Curl_infof(
+        if (trcDnsVerbose(doh)) {
+            Curl_trc_dns(
                 doh,
                 "[DoH] [%s] error: HTTP status %d",
                 doh_type2name(doh_req.dnstype),
@@ -1229,8 +1462,15 @@ fn doh_probe_done(doh: *Curl_easy, master: *Curl_easy, result_in: CURLcode) call
         &de,
     );
     if (dohp.probe_rc[slot] != DOH_OK) {
-        if (trcIsVerbose(doh)) {
-            Curl_infof(
+        if (comptime use_httpsrr) {
+            if (dohp.probe_rc[slot] == DOH_NO_CONTENT and
+                doh_req.dnstype == CURL_DNS_TYPE_HTTPS)
+            {
+                dohp.probe_rc[slot] = DOH_DNS_NXDOMAIN;
+            }
+        }
+        if (trcDnsVerbose(doh)) {
+            Curl_trc_dns(
                 doh,
                 "[DoH] [%s] error decoding response: %s",
                 doh_type2name(doh_req.dnstype),
@@ -1256,8 +1496,8 @@ fn doh_probe_done(doh: *Curl_easy, master: *Curl_easy, result_in: CURLcode) call
         const peer: *Curl_peer = @ptrCast(async_ctx.peer.?);
         result = doh2ai(&de, peer.hostname, @intCast(peer.port), dest);
         if (result != CURLE_OK) {
-            if (trcIsVerbose(doh)) {
-                Curl_infof(
+            if (trcDnsVerbose(doh)) {
+                Curl_trc_dns(
                     doh,
                     "[DoH] [%s] error creating addrinfo: %s",
                     doh_type2name(doh_req.dnstype),
@@ -1269,8 +1509,28 @@ fn doh_probe_done(doh: *Curl_easy, master: *Curl_easy, result_in: CURLcode) call
         }
     }
 
-    if (trcIsVerbose(doh)) {
-        Curl_infof(doh, "DoH request complete, %u to go", @as(c_uint, async_ctx.queries_ongoing));
+    if (comptime use_httpsrr) {
+        if (doh_req.dnstype == CURL_DNS_TYPE_HTTPS and de.numhttps_rrs > 0) {
+            if (trcDnsVerbose(doh)) {
+                Curl_trc_dns(doh, "[HTTPS] got %d records", de.numhttps_rrs);
+            }
+            result = doh_resp_decode_httpsrr(doh, de.https_rrs[0].val, de.https_rrs[0].len, &async_ctx.httpsrr);
+            if (result != CURLE_OK) {
+                dohp.probe_rc[slot] = DOH_HTTP_FAILED;
+                if (trcIsVerbose(doh)) {
+                    Curl_infof(
+                        doh,
+                        "[DoH] error decoding HTTPS RR: %s",
+                        curl_easy_strerror(result),
+                    );
+                }
+                return;
+            }
+        }
+    }
+
+    if (trcDnsVerbose(doh)) {
+        Curl_trc_dns(doh, "DoH request complete, %u to go", @as(c_uint, async_ctx.queries_ongoing));
     }
 }
 
@@ -1322,6 +1582,23 @@ pub export fn Curl_doh_take_result(
             if (dns == null) {
                 Curl_doh_cleanup(data, async_ctx);
                 return CURLE_OUT_OF_MEMORY;
+            }
+        } else if (comptime use_httpsrr) {
+            if ((async_ctx.dns_queries & CURL_DNSQ_HTTPS) != 0 and
+                dohp.probe_rc[DOH_SLOT_HTTPS_RR] == DOH_OK)
+            {
+                vdns_core.Curl_httpsrr_trace(data, async_ctx.httpsrr);
+                dns = vdns_core.Curl_dnsc_mk_https(data, &async_ctx.httpsrr, @ptrCast(peer));
+                if (dns == null) {
+                    Curl_doh_cleanup(data, async_ctx);
+                    return CURLE_OUT_OF_MEMORY;
+                }
+            } else {
+                async_ctx.setNegativeAnswer(negative);
+                result = if (async_ctx.forProxy())
+                    CURLE_COULDNT_RESOLVE_PROXY
+                else
+                    CURLE_COULDNT_RESOLVE_HOST;
             }
         } else {
             async_ctx.setNegativeAnswer(negative);
@@ -1697,6 +1974,45 @@ pub export fn Curl_resolv_get_ai(
         AF_INET6 => netrc_addr_idn.Curl_addrinfo_get(async_ctx.ai_AAAA, ai_family, index),
         else => null,
     };
+}
+
+pub fn Curl_resolv_https(
+    data: *Curl_easy,
+    peer: *Curl_peer,
+    for_proxy: bool,
+    timeout_ms: timediff_t,
+    presolv_id: *u32,
+    pdns: *?*Curl_dns_entry,
+) callconv(.c) CURLcode {
+    return Curl_resolv(data, peer, CURL_DNSQ_HTTPS, TRNSPRT_TCP, for_proxy, timeout_ms, presolv_id, pdns);
+}
+
+pub fn Curl_resolv_get_https(
+    data: *Curl_easy,
+    resolv_id: u32,
+) callconv(.c) ?*const vdns_core.Curl_https_rrinfo {
+    if (comptime use_httpsrr) {
+        const async_ctx = Curl_async_get(data, resolv_id) orelse return null;
+        return async_ctx.httpsrr;
+    }
+    return null;
+}
+
+pub fn Curl_resolv_knows_https(
+    data: *Curl_easy,
+    resolv_id: u32,
+) callconv(.c) bool {
+    const async_ctx = Curl_async_get(data, resolv_id) orelse return true;
+    return (async_ctx.dns_queries & CURL_DNSQ_HTTPS) == 0 or
+        (async_ctx.dns_responses & CURL_DNSQ_HTTPS) != 0;
+}
+
+comptime {
+    if (use_httpsrr) {
+        @export(&Curl_resolv_https, .{ .name = "Curl_resolv_https" });
+        @export(&Curl_resolv_get_https, .{ .name = "Curl_resolv_get_https" });
+        @export(&Curl_resolv_knows_https, .{ .name = "Curl_resolv_knows_https" });
+    }
 }
 
 fn hostip_resolv_start(
@@ -2965,6 +3281,94 @@ test "doh_req_encode and doh_resp_decode" {
     try std.testing.expectEqual(@as(c_int, 1), de.numaddr);
     try std.testing.expectEqual(@as(c_uint, 300), de.ttl);
     try std.testing.expectEqualSlices(u8, &[_]u8{ 93, 184, 216, 34 }, &de.addr[0].ip.v4);
+}
+
+test "doh_resp_decode_httpsrr (unit1658 vectors)" {
+    if (comptime !use_httpsrr) return;
+
+    const rdata_https_1 =
+        "\x00\x30\x05\x5f\x38\x37\x36\x35\x06\x5f\x68\x74\x74\x70\x73\x07" ++
+        "\x65\x78\x61\x6d\x70\x6c\x65\x03\x63\x6f\x6d\x00\x00\x01\x00\x0c" ++
+        "\x02\x68\x33\x05\x68\x33\x2d\x32\x39\x02\x68\x32\x00\x02\x00\x00" ++
+        "\x00\x03\x00\x02\x22\x3d\x00\x04\x00\x04\x7f\x00\x00\x01\x00\x06" ++
+        "\x00\x10\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00" ++
+        "\x00\x01";
+
+    var hrr: ?*vdns_core.Curl_https_rrinfo = null;
+    try std.testing.expectEqual(
+        CURLE_OK,
+        doh_resp_decode_httpsrr(null, rdata_https_1.ptr, rdata_https_1.len, &hrr),
+    );
+    try std.testing.expect(hrr != null);
+    defer {
+        if (hrr) |rr| {
+            vdns_core.Curl_httpsrr_destroy(rr);
+        }
+    }
+    const rr1 = hrr.?;
+    try std.testing.expectEqual(@as(u16, 48), rr1.priority);
+    try std.testing.expect(rr1.target != null);
+    try std.testing.expectEqualStrings("_8765._https.example.com.", std.mem.span(rr1.target.?));
+    try std.testing.expectEqual(@as(u8, @intCast(vdns_core.ALPN_h3)), rr1.alpns[0]);
+    try std.testing.expectEqual(@as(u8, @intCast(vdns_core.ALPN_h2)), rr1.alpns[1]);
+    try std.testing.expectEqual(@as(u8, @intCast(vdns_core.ALPN_none)), rr1.alpns[2]);
+    try std.testing.expectEqual(@as(u8, @intCast(vdns_core.ALPN_none)), rr1.alpns[3]);
+    try std.testing.expect(rr1.noDefAlpn());
+    try std.testing.expect(rr1.portSet());
+    try std.testing.expectEqual(@as(u16, 8765), rr1.port);
+    try std.testing.expectEqual(@as(usize, 4), rr1.ipv4hints_len);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 127, 0, 0, 1 }, rr1.ipv4hints.?[0..4]);
+    try std.testing.expectEqual(@as(usize, 16), rr1.ipv6hints_len);
+    try std.testing.expectEqualSlices(
+        u8,
+        &[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 },
+        rr1.ipv6hints.?[0..16],
+    );
+    try std.testing.expectEqual(@as(?[*]u8, null), rr1.echconfiglist);
+    try std.testing.expectEqual(@as(usize, 0), rr1.echconfiglist_len);
+
+    vdns_core.Curl_httpsrr_destroy(rr1);
+    hrr = null;
+
+    // Test 2: compressed target name in HTTPS RR is rejected
+    const rdata_https_2 =
+        "\x00\x01\x03\x66\x6f\x6f\xc0\x17\x00\x01\x00\x0c\x02\x68\x32\x08" ++
+        "\x68\x74\x74\x70\x2f\x31\x2e\x31";
+    try std.testing.expectEqual(
+        CURLE_OUT_OF_MEMORY,
+        doh_resp_decode_httpsrr(null, rdata_https_2.ptr, rdata_https_2.len, &hrr),
+    );
+    try std.testing.expectEqual(@as(?*vdns_core.Curl_https_rrinfo, null), hrr);
+
+    // Test 3: wrong syntax ALPN returns CURLE_BAD_CONTENT_ENCODING
+    const wrong_alpn = "\x00\x00\x04name\x04some\x00\x00\x01\x00\x06\x02h2\x03h3";
+    try std.testing.expectEqual(
+        CURLE_BAD_CONTENT_ENCODING,
+        doh_resp_decode_httpsrr(null, wrong_alpn.ptr, wrong_alpn.len, &hrr),
+    );
+    try std.testing.expectEqual(@as(?*vdns_core.Curl_https_rrinfo, null), hrr);
+
+    // Test 4: SvcParamKeys out of numerical order returns CURLE_WEIRD_SERVER_REPLY
+    const wrong_order =
+        "\x00\x10\x00\x00\x04\x00\x08\xc0\xa8\x00\x01\xc0\xa8\x00\x02\x00\x01\x00\x03\x02h2";
+    try std.testing.expectEqual(
+        CURLE_WEIRD_SERVER_REPLY,
+        doh_resp_decode_httpsrr(null, wrong_order.ptr, wrong_order.len, &hrr),
+    );
+    try std.testing.expectEqual(@as(?*vdns_core.Curl_https_rrinfo, null), hrr);
+
+    // Test 5: ECH SvcParam
+    const rdata_https_ech = "\x00\x01\x00\x00\x05\x00\x09\x68\x65\x6c\x6c\x6f\x2d\x65\x63\x68";
+    try std.testing.expectEqual(
+        CURLE_OK,
+        doh_resp_decode_httpsrr(null, rdata_https_ech.ptr, rdata_https_ech.len, &hrr),
+    );
+    try std.testing.expect(hrr != null);
+    const rr3 = hrr.?;
+    try std.testing.expectEqual(@as(u16, 1), rr3.priority);
+    try std.testing.expectEqualStrings(".", std.mem.span(rr3.target.?));
+    try std.testing.expectEqual(@as(usize, 9), rr3.echconfiglist_len);
+    try std.testing.expectEqualSlices(u8, "hello-ech", rr3.echconfiglist.?[0..9]);
 }
 
 test "Curl_resolv_query_str, Curl_host_is_ipnum, and Curl_printable_address" {
