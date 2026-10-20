@@ -1,10 +1,18 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const backend_options = @import("backend_options");
 const mem = @import("mem.zig");
 const containers = @import("containers.zig");
 const collections = @import("collections.zig");
 const io_buffers = @import("io_buffers.zig");
 const curlx_time_net = @import("curlx_time_net.zig");
+const headers_sock = @import("headers_sock.zig");
+const netrc_addr_idn = @import("netrc_addr_idn.zig");
+
+pub const use_ares = if (@hasDecl(backend_options, "ares")) backend_options.ares else false;
+pub const use_httpsrr = if (@hasDecl(backend_options, "httpsrr")) backend_options.httpsrr else false;
+pub const use_resolv_ares = if (@hasDecl(backend_options, "use_resolv_ares")) backend_options.use_resolv_ares else false;
+pub const use_resolv_threaded = if (@hasDecl(backend_options, "use_resolv_threaded")) backend_options.use_resolv_threaded else true;
 
 pub const CURLcode = c_uint;
 pub const CURLE_OK: CURLcode = 0;
@@ -116,16 +124,7 @@ pub const CAddrinfo = extern struct {
     ai_next: ?*anyopaque = null,
 };
 
-pub const Curl_addrinfo = extern struct {
-    ai_flags: c_int,
-    ai_family: c_int,
-    ai_socktype: c_int,
-    ai_protocol: c_int,
-    ai_addrlen: u32,
-    ai_canonname: ?[*:0]u8,
-    ai_addr: ?*anyopaque,
-    ai_next: ?*Curl_addrinfo,
-};
+pub const Curl_addrinfo = netrc_addr_idn.Curl_addrinfo;
 
 extern fn Curl_getaddrinfo_ex(
     nodename: ?[*:0]const u8,
@@ -171,30 +170,174 @@ else
         }
     };
 
+pub const MAX_HTTPSRR_ALPNS: usize = 4;
+
+pub const Curl_https_rrinfo = extern struct {
+    target: ?[*:0]u8,
+    ipv4hints: ?[*]u8,
+    ipv4hints_len: usize,
+    echconfiglist: ?[*]u8,
+    echconfiglist_len: usize,
+    ipv6hints: ?[*]u8,
+    ipv6hints_len: usize,
+    alpns: [MAX_HTTPSRR_ALPNS]u8,
+    port: u16,
+    priority: u16,
+    flags: u32,
+    _pad: u32 = 0,
+
+    pub inline fn noDefAlpn(self: *const Curl_https_rrinfo) bool {
+        return (self.flags & 1) != 0;
+    }
+
+    pub inline fn setNoDefAlpn(self: *Curl_https_rrinfo, val: bool) void {
+        if (val) self.flags |= 1 else self.flags &= ~@as(u32, 1);
+    }
+
+    pub inline fn mandatory(self: *const Curl_https_rrinfo) bool {
+        return (self.flags & 2) != 0;
+    }
+
+    pub inline fn setMandatory(self: *Curl_https_rrinfo, val: bool) void {
+        if (val) self.flags |= 2 else self.flags &= ~@as(u32, 2);
+    }
+
+    pub inline fn portSet(self: *const Curl_https_rrinfo) bool {
+        return (self.flags & 4) != 0;
+    }
+
+    pub inline fn setPortSet(self: *Curl_https_rrinfo, val: bool) void {
+        if (val) self.flags |= 4 else self.flags &= ~@as(u32, 4);
+    }
+};
+
+pub const CURL_ASYN_ITEM_DESC_LEN: usize = 64;
+
+pub const async_thrdd_item = extern struct {
+    res: ?*Curl_addrinfo = null,
+    description: [CURL_ASYN_ITEM_DESC_LEN]u8 = @splat(0),
+    sockerr: c_int = 0,
+    mid: u32 = 0,
+    resolv_id: u32 = 0,
+    port: u16 = 0,
+    transport: u8 = 0,
+    dns_queries: u8 = 0,
+    negative: bool = false,
+    hostname: [1]u8 = .{0},
+
+    pub inline fn hostnamePtr(self: *async_thrdd_item) [*:0]u8 {
+        return @ptrCast(&self.hostname);
+    }
+
+    pub inline fn hostnameConstPtr(self: *const async_thrdd_item) [*:0]const u8 {
+        return @ptrCast(&self.hostname);
+    }
+
+    pub inline fn descriptionPtr(self: *async_thrdd_item) [*:0]u8 {
+        return @ptrCast(&self.description);
+    }
+};
+
+pub const async_ares_ctx = extern struct {
+    channel: ?*anyopaque = null,
+    ares_status: c_int = 0,
+    result: CURLcode = CURLE_OK,
+    flags: c_uint = 0,
+
+    pub const FLAG_TRANSIENT_ERR: c_uint = 1 << 0;
+
+    pub inline fn transientErr(self: *const async_ares_ctx) bool {
+        return (self.flags & FLAG_TRANSIENT_ERR) != 0;
+    }
+
+    pub inline fn setTransientErr(self: *async_ares_ctx, val: bool) void {
+        if (val) {
+            self.flags |= FLAG_TRANSIENT_ERR;
+        } else {
+            self.flags &= ~FLAG_TRANSIENT_ERR;
+        }
+    }
+};
+
+pub const async_thrdd_rr_ctx = extern struct {
+    channel: ?*anyopaque = null,
+};
+
 pub const async_thrdd_ctx = extern struct {
-    res_A: ?*anyopaque,
-    res_AAAA: ?*anyopaque,
-    flags: c_uint,
+    res_A: ?*async_thrdd_item = null,
+    res_AAAA: ?*async_thrdd_item = null,
+    rr: if (use_httpsrr and use_ares) async_thrdd_rr_ctx else void = if (use_httpsrr and use_ares) .{} else {},
+    flags: c_uint = 0,
+
+    pub const FLAG_PROCESSED_A: c_uint = 1 << 0;
+    pub const FLAG_PROCESSED_AAAA: c_uint = 1 << 1;
+    pub const FLAG_TRANSIENT_ERR: c_uint = 1 << 2;
+
+    pub inline fn isProcessedA(self: *const async_thrdd_ctx) bool {
+        return (self.flags & FLAG_PROCESSED_A) != 0;
+    }
+
+    pub inline fn processedA(self: *const async_thrdd_ctx) bool {
+        return (self.flags & FLAG_PROCESSED_A) != 0;
+    }
+
+    pub inline fn setProcessedA(self: *async_thrdd_ctx, val: bool) void {
+        if (val) {
+            self.flags |= FLAG_PROCESSED_A;
+        } else {
+            self.flags &= ~FLAG_PROCESSED_A;
+        }
+    }
+
+    pub inline fn isProcessedAAAA(self: *const async_thrdd_ctx) bool {
+        return (self.flags & FLAG_PROCESSED_AAAA) != 0;
+    }
+
+    pub inline fn processedAAAA(self: *const async_thrdd_ctx) bool {
+        return (self.flags & FLAG_PROCESSED_AAAA) != 0;
+    }
+
+    pub inline fn setProcessedAAAA(self: *async_thrdd_ctx, val: bool) void {
+        if (val) {
+            self.flags |= FLAG_PROCESSED_AAAA;
+        } else {
+            self.flags &= ~FLAG_PROCESSED_AAAA;
+        }
+    }
+
+    pub inline fn transientErr(self: *const async_thrdd_ctx) bool {
+        return (self.flags & FLAG_TRANSIENT_ERR) != 0;
+    }
+
+    pub inline fn setTransientErr(self: *async_thrdd_ctx, val: bool) void {
+        if (val) {
+            self.flags |= FLAG_TRANSIENT_ERR;
+        } else {
+            self.flags &= ~FLAG_TRANSIENT_ERR;
+        }
+    }
 };
 
 pub const Curl_resolv_async = extern struct {
-    next: ?*Curl_resolv_async,
-    peer: ?*Curl_peer,
-    ai_A: ?*Curl_addrinfo,
-    ai_AAAA: ?*Curl_addrinfo,
-    thrdd: async_thrdd_ctx,
-    doh: ?*anyopaque,
-    start: Curltime,
-    interval_end: timediff_t,
-    timeout_ms: timediff_t,
-    result: CURLcode,
-    poll_interval: u32,
-    id: u32,
-    dns_queries: u8,
-    dns_responses: u8,
-    transport: u8,
-    queries_ongoing: u8,
-    flags: c_uint,
+    next: ?*Curl_resolv_async = null,
+    peer: ?*Curl_peer = null,
+    ai_A: ?*Curl_addrinfo = null,
+    ai_AAAA: ?*Curl_addrinfo = null,
+    httpsrr: if (use_httpsrr) ?*Curl_https_rrinfo else void = if (use_httpsrr) null else {},
+    ares: if (use_resolv_ares) async_ares_ctx else void = if (use_resolv_ares) .{} else {},
+    thrdd: if (use_resolv_threaded) async_thrdd_ctx else void = if (use_resolv_threaded) .{} else {},
+    doh: ?*anyopaque = null,
+    start: Curltime = .{ .tv_sec = 0, .tv_usec = 0 },
+    interval_end: timediff_t = 0,
+    timeout_ms: timediff_t = 0,
+    result: CURLcode = CURLE_OK,
+    poll_interval: u32 = 0,
+    id: u32 = 0,
+    dns_queries: u8 = 0,
+    dns_responses: u8 = 0,
+    transport: u8 = 0,
+    queries_ongoing: u8 = 0,
+    flags: c_uint = 0,
 
     pub const FLAG_IS_IPADDR: c_uint = 1 << 0;
     pub const FLAG_IS_IPV4ADDR: c_uint = 1 << 1;
@@ -203,8 +346,56 @@ pub const Curl_resolv_async = extern struct {
     pub const FLAG_SHUTDOWN: c_uint = 1 << 4;
     pub const FLAG_NEGATIVE_ANSWER: c_uint = 1 << 5;
 
+    pub inline fn isIpaddr(self: *const Curl_resolv_async) bool {
+        return (self.flags & FLAG_IS_IPADDR) != 0;
+    }
+
+    pub inline fn setIsIpaddr(self: *Curl_resolv_async, val: bool) void {
+        if (val) {
+            self.flags |= FLAG_IS_IPADDR;
+        } else {
+            self.flags &= ~FLAG_IS_IPADDR;
+        }
+    }
+
+    pub inline fn isIpv4Addr(self: *const Curl_resolv_async) bool {
+        return (self.flags & FLAG_IS_IPV4ADDR) != 0;
+    }
+
+    pub inline fn setIsIpv4Addr(self: *Curl_resolv_async, val: bool) void {
+        if (val) {
+            self.flags |= FLAG_IS_IPV4ADDR;
+        } else {
+            self.flags &= ~FLAG_IS_IPV4ADDR;
+        }
+    }
+
+    pub inline fn forProxy(self: *const Curl_resolv_async) bool {
+        return (self.flags & FLAG_FOR_PROXY) != 0;
+    }
+
     pub inline fn isForProxy(self: *const Curl_resolv_async) bool {
         return (self.flags & FLAG_FOR_PROXY) != 0;
+    }
+
+    pub inline fn setForProxy(self: *Curl_resolv_async, val: bool) void {
+        if (val) {
+            self.flags |= FLAG_FOR_PROXY;
+        } else {
+            self.flags &= ~FLAG_FOR_PROXY;
+        }
+    }
+
+    pub inline fn isDone(self: *const Curl_resolv_async) bool {
+        return (self.flags & FLAG_DONE) != 0;
+    }
+
+    pub inline fn setDone(self: *Curl_resolv_async, val: bool) void {
+        if (val) {
+            self.flags |= FLAG_DONE;
+        } else {
+            self.flags &= ~FLAG_DONE;
+        }
     }
 
     pub inline fn isShutdown(self: *const Curl_resolv_async) bool {
@@ -218,12 +409,27 @@ pub const Curl_resolv_async = extern struct {
             self.flags &= ~FLAG_SHUTDOWN;
         }
     }
+
+    pub inline fn negativeAnswer(self: *const Curl_resolv_async) bool {
+        return (self.flags & FLAG_NEGATIVE_ANSWER) != 0;
+    }
+
+    pub inline fn setNegativeAnswer(self: *Curl_resolv_async, val: bool) void {
+        if (val) {
+            self.flags |= FLAG_NEGATIVE_ANSWER;
+        } else {
+            self.flags &= ~FLAG_NEGATIVE_ANSWER;
+        }
+    }
 };
 
 extern fn Curl_pgrs_now(data: ?*Curl_easy) callconv(.c) *const Curltime;
 extern fn Curl_timeleft_ms(data: ?*Curl_easy) callconv(.c) timediff_t;
 extern fn Curl_async_thrdd_shutdown(data: ?*Curl_easy, async_ctx: *Curl_resolv_async) callconv(.c) void;
 extern fn Curl_async_thrdd_destroy(data: ?*Curl_easy, async_ctx: *Curl_resolv_async) callconv(.c) void;
+extern fn Curl_async_ares_shutdown(data: ?*Curl_easy, async_ctx: *Curl_resolv_async) callconv(.c) void;
+extern fn Curl_async_ares_destroy(data: ?*Curl_easy, async_ctx: *Curl_resolv_async) callconv(.c) void;
+extern fn Curl_httpsrr_destroy(hinfo: ?*Curl_https_rrinfo) callconv(.c) void;
 extern fn Curl_doh_cleanup(data: ?*Curl_easy, async_ctx: *Curl_resolv_async) callconv(.c) void;
 extern fn Curl_peer_unlink(ppeer: *?*Curl_peer) callconv(.c) void;
 
@@ -393,8 +599,9 @@ inline fn cwriterFlush(data: ?*Curl_easy, writer: ?*Curl_cwriter) CURLcode {
 const EASY_WRITER_PAUSED_OFFSET: usize = 240;
 const EASY_STRINGS_OFFSET_NO_HSTS: usize = 872;
 const EASY_STRINGS_OFFSET_WITH_HSTS: usize = 904;
-const STRING_HAPROXY_CLIENT_IP_NO_HSTS: u8 = 65;
-const STRING_HAPROXY_CLIENT_IP_WITH_HSTS: u8 = 66;
+const ares_off: u8 = if (use_ares) 4 else 0;
+const STRING_HAPROXY_CLIENT_IP_NO_HSTS: u8 = 65 + ares_off;
+const STRING_HAPROXY_CLIENT_IP_WITH_HSTS: u8 = 66 + ares_off;
 
 inline fn cwriterIsPaused(data: ?*const Curl_easy) bool {
     const d = data orelse return false;
@@ -523,6 +730,129 @@ export fn Curl_sync_getaddrinfo(
 // 3. lib/vdns/asyn-base.c
 // ============================================================================
 
+const ARES_GETSOCK_MAXNUM: usize = 16;
+const ARES_SOCKET_BAD: curl_socket_t = CURL_SOCKET_BAD;
+const CURL_TIMEOUT_RESOLVE_MS: timediff_t = 300 * 1000;
+
+pub const ares_timeval = extern struct {
+    tv_sec: c_long,
+    tv_usec: c_long,
+};
+pub const AresTimeval = ares_timeval;
+
+extern fn ares_getsock(channel: ?*const anyopaque, socks: [*]curl_socket_t, numsocks: c_int) callconv(.c) c_int;
+extern fn ares_timeout(channel: ?*const anyopaque, maxtv: ?*ares_timeval, tv: *ares_timeval) callconv(.c) ?*ares_timeval;
+extern fn ares_process_fd(channel: ?*anyopaque, read_fd: curl_socket_t, write_fd: curl_socket_t) callconv(.c) void;
+
+pub fn Curl_ares_pollset(
+    data: ?*Curl_easy,
+    channel: ?*anyopaque,
+    ps: *easy_pollset,
+) callconv(.c) CURLcode {
+    if (channel == null) return CURLE_FAILED_INIT;
+    var socks: [ARES_GETSOCK_MAXNUM]curl_socket_t = undefined;
+    const max: c_uint = @bitCast(ares_getsock(channel, &socks, @intCast(ARES_GETSOCK_MAXNUM)));
+    for (0..ARES_GETSOCK_MAXNUM) |i| {
+        var flags: c_int = 0;
+        const shift: u5 = @intCast(i);
+        const wshift: u5 = @intCast(i + ARES_GETSOCK_MAXNUM);
+        if ((max & (@as(c_uint, 1) << shift)) != 0) {
+            flags |= CURL_POLL_IN;
+        }
+        if ((max & (@as(c_uint, 1) << wshift)) != 0) {
+            flags |= CURL_POLL_OUT;
+        }
+        if (flags == 0) break;
+        const result = Curl_pollset_change(data, ps, socks[i], flags, 0);
+        if (result != CURLE_OK) return result;
+    }
+    return CURLE_OK;
+}
+
+pub fn Curl_ares_timeout_ms(
+    data: ?*Curl_easy,
+    async_ctx: *Curl_resolv_async,
+    channel: ?*anyopaque,
+) callconv(.c) timediff_t {
+    if (channel == null) return -1;
+    const async_timeout_ms = Curl_async_timeleft_ms(data, async_ctx);
+    if (async_timeout_ms > 0 and async_timeout_ms < std.math.maxInt(c_int)) {
+        const itimeout_ms: c_int = @intCast(async_timeout_ms);
+        var max_tv: ares_timeval = .{
+            .tv_sec = @divTrunc(itimeout_ms, 1000),
+            .tv_usec = @rem(itimeout_ms, 1000) * 1000,
+        };
+        var tv_buf: ares_timeval = .{ .tv_sec = 0, .tv_usec = 0 };
+        if (ares_timeout(channel, &max_tv, &tv_buf)) |tv| {
+            return @as(timediff_t, tv.tv_sec) * 1000 + @divTrunc(@as(timediff_t, tv.tv_usec), 1000);
+        }
+    }
+    return async_timeout_ms;
+}
+
+pub fn Curl_ares_perform(
+    channel: ?*anyopaque,
+    timeout_ms: timediff_t,
+) callconv(.c) c_int {
+    var nfds: c_int = undefined;
+    var bitmask: c_uint = undefined;
+    var socks: [ARES_GETSOCK_MAXNUM]curl_socket_t = undefined;
+    var pfd: [ARES_GETSOCK_MAXNUM]headers_sock.Pollfd = undefined;
+    var num: usize = 0;
+
+    if (channel == null) return 0;
+
+    bitmask = @bitCast(ares_getsock(channel, &socks, @intCast(ARES_GETSOCK_MAXNUM)));
+
+    for (0..ARES_GETSOCK_MAXNUM) |i| {
+        pfd[i].events = 0;
+        pfd[i].revents = 0;
+        const shift: u5 = @intCast(i);
+        const wshift: u5 = @intCast(i + ARES_GETSOCK_MAXNUM);
+        if ((bitmask & (@as(c_uint, 1) << shift)) != 0) {
+            pfd[i].fd = socks[i];
+            pfd[i].events |= headers_sock.POLLRDNORM | headers_sock.POLLIN;
+        }
+        if ((bitmask & (@as(c_uint, 1) << wshift)) != 0) {
+            pfd[i].fd = socks[i];
+            pfd[i].events |= headers_sock.POLLWRNORM | headers_sock.POLLOUT;
+        }
+        if (pfd[i].events != 0) {
+            num += 1;
+        } else {
+            break;
+        }
+    }
+
+    if (num > 0) {
+        nfds = headers_sock.Curl_poll(&pfd, @intCast(num), timeout_ms);
+        if (nfds < 0) return -1;
+    } else {
+        nfds = 0;
+    }
+
+    if (nfds == 0) {
+        ares_process_fd(channel, ARES_SOCKET_BAD, ARES_SOCKET_BAD);
+    } else {
+        for (0..num) |i| {
+            ares_process_fd(
+                channel,
+                if ((pfd[i].revents & (headers_sock.POLLRDNORM | headers_sock.POLLIN)) != 0) pfd[i].fd else ARES_SOCKET_BAD,
+                if ((pfd[i].revents & (headers_sock.POLLWRNORM | headers_sock.POLLOUT)) != 0) pfd[i].fd else ARES_SOCKET_BAD,
+            );
+        }
+    }
+    return nfds;
+}
+
+comptime {
+    if (use_ares) {
+        @export(&Curl_ares_pollset, .{ .name = "Curl_ares_pollset", .linkage = .strong });
+        @export(&Curl_ares_timeout_ms, .{ .name = "Curl_ares_timeout_ms", .linkage = .strong });
+        @export(&Curl_ares_perform, .{ .name = "Curl_ares_perform", .linkage = .strong });
+    }
+}
+
 export fn Curl_async_timeleft_ms(data: ?*Curl_easy, async_ctx: *Curl_resolv_async) callconv(.c) timediff_t {
     if (async_ctx.timeout_ms != 0) {
         const elapsed_ms = curlx_time_net.curlx_ptimediff_ms(Curl_pgrs_now(data), &async_ctx.start);
@@ -535,7 +865,12 @@ export fn Curl_async_shutdown(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async)
     const a = async_ctx orelse return;
     trcDns(data, "[%u] shutdown async", .{a.id});
     a.setShutdown(true);
-    Curl_async_thrdd_shutdown(data, a);
+    if (use_resolv_ares) {
+        Curl_async_ares_shutdown(data, a);
+    }
+    if (use_resolv_threaded) {
+        Curl_async_thrdd_shutdown(data, a);
+    }
     Curl_doh_cleanup(data, a);
 }
 
@@ -543,13 +878,22 @@ export fn Curl_async_destroy(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) 
     const a = async_ctx orelse return;
     trcDns(data, "[%u] destroy async", .{a.id});
     a.setShutdown(true);
-    Curl_async_thrdd_destroy(data, a);
+    if (use_resolv_ares) {
+        Curl_async_ares_destroy(data, a);
+    }
+    if (use_resolv_threaded) {
+        Curl_async_thrdd_destroy(data, a);
+    }
     Curl_doh_cleanup(data, a);
     if (a.ai_A) |ai_a| {
         Curl_freeaddrinfo(ai_a);
     }
     if (a.ai_AAAA) |ai_aaaa| {
         Curl_freeaddrinfo(ai_aaaa);
+    }
+    if (use_httpsrr) {
+        Curl_httpsrr_destroy(a.httpsrr);
+        a.httpsrr = null;
     }
     Curl_peer_unlink(&a.peer);
     mem.free(a);
@@ -1578,24 +1922,41 @@ comptime {
         std.debug.assert(@offsetOf(Curl_peer, "user_hostname") == 35);
     }
 
-    std.debug.assert(@sizeOf(Curl_resolv_async) == 120);
+    const httpsrr_off: usize = if (use_httpsrr) 8 else 0;
+    const resolv_ctx_size: usize = if (use_resolv_threaded and use_httpsrr and use_ares)
+        32
+    else if (use_resolv_threaded or use_resolv_ares)
+        24
+    else
+        0;
+    std.debug.assert(@sizeOf(Curl_resolv_async) == 96 + httpsrr_off + resolv_ctx_size);
     std.debug.assert(@alignOf(Curl_resolv_async) == 8);
     std.debug.assert(@offsetOf(Curl_resolv_async, "next") == 0);
     std.debug.assert(@offsetOf(Curl_resolv_async, "peer") == 8);
     std.debug.assert(@offsetOf(Curl_resolv_async, "ai_A") == 16);
     std.debug.assert(@offsetOf(Curl_resolv_async, "ai_AAAA") == 24);
-    std.debug.assert(@offsetOf(Curl_resolv_async, "thrdd") == 32);
-    std.debug.assert(@offsetOf(Curl_resolv_async, "doh") == 56);
-    std.debug.assert(@offsetOf(Curl_resolv_async, "start") == 64);
-    std.debug.assert(@offsetOf(Curl_resolv_async, "interval_end") == 80);
-    std.debug.assert(@offsetOf(Curl_resolv_async, "timeout_ms") == 88);
-    std.debug.assert(@offsetOf(Curl_resolv_async, "result") == 96);
-    std.debug.assert(@offsetOf(Curl_resolv_async, "poll_interval") == 100);
-    std.debug.assert(@offsetOf(Curl_resolv_async, "id") == 104);
-    std.debug.assert(@offsetOf(Curl_resolv_async, "dns_queries") == 108);
-    std.debug.assert(@offsetOf(Curl_resolv_async, "dns_responses") == 109);
-    std.debug.assert(@offsetOf(Curl_resolv_async, "transport") == 110);
-    std.debug.assert(@offsetOf(Curl_resolv_async, "queries_ongoing") == 111);
+    if (use_httpsrr) {
+        std.debug.assert(@offsetOf(Curl_resolv_async, "httpsrr") == 32);
+    }
+    if (use_resolv_ares) {
+        std.debug.assert(@sizeOf(async_ares_ctx) == 24);
+        std.debug.assert(@offsetOf(Curl_resolv_async, "ares") == 32 + httpsrr_off);
+    }
+    if (use_resolv_threaded) {
+        std.debug.assert(@sizeOf(async_thrdd_ctx) == resolv_ctx_size);
+        std.debug.assert(@offsetOf(Curl_resolv_async, "thrdd") == 32 + httpsrr_off);
+    }
+    std.debug.assert(@offsetOf(Curl_resolv_async, "doh") == 32 + httpsrr_off + resolv_ctx_size);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "start") == 40 + httpsrr_off + resolv_ctx_size);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "interval_end") == 56 + httpsrr_off + resolv_ctx_size);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "timeout_ms") == 64 + httpsrr_off + resolv_ctx_size);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "result") == 72 + httpsrr_off + resolv_ctx_size);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "poll_interval") == 76 + httpsrr_off + resolv_ctx_size);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "id") == 80 + httpsrr_off + resolv_ctx_size);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "dns_queries") == 84 + httpsrr_off + resolv_ctx_size);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "dns_responses") == 85 + httpsrr_off + resolv_ctx_size);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "transport") == 86 + httpsrr_off + resolv_ctx_size);
+    std.debug.assert(@offsetOf(Curl_resolv_async, "queries_ongoing") == 87 + httpsrr_off + resolv_ctx_size);
 
     std.debug.assert(@sizeOf(Curl_cftype) == 104);
     std.debug.assert(@alignOf(Curl_cftype) == 8);

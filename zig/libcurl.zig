@@ -46,7 +46,6 @@ pub fn createConfigHeader(b: *std.Build, target: std.Build.ResolvedTarget) *std.
         .CURL_DISABLE_LDAPS = 1,
         .USE_IPV6 = 1,
         .USE_UNIX_SOCKETS = 1,
-        .USE_RESOLV_THREADED = 1,
         .SIZEOF_INT = 4,
         .SIZEOF_LONG = long_bytes,
         .SIZEOF_OFF_T = off_t_bytes,

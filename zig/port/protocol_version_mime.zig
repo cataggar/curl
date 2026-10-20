@@ -39,6 +39,10 @@ extern fn curlx_strerror(err: c_int, buf: [*]u8, buflen: usize) callconv(.c) [*:
 
 const is_windows = builtin.os.tag == .windows;
 const use_ssl = backend_options.ssl != .none;
+const use_ares = if (@hasDecl(backend_options, "ares")) backend_options.ares else false;
+const use_httpsrr = if (@hasDecl(backend_options, "httpsrr")) backend_options.httpsrr else false;
+const use_resolv_ares = if (@hasDecl(backend_options, "use_resolv_ares")) backend_options.use_resolv_ares else false;
+const use_resolv_threaded = if (@hasDecl(backend_options, "use_resolv_threaded")) backend_options.use_resolv_threaded else true;
 const use_apple_sectrust = backend_options.apple_sectrust orelse (backend_options.ssl == .openssl and builtin.os.tag.isDarwin());
 
 // ============================================================================
@@ -630,6 +634,7 @@ extern fn BrotliDecoderVersion() callconv(.c) u32;
 extern fn psl_check_version_number(version: c_int) callconv(.c) c_int;
 extern fn idn2_check_version(req_version: ?[*:0]const u8) callconv(.c) ?[*:0]const u8;
 extern fn Curl_http2_ver(p: [*]u8, len: usize) callconv(.c) void;
+extern fn ares_version(version: ?*c_int) callconv(.c) ?[*:0]const u8;
 
 const nghttp2_info = extern struct {
     age: c_int,
@@ -698,6 +703,7 @@ var version_ssl_buf: [80]u8 = undefined;
 var version_z_buf: [30]u8 = undefined;
 var version_brotli_buf: [30]u8 = undefined;
 var version_zstd_buf: [30]u8 = undefined;
+var version_cares_buf: [30]u8 = undefined;
 var version_idn_buf: [30]u8 = undefined;
 var version_psl_buf: [30]u8 = undefined;
 var version_h2_buf: [30]u8 = undefined;
@@ -740,6 +746,14 @@ pub export fn curl_version() callconv(.c) [*:0]u8 {
         const s = std.fmt.bufPrint(version_zstd_buf[0 .. version_zstd_buf.len - 1], "zstd/{s}", .{zv}) catch "";
         version_zstd_buf[s.len] = 0;
         src[i] = @ptrCast(&version_zstd_buf);
+        i += 1;
+    }
+
+    if (comptime use_ares) {
+        const av = if (ares_version(null)) |p| std.mem.span(p) else "";
+        const s = std.fmt.bufPrint(version_cares_buf[0 .. version_cares_buf.len - 1], "c-ares/{s}", .{av}) catch "";
+        version_cares_buf[s.len] = 0;
+        src[i] = @ptrCast(&version_cares_buf);
         i += 1;
     }
 
@@ -864,13 +878,19 @@ fn idn_present(info: *curl_version_info_data) bool {
 }
 
 const features_table = blk: {
-    var list: [24]FeatEntry = undefined;
+    var list: [32]FeatEntry = undefined;
     var n: usize = 0;
 
     list[n] = .{ .name = "alt-svc", .bitmask = CURL_VERSION_ALTSVC };
     n += 1;
-    list[n] = .{ .name = "AsynchDNS", .bitmask = CURL_VERSION_ASYNCHDNS };
-    n += 1;
+    if (use_ares and use_resolv_threaded and use_httpsrr) {
+        list[n] = .{ .name = "asyn-rr", .bitmask = 0 };
+        n += 1;
+    }
+    if (use_resolv_ares or use_resolv_threaded) {
+        list[n] = .{ .name = "AsynchDNS", .bitmask = CURL_VERSION_ASYNCHDNS };
+        n += 1;
+    }
     if (backend_options.brotli) {
         list[n] = .{ .name = "brotli", .bitmask = CURL_VERSION_BROTLI };
         n += 1;
@@ -889,6 +909,10 @@ const features_table = blk: {
     }
     list[n] = .{ .name = "HTTPSIG", .bitmask = 0 };
     n += 1;
+    if (use_httpsrr) {
+        list[n] = .{ .name = "HTTPSRR", .bitmask = 0 };
+        n += 1;
+    }
     if (backend_options.idn != .none) {
         list[n] = .{ .name = "IDN", .present = idn_present, .bitmask = CURL_VERSION_IDN };
         n += 1;
@@ -1003,6 +1027,12 @@ pub export fn curl_version_info(stamp: c_uint) callconv(.c) *curl_version_info_d
 
     if (comptime backend_options.zlib) {
         version_info.libz_version = zlibVersion();
+    }
+
+    if (comptime use_ares) {
+        var aresnum: c_int = 0;
+        version_info.ares = ares_version(&aresnum);
+        version_info.ares_num = aresnum;
     }
 
     if (comptime (backend_options.idn == .libidn2)) {

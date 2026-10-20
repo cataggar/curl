@@ -26,8 +26,19 @@ pub const Options = struct {
     psl: bool = false,
     idn: IdnBackend = .none,
     nghttp2: bool = false,
+    ares: bool = false,
+    httpsrr: bool = false,
+    threaded_resolver: ?bool = null,
     ca_bundle: ?[]const u8 = null,
     ca_fallback: bool = false,
+
+    pub fn useThreadedResolver(self: Options) bool {
+        return self.threaded_resolver orelse !self.ares;
+    }
+
+    pub fn useResolvAres(self: Options) bool {
+        return self.ares and !self.useThreadedResolver();
+    }
 
     pub fn useAppleSectrust(self: Options, os_tag: std.Target.Os.Tag) bool {
         return self.apple_sectrust orelse (self.ssl == .openssl and os_tag.isDarwin());
@@ -67,6 +78,9 @@ pub fn fromBuild(b: *std.Build) Options {
         .psl = b.option(bool, "psl", "Enable Public Suffix List support via system libpsl (default: false)") orelse false,
         .idn = b.option(IdnBackend, "idn", "IDN backend (default: none)") orelse .none,
         .nghttp2 = b.option(bool, "nghttp2", "Enable HTTP/2 via system libnghttp2 (default: false)") orelse false,
+        .ares = b.option(bool, "ares", "Enable c-ares DNS resolver / HTTPS-RR support (default: false)") orelse false,
+        .httpsrr = b.option(bool, "httpsrr", "Enable HTTPS DNS resource record (HTTPS-RR) support (default: false)") orelse false,
+        .threaded_resolver = b.option(bool, "threaded-resolver", "Use threaded DNS resolver (default: !ares; set true with -Dares=true for hybrid threaded+c-ares HTTPS-RR)"),
         .ca_bundle = b.option([]const u8, "ca-bundle", "Custom CA certificate bundle path"),
         .ca_fallback = b.option(bool, "ca-fallback", "Use TLS backend built-in CA store fallback (default: false)") orelse false,
     };
@@ -148,6 +162,22 @@ pub fn applyCMacros(mod: *std.Build.Module, target: std.Build.ResolvedTarget, op
     if (opts.nghttp2) {
         mod.addCMacro("USE_NGHTTP2", "1");
     }
+
+    if (opts.useThreadedResolver()) {
+        mod.addCMacro("USE_RESOLV_THREADED", "1");
+    }
+
+    if (opts.useResolvAres()) {
+        mod.addCMacro("USE_RESOLV_ARES", "1");
+    }
+
+    if (opts.ares) {
+        mod.addCMacro("USE_ARES", "1");
+    }
+
+    if (opts.httpsrr) {
+        mod.addCMacro("USE_HTTPSRR", "1");
+    }
 }
 
 pub fn linkBackends(mod: *std.Build.Module, target: std.Build.ResolvedTarget, opts: Options) void {
@@ -213,6 +243,10 @@ pub fn linkBackends(mod: *std.Build.Module, target: std.Build.ResolvedTarget, op
     if (opts.nghttp2) {
         mod.linkSystemLibrary("nghttp2", .{});
     }
+
+    if (opts.ares) {
+        mod.linkSystemLibrary("cares", .{});
+    }
 }
 
 pub fn createOptionsStep(b: *std.Build, opts: Options) *std.Build.Step.Options {
@@ -225,6 +259,10 @@ pub fn createOptionsStep(b: *std.Build, opts: Options) *std.Build.Step.Options {
     step.addOption(bool, "psl", opts.psl);
     step.addOption(IdnBackend, "idn", opts.idn);
     step.addOption(bool, "nghttp2", opts.nghttp2);
+    step.addOption(bool, "ares", opts.ares);
+    step.addOption(bool, "httpsrr", opts.httpsrr);
+    step.addOption(bool, "use_resolv_ares", opts.useResolvAres());
+    step.addOption(bool, "use_resolv_threaded", opts.useThreadedResolver());
     step.addOption(?[]const u8, "ca_bundle", opts.ca_bundle);
     step.addOption(bool, "ca_fallback", opts.ca_fallback);
     return step;

@@ -51,7 +51,8 @@ const use_http2 = backend_options.nghttp2;
 const use_http3 = false;
 const use_ssh = false;
 const use_ech = false;
-const use_resolv_ares = false;
+const use_ares = if (@hasDecl(backend_options, "ares")) backend_options.ares else false;
+const use_resolv_ares = if (@hasDecl(backend_options, "use_resolv_ares")) backend_options.use_resolv_ares else false;
 const enable_hsts = backend_options.ssl != .none;
 const has_tcp_fastopen = builtin.os.tag != .windows;
 
@@ -192,6 +193,7 @@ const CURL_LOCK_ACCESS_SINGLE: c_uint = 2;
 
 // enum dupstring indices
 const hsts_off: c_uint = if (enable_hsts) 1 else 0;
+const ares_off: c_uint = if (use_ares) 4 else 0;
 pub const STRING_CERT: c_uint = 0;
 pub const STRING_CERT_TYPE: c_uint = 1;
 pub const STRING_KEY: c_uint = 2;
@@ -253,15 +255,19 @@ pub const STRING_DOH: c_uint = 57;
 pub const STRING_ALTSVC: c_uint = 58;
 pub const STRING_HSTS: c_uint = 59;
 pub const STRING_SASL_AUTHZID: c_uint = 59 + hsts_off;
-pub const STRING_SSL_EC_CURVES: c_uint = 60 + hsts_off;
-pub const STRING_AWS_SIGV4: c_uint = 61 + hsts_off;
-pub const STRING_HTTPSIG_KEY: c_uint = 62 + hsts_off;
-pub const STRING_HTTPSIG_KEYID: c_uint = 63 + hsts_off;
-pub const STRING_HTTPSIG_HEADERS: c_uint = 64 + hsts_off;
-pub const STRING_HAPROXY_CLIENT_IP: c_uint = 65 + hsts_off;
-pub const STRING_ECH_CONFIG: c_uint = 66 + hsts_off;
-pub const STRING_ECH_PUBLIC: c_uint = 67 + hsts_off;
-pub const STRING_SSL_SIGNATURE_ALGORITHMS: c_uint = 68 + hsts_off;
+pub const STRING_DNS_SERVERS: c_uint = 60 + hsts_off;
+pub const STRING_DNS_INTERFACE: c_uint = 61 + hsts_off;
+pub const STRING_DNS_LOCAL_IP4: c_uint = 62 + hsts_off;
+pub const STRING_DNS_LOCAL_IP6: c_uint = 63 + hsts_off;
+pub const STRING_SSL_EC_CURVES: c_uint = 60 + hsts_off + ares_off;
+pub const STRING_AWS_SIGV4: c_uint = 61 + hsts_off + ares_off;
+pub const STRING_HTTPSIG_KEY: c_uint = 62 + hsts_off + ares_off;
+pub const STRING_HTTPSIG_KEYID: c_uint = 63 + hsts_off + ares_off;
+pub const STRING_HTTPSIG_HEADERS: c_uint = 64 + hsts_off + ares_off;
+pub const STRING_HAPROXY_CLIENT_IP: c_uint = 65 + hsts_off + ares_off;
+pub const STRING_ECH_CONFIG: c_uint = 66 + hsts_off + ares_off;
+pub const STRING_ECH_PUBLIC: c_uint = 67 + hsts_off + ares_off;
+pub const STRING_SSL_SIGNATURE_ALGORITHMS: c_uint = 68 + hsts_off + ares_off;
 
 // enum dupblob indices
 pub const BLOB_CERT: c_uint = 0;
@@ -2296,6 +2302,22 @@ fn setoptCptrFtp(data: *Curl_easy, option: CURLoption, ptr: ?[*:0]const u8) CURL
 fn setoptCptrNet(data: *Curl_easy, option: CURLoption, ptr: ?[*:0]const u8) CURLcode {
     switch (option) {
         CURLOPT_INTERFACE => return setstroptInterface(data, ptr),
+        CURLOPT_DNS_SERVERS => {
+            if (!use_resolv_ares) return CURLE_UNKNOWN_OPTION;
+            return Curl_setstropt(data, STRING_DNS_SERVERS, ptr);
+        },
+        CURLOPT_DNS_INTERFACE => {
+            if (!use_resolv_ares) return CURLE_UNKNOWN_OPTION;
+            return Curl_setstropt(data, STRING_DNS_INTERFACE, ptr);
+        },
+        CURLOPT_DNS_LOCAL_IP4 => {
+            if (!use_resolv_ares) return CURLE_UNKNOWN_OPTION;
+            return Curl_setstropt(data, STRING_DNS_LOCAL_IP4, ptr);
+        },
+        CURLOPT_DNS_LOCAL_IP6 => {
+            if (!use_resolv_ares) return CURLE_UNKNOWN_OPTION;
+            return Curl_setstropt(data, STRING_DNS_LOCAL_IP6, ptr);
+        },
         CURLOPT_UNIX_SOCKET_PATH => {
             Curl_setopt_set_bit(data, BIT_ABSTRACT_UNIX_SOCKET, false);
             return Curl_setstropt(data, STRING_UNIX_SOCKET_PATH, ptr);

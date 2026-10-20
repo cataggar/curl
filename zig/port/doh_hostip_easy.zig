@@ -198,33 +198,7 @@ pub const Curl_hash = collections.Curl_hash;
 pub const Bufref = containers.bufref;
 pub const StoreNetrc = netrc_addr_idn.StoreNetrc;
 
-pub const Curl_resolv_async = extern struct {
-    next: ?*Curl_resolv_async,
-    peer: ?*Curl_peer,
-    ai_A: ?*Curl_addrinfo,
-    ai_AAAA: ?*Curl_addrinfo,
-    thrdd: vdns_cfilters.async_thrdd_ctx,
-    doh: ?*anyopaque,
-    start: Curltime,
-    interval_end: timediff_t,
-    timeout_ms: timediff_t,
-    result: CURLcode,
-    poll_interval: u32,
-    id: u32,
-    dns_queries: u8,
-    dns_responses: u8,
-    transport: u8,
-    queries_ongoing: u8,
-    flags: packed struct(u32) {
-        is_ipaddr: bool = false,
-        is_ipv4addr: bool = false,
-        for_proxy: bool = false,
-        done: bool = false,
-        shutdown: bool = false,
-        negative_answer: bool = false,
-        _pad: u26 = 0,
-    },
-};
+pub const Curl_resolv_async = vdns_cfilters.Curl_resolv_async;
 
 pub const Curl_eapi_guard = extern struct {
     data: ?*Curl_easy,
@@ -892,7 +866,7 @@ pub export fn Curl_doh(
         const result = doh_probe_run(
             data,
             CURL_DNS_TYPE_AAAA,
-            peer.hostname,
+            peer.hostname orelse "",
             doh_url,
             multi,
             async_ctx.id,
@@ -909,7 +883,7 @@ pub export fn Curl_doh(
         const result = doh_probe_run(
             data,
             CURL_DNS_TYPE_A,
-            peer.hostname,
+            peer.hostname orelse "",
             doh_url,
             multi,
             async_ctx.id,
@@ -1279,7 +1253,7 @@ fn doh_probe_done(doh: *Curl_easy, master: *Curl_easy, result_in: CURLcode) call
             netrc_addr_idn.Curl_freeaddrinfo(existing);
             dest.* = null;
         }
-        const peer = async_ctx.peer.?;
+        const peer: *Curl_peer = @ptrCast(async_ctx.peer.?);
         result = doh2ai(&de, peer.hostname, @intCast(peer.port), dest);
         if (result != CURLE_OK) {
             if (trcIsVerbose(doh)) {
@@ -1310,20 +1284,20 @@ pub export fn Curl_doh_take_result(
     const dohp: *doh_probes = @ptrCast(@alignCast(dohp_raw));
     var result: CURLcode = CURLE_OK;
 
-    async_ctx.flags.negative_answer = false;
+    async_ctx.setNegativeAnswer(false);
     if (async_ctx.result != CURLE_OK) {
         result = async_ctx.result;
         Curl_doh_cleanup(data, async_ctx);
         return result;
     }
 
-    const peer = async_ctx.peer.?;
+    const peer: *Curl_peer = @ptrCast(async_ctx.peer.?);
     if ((async_ctx.dns_queries & CURL_DNSQ_ADDR) != 0 and
         dohp.probe_mid[DOH_SLOT_IPV4] == std.math.maxInt(u32) and
         dohp.probe_mid[DOH_SLOT_IPV6] == std.math.maxInt(u32))
     {
         Curl_failf(data, "Could not DoH-resolve: %s", peer.hostname);
-        return if (async_ctx.flags.for_proxy)
+        return if (async_ctx.forProxy())
             CURLE_COULDNT_RESOLVE_PROXY
         else
             CURLE_COULDNT_RESOLVE_HOST;
@@ -1350,8 +1324,8 @@ pub export fn Curl_doh_take_result(
                 return CURLE_OUT_OF_MEMORY;
             }
         } else {
-            async_ctx.flags.negative_answer = negative;
-            result = if (async_ctx.flags.for_proxy)
+            async_ctx.setNegativeAnswer(negative);
+            result = if (async_ctx.forProxy())
                 CURLE_COULDNT_RESOLVE_PROXY
             else
                 CURLE_COULDNT_RESOLVE_HOST;
@@ -1621,15 +1595,15 @@ fn hostip_async_new(
     const async_ctx: *Curl_resolv_async = @ptrCast(@alignCast(raw));
 
     async_ctx.id = Curl_multi_next_resolv_id(multi);
-    altsvc_hsts_peer.Curl_peer_link(&async_ctx.peer, peer);
+    altsvc_hsts_peer.Curl_peer_link(@ptrCast(&async_ctx.peer), peer);
     async_ctx.dns_queries = dns_queries;
     async_ctx.transport = transport;
-    async_ctx.flags.for_proxy = for_proxy;
+    async_ctx.setForProxy(for_proxy);
     async_ctx.start = Curl_pgrs_now(data).*;
     async_ctx.timeout_ms = timeout_ms;
-    async_ctx.flags.is_ipaddr = netrc_addr_idn.Curl_is_ipaddr(peer.hostname);
-    if (async_ctx.flags.is_ipaddr)
-        async_ctx.flags.is_ipv4addr = netrc_addr_idn.Curl_is_ipv4addr(peer.hostname);
+    async_ctx.setIsIpaddr(netrc_addr_idn.Curl_is_ipaddr(peer.hostname));
+    if (async_ctx.isIpaddr())
+        async_ctx.setIsIpv4Addr(netrc_addr_idn.Curl_is_ipv4addr(peer.hostname));
 
     return async_ctx;
 }
@@ -1703,7 +1677,7 @@ pub export fn Curl_resolv_has_answers(
     dns_queries: u8,
 ) callconv(.c) bool {
     const async_ctx = Curl_async_get(data, resolv_id) orelse return true;
-    if (async_ctx.flags.done)
+    if (async_ctx.isDone())
         return true;
     const check_queries = dns_queries & async_ctx.dns_queries;
     return (check_queries & async_ctx.dns_responses) == check_queries;
@@ -1838,7 +1812,7 @@ fn hostip_resolv_start_out(
             async_ctx.next = Curl_easy_get_async_head(data);
             Curl_easy_set_async_head(data, async_ctx);
         } else {
-            pnegative.* = async_ctx.flags.negative_answer;
+            pnegative.* = async_ctx.negativeAnswer();
             Curl_async_destroy(data, async_ctx);
         }
     }
@@ -2059,7 +2033,7 @@ pub export fn Curl_resolv_take_result(
     pdns: *?*Curl_dns_entry,
 ) callconv(.c) CURLcode {
     const async_ctx = Curl_async_get(data, resolv_id) orelse return CURLE_FAILED_INIT;
-    const peer = async_ctx.peer.?;
+    const peer: *const Curl_peer = @ptrCast(async_ctx.peer.?);
 
     var result = Curl_dnscache_get(data, async_ctx.dns_queries, peer, pdns);
     if (pdns.* != null) {
@@ -2080,7 +2054,7 @@ pub export fn Curl_resolv_take_result(
         if (result != CURLE_OK)
             Curl_dns_entry_unlink(data, pdns);
     } else if (isResolvFail(result)) {
-        if (async_ctx.flags.negative_answer)
+        if (async_ctx.negativeAnswer())
             _ = Curl_dnscache_add_negative(data, async_ctx.dns_queries, peer);
         if ((async_ctx.dns_queries & (CURL_DNSQ_A | CURL_DNSQ_AAAA)) != 0) {
             Curl_failf(

@@ -2267,116 +2267,15 @@ extern fn curlx_dyn_len(s: *const containers.dynbuf) callconv(.c) usize;
 extern fn curlx_dyn_ptr(s: *const containers.dynbuf) callconv(.c) ?[*:0]u8;
 extern fn curlx_dyn_addf(s: *containers.dynbuf, fmt: [*:0]const u8, ...) callconv(.c) CURLcode;
 
-const async_thrdd_item = extern struct {
-    res: ?*Curl_addrinfo,
-    description: [CURL_ASYN_ITEM_DESC_LEN]u8,
-    sockerr: c_int,
-    mid: u32,
-    resolv_id: u32,
-    port: u16,
-    transport: u8,
-    dns_queries: u8,
-    negative: bool,
-    hostname: [1]u8,
+pub const async_thrdd_item = vdns_cfilters.async_thrdd_item;
+pub const async_thrdd_ctx = vdns_cfilters.async_thrdd_ctx;
+pub const Curl_resolv_async = vdns_cfilters.Curl_resolv_async;
 
-    inline fn hostnamePtr(self: *async_thrdd_item) [*:0]u8 {
-        return @ptrCast(&self.hostname);
-    }
-
-    inline fn descriptionPtr(self: *async_thrdd_item) [*:0]u8 {
-        return @ptrCast(&self.description);
-    }
-};
-
-pub const async_thrdd_ctx = extern struct {
-    res_A: ?*async_thrdd_item,
-    res_AAAA: ?*async_thrdd_item,
-    flags: c_uint,
-
-    pub const FLAG_PROCESSED_A: c_uint = 1 << 0;
-    pub const FLAG_PROCESSED_AAAA: c_uint = 1 << 1;
-
-    pub inline fn isProcessedA(self: *const async_thrdd_ctx) bool {
-        return (self.flags & FLAG_PROCESSED_A) != 0;
-    }
-
-    pub inline fn setProcessedA(self: *async_thrdd_ctx, val: bool) void {
-        if (val) {
-            self.flags |= FLAG_PROCESSED_A;
-        } else {
-            self.flags &= ~FLAG_PROCESSED_A;
-        }
-    }
-
-    pub inline fn isProcessedAAAA(self: *const async_thrdd_ctx) bool {
-        return (self.flags & FLAG_PROCESSED_AAAA) != 0;
-    }
-
-    pub inline fn setProcessedAAAA(self: *async_thrdd_ctx, val: bool) void {
-        if (val) {
-            self.flags |= FLAG_PROCESSED_AAAA;
-        } else {
-            self.flags &= ~FLAG_PROCESSED_AAAA;
-        }
-    }
-};
-
-pub const Curl_resolv_async = extern struct {
-    next: ?*Curl_resolv_async,
-    peer: ?*Curl_peer,
-    ai_A: ?*Curl_addrinfo,
-    ai_AAAA: ?*Curl_addrinfo,
-    thrdd: async_thrdd_ctx,
-    doh: ?*anyopaque,
-    start: Curltime,
-    interval_end: timediff_t,
-    timeout_ms: timediff_t,
-    result: CURLcode,
-    poll_interval: u32,
-    id: u32,
-    dns_queries: u8,
-    dns_responses: u8,
-    transport: u8,
-    queries_ongoing: u8,
-    flags: c_uint,
-
-    pub const FLAG_IS_IPADDR: c_uint = 1 << 0;
-    pub const FLAG_IS_IPV4ADDR: c_uint = 1 << 1;
-    pub const FLAG_FOR_PROXY: c_uint = 1 << 2;
-    pub const FLAG_DONE: c_uint = 1 << 3;
-    pub const FLAG_SHUTDOWN: c_uint = 1 << 4;
-    pub const FLAG_NEGATIVE_ANSWER: c_uint = 1 << 5;
-
-    pub inline fn isIpv4Addr(self: *const Curl_resolv_async) bool {
-        return (self.flags & FLAG_IS_IPV4ADDR) != 0;
-    }
-
-    pub inline fn isDone(self: *const Curl_resolv_async) bool {
-        return (self.flags & FLAG_DONE) != 0;
-    }
-
-    pub inline fn setDone(self: *Curl_resolv_async, val: bool) void {
-        if (val) {
-            self.flags |= FLAG_DONE;
-        } else {
-            self.flags &= ~FLAG_DONE;
-        }
-    }
-
-    pub inline fn setNegativeAnswer(self: *Curl_resolv_async, val: bool) void {
-        if (val) {
-            self.flags |= FLAG_NEGATIVE_ANSWER;
-        } else {
-            self.flags &= ~FLAG_NEGATIVE_ANSWER;
-        }
-    }
-};
-
-export fn Curl_async_global_init() callconv(.c) c_int {
+fn Curl_async_global_init() callconv(.c) c_int {
     return @intCast(CURLE_OK);
 }
 
-export fn Curl_async_global_cleanup() callconv(.c) void {}
+fn Curl_async_global_cleanup() callconv(.c) void {}
 
 fn async_thrdd_item_destroy(item_opt: ?*async_thrdd_item) void {
     const item = item_opt orelse return;
@@ -2422,7 +2321,7 @@ fn async_thrdd_item_create(
     return item;
 }
 
-export fn Curl_async_thrdd_shutdown(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) callconv(.c) void {
+fn Curl_async_thrdd_shutdown(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) callconv(.c) void {
     Curl_async_thrdd_destroy(data, async_ctx);
 }
 
@@ -2437,7 +2336,7 @@ fn async_thrdd_match_item(qitem: ?*anyopaque, match_data: ?*anyopaque) callconv(
     return (item.mid == ctx.mid) and (item.resolv_id == ctx.resolv_id);
 }
 
-export fn Curl_async_thrdd_destroy(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) callconv(.c) void {
+fn Curl_async_thrdd_destroy(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) callconv(.c) void {
     const a = async_ctx orelse return;
     if (a.queries_ongoing != 0 and !a.isDone()) {
         if (data) |d| {
@@ -2458,7 +2357,7 @@ export fn Curl_async_thrdd_destroy(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_a
     a.thrdd.res_AAAA = null;
 }
 
-export fn Curl_async_await(data: ?*Curl_easy, resolv_id: u32, pdns: *?*Curl_dns_entry) callconv(.c) CURLcode {
+fn Curl_async_await(data: ?*Curl_easy, resolv_id: u32, pdns: *?*Curl_dns_entry) callconv(.c) CURLcode {
     const a = Curl_async_get(data, resolv_id) orelse return CURLE_FAILED_INIT;
     var result: CURLcode = CURLE_AGAIN;
 
@@ -2524,7 +2423,7 @@ fn async_thrdd_item_free(item: ?*anyopaque) callconv(.c) void {
     async_thrdd_item_destroy(@ptrCast(@alignCast(item)));
 }
 
-export fn Curl_async_thrdd_multi_init(
+fn Curl_async_thrdd_multi_init(
     multi: *Curl_multi,
     min_threads: u32,
     max_threads: u32,
@@ -2544,7 +2443,7 @@ export fn Curl_async_thrdd_multi_init(
     );
 }
 
-export fn Curl_async_thrdd_multi_destroy(multi: ?*Curl_multi, join: bool) callconv(.c) void {
+fn Curl_async_thrdd_multi_destroy(multi: ?*Curl_multi, join: bool) callconv(.c) void {
     const m = multi orelse return;
     const thrdq = Curl_zig_multi_get_resolv_thrdq(m) orelse return;
     const admin = Curl_zig_multi_get_admin(m);
@@ -2588,7 +2487,7 @@ fn async_thrdd_report_item(data: ?*Curl_easy, item: *async_thrdd_item) void {
     );
 }
 
-export fn Curl_async_thrdd_multi_process(multi: ?*Curl_multi) callconv(.c) void {
+fn Curl_async_thrdd_multi_process(multi: ?*Curl_multi) callconv(.c) void {
     const m = multi orelse return;
     const thrdq = Curl_zig_multi_get_resolv_thrdq(m);
     var qitem: ?*anyopaque = null;
@@ -2614,7 +2513,7 @@ export fn Curl_async_thrdd_multi_process(multi: ?*Curl_multi) callconv(.c) void 
     Curl_zig_thrdq_trace(thrdq, Curl_zig_multi_get_admin(m));
 }
 
-export fn Curl_async_thrdd_multi_set_props(
+fn Curl_async_thrdd_multi_set_props(
     multi: ?*Curl_multi,
     min_threads: u32,
     max_threads: u32,
@@ -2652,7 +2551,7 @@ fn async_thrdd_query(data: *Curl_easy, async_ctx: *Curl_resolv_async, dns_querie
     return result;
 }
 
-export fn Curl_async_getaddrinfo(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) callconv(.c) CURLcode {
+fn Curl_async_getaddrinfo(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) callconv(.c) CURLcode {
     const d = data orelse return CURLE_FAILED_INIT;
     const a = async_ctx orelse return CURLE_FAILED_INIT;
 
@@ -2697,7 +2596,7 @@ export fn Curl_async_getaddrinfo(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_asy
     return result;
 }
 
-export fn Curl_async_pollset(
+fn Curl_async_pollset(
     data: ?*Curl_easy,
     async_ctx: ?*Curl_resolv_async,
     ps: *easy_pollset,
@@ -2815,7 +2714,7 @@ fn async_thrdd_check_done(data: ?*Curl_easy, async_ctx: *Curl_resolv_async) CURL
     return CURLE_OK;
 }
 
-export fn Curl_async_take_result(
+fn Curl_async_take_result(
     data: ?*Curl_easy,
     async_ctx: ?*Curl_resolv_async,
     pdns: *?*Curl_dns_entry,
@@ -2898,6 +2797,23 @@ export fn Curl_async_take_result(
     return result;
 }
 
+comptime {
+    if (vdns_cfilters.use_resolv_threaded) {
+        @export(&Curl_async_global_init, .{ .name = "Curl_async_global_init" });
+        @export(&Curl_async_global_cleanup, .{ .name = "Curl_async_global_cleanup" });
+        @export(&Curl_async_thrdd_shutdown, .{ .name = "Curl_async_thrdd_shutdown" });
+        @export(&Curl_async_thrdd_destroy, .{ .name = "Curl_async_thrdd_destroy" });
+        @export(&Curl_async_await, .{ .name = "Curl_async_await" });
+        @export(&Curl_async_thrdd_multi_init, .{ .name = "Curl_async_thrdd_multi_init" });
+        @export(&Curl_async_thrdd_multi_destroy, .{ .name = "Curl_async_thrdd_multi_destroy" });
+        @export(&Curl_async_thrdd_multi_process, .{ .name = "Curl_async_thrdd_multi_process" });
+        @export(&Curl_async_thrdd_multi_set_props, .{ .name = "Curl_async_thrdd_multi_set_props" });
+        @export(&Curl_async_getaddrinfo, .{ .name = "Curl_async_getaddrinfo" });
+        @export(&Curl_async_pollset, .{ .name = "Curl_async_pollset" });
+        @export(&Curl_async_take_result, .{ .name = "Curl_async_take_result" });
+    }
+}
+
 // ============================================================================
 // Unit Tests
 // ============================================================================
@@ -2948,11 +2864,7 @@ test "Curl_async_global_init and async_thrdd_ctx flags" {
     try std.testing.expectEqual(@as(c_int, 0), Curl_async_global_init());
     Curl_async_global_cleanup();
 
-    var thrdd: async_thrdd_ctx = .{
-        .res_A = null,
-        .res_AAAA = null,
-        .flags = 0,
-    };
+    var thrdd: async_thrdd_ctx = .{};
     try std.testing.expect(!thrdd.isProcessedA());
     try std.testing.expect(!thrdd.isProcessedAAAA());
     thrdd.setProcessedA(true);

@@ -4835,20 +4835,74 @@ struct Curl_multi *Curl_zig_data_get_multi(const struct Curl_easy *data)
 struct curl_thrdq **Curl_zig_multi_get_resolv_thrdq_ptr(
   struct Curl_multi *multi)
 {
+#ifdef USE_RESOLV_THREADED
   return &multi->resolv_thrdq;
+#else
+  (void)multi;
+  return NULL;
+#endif
 }
 
 struct curl_thrdq *Curl_zig_multi_get_resolv_thrdq(
   const struct Curl_multi *multi)
 {
+#ifdef USE_RESOLV_THREADED
   return multi ? multi->resolv_thrdq : NULL;
+#else
+  (void)multi;
+  return NULL;
+#endif
 }
 
 void Curl_zig_multi_set_resolv_thrdq(struct Curl_multi *multi,
                                      struct curl_thrdq *thrdq)
 {
+#ifdef USE_RESOLV_THREADED
   multi->resolv_thrdq = thrdq;
+#else
+  (void)multi;
+  (void)thrdq;
+#endif
 }
+
+#ifdef USE_ARES
+int Curl_zig_ares_init_channel(void **channel_out,
+                               struct Curl_easy *data,
+                               ares_sock_state_cb sock_state_cb)
+{
+  struct ares_options options;
+  int optmask = ARES_OPT_SOCK_STATE_CB;
+
+  memset(&options, 0, sizeof(options));
+  options.sock_state_cb = sock_state_cb;
+  options.sock_state_cb_data = data;
+#if ARES_VERSION < 0x011400
+  options.timeout = 2000;
+  optmask |= ARES_OPT_TIMEOUTMS;
+#endif
+  return ares_init_options((ares_channel *)channel_out, &options, optmask);
+}
+
+const char *Curl_zig_easy_get_dns_servers(const struct Curl_easy *data)
+{
+  return data ? CURL_EASY_STR(data, STRING_DNS_SERVERS) : NULL;
+}
+
+const char *Curl_zig_easy_get_dns_interface(const struct Curl_easy *data)
+{
+  return data ? CURL_EASY_STR(data, STRING_DNS_INTERFACE) : NULL;
+}
+
+const char *Curl_zig_easy_get_dns_local_ip4(const struct Curl_easy *data)
+{
+  return data ? CURL_EASY_STR(data, STRING_DNS_LOCAL_IP4) : NULL;
+}
+
+const char *Curl_zig_easy_get_dns_local_ip6(const struct Curl_easy *data)
+{
+  return data ? CURL_EASY_STR(data, STRING_DNS_LOCAL_IP6) : NULL;
+}
+#endif
 
 struct Curl_easy *Curl_zig_multi_get_admin(const struct Curl_multi *multi)
 {
@@ -4878,7 +4932,12 @@ bool Curl_zig_trc_dns_is_verbose(struct Curl_easy *data)
 
 void Curl_zig_thrdq_trace(struct curl_thrdq *tqueue, struct Curl_easy *data)
 {
+#ifdef USE_THREADS
   CURL_THRDQ_TRACE(tqueue, data);
+#else
+  (void)tqueue;
+  (void)data;
+#endif
 }
 
 void Curl_zig_async_thrdd_classify_gai_error(int rc,
@@ -13549,24 +13608,46 @@ _Static_assert(offsetof(struct Curl_peer, user_hostname) == 35, "Curl_peer.user_
 #endif
 
 #ifdef USE_CURL_ASYNC
-_Static_assert(sizeof(struct Curl_resolv_async) == 120, "sizeof(Curl_resolv_async)");
+#ifdef USE_HTTPSRR
+#define CURL_ABI_HTTPSRR_OFF 8
+#else
+#define CURL_ABI_HTTPSRR_OFF 0
+#endif
+#if defined(USE_RESOLV_THREADED) && defined(USE_HTTPSRR) && defined(USE_ARES)
+#define CURL_ABI_RESOLV_CTX_SIZE 32
+#elif defined(USE_RESOLV_THREADED) || defined(USE_RESOLV_ARES)
+#define CURL_ABI_RESOLV_CTX_SIZE 24
+#else
+#define CURL_ABI_RESOLV_CTX_SIZE 0
+#endif
+_Static_assert(sizeof(struct Curl_resolv_async) == (96 + CURL_ABI_HTTPSRR_OFF + CURL_ABI_RESOLV_CTX_SIZE), "sizeof(Curl_resolv_async)");
 _Static_assert(_Alignof(struct Curl_resolv_async) == 8, "alignof(Curl_resolv_async)");
 _Static_assert(offsetof(struct Curl_resolv_async, next) == 0, "Curl_resolv_async.next");
 _Static_assert(offsetof(struct Curl_resolv_async, peer) == 8, "Curl_resolv_async.peer");
 _Static_assert(offsetof(struct Curl_resolv_async, ai_A) == 16, "Curl_resolv_async.ai_A");
 _Static_assert(offsetof(struct Curl_resolv_async, ai_AAAA) == 24, "Curl_resolv_async.ai_AAAA");
-_Static_assert(offsetof(struct Curl_resolv_async, thrdd) == 32, "Curl_resolv_async.thrdd");
-_Static_assert(offsetof(struct Curl_resolv_async, doh) == 56, "Curl_resolv_async.doh");
-_Static_assert(offsetof(struct Curl_resolv_async, start) == 64, "Curl_resolv_async.start");
-_Static_assert(offsetof(struct Curl_resolv_async, interval_end) == 80, "Curl_resolv_async.interval_end");
-_Static_assert(offsetof(struct Curl_resolv_async, timeout_ms) == 88, "Curl_resolv_async.timeout_ms");
-_Static_assert(offsetof(struct Curl_resolv_async, result) == 96, "Curl_resolv_async.result");
-_Static_assert(offsetof(struct Curl_resolv_async, poll_interval) == 100, "Curl_resolv_async.poll_interval");
-_Static_assert(offsetof(struct Curl_resolv_async, id) == 104, "Curl_resolv_async.id");
-_Static_assert(offsetof(struct Curl_resolv_async, dns_queries) == 108, "Curl_resolv_async.dns_queries");
-_Static_assert(offsetof(struct Curl_resolv_async, dns_responses) == 109, "Curl_resolv_async.dns_responses");
-_Static_assert(offsetof(struct Curl_resolv_async, transport) == 110, "Curl_resolv_async.transport");
-_Static_assert(offsetof(struct Curl_resolv_async, queries_ongoing) == 111, "Curl_resolv_async.queries_ongoing");
+#ifdef USE_HTTPSRR
+_Static_assert(offsetof(struct Curl_resolv_async, httpsrr) == 32, "Curl_resolv_async.httpsrr");
+#endif
+#ifdef USE_RESOLV_ARES
+_Static_assert(sizeof(struct async_ares_ctx) == 24, "sizeof(async_ares_ctx)");
+_Static_assert(offsetof(struct Curl_resolv_async, ares) == (32 + CURL_ABI_HTTPSRR_OFF), "Curl_resolv_async.ares");
+#endif
+#ifdef USE_RESOLV_THREADED
+_Static_assert(sizeof(struct async_thrdd_ctx) == CURL_ABI_RESOLV_CTX_SIZE, "sizeof(async_thrdd_ctx)");
+_Static_assert(offsetof(struct Curl_resolv_async, thrdd) == (32 + CURL_ABI_HTTPSRR_OFF), "Curl_resolv_async.thrdd");
+#endif
+_Static_assert(offsetof(struct Curl_resolv_async, doh) == (32 + CURL_ABI_HTTPSRR_OFF + CURL_ABI_RESOLV_CTX_SIZE), "Curl_resolv_async.doh");
+_Static_assert(offsetof(struct Curl_resolv_async, start) == (40 + CURL_ABI_HTTPSRR_OFF + CURL_ABI_RESOLV_CTX_SIZE), "Curl_resolv_async.start");
+_Static_assert(offsetof(struct Curl_resolv_async, interval_end) == (56 + CURL_ABI_HTTPSRR_OFF + CURL_ABI_RESOLV_CTX_SIZE), "Curl_resolv_async.interval_end");
+_Static_assert(offsetof(struct Curl_resolv_async, timeout_ms) == (64 + CURL_ABI_HTTPSRR_OFF + CURL_ABI_RESOLV_CTX_SIZE), "Curl_resolv_async.timeout_ms");
+_Static_assert(offsetof(struct Curl_resolv_async, result) == (72 + CURL_ABI_HTTPSRR_OFF + CURL_ABI_RESOLV_CTX_SIZE), "Curl_resolv_async.result");
+_Static_assert(offsetof(struct Curl_resolv_async, poll_interval) == (76 + CURL_ABI_HTTPSRR_OFF + CURL_ABI_RESOLV_CTX_SIZE), "Curl_resolv_async.poll_interval");
+_Static_assert(offsetof(struct Curl_resolv_async, id) == (80 + CURL_ABI_HTTPSRR_OFF + CURL_ABI_RESOLV_CTX_SIZE), "Curl_resolv_async.id");
+_Static_assert(offsetof(struct Curl_resolv_async, dns_queries) == (84 + CURL_ABI_HTTPSRR_OFF + CURL_ABI_RESOLV_CTX_SIZE), "Curl_resolv_async.dns_queries");
+_Static_assert(offsetof(struct Curl_resolv_async, dns_responses) == (85 + CURL_ABI_HTTPSRR_OFF + CURL_ABI_RESOLV_CTX_SIZE), "Curl_resolv_async.dns_responses");
+_Static_assert(offsetof(struct Curl_resolv_async, transport) == (86 + CURL_ABI_HTTPSRR_OFF + CURL_ABI_RESOLV_CTX_SIZE), "Curl_resolv_async.transport");
+_Static_assert(offsetof(struct Curl_resolv_async, queries_ongoing) == (87 + CURL_ABI_HTTPSRR_OFF + CURL_ABI_RESOLV_CTX_SIZE), "Curl_resolv_async.queries_ongoing");
 #endif
 
 _Static_assert(sizeof(struct ip_quadruple) == 98, "sizeof(ip_quadruple)");
