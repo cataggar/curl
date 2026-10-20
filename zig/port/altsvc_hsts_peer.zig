@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const backend_options = @import("backend_options");
 const mem = @import("mem.zig");
 const primitives = @import("primitives.zig");
 const containers_mod = @import("containers.zig");
@@ -7,6 +8,7 @@ const curlx_parse_mod = @import("curlx_parse.zig");
 const curlx_time_net = @import("curlx_time_net.zig");
 const os_leaf = @import("os_leaf.zig");
 const urlapi = @import("urlapi.zig");
+const netrc_addr_idn = @import("netrc_addr_idn.zig");
 
 const Curl_str = curlx_parse_mod.Curl_str;
 
@@ -175,6 +177,7 @@ extern fn Curl_is_ipv4addr(address: [*:0]const u8) callconv(.c) bool;
 extern fn Curl_uc_to_curlcode(uc: urlapi.CURLUcode) callconv(.c) c_uint;
 extern fn Curl_get_scheme(scheme: [*:0]const u8) callconv(.c) ?*const CurlScheme;
 extern fn Curl_ssl_supports(data: ?*anyopaque, ssl_option: c_uint) callconv(.c) bool;
+extern fn curlx_memdup0(src: ?[*]const u8, length: usize) callconv(.c) ?[*:0]u8;
 
 extern const Curl_scheme_http: CurlScheme;
 extern const Curl_scheme_https: CurlScheme;
@@ -418,17 +421,32 @@ fn peerParseHost(data: ?*anyopaque, pp: *PeerParse, scan_for_ipv6: bool) c_uint 
             return CURLE_URL_MALFORMAT;
         }
         pp.ipv6 = true;
-    } else if (scan_for_ipv6 and Curl_looks_like_ipv6(hu_str, pp.host_user.len, true, &pp.host, &pp.zoneid)) {
-        if (pp.host_user.len < MAX_IPADR_LEN) {
-            var tmp: [MAX_IPADR_LEN]u8 = undefined;
-            @memcpy(tmp[0..pp.host_user.len], hu_str[0..pp.host_user.len]);
-            tmp[pp.host_user.len] = 0;
-            pp.ipv6 = !Curl_is_ipv4addr(@ptrCast(&tmp));
-        } else {
-            pp.ipv6 = true;
-        }
     } else {
-        pp.host = pp.host_user;
+        if (comptime (backend_options.idn != .none)) {
+            if (!netrc_addr_idn.Curl_is_ASCII_str(&pp.host_user)) {
+                if (pp.tmp_host_user == null) {
+                    pp.tmp_host_user = curlx_memdup0(hu_str, pp.host_user.len);
+                    if (pp.tmp_host_user == null) return CURLE_OUT_OF_MEMORY;
+                }
+                const result = netrc_addr_idn.Curl_idn_decode(pp.tmp_host_user.?, &pp.tmp_host);
+                if (result != CURLE_OK) return result;
+                pp.host.str = pp.tmp_host;
+                pp.host.len = std.mem.len(pp.tmp_host.?);
+                return CURLE_OK;
+            }
+        }
+        if (scan_for_ipv6 and Curl_looks_like_ipv6(hu_str, pp.host_user.len, true, &pp.host, &pp.zoneid)) {
+            if (pp.host_user.len < MAX_IPADR_LEN) {
+                var tmp: [MAX_IPADR_LEN]u8 = undefined;
+                @memcpy(tmp[0..pp.host_user.len], hu_str[0..pp.host_user.len]);
+                tmp[pp.host_user.len] = 0;
+                pp.ipv6 = !Curl_is_ipv4addr(@ptrCast(&tmp));
+            } else {
+                pp.ipv6 = true;
+            }
+        } else {
+            pp.host = pp.host_user;
+        }
     }
     return CURLE_OK;
 }
@@ -2767,4 +2785,20 @@ test "Curl_peer_create, Curl_peer_equal, Curl_peer_link, Curl_peer_unlink" {
     Curl_peer_unlink(&linked);
     try std.testing.expect(linked == null);
     try std.testing.expectEqual(@as(u32, 1), p1.?.refcount);
+
+    if (comptime (backend_options.idn != .none)) {
+        if (comptime (builtin.os.tag != .windows)) {
+            const c_locale = struct {
+                extern fn setlocale(category: c_int, locale: ?[*:0]const u8) callconv(.c) ?[*:0]u8;
+            };
+            _ = c_locale.setlocale(0, "C.UTF-8") orelse c_locale.setlocale(0, "");
+        }
+        var p_idn: ?*CurlPeer = null;
+        var p_puny: ?*CurlPeer = null;
+        defer Curl_peer_unlink(&p_idn);
+        defer Curl_peer_unlink(&p_puny);
+        try std.testing.expectEqual(CURLE_OK, Curl_peer_create(null, &Curl_scheme_https, "M\xc3\xbcnchen.de", 443, &p_idn));
+        try std.testing.expectEqual(CURLE_OK, Curl_peer_create(null, &Curl_scheme_https, "xn--mnchen-3ya.de", 443, &p_puny));
+        try std.testing.expect(Curl_peer_equal(p_idn, p_puny));
+    }
 }

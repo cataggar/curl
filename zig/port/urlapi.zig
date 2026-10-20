@@ -1,9 +1,11 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const backend_options = @import("backend_options");
 const mem = @import("mem.zig");
 const primitives = @import("primitives.zig");
 const curlx_parse = @import("curlx_parse.zig");
 const curlx_time_net = @import("curlx_time_net.zig");
+const netrc_addr_idn = @import("netrc_addr_idn.zig");
 
 pub const CURLUcode = enum(c_uint) {
     CURLUE_OK = 0,
@@ -1412,15 +1414,29 @@ pub export fn curl_url_dup(in_u: ?*const Curl_URL) callconv(.c) ?*Curl_URL {
 }
 
 fn host_decode(host: [*:0]const u8, allochost: *?[*:0]u8) CURLUcode {
-    _ = host;
-    _ = allochost;
-    return .CURLUE_LACKS_IDN;
+    if (comptime (backend_options.idn != .none)) {
+        if (!netrc_addr_idn.Curl_is_ASCII_name(host)) {
+            const result = netrc_addr_idn.Curl_idn_decode(host, allochost);
+            if (result != CURLE_OK) {
+                return if (result == CURLE_OUT_OF_MEMORY) .CURLUE_OUT_OF_MEMORY else .CURLUE_BAD_HOSTNAME;
+            }
+        }
+        return .CURLUE_OK;
+    } else {
+        return .CURLUE_LACKS_IDN;
+    }
 }
 
 fn host_encode(host: [*:0]const u8, allochost: *?[*:0]u8) CURLUcode {
-    _ = host;
-    _ = allochost;
-    return .CURLUE_LACKS_IDN;
+    if (comptime (backend_options.idn != .none)) {
+        const result = netrc_addr_idn.Curl_idn_encode(host, allochost);
+        if (result != CURLE_OK) {
+            return if (result == CURLE_OUT_OF_MEMORY) .CURLUE_OUT_OF_MEMORY else .CURLUE_BAD_HOSTNAME;
+        }
+        return .CURLUE_OK;
+    } else {
+        return .CURLUE_LACKS_IDN;
+    }
 }
 
 fn urlget_format(
@@ -2518,4 +2534,30 @@ test "adversarial urlapi inputs: ipv6 brackets/zones, port overflow, percent esc
     var small_buf: [3]u8 = .{ 0xAA, 0xAA, 0xAA };
     try std.testing.expectEqual(@as(usize, 0), Curl_is_absolute_url("https://example.com", &small_buf, small_buf.len, false));
     try std.testing.expectEqual(@as(u8, 0), small_buf[0]);
+}
+
+test "IDN punycode host_decode and host_encode (CURLU_PUNYCODE / CURLU_PUNY2IDN)" {
+    const u = curl_url() orelse return error.OutOfMemory;
+    defer curl_url_cleanup(u);
+
+    if (comptime (backend_options.idn != .none)) {
+        if (comptime (builtin.os.tag != .windows)) {
+            const c_locale = struct {
+                extern fn setlocale(category: c_int, locale: ?[*:0]const u8) callconv(.c) ?[*:0]u8;
+            };
+            _ = c_locale.setlocale(0, "C.UTF-8") orelse c_locale.setlocale(0, "");
+        }
+        try std.testing.expectEqual(CURLUcode.CURLUE_OK, curl_url_set(u, .CURLUPART_URL, "https://r\xc3\xa4ksm\xc3\xb6rg\xc3\xa5s.se/path", 0));
+        try expectPart(u, .CURLUPART_HOST, CURLU_PUNYCODE, .CURLUE_OK, "xn--rksmrgs-5wao1o.se");
+        try expectPart(u, .CURLUPART_URL, CURLU_PUNYCODE, .CURLUE_OK, "https://xn--rksmrgs-5wao1o.se/path");
+
+        try std.testing.expectEqual(CURLUcode.CURLUE_OK, curl_url_set(u, .CURLUPART_URL, "https://xn--rksmrgs-5wao1o.se/path", 0));
+        try expectPart(u, .CURLUPART_HOST, CURLU_PUNY2IDN, .CURLUE_OK, "r\xc3\xa4ksm\xc3\xb6rg\xc3\xa5s.se");
+        try expectPart(u, .CURLUPART_URL, CURLU_PUNY2IDN, .CURLUE_OK, "https://r\xc3\xa4ksm\xc3\xb6rg\xc3\xa5s.se/path");
+    } else {
+        try std.testing.expectEqual(CURLUcode.CURLUE_OK, curl_url_set(u, .CURLUPART_URL, "https://r\xc3\xa4ksm\xc3\xb6rg\xc3\xa5s.se/path", 0));
+        try expectPart(u, .CURLUPART_HOST, CURLU_PUNYCODE, .CURLUE_LACKS_IDN, null);
+        try std.testing.expectEqual(CURLUcode.CURLUE_OK, curl_url_set(u, .CURLUPART_URL, "https://xn--rksmrgs-5wao1o.se/path", 0));
+        try expectPart(u, .CURLUPART_HOST, CURLU_PUNY2IDN, .CURLUE_LACKS_IDN, null);
+    }
 }
