@@ -1,15 +1,21 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const backend_options = @import("backend_options");
 const mem = @import("mem.zig");
 const primitives = @import("primitives.zig");
+const containers = @import("containers.zig");
 const curlx_parse = @import("curlx_parse.zig");
 const curlx_time_net = @import("curlx_time_net.zig");
 const os_leaf = @import("os_leaf.zig");
 
-const CURLE_OK: c_uint = 0;
-const CURLE_OUT_OF_MEMORY: c_uint = 27;
-const CURLE_BAD_FUNCTION_ARGUMENT: c_uint = 43;
-const CURLE_TOO_LARGE: c_uint = 100;
+pub const CURLcode = c_uint;
+const CURLE_OK: CURLcode = 0;
+const CURLE_FAILED_INIT: CURLcode = 2;
+const CURLE_URL_MALFORMAT: CURLcode = 3;
+const CURLE_NOT_BUILT_IN: CURLcode = 4;
+const CURLE_OUT_OF_MEMORY: CURLcode = 27;
+const CURLE_BAD_FUNCTION_ARGUMENT: CURLcode = 43;
+const CURLE_TOO_LARGE: CURLcode = 100;
 
 const AF_UNIX: c_int = 1;
 const AF_INET: c_int = curlx_time_net.AF_INET;
@@ -63,15 +69,361 @@ pub export fn Curl_is_ASCII_name(hostname_opt: ?[*:0]const u8) callconv(.c) bool
     return true;
 }
 
-pub export fn Curl_idnconvert_hostname(host: *Hostname) callconv(.c) c_uint {
-    host.dispname = host.name;
+const libidn2 = struct {
+    const IDN2_VERSION: [*:0]const u8 = "2.0.0";
+    const IDN2_NFC_INPUT: c_int = 1;
+    const IDN2_TRANSITIONAL: c_int = 4;
+    const IDN2_NONTRANSITIONAL: c_int = 8;
+    const IDN2_OK: c_int = 0;
+    const IDN2_MALLOC: c_int = -100;
+
+    extern fn idn2_check_version(req_version: ?[*:0]const u8) callconv(.c) ?[*:0]const u8;
+    extern fn idn2_lookup_ul(src: [*:0]const u8, lookupname: *?[*:0]u8, flags: c_int) callconv(.c) c_int;
+    extern fn idn2_to_unicode_8z8z(input: [*:0]const u8, output: *?[*:0]u8, flags: c_int) callconv(.c) c_int;
+    extern fn idn2_free(ptr: ?*anyopaque) callconv(.c) void;
+};
+
+const winidn = struct {
+    const CP_UTF8: u32 = 65001;
+    const MB_ERR_INVALID_CHARS: u32 = 0x00000008;
+    const IDN_MAX_LENGTH: c_int = 255;
+
+    extern "kernel32" fn MultiByteToWideChar(
+        CodePage: u32,
+        dwFlags: u32,
+        lpMultiByteStr: [*:0]const u8,
+        cbMultiByte: c_int,
+        lpWideCharStr: ?[*]u16,
+        cchWideChar: c_int,
+    ) callconv(.winapi) c_int;
+
+    extern "kernel32" fn WideCharToMultiByte(
+        CodePage: u32,
+        dwFlags: u32,
+        lpWideCharStr: [*]const u16,
+        cchWideChar: c_int,
+        lpMultiByteStr: ?[*]u8,
+        cbMultiByte: c_int,
+        lpDefaultChar: ?[*:0]const u8,
+        lpUsedDefaultChar: ?*c_int,
+    ) callconv(.winapi) c_int;
+
+    extern "normaliz" fn IdnToAscii(
+        dwFlags: u32,
+        lpUnicodeCharStr: [*]const u16,
+        cchUnicodeChar: c_int,
+        lpASCIICharStr: ?[*]u16,
+        cchASCIIChar: c_int,
+    ) callconv(.winapi) c_int;
+
+    extern "normaliz" fn IdnToUnicode(
+        dwFlags: u32,
+        lpASCIICharStr: [*]const u16,
+        cchASCIIChar: c_int,
+        lpUnicodeCharStr: ?[*]u16,
+        cchUnicodeChar: c_int,
+    ) callconv(.winapi) c_int;
+
+    fn convertWcharToUtf8(str_w: [*]const u16, chars: c_int) ?[*:0]u8 {
+        const bytes = WideCharToMultiByte(CP_UTF8, 0, str_w, chars, null, 0, null, null);
+        if (bytes > 0) {
+            const str_utf8 = mem.malloc(@intCast(bytes)) orelse return null;
+            if (WideCharToMultiByte(CP_UTF8, 0, str_w, chars, str_utf8, bytes, null, null) == 0) {
+                mem.free(str_utf8);
+                return null;
+            }
+            return @ptrCast(str_utf8);
+        }
+        return null;
+    }
+
+    fn win32_idn_to_ascii(in: [*:0]const u8, out: *?[*:0]u8) CURLcode {
+        var in_w: [IDN_MAX_LENGTH]u16 = undefined;
+        out.* = null;
+        const in_w_len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, in, -1, &in_w, IDN_MAX_LENGTH);
+        if (in_w_len != 0) {
+            var punycode: [IDN_MAX_LENGTH]u16 = undefined;
+            const chars = IdnToAscii(0, &in_w, in_w_len, &punycode, IDN_MAX_LENGTH);
+            if (chars > 0) {
+                out.* = convertWcharToUtf8(&punycode, chars) orelse return CURLE_OUT_OF_MEMORY;
+                return CURLE_OK;
+            }
+        }
+        return CURLE_URL_MALFORMAT;
+    }
+
+    fn win32_ascii_to_idn(in: [*:0]const u8, out: *?[*:0]u8) CURLcode {
+        var in_w: [IDN_MAX_LENGTH]u16 = undefined;
+        out.* = null;
+        const in_w_len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, in, -1, &in_w, IDN_MAX_LENGTH);
+        if (in_w_len != 0) {
+            var idn: [IDN_MAX_LENGTH]u16 = undefined;
+            const chars = IdnToUnicode(0, &in_w, in_w_len, &idn, IDN_MAX_LENGTH);
+            if (chars > 0) {
+                out.* = convertWcharToUtf8(&idn, chars) orelse return CURLE_OUT_OF_MEMORY;
+                return CURLE_OK;
+            }
+        }
+        return CURLE_URL_MALFORMAT;
+    }
+};
+
+const appleidn = struct {
+    const CODESET: c_int = 0;
+    const MAX_HOST_LENGTH: usize = 512;
+    const U_ZERO_ERROR: c_int = 0;
+    const UIDNA_CHECK_BIDI: u32 = 4;
+    const UIDNA_CHECK_CONTEXTJ: u32 = 8;
+    const UIDNA_NONTRANSITIONAL_TO_ASCII: u32 = 0x10;
+    const UIDNA_NONTRANSITIONAL_TO_UNICODE: u32 = 0x20;
+    const UIDNA_ERROR_EMPTY_LABEL: u32 = 1;
+
+    const UIDNAInfo = extern struct {
+        size: i16 = @sizeOf(UIDNAInfo),
+        isTransitionalDifferent: i8 = 0,
+        errors: u32 = 0,
+        reservedI2: i32 = 0,
+        reservedI3: i32 = 0,
+    };
+
+    extern fn nl_langinfo(item: c_int) callconv(.c) [*:0]const u8;
+    extern fn iconv_open(tocode: [*:0]const u8, fromcode: [*:0]const u8) callconv(.c) usize;
+    extern fn iconv(cd: usize, inbuf: *?[*]const u8, inbytesleft: *usize, outbuf: *?[*]u8, outbytesleft: *usize) callconv(.c) usize;
+    extern fn iconv_close(cd: usize) callconv(.c) c_int;
+    extern fn uidna_openUTS46(options: u32, pErrorCode: *c_int) callconv(.c) ?*anyopaque;
+    extern fn uidna_close(idna: ?*anyopaque) callconv(.c) void;
+    extern fn uidna_nameToASCII_UTF8(
+        idna: ?*anyopaque,
+        name: [*]const u8,
+        length: c_int,
+        dest: [*]u8,
+        capacity: c_int,
+        pInfo: *UIDNAInfo,
+        pErrorCode: *c_int,
+    ) callconv(.c) c_int;
+    extern fn uidna_nameToUnicodeUTF8(
+        idna: ?*anyopaque,
+        name: [*]const u8,
+        length: c_int,
+        dest: [*]u8,
+        capacity: c_int,
+        pInfo: *UIDNAInfo,
+        pErrorCode: *c_int,
+    ) callconv(.c) c_int;
+
+    fn iconvToUtf8(in: [*]const u8, inlen: usize, out: *?[*]u8, outlen: *usize) CURLcode {
+        const invalid_cd: usize = std.math.maxInt(usize);
+        const cd = iconv_open("UTF-8", nl_langinfo(CODESET));
+        if (cd != invalid_cd) {
+            var iconv_outlen = outlen.*;
+            var iconv_in: ?[*]const u8 = in;
+            var iconv_inlen = inlen;
+            const iconv_result = iconv(cd, &iconv_in, &iconv_inlen, out, &iconv_outlen);
+            outlen.* -= iconv_outlen;
+            _ = iconv_close(cd);
+            if (iconv_result == invalid_cd) {
+                return if (std.c._errno().* == @intFromEnum(std.c.E.NOMEM))
+                    CURLE_OUT_OF_MEMORY
+                else
+                    CURLE_URL_MALFORMAT;
+            }
+            return CURLE_OK;
+        } else {
+            return if (std.c._errno().* == @intFromEnum(std.c.E.NOMEM))
+                CURLE_OUT_OF_MEMORY
+            else
+                CURLE_FAILED_INIT;
+        }
+    }
+
+    fn mac_idn_to_ascii(in: [*:0]const u8, out: *?[*:0]u8) CURLcode {
+        const inlen = std.mem.len(in);
+        if (inlen < MAX_HOST_LENGTH) {
+            var iconv_buffer: [MAX_HOST_LENGTH]u8 = @splat(0);
+            var iconv_outptr: ?[*]u8 = &iconv_buffer;
+            var iconv_outlen: usize = iconv_buffer.len;
+            const iconv_result = iconvToUtf8(in, inlen, &iconv_outptr, &iconv_outlen);
+            if (iconv_result == CURLE_OK) {
+                var err: c_int = U_ZERO_ERROR;
+                const idna = uidna_openUTS46(UIDNA_CHECK_BIDI | UIDNA_NONTRANSITIONAL_TO_ASCII, &err);
+                if (err <= U_ZERO_ERROR) {
+                    var info: UIDNAInfo = .{};
+                    var buffer: [MAX_HOST_LENGTH]u8 = @splat(0);
+                    _ = uidna_nameToASCII_UTF8(
+                        idna,
+                        &iconv_buffer,
+                        @intCast(iconv_outlen),
+                        &buffer,
+                        @intCast(buffer.len - 1),
+                        &info,
+                        &err,
+                    );
+                    uidna_close(idna);
+                    if (err <= U_ZERO_ERROR and info.errors == 0) {
+                        out.* = mem.strdup(@ptrCast(&buffer)) orelse return CURLE_OUT_OF_MEMORY;
+                        return CURLE_OK;
+                    }
+                }
+            } else {
+                return iconv_result;
+            }
+        }
+        return CURLE_URL_MALFORMAT;
+    }
+
+    fn mac_ascii_to_idn(in: [*:0]const u8, out: *?[*:0]u8) CURLcode {
+        const inlen = std.mem.len(in);
+        if (inlen < MAX_HOST_LENGTH) {
+            var err: c_int = U_ZERO_ERROR;
+            const idna = uidna_openUTS46(UIDNA_CHECK_BIDI | UIDNA_NONTRANSITIONAL_TO_UNICODE, &err);
+            if (err <= U_ZERO_ERROR) {
+                var info: UIDNAInfo = .{};
+                var buffer: [MAX_HOST_LENGTH]u8 = @splat(0);
+                _ = uidna_nameToUnicodeUTF8(
+                    idna,
+                    in,
+                    -1,
+                    &buffer,
+                    @intCast(buffer.len - 1),
+                    &info,
+                    &err,
+                );
+                uidna_close(idna);
+                if (err <= U_ZERO_ERROR) {
+                    out.* = mem.strdup(@ptrCast(&buffer)) orelse return CURLE_OUT_OF_MEMORY;
+                    return CURLE_OK;
+                }
+            }
+        }
+        return CURLE_URL_MALFORMAT;
+    }
+};
+
+fn idn_decode(input: [*:0]const u8, output: *?[*:0]u8) CURLcode {
+    if (comptime (backend_options.idn == .libidn2)) {
+        if (libidn2.idn2_check_version(null) != null) {
+            var decoded: ?[*:0]u8 = null;
+            const flags: c_int = libidn2.IDN2_NFC_INPUT | libidn2.IDN2_NONTRANSITIONAL;
+            var rc = libidn2.idn2_lookup_ul(input, &decoded, flags);
+            if (rc != libidn2.IDN2_OK) {
+                rc = libidn2.idn2_lookup_ul(input, &decoded, libidn2.IDN2_TRANSITIONAL);
+            }
+            if (rc == libidn2.IDN2_OK) {
+                output.* = decoded;
+                return CURLE_OK;
+            } else if (rc == libidn2.IDN2_MALLOC) {
+                return CURLE_OUT_OF_MEMORY;
+            } else {
+                return CURLE_URL_MALFORMAT;
+            }
+        }
+        return CURLE_NOT_BUILT_IN;
+    } else if (comptime (backend_options.idn == .winidn and builtin.os.tag == .windows)) {
+        return winidn.win32_idn_to_ascii(input, output);
+    } else if (comptime (backend_options.idn == .appleidn and builtin.os.tag.isDarwin())) {
+        return appleidn.mac_idn_to_ascii(input, output);
+    } else {
+        return CURLE_NOT_BUILT_IN;
+    }
+}
+
+fn idn_encode(puny: [*:0]const u8, output: *?[*:0]u8) CURLcode {
+    if (comptime (backend_options.idn == .libidn2)) {
+        var enc: ?[*:0]u8 = null;
+        const rc = libidn2.idn2_to_unicode_8z8z(puny, &enc, 0);
+        if (rc == libidn2.IDN2_OK) {
+            output.* = enc;
+            return CURLE_OK;
+        } else if (rc == libidn2.IDN2_MALLOC) {
+            return CURLE_OUT_OF_MEMORY;
+        } else {
+            return CURLE_URL_MALFORMAT;
+        }
+    } else if (comptime (backend_options.idn == .winidn and builtin.os.tag == .windows)) {
+        return winidn.win32_ascii_to_idn(puny, output);
+    } else if (comptime (backend_options.idn == .appleidn and builtin.os.tag.isDarwin())) {
+        return appleidn.mac_ascii_to_idn(puny, output);
+    } else {
+        return CURLE_NOT_BUILT_IN;
+    }
+}
+
+pub export fn Curl_idn_decode(input: [*:0]const u8, output: *?[*:0]u8) callconv(.c) CURLcode {
+    if (comptime (backend_options.idn != .none)) {
+        var d: ?[*:0]u8 = null;
+        var result = idn_decode(input, &d);
+        if (result == CURLE_OK) {
+            if (comptime (backend_options.idn == .libidn2)) {
+                const c = mem.strdup(d.?);
+                libidn2.idn2_free(d);
+                if (c != null) {
+                    d = c;
+                } else {
+                    result = CURLE_OUT_OF_MEMORY;
+                }
+            }
+            if (result == CURLE_OK and d.?[0] == 0) {
+                mem.free(d);
+                return CURLE_URL_MALFORMAT;
+            }
+        }
+        if (result == CURLE_OK) {
+            output.* = d;
+        }
+        return result;
+    } else {
+        return CURLE_NOT_BUILT_IN;
+    }
+}
+
+pub export fn Curl_idn_encode(puny: [*:0]const u8, output: *?[*:0]u8) callconv(.c) CURLcode {
+    if (comptime (backend_options.idn != .none)) {
+        var d: ?[*:0]u8 = null;
+        var result = idn_encode(puny, &d);
+        if (result == CURLE_OK and comptime (backend_options.idn == .libidn2)) {
+            const c = mem.strdup(d.?);
+            libidn2.idn2_free(d);
+            if (c != null) {
+                d = c;
+            } else {
+                result = CURLE_OUT_OF_MEMORY;
+            }
+        }
+        if (result == CURLE_OK) {
+            output.* = d;
+        }
+        return result;
+    } else {
+        return CURLE_NOT_BUILT_IN;
+    }
+}
+
+pub export fn Curl_idnconvert_hostname(host: ?*Hostname) callconv(.c) CURLcode {
+    const h = host orelse return CURLE_OK;
+    const name = h.name orelse return CURLE_OK;
+    h.dispname = name;
+    if (comptime (backend_options.idn != .none)) {
+        if (!Curl_is_ASCII_name(name)) {
+            var decoded: ?[*:0]u8 = null;
+            const result = Curl_idn_decode(name, &decoded);
+            if (result == CURLE_OK) {
+                h.encalloc = decoded;
+                h.name = decoded;
+            }
+            return result;
+        }
+    }
     return CURLE_OK;
 }
 
-pub export fn Curl_free_idnconverted_hostname(host: *Hostname) callconv(.c) void {
-    if (host.encalloc) |p| {
-        mem.free(@ptrCast(p));
-        host.encalloc = null;
+pub export fn Curl_free_idnconverted_hostname(host: ?*Hostname) callconv(.c) void {
+    if (comptime (backend_options.idn != .none)) {
+        if (host) |h| {
+            if (h.encalloc) |p| {
+                mem.free(p);
+                h.encalloc = null;
+            }
+        }
     }
 }
 
@@ -1182,6 +1534,41 @@ test "idn: Curl_is_ASCII_name, Curl_is_ASCII_str, Curl_idnconvert_hostname" {
     };
     try std.testing.expectEqual(CURLE_OK, Curl_idnconvert_hostname(&host));
     try std.testing.expectEqualStrings("example.org", std.mem.span(host.dispname.?));
+
+    if (comptime (backend_options.idn != .none)) {
+        if (comptime (builtin.os.tag != .windows)) {
+            const c_locale = struct {
+                extern fn setlocale(category: c_int, locale: ?[*:0]const u8) callconv(.c) ?[*:0]u8;
+            };
+            _ = c_locale.setlocale(0, "C.UTF-8") orelse c_locale.setlocale(0, "");
+        }
+        var encoded: ?[*:0]u8 = null;
+        try std.testing.expectEqual(CURLE_OK, Curl_idn_encode("xn--mnchen-3ya.de", &encoded));
+        defer mem.free(encoded);
+        try std.testing.expectEqualStrings("m\xc3\xbcnchen.de", std.mem.span(encoded.?));
+
+        var decoded: ?[*:0]u8 = null;
+        try std.testing.expectEqual(CURLE_OK, Curl_idn_decode("m\xc3\xbcnchen.de", &decoded));
+        defer mem.free(decoded);
+        try std.testing.expectEqualStrings("xn--mnchen-3ya.de", std.mem.span(decoded.?));
+
+        var idn_name_buf = "m\xc3\xbcnchen.de".*;
+        var idn_host = Hostname{
+            .rawalloc = null,
+            .encalloc = null,
+            .name = &idn_name_buf,
+            .dispname = null,
+        };
+        try std.testing.expectEqual(CURLE_OK, Curl_idnconvert_hostname(&idn_host));
+        defer Curl_free_idnconverted_hostname(&idn_host);
+        try std.testing.expectEqualStrings("m\xc3\xbcnchen.de", std.mem.span(idn_host.dispname.?));
+        try std.testing.expectEqualStrings("xn--mnchen-3ya.de", std.mem.span(idn_host.name.?));
+        try std.testing.expect(idn_host.encalloc != null);
+    } else {
+        var out: ?[*:0]u8 = null;
+        try std.testing.expectEqual(CURLE_NOT_BUILT_IN, Curl_idn_decode("m\xc3\xbcnchen.de", &out));
+        try std.testing.expectEqual(CURLE_NOT_BUILT_IN, Curl_idn_encode("xn--mnchen-3ya.de", &out));
+    }
 }
 
 test "curl_addrinfo: Curl_is_ipv4addr, Curl_is_ipaddr, Curl_looks_like_ipv6" {
