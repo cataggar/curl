@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const backend_options = @import("backend_options");
 const mem = @import("mem.zig");
 const containers = @import("containers.zig");
 const curlx_time_net = @import("curlx_time_net.zig");
@@ -1102,6 +1103,20 @@ pub export fn Curl_thrdq_trace(tqueue: *curl_thrdq, data: ?*anyopaque) callconv(
 // 4. lib/psl.c (lib/psl.h)
 // ============================================================================
 
+pub const psl_ctx_t = opaque {};
+const PSL_TTL: curlx_time_net.time_t = 72 * 3600;
+const CURL_LOCK_DATA_PSL: c_uint = 6;
+const CURL_LOCK_ACCESS_SHARED: c_uint = 1;
+const CURL_LOCK_ACCESS_SINGLE: c_uint = 2;
+
+extern fn psl_free(psl: ?*psl_ctx_t) callconv(.c) void;
+extern fn psl_latest(fname: ?[*:0]const u8) callconv(.c) ?*psl_ctx_t;
+pub extern fn psl_builtin() callconv(.c) ?*const psl_ctx_t;
+extern fn Curl_zig_easy_psl(data: ?*anyopaque) callconv(.c) ?*PslCache;
+extern fn Curl_share_lock(data: ?*anyopaque, type_: c_uint, locktype: c_uint) callconv(.c) c_uint;
+extern fn Curl_share_unlock(data: ?*anyopaque, type_: c_uint) callconv(.c) c_uint;
+extern fn Curl_pgrs_now(data: ?*anyopaque) callconv(.c) *const Curltime;
+
 pub const PslCache = extern struct {
     psl: ?*const anyopaque,
     expires: curlx_time_net.time_t,
@@ -1110,18 +1125,70 @@ pub const PslCache = extern struct {
 
 pub export fn Curl_psl_destroy(pslcache: ?*PslCache) callconv(.c) void {
     if (pslcache) |cache| {
-        cache.psl = null;
-        cache.flags = 0;
+        if (cache.psl) |psl| {
+            if (comptime backend_options.psl) {
+                if ((cache.flags & 1) != 0) {
+                    psl_free(@constCast(@ptrCast(psl)));
+                }
+            }
+            cache.psl = null;
+            cache.expires = 0;
+            cache.flags = 0;
+        }
     }
 }
 
 pub export fn Curl_psl_use(easy: ?*anyopaque) callconv(.c) ?*const anyopaque {
-    _ = easy;
+    if (comptime backend_options.psl) {
+        const pslcache = Curl_zig_easy_psl(easy) orelse return null;
+        const time_max = std.math.maxInt(curlx_time_net.time_t);
+
+        _ = Curl_share_lock(easy, CURL_LOCK_DATA_PSL, CURL_LOCK_ACCESS_SHARED);
+        var now_sec = Curl_pgrs_now(easy).tv_sec;
+        if (pslcache.psl == null or pslcache.expires <= now_sec) {
+            _ = Curl_share_unlock(easy, CURL_LOCK_DATA_PSL);
+            _ = Curl_share_lock(easy, CURL_LOCK_DATA_PSL, CURL_LOCK_ACCESS_SINGLE);
+
+            if (pslcache.expires <= now_sec) {
+                now_sec = Curl_pgrs_now(easy).tv_sec;
+            }
+            if (pslcache.psl == null or pslcache.expires <= now_sec) {
+                var psl: ?*const psl_ctx_t = psl_latest(null);
+                const dynamic = psl != null;
+                const expires: curlx_time_net.time_t = if (now_sec < time_max - PSL_TTL)
+                    now_sec + PSL_TTL
+                else
+                    time_max;
+
+                if (psl == null and (pslcache.flags & 1) == 0) {
+                    psl = psl_builtin();
+                }
+
+                if (psl != null) {
+                    Curl_psl_destroy(pslcache);
+                    pslcache.psl = @ptrCast(psl);
+                    pslcache.flags = if (dynamic) 1 else 0;
+                    pslcache.expires = expires;
+                }
+            }
+            _ = Curl_share_unlock(easy, CURL_LOCK_DATA_PSL);
+            _ = Curl_share_lock(easy, CURL_LOCK_DATA_PSL, CURL_LOCK_ACCESS_SHARED);
+        }
+        const psl = pslcache.psl;
+        if (psl == null) {
+            _ = Curl_share_unlock(easy, CURL_LOCK_DATA_PSL);
+        }
+        return psl;
+    }
     return null;
 }
 
 pub export fn Curl_psl_release(easy: ?*anyopaque) callconv(.c) void {
-    _ = easy;
+    if (comptime backend_options.psl) {
+        if (easy != null) {
+            _ = Curl_share_unlock(easy, CURL_LOCK_DATA_PSL);
+        }
+    }
 }
 
 // ============================================================================
@@ -1355,11 +1422,23 @@ test "Curl_psl_*, Curl_macos_init, Curl_amiga_init" {
     var cache = PslCache{
         .psl = @ptrFromInt(0x1234),
         .expires = 100,
-        .flags = 1,
+        .flags = if (backend_options.psl) 0 else 1,
     };
     Curl_psl_destroy(&cache);
     try std.testing.expect(cache.psl == null);
     try std.testing.expectEqual(@as(c_uint, 0), cache.flags);
+    if (comptime backend_options.psl) {
+        if (psl_latest(null)) |dyn_psl| {
+            cache = .{
+                .psl = @ptrCast(dyn_psl),
+                .expires = 200,
+                .flags = 1,
+            };
+            Curl_psl_destroy(&cache);
+            try std.testing.expect(cache.psl == null);
+            try std.testing.expectEqual(@as(c_uint, 0), cache.flags);
+        }
+    }
     try std.testing.expect(Curl_psl_use(null) == null);
     Curl_psl_release(null);
 

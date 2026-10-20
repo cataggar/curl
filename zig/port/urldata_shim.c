@@ -8418,6 +8418,16 @@ void Curl_zig_easy_setup_psl(struct Curl_multi *multi, struct Curl_easy *data)
 #endif
 }
 
+struct PslCache *Curl_zig_easy_psl(const struct Curl_easy *data)
+{
+#ifdef USE_LIBPSL
+  return data ? data->psl : NULL;
+#else
+  (void)data;
+  return NULL;
+#endif
+}
+
 void Curl_zig_easy_clear_psl(struct Curl_easy *data)
 {
 #ifdef USE_LIBPSL

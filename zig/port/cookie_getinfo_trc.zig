@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const backend_options = @import("backend_options");
 const mem = @import("mem.zig");
 const primitives = @import("primitives.zig");
 const curlx_parse = @import("curlx_parse.zig");
@@ -8,6 +9,7 @@ const os_leaf = @import("os_leaf.zig");
 const containers = @import("containers.zig");
 const http1_options = @import("http1_options.zig");
 const netrc_addr_idn = @import("netrc_addr_idn.zig");
+const threads_psl = @import("threads_psl.zig");
 const vfilters = @import("vdns_cfilters.zig");
 
 const in_libcurl = (builtin.output_mode == .Lib) or builtin.is_test;
@@ -1716,9 +1718,11 @@ fn parseDomain(
     }
 
     const vptr = val.str orelse return false;
-    if (badDomain(vptr, val.len)) {
-        domainp.* = ":";
-        domain = ":";
+    if (comptime !backend_options.psl) {
+        if (badDomain(vptr, val.len)) {
+            domainp.* = ":";
+            domain = ":";
+        }
     }
 
     var v_null_buf: [MAX_COOKIE_LINE + 1]u8 = undefined;
@@ -2011,6 +2015,84 @@ fn parseNetscape(
     return CURLE_OK;
 }
 
+extern fn psl_is_cookie_domain_acceptable(
+    psl: ?*const anyopaque,
+    hostname: [*:0]const u8,
+    cookie_domain: [*:0]const u8,
+) callconv(.c) c_int;
+extern fn psl_is_public_suffix(
+    psl: ?*const anyopaque,
+    domain: [*:0]const u8,
+) callconv(.c) c_int;
+
+fn isPublicSuffix(
+    data: ?*Curl_easy,
+    co: *Cookie,
+    domain: ?[*:0]const u8,
+) bool {
+    if (comptime backend_options.psl) {
+        const co_dom = co.domain orelse return false;
+        if (netrc_addr_idn.Curl_is_ipaddr(co_dom)) return false;
+
+        var acceptable = false;
+        var lcase: [256]u8 = undefined;
+        var lcookie: [256]u8 = undefined;
+        var dlen: usize = if (domain) |d| std.mem.len(d) else 0;
+        var clen: usize = std.mem.len(co_dom);
+
+        if (dlen > 0 and domain.?[dlen - 1] == '.') dlen -= 1;
+        if (clen > 0 and co_dom[clen - 1] == '.') clen -= 1;
+
+        if (dlen < lcase.len and clen < lcookie.len) {
+            const psl: ?*const anyopaque = if (data != null)
+                threads_psl.Curl_psl_use(data)
+            else
+                @ptrCast(threads_psl.psl_builtin());
+            if (psl != null) {
+                primitives.Curl_strntolower(&lcookie, co_dom, clen);
+                lcookie[clen] = 0;
+                const lcookie_cstr: [*:0]const u8 = @ptrCast(&lcookie);
+                if (domain) |dom| {
+                    primitives.Curl_strntolower(&lcase, dom, dlen);
+                    lcase[dlen] = 0;
+                    const lcase_cstr: [*:0]const u8 = @ptrCast(&lcase);
+                    acceptable = psl_is_cookie_domain_acceptable(psl, lcase_cstr, lcookie_cstr) != 0;
+
+                    if (acceptable and co.isTailmatch() and
+                        primitives.curl_strequal(co_dom, dom) != 0 and
+                        psl_is_public_suffix(psl, lcookie_cstr) != 0)
+                    {
+                        co.setTailmatch(false);
+                    }
+                } else {
+                    const suffix = psl_is_public_suffix(psl, lcookie_cstr) != 0;
+                    acceptable = true;
+                    if (suffix) {
+                        co.setTailmatch(false);
+                    }
+                }
+                if (data != null) {
+                    threads_psl.Curl_psl_release(data);
+                }
+            } else {
+                Curl_infof(data, "libpsl problem, rejecting cookie for safety");
+            }
+        }
+
+        if (!acceptable) {
+            Curl_infof(
+                data,
+                "cookie '%s' dropped, domain '%s' must not set cookies for '%s'",
+                co.name orelse @as([*:0]const u8, ""),
+                domain orelse @as([*:0]const u8, "[file]"),
+                co_dom,
+            );
+            return true;
+        }
+    }
+    return false;
+}
+
 fn replaceExisting(
     data: ?*Curl_easy,
     co: *Cookie,
@@ -2135,6 +2217,11 @@ pub export fn Curl_cookie_add(
     }
 
     if (comem.isPrefixSecure() and !comem.isSecure()) {
+        freecookie(&comem, false);
+        return result;
+    }
+
+    if ((flags & COOKIE_NOPSL) == 0 and isPublicSuffix(data, &comem, domain)) {
         freecookie(&comem, false);
         return result;
     }
@@ -3107,4 +3194,37 @@ test "adversarial cookie parsing: oversized attributes, control bytes, max-age a
     const node = containers.Curl_llist_head(&llist).?;
     const co: *Cookie = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
     try std.testing.expectEqualStrings("huge_ma", std.mem.span(co.name.?));
+
+    if (comptime backend_options.psl) {
+        // Multi-label public suffix (co.uk, even with trailing dot) must be rejected
+        try std.testing.expectEqual(
+            CURLE_OK,
+            Curl_cookie_add(null, ci, "badpsl=1; Domain=co.uk", "foo.co.uk", "/", COOKIE_HTTPHEADER | COOKIE_SECURE, &setcookies),
+        );
+        try std.testing.expectEqual(
+            CURLE_OK,
+            Curl_cookie_add(null, ci, "badpsldot=1; Domain=co.uk.", "foo.co.uk.", "/", COOKIE_HTTPHEADER | COOKIE_SECURE, &setcookies),
+        );
+        try std.testing.expectEqual(
+            CURLE_OK,
+            Curl_cookie_getlist(null, ci, "/", &okay, "foo.co.uk", &llist),
+        );
+        try std.testing.expectEqual(@as(usize, 0), containers.Curl_llist_count(&llist));
+
+        // Exact PSL domain (github.io) is accepted for github.io with tailmatch disabled
+        try std.testing.expectEqual(
+            CURLE_OK,
+            Curl_cookie_add(null, ci, "sid=secret; Domain=github.io; Path=/", "github.io", "/", COOKIE_HTTPHEADER | COOKIE_SECURE, &setcookies),
+        );
+        try std.testing.expectEqual(
+            CURLE_OK,
+            Curl_cookie_getlist(null, ci, "/", &okay, "attacker.github.io", &llist),
+        );
+        try std.testing.expectEqual(@as(usize, 0), containers.Curl_llist_count(&llist));
+        try std.testing.expectEqual(
+            CURLE_OK,
+            Curl_cookie_getlist(null, ci, "/", &okay, "github.io", &llist),
+        );
+        try std.testing.expectEqual(@as(usize, 1), containers.Curl_llist_count(&llist));
+    }
 }
