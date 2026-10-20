@@ -2820,6 +2820,136 @@ const gzip_encoding: Curl_cwtype = .{
     .cwriter_size = @sizeOf(zlib_writer),
 };
 
+// --- Brotli ---
+
+const BrotliDecoderState = opaque {};
+const BrotliDecoderResult = c_int;
+const BROTLI_DECODER_RESULT_ERROR: BrotliDecoderResult = 0;
+const BROTLI_DECODER_RESULT_SUCCESS: BrotliDecoderResult = 1;
+const BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT: BrotliDecoderResult = 2;
+const BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT: BrotliDecoderResult = 3;
+const BrotliDecoderErrorCode = c_int;
+
+extern fn BrotliDecoderCreateInstance(
+    alloc_func: ?*const anyopaque,
+    free_func: ?*const anyopaque,
+    opaque_ptr: ?*anyopaque,
+) callconv(.c) ?*BrotliDecoderState;
+extern fn BrotliDecoderDestroyInstance(state: *BrotliDecoderState) callconv(.c) void;
+extern fn BrotliDecoderDecompressStream(
+    state: *BrotliDecoderState,
+    available_in: *usize,
+    next_in: *?[*]const u8,
+    available_out: *usize,
+    next_out: *[*]u8,
+    total_out: ?*usize,
+) callconv(.c) BrotliDecoderResult;
+extern fn BrotliDecoderGetErrorCode(state: *const BrotliDecoderState) callconv(.c) BrotliDecoderErrorCode;
+
+pub const brotli_writer = extern struct {
+    super: Curl_cwriter,
+    br: ?*BrotliDecoderState,
+};
+
+fn brotli_map_error(be: BrotliDecoderErrorCode) CURLcode {
+    return switch (be) {
+        -16...-1, -20...-18 => CURLE_BAD_CONTENT_ENCODING,
+        -30...-21 => CURLE_OUT_OF_MEMORY,
+        else => CURLE_WRITE_ERROR,
+    };
+}
+
+fn brotli_do_init(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) CURLcode {
+    _ = data;
+    const bp: *brotli_writer = @ptrCast(@alignCast(writer.ctx));
+    bp.br = BrotliDecoderCreateInstance(null, null, null);
+    return if (bp.br != null) CURLE_OK else CURLE_OUT_OF_MEMORY;
+}
+
+fn brotli_do_write(
+    data: ?*Curl_easy,
+    writer: *Curl_cwriter,
+    wtype: c_int,
+    buf: [*]const u8,
+    nbytes: usize,
+) callconv(.c) CURLcode {
+    const bp: *brotli_writer = @ptrCast(@alignCast(writer.ctx));
+    var result: CURLcode = CURLE_OK;
+
+    if ((wtype & CLIENTWRITE_BODY) == 0 or nbytes == 0)
+        return Curl_cwriter_write(data, writer.next, wtype, buf, nbytes);
+
+    if (bp.br == null)
+        return CURLE_WRITE_ERROR;
+
+    const decomp = mem.malloc(DECOMPRESS_BUFFER_SIZE) orelse return CURLE_OUT_OF_MEMORY;
+    defer mem.free(decomp);
+
+    var src: ?[*]const u8 = buf;
+    var src_len: usize = nbytes;
+    var decomp_len: usize = 0;
+    var r: BrotliDecoderResult = BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT;
+
+    while ((src_len != 0 or r == BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT) and result == CURLE_OK) {
+        var dst: [*]u8 = decomp;
+        var dst_len: usize = DECOMPRESS_BUFFER_SIZE;
+
+        r = BrotliDecoderDecompressStream(bp.br.?, &src_len, &src, &dst_len, &dst, null);
+        const used_out = DECOMPRESS_BUFFER_SIZE - dst_len;
+        decomp_len += used_out;
+        if (decomp_len > 1024 * 1024) {
+            if (Curl_timeleft_ms(data) < 0) {
+                Curl_failf(data, "Operation timed out while decoding payload");
+                result = CURLE_OPERATION_TIMEDOUT;
+                break;
+            } else {
+                decomp_len = 0;
+            }
+        }
+        if (used_out > 0) {
+            result = Curl_cwriter_write(data, writer.next, wtype, decomp, used_out);
+            if (result != CURLE_OK)
+                break;
+        }
+        switch (r) {
+            BROTLI_DECODER_RESULT_SUCCESS => {
+                BrotliDecoderDestroyInstance(bp.br.?);
+                bp.br = null;
+                if (src_len != 0)
+                    result = CURLE_WRITE_ERROR;
+                break;
+            },
+            BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT,
+            BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT,
+            => {},
+            else => {
+                result = brotli_map_error(BrotliDecoderGetErrorCode(bp.br.?));
+            },
+        }
+    }
+    return result;
+}
+
+fn brotli_do_close(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) void {
+    _ = data;
+    const bp: *brotli_writer = @ptrCast(@alignCast(writer.ctx));
+    if (bp.br) |br| {
+        BrotliDecoderDestroyInstance(br);
+        bp.br = null;
+    }
+}
+
+const brotli_encoding: Curl_cwtype = .{
+    .name = "br",
+    .alias = null,
+    .flags = CURL_CW_FLAG_BLOWUP,
+    .do_init = brotli_do_init,
+    .do_write = brotli_do_write,
+    .do_flush = Curl_cwriter_def_flush,
+    .do_close = brotli_do_close,
+    .cwriter_size = @sizeOf(brotli_writer),
+};
+
 // --- Zstd ---
 
 const ZSTD_DStream = opaque {};
@@ -2949,6 +3079,9 @@ const general_unencoders = blk: {
     var list: []const ?*const Curl_cwtype = &.{&identity_encoding};
     if (backend_options.zlib) {
         list = list ++ &[_]?*const Curl_cwtype{ &deflate_encoding, &gzip_encoding };
+    }
+    if (backend_options.brotli) {
+        list = list ++ &[_]?*const Curl_cwtype{&brotli_encoding};
     }
     if (backend_options.zstd) {
         list = list ++ &[_]?*const Curl_cwtype{&zstd_encoding};
@@ -3350,13 +3483,93 @@ test "Curl_http_proxy_transport, proxy cftypes, and content encodings" {
         try std.testing.expect(find_unencode_writer("x-gzip", 6, CURL_CW_CONTENT_DECODE) == &gzip_encoding);
         try std.testing.expect(find_unencode_writer("deflate", 7, CURL_CW_CONTENT_DECODE) == &deflate_encoding);
     }
+    if (backend_options.brotli) {
+        try std.testing.expect(std.mem.indexOf(u8, enc_str, "br") != null);
+        try std.testing.expect(find_unencode_writer("br", 2, CURL_CW_CONTENT_DECODE) == &brotli_encoding);
+
+        const Capture = struct {
+            var out_buf: [64]u8 = undefined;
+            var out_len: usize = 0;
+
+            fn doWrite(
+                data: ?*Curl_easy,
+                writer: *Curl_cwriter,
+                wtype: c_int,
+                b: [*]const u8,
+                n: usize,
+            ) callconv(.c) CURLcode {
+                _ = data;
+                _ = writer;
+                if ((wtype & CLIENTWRITE_BODY) != 0 and n > 0) {
+                    @memcpy(out_buf[out_len .. out_len + n], b[0..n]);
+                    out_len += n;
+                }
+                return CURLE_OK;
+            }
+        };
+
+        const sink_cwt = Curl_cwtype{
+            .name = "sink",
+            .alias = null,
+            .flags = 0,
+            .do_init = Curl_cwriter_def_init,
+            .do_write = Capture.doWrite,
+            .do_flush = Curl_cwriter_def_flush,
+            .do_close = Curl_cwriter_def_close,
+            .cwriter_size = @sizeOf(Curl_cwriter),
+        };
+        var sink = Curl_cwriter{
+            .cwt = &sink_cwt,
+            .next = null,
+            .ctx = undefined,
+            .phase = CURL_CW_CONTENT_DECODE,
+        };
+        sink.ctx = @ptrCast(&sink);
+
+        var bw = brotli_writer{
+            .super = .{
+                .cwt = &brotli_encoding,
+                .next = &sink,
+                .ctx = undefined,
+                .phase = CURL_CW_CONTENT_DECODE,
+            },
+            .br = null,
+        };
+        bw.super.ctx = @ptrCast(&bw);
+
+        Capture.out_len = 0;
+        try std.testing.expectEqual(CURLE_OK, brotli_do_init(null, &bw.super));
+        defer brotli_do_close(null, &bw.super);
+
+        const br_stream = "\xb0\x00\x10hello brotli\x03";
+        try std.testing.expectEqual(CURLE_OK, brotli_do_write(null, &bw.super, CLIENTWRITE_BODY, br_stream[0..5].ptr, 5));
+        try std.testing.expectEqual(CURLE_OK, brotli_do_write(null, &bw.super, CLIENTWRITE_BODY, br_stream[5..].ptr, br_stream.len - 5));
+        try std.testing.expectEqualStrings("hello brotli", Capture.out_buf[0..Capture.out_len]);
+        try std.testing.expect(bw.br == null);
+        // Writing body bytes after stream completion fails with CURLE_WRITE_ERROR
+        try std.testing.expectEqual(CURLE_WRITE_ERROR, brotli_do_write(null, &bw.super, CLIENTWRITE_BODY, "x", 1));
+
+        // Corrupt input returns CURLE_BAD_CONTENT_ENCODING
+        try std.testing.expectEqual(CURLE_OK, brotli_do_init(null, &bw.super));
+        const corrupt = "\xff\xff\xff\xff";
+        try std.testing.expectEqual(CURLE_BAD_CONTENT_ENCODING, brotli_do_write(null, &bw.super, CLIENTWRITE_BODY, corrupt.ptr, corrupt.len));
+        brotli_do_close(null, &bw.super);
+    }
     if (backend_options.zstd) {
         try std.testing.expect(std.mem.indexOf(u8, enc_str, "zstd") != null);
         try std.testing.expect(find_unencode_writer("zstd", 4, CURL_CW_CONTENT_DECODE) == &zstd_encoding);
     }
-    if (!backend_options.zlib and !backend_options.zstd) {
+    if (!backend_options.zlib and !backend_options.brotli and !backend_options.zstd) {
         try std.testing.expectEqualStrings("identity", enc_str);
     }
+    try std.testing.expectEqual(CURLE_BAD_CONTENT_ENCODING, brotli_map_error(-1));
+    try std.testing.expectEqual(CURLE_BAD_CONTENT_ENCODING, brotli_map_error(-16));
+    try std.testing.expectEqual(CURLE_BAD_CONTENT_ENCODING, brotli_map_error(-18));
+    try std.testing.expectEqual(CURLE_BAD_CONTENT_ENCODING, brotli_map_error(-20));
+    try std.testing.expectEqual(CURLE_OUT_OF_MEMORY, brotli_map_error(-21));
+    try std.testing.expectEqual(CURLE_OUT_OF_MEMORY, brotli_map_error(-30));
+    try std.testing.expectEqual(CURLE_WRITE_ERROR, brotli_map_error(-31));
+    try std.testing.expectEqual(CURLE_WRITE_ERROR, brotli_map_error(0));
     try std.testing.expect(find_unencode_writer("identity", 8, CURL_CW_CONTENT_DECODE) == &identity_encoding);
     try std.testing.expect(find_unencode_writer("none", 4, CURL_CW_CONTENT_DECODE) == &identity_encoding);
     try std.testing.expect(find_unencode_writer("chunked", 7, CURL_CW_TRANSFER_DECODE) == &Curl_httpchunk_unencoder);
