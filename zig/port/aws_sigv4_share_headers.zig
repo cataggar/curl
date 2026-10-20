@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const backend_options = @import("backend_options");
 const mem = @import("mem.zig");
 const primitives = @import("primitives.zig");
 const containers = @import("containers.zig");
@@ -1481,7 +1482,9 @@ fn shareSetoptImpl(sh: ?*Curl_share, option: c_uint, arg: usize) CURLSHcode {
                     }
                 },
                 CURL_LOCK_DATA_PSL => {
-                    res = CURLSHE_NOT_BUILT_IN;
+                    if (comptime !backend_options.psl) {
+                        res = CURLSHE_NOT_BUILT_IN;
+                    }
                 },
                 else => {
                     res = CURLSHE_BAD_OPTION;
@@ -2993,6 +2996,15 @@ test "Curl_share_lock_share and Curl_cshutdn_init" {
     try std.testing.expectEqual(@as(usize, 1), LockState.locked_count);
     try std.testing.expectEqual(CURLSHE_OK, Curl_share_unlock_share(&share, null, CURL_LOCK_DATA_DNS));
     try std.testing.expectEqual(@as(usize, 1), LockState.unlocked_count);
+
+    share.ref_count = 1;
+    const psl_share_rc = shareSetoptImpl(&share, CURLSHOPT_SHARE, CURL_LOCK_DATA_PSL);
+    if (comptime backend_options.psl) {
+        try std.testing.expectEqual(CURLSHE_OK, psl_share_rc);
+        try std.testing.expect((share.specifier & (@as(c_uint, 1) << CURL_LOCK_DATA_PSL)) != 0);
+    } else {
+        try std.testing.expectEqual(CURLSHE_NOT_BUILT_IN, psl_share_rc);
+    }
 
     var cs: cshutdn = undefined;
     Curl_cshutdn_init(&cs);
