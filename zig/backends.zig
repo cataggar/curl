@@ -10,11 +10,21 @@ pub const SslBackend = enum {
     wolfssl,
 };
 
+pub const IdnBackend = enum {
+    none,
+    libidn2,
+    winidn,
+    appleidn,
+};
+
 pub const Options = struct {
     ssl: SslBackend = .none,
     apple_sectrust: ?bool = null,
     zstd: bool = false,
     zlib: bool = false,
+    brotli: bool = false,
+    psl: bool = false,
+    idn: IdnBackend = .none,
     nghttp2: bool = false,
     ca_bundle: ?[]const u8 = null,
     ca_fallback: bool = false,
@@ -26,6 +36,8 @@ pub const Options = struct {
     pub fn isValidForTarget(self: Options, os_tag: std.Target.Os.Tag) bool {
         if (self.ssl == .schannel and os_tag != .windows) return false;
         if (self.apple_sectrust == true and (self.ssl != .openssl or !os_tag.isDarwin())) return false;
+        if (self.idn == .winidn and os_tag != .windows) return false;
+        if (self.idn == .appleidn and !os_tag.isDarwin()) return false;
         return true;
     }
 
@@ -36,6 +48,12 @@ pub const Options = struct {
         if (self.apple_sectrust == true and (self.ssl != .openssl or !os_tag.isDarwin())) {
             @panic("Apple SecTrust (-Dapple-sectrust=true) requires -Dssl=openssl on a Darwin target");
         }
+        if (self.idn == .winidn and os_tag != .windows) {
+            @panic("WinIDN backend (-Didn=winidn) is only supported on Windows targets");
+        }
+        if (self.idn == .appleidn and !os_tag.isDarwin()) {
+            @panic("AppleIDN backend (-Didn=appleidn) is only supported on Darwin targets");
+        }
     }
 };
 
@@ -45,6 +63,9 @@ pub fn fromBuild(b: *std.Build) Options {
         .apple_sectrust = b.option(bool, "apple-sectrust", "Enable Apple SecTrust native certificate verification with OpenSSL on Darwin"),
         .zstd = b.option(bool, "zstd", "Enable zstd compression via system libzstd (default: false)") orelse false,
         .zlib = b.option(bool, "zlib", "Enable zlib compression via system libz (default: false)") orelse false,
+        .brotli = b.option(bool, "brotli", "Enable brotli compression via system libbrotlidec (default: false)") orelse false,
+        .psl = b.option(bool, "psl", "Enable Public Suffix List support via system libpsl (default: false)") orelse false,
+        .idn = b.option(IdnBackend, "idn", "IDN backend (default: none)") orelse .none,
         .nghttp2 = b.option(bool, "nghttp2", "Enable HTTP/2 via system libnghttp2 (default: false)") orelse false,
         .ca_bundle = b.option([]const u8, "ca-bundle", "Custom CA certificate bundle path"),
         .ca_fallback = b.option(bool, "ca-fallback", "Use TLS backend built-in CA store fallback (default: false)") orelse false,
@@ -112,6 +133,18 @@ pub fn applyCMacros(mod: *std.Build.Module, target: std.Build.ResolvedTarget, op
     if (opts.zlib) {
         mod.addCMacro("HAVE_LIBZ", "1");
     }
+    if (opts.brotli) {
+        mod.addCMacro("HAVE_BROTLI", "1");
+    }
+    if (opts.psl) {
+        mod.addCMacro("USE_LIBPSL", "1");
+    }
+    switch (opts.idn) {
+        .none => {},
+        .libidn2 => mod.addCMacro("USE_LIBIDN2", "1"),
+        .winidn => mod.addCMacro("USE_WIN32_IDN", "1"),
+        .appleidn => mod.addCMacro("USE_APPLE_IDN", "1"),
+    }
     if (opts.nghttp2) {
         mod.addCMacro("USE_NGHTTP2", "1");
     }
@@ -162,6 +195,21 @@ pub fn linkBackends(mod: *std.Build.Module, target: std.Build.ResolvedTarget, op
     if (opts.zlib) {
         mod.linkSystemLibrary("z", .{});
     }
+    if (opts.brotli) {
+        mod.linkSystemLibrary("brotlidec", .{});
+    }
+    if (opts.psl) {
+        mod.linkSystemLibrary("psl", .{});
+    }
+    switch (opts.idn) {
+        .none => {},
+        .libidn2 => mod.linkSystemLibrary("idn2", .{}),
+        .winidn => mod.linkSystemLibrary("normaliz", .{}),
+        .appleidn => {
+            mod.linkSystemLibrary("icucore", .{});
+            mod.linkSystemLibrary("iconv", .{});
+        },
+    }
     if (opts.nghttp2) {
         mod.linkSystemLibrary("nghttp2", .{});
     }
@@ -173,6 +221,9 @@ pub fn createOptionsStep(b: *std.Build, opts: Options) *std.Build.Step.Options {
     step.addOption(?bool, "apple_sectrust", opts.apple_sectrust);
     step.addOption(bool, "zstd", opts.zstd);
     step.addOption(bool, "zlib", opts.zlib);
+    step.addOption(bool, "brotli", opts.brotli);
+    step.addOption(bool, "psl", opts.psl);
+    step.addOption(IdnBackend, "idn", opts.idn);
     step.addOption(bool, "nghttp2", opts.nghttp2);
     step.addOption(?[]const u8, "ca_bundle", opts.ca_bundle);
     step.addOption(bool, "ca_fallback", opts.ca_fallback);

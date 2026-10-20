@@ -606,11 +606,14 @@ const CURL_VERSION_LIBZ: c_int = 1 << 3;
 const CURL_VERSION_ASYNCHDNS: c_int = 1 << 7;
 const CURL_VERSION_SPNEGO: c_int = 1 << 8;
 const CURL_VERSION_LARGEFILE: c_int = 1 << 9;
+const CURL_VERSION_IDN: c_int = 1 << 10;
 const CURL_VERSION_SSPI: c_int = 1 << 11;
 const CURL_VERSION_HTTP2: c_int = 1 << 16;
 const CURL_VERSION_KERBEROS5: c_int = 1 << 18;
 const CURL_VERSION_UNIX_SOCKETS: c_int = 1 << 19;
+const CURL_VERSION_PSL: c_int = 1 << 20;
 const CURL_VERSION_HTTPS_PROXY: c_int = 1 << 21;
+const CURL_VERSION_BROTLI: c_int = 1 << 23;
 const CURL_VERSION_ALTSVC: c_int = 1 << 24;
 const CURL_VERSION_ZSTD: c_int = 1 << 26;
 const CURL_VERSION_UNICODE: c_int = 1 << 27;
@@ -623,6 +626,9 @@ extern fn Curl_ssl_version(buffer: [*]u8, size: usize) callconv(.c) void;
 extern fn Curl_ssl_supports(data: ?*anyopaque, ssl_option: c_uint) callconv(.c) bool;
 extern fn zlibVersion() callconv(.c) ?[*:0]const u8;
 extern fn ZSTD_versionNumber() callconv(.c) c_uint;
+extern fn BrotliDecoderVersion() callconv(.c) u32;
+extern fn psl_check_version_number(version: c_int) callconv(.c) c_int;
+extern fn idn2_check_version(req_version: ?[*:0]const u8) callconv(.c) ?[*:0]const u8;
 extern fn Curl_http2_ver(p: [*]u8, len: usize) callconv(.c) void;
 
 const nghttp2_info = extern struct {
@@ -675,10 +681,25 @@ fn zstd_version_fmt(buf: []u8) void {
     buf[s.len] = 0;
 }
 
+fn brotli_version_fmt(buf: []u8) void {
+    const br_ver = BrotliDecoderVersion();
+    const major: c_uint = br_ver >> 24;
+    const minor: c_uint = (br_ver & 0x00FFFFFF) >> 12;
+    const patch: c_uint = br_ver & 0x00000FFF;
+    const s = std.fmt.bufPrint(buf[0 .. buf.len - 1], "{d}.{d}.{d}", .{ major, minor, patch }) catch {
+        buf[0] = 0;
+        return;
+    };
+    buf[s.len] = 0;
+}
+
 var version_out_buf: [300]u8 = undefined;
 var version_ssl_buf: [80]u8 = undefined;
 var version_z_buf: [30]u8 = undefined;
+var version_brotli_buf: [30]u8 = undefined;
 var version_zstd_buf: [30]u8 = undefined;
+var version_idn_buf: [30]u8 = undefined;
+var version_psl_buf: [30]u8 = undefined;
 var version_h2_buf: [30]u8 = undefined;
 
 pub export fn curl_version() callconv(.c) [*:0]u8 {
@@ -702,6 +723,16 @@ pub export fn curl_version() callconv(.c) [*:0]u8 {
         i += 1;
     }
 
+    if (comptime backend_options.brotli) {
+        var br_ver: [30]u8 = undefined;
+        brotli_version_fmt(&br_ver);
+        const bv = std.mem.sliceTo(&br_ver, 0);
+        const s = std.fmt.bufPrint(version_brotli_buf[0 .. version_brotli_buf.len - 1], "brotli/{s}", .{bv}) catch "";
+        version_brotli_buf[s.len] = 0;
+        src[i] = @ptrCast(&version_brotli_buf);
+        i += 1;
+    }
+
     if (comptime backend_options.zstd) {
         var zstd_ver: [40]u8 = undefined;
         zstd_version_fmt(&zstd_ver);
@@ -709,6 +740,39 @@ pub export fn curl_version() callconv(.c) [*:0]u8 {
         const s = std.fmt.bufPrint(version_zstd_buf[0 .. version_zstd_buf.len - 1], "zstd/{s}", .{zv}) catch "";
         version_zstd_buf[s.len] = 0;
         src[i] = @ptrCast(&version_zstd_buf);
+        i += 1;
+    }
+
+    if (comptime (backend_options.idn != .none)) {
+        switch (comptime backend_options.idn) {
+            .libidn2 => {
+                const iv = if (idn2_check_version(null)) |p| std.mem.span(p) else "";
+                const s = std.fmt.bufPrint(version_idn_buf[0 .. version_idn_buf.len - 1], "libidn2/{s}", .{iv}) catch "";
+                version_idn_buf[s.len] = 0;
+                src[i] = @ptrCast(&version_idn_buf);
+                i += 1;
+            },
+            .winidn => {
+                src[i] = "WinIDN";
+                i += 1;
+            },
+            .appleidn => {
+                src[i] = "AppleIDN";
+                i += 1;
+            },
+            .none => unreachable,
+        }
+    }
+
+    if (comptime backend_options.psl) {
+        const num = psl_check_version_number(0);
+        const s = std.fmt.bufPrint(
+            version_psl_buf[0 .. version_psl_buf.len - 1],
+            "libpsl/{d}.{d}.{d}",
+            .{ num >> 16, (num >> 8) & 0xff, num & 0xff },
+        ) catch "";
+        version_psl_buf[s.len] = 0;
+        src[i] = @ptrCast(&version_psl_buf);
         i += 1;
     }
 
@@ -792,14 +856,25 @@ fn https_proxy_present(info: *curl_version_info_data) bool {
     return false;
 }
 
+fn idn_present(info: *curl_version_info_data) bool {
+    if (comptime (backend_options.idn == .winidn or backend_options.idn == .appleidn)) {
+        return true;
+    }
+    return info.libidn != null;
+}
+
 const features_table = blk: {
-    var list: [20]FeatEntry = undefined;
+    var list: [24]FeatEntry = undefined;
     var n: usize = 0;
 
     list[n] = .{ .name = "alt-svc", .bitmask = CURL_VERSION_ALTSVC };
     n += 1;
     list[n] = .{ .name = "AsynchDNS", .bitmask = CURL_VERSION_ASYNCHDNS };
     n += 1;
+    if (backend_options.brotli) {
+        list[n] = .{ .name = "brotli", .bitmask = CURL_VERSION_BROTLI };
+        n += 1;
+    }
     if (backend_options.ssl != .none) {
         list[n] = .{ .name = "HSTS", .bitmask = CURL_VERSION_HSTS };
         n += 1;
@@ -814,6 +889,10 @@ const features_table = blk: {
     }
     list[n] = .{ .name = "HTTPSIG", .bitmask = 0 };
     n += 1;
+    if (backend_options.idn != .none) {
+        list[n] = .{ .name = "IDN", .present = idn_present, .bitmask = CURL_VERSION_IDN };
+        n += 1;
+    }
     list[n] = .{ .name = "IPv6", .bitmask = CURL_VERSION_IPV6 };
     n += 1;
     if (backend_options.ssl == .schannel) {
@@ -824,6 +903,10 @@ const features_table = blk: {
     n += 1;
     if (backend_options.zlib) {
         list[n] = .{ .name = "libz", .bitmask = CURL_VERSION_LIBZ };
+        n += 1;
+    }
+    if (backend_options.psl) {
+        list[n] = .{ .name = "PSL", .bitmask = CURL_VERSION_PSL };
         n += 1;
     }
     if (use_ssl and use_apple_sectrust) {
@@ -864,6 +947,7 @@ const features_table = blk: {
 
 var feature_names_buf: [features_table.len + 1]?[*:0]const u8 = @splat(null);
 var info_ssl_buffer: [80]u8 = undefined;
+var info_brotli_buffer: [30]u8 = undefined;
 var info_zstd_buffer: [30]u8 = undefined;
 
 const effective_ca_bundle: ?[*:0]const u8 = blk: {
@@ -919,6 +1003,16 @@ pub export fn curl_version_info(stamp: c_uint) callconv(.c) *curl_version_info_d
 
     if (comptime backend_options.zlib) {
         version_info.libz_version = zlibVersion();
+    }
+
+    if (comptime (backend_options.idn == .libidn2)) {
+        version_info.libidn = idn2_check_version(null);
+    }
+
+    if (comptime backend_options.brotli) {
+        version_info.brotli_ver_num = BrotliDecoderVersion();
+        brotli_version_fmt(&info_brotli_buffer);
+        version_info.brotli_version = @ptrCast(&info_brotli_buffer);
     }
 
     if (comptime backend_options.nghttp2) {
