@@ -67,8 +67,10 @@ const c = struct {
     pub const CURLcode = c_uint;
     pub const CURLE_OK: CURLcode = 0;
     pub const CURLE_NOT_BUILT_IN: CURLcode = 4;
+    pub const CURLE_WRITE_ERROR: CURLcode = 23;
     pub const CURLE_UNKNOWN_OPTION: CURLcode = 48;
     pub const CURLE_PEER_FAILED_VERIFICATION: CURLcode = 60;
+    pub const CURLE_BAD_CONTENT_ENCODING: CURLcode = 61;
     pub const CURLE_SSL_PINNEDPUBKEYNOTMATCH: CURLcode = 90;
 
     pub const CURLsslset = c_uint;
@@ -113,11 +115,14 @@ const c = struct {
 
     pub const CURLOPT_WRITEDATA: CURLoption = CURLOPTTYPE_OBJECTPOINT + 1;
     pub const CURLOPT_URL: CURLoption = CURLOPTTYPE_OBJECTPOINT + 2;
+    pub const CURLOPT_COOKIEFILE: CURLoption = 10031;
     pub const CURLOPT_SSL_VERIFYPEER: CURLoption = CURLOPTTYPE_LONG + 64;
     pub const CURLOPT_CAINFO: CURLoption = CURLOPTTYPE_OBJECTPOINT + 65;
     pub const CURLOPT_SSL_VERIFYHOST: CURLoption = CURLOPTTYPE_LONG + 81;
     pub const CURLOPT_SSL_CIPHER_LIST: CURLoption = CURLOPTTYPE_OBJECTPOINT + 83;
     pub const CURLOPT_NOSIGNAL: CURLoption = CURLOPTTYPE_LONG + 99;
+    pub const CURLOPT_ACCEPT_ENCODING: CURLoption = CURLOPTTYPE_OBJECTPOINT + 102;
+    pub const CURLOPT_COOKIELIST: CURLoption = 10135;
     pub const CURLOPT_TIMEOUT_MS: CURLoption = CURLOPTTYPE_LONG + 155;
     pub const CURLOPT_CRLFILE: CURLoption = CURLOPTTYPE_OBJECTPOINT + 169;
     pub const CURLOPT_ISSUERCERT: CURLoption = CURLOPTTYPE_OBJECTPOINT + 170;
@@ -135,9 +140,31 @@ const c = struct {
     pub const CURLINFO_SLIST: CURLINFO = 0x400000;
     pub const CURLINFO_PTR: CURLINFO = 0x400000;
     pub const CURLINFO_RESPONSE_CODE: CURLINFO = CURLINFO_LONG + 2;
+    pub const CURLINFO_COOKIELIST: CURLINFO = 0x400000 + 28;
     pub const CURLINFO_CERTINFO: CURLINFO = CURLINFO_SLIST + 34;
     pub const CURLINFO_TLS_SESSION: CURLINFO = CURLINFO_PTR + 43;
     pub const CURLINFO_TLS_SSL_PTR: CURLINFO = CURLINFO_PTR + 45;
+
+    pub const CURLSHcode = c_uint;
+    pub const CURLSHE_OK: CURLSHcode = 0;
+    pub const CURLSHE_NOT_BUILT_IN: CURLSHcode = 5;
+
+    pub const CURLSHoption = c_uint;
+    pub const CURLSHOPT_SHARE: CURLSHoption = 1;
+    pub const CURL_LOCK_DATA_PSL: c_int = 6;
+
+    pub const CURLU = anyopaque;
+    pub const CURLUcode = c_uint;
+    pub const CURLUE_OK: CURLUcode = 0;
+    pub const CURLUE_BAD_HOSTNAME: CURLUcode = 21;
+    pub const CURLUE_LACKS_IDN: CURLUcode = 30;
+
+    pub const CURLUPart = c_uint;
+    pub const CURLUPART_URL: CURLUPart = 0;
+    pub const CURLUPART_HOST: CURLUPart = 5;
+
+    pub const CURLU_PUNYCODE: c_uint = 1 << 12;
+    pub const CURLU_PUNY2IDN: c_uint = 1 << 13;
 
     pub const curl_tlssessioninfo = extern struct {
         backend: c_uint,
@@ -162,7 +189,9 @@ const c = struct {
     };
 };
 
+extern fn curl_version() callconv(.c) ?[*:0]const u8;
 extern fn curl_version_info(stamp: c.CURLversion) ?*const c.curl_version_info_data;
+extern fn curl_free(p: ?*anyopaque) callconv(.c) void;
 extern fn curl_global_sslset(
     id: c_uint,
     name: ?[*:0]const u8,
@@ -175,13 +204,31 @@ extern fn curl_easy_perform(handle: ?*anyopaque) callconv(.c) c.CURLcode;
 extern fn curl_easy_getinfo(handle: ?*anyopaque, info: c.CURLINFO, ...) callconv(.c) c.CURLcode;
 extern fn curl_slist_append(list: ?*c.curl_slist, data: [*:0]const u8) callconv(.c) ?*c.curl_slist;
 extern fn curl_slist_free_all(list: ?*c.curl_slist) callconv(.c) void;
+extern fn curl_share_init() callconv(.c) ?*anyopaque;
+extern fn curl_share_setopt(sh: ?*anyopaque, option: c.CURLSHoption, ...) callconv(.c) c.CURLSHcode;
+extern fn curl_share_cleanup(sh: ?*anyopaque) callconv(.c) c.CURLSHcode;
+extern fn curl_url() callconv(.c) ?*c.CURLU;
+extern fn curl_url_cleanup(handle: ?*c.CURLU) callconv(.c) void;
+extern fn curl_url_set(handle: ?*c.CURLU, what: c.CURLUPart, part: ?[*:0]const u8, flags: c_uint) callconv(.c) c.CURLUcode;
+extern fn curl_url_get(handle: ?*c.CURLU, what: c.CURLUPart, part: *?[*:0]u8, flags: c_uint) callconv(.c) c.CURLUcode;
 extern fn Curl_ssl_supports(data: ?*anyopaque, ssl_option: c_uint) callconv(.c) bool;
 
-test "curl_version_info feature bits match backend_options" {
+fn hasFeature(names: [*:null]const ?[*:0]const u8, target: []const u8) bool {
+    var idx: usize = 0;
+    while (names[idx]) |feat_name| : (idx += 1) {
+        if (std.mem.eql(u8, std.mem.span(feat_name), target)) return true;
+    }
+    return false;
+}
+
+test "curl_version_info feature flags match build options" {
     const info = curl_version_info(c.CURLVERSION_NOW) orelse return error.NullVersionInfo;
 
     try testing.expect((info.*.features & c.CURL_VERSION_ZSTD != 0) == backend_options.zstd);
     try testing.expect((info.*.features & c.CURL_VERSION_LIBZ != 0) == backend_options.zlib);
+    try testing.expect((info.*.features & c.CURL_VERSION_BROTLI != 0) == backend_options.brotli);
+    try testing.expect((info.*.features & c.CURL_VERSION_PSL != 0) == backend_options.psl);
+    try testing.expect((info.*.features & c.CURL_VERSION_IDN != 0) == (backend_options.idn != .none));
     try testing.expect((info.*.features & c.CURL_VERSION_SSL != 0) == (backend_options.ssl != .none));
     try testing.expect((info.*.features & c.CURL_VERSION_HTTP2 != 0) == backend_options.nghttp2);
     try testing.expect((info.*.features & c.CURL_VERSION_HSTS != 0) == (backend_options.ssl != .none));
@@ -194,6 +241,18 @@ test "curl_version_info feature bits match backend_options" {
     }
     if (backend_options.zlib) {
         try testing.expect(info.*.libz_version != null);
+    }
+    if (backend_options.brotli) {
+        try testing.expect(info.*.brotli_version != null);
+        try testing.expect(info.*.brotli_ver_num != 0);
+    } else {
+        try testing.expect(info.*.brotli_version == null);
+        try testing.expectEqual(@as(c_uint, 0), info.*.brotli_ver_num);
+    }
+    if (backend_options.idn == .libidn2) {
+        try testing.expect(info.*.libidn != null);
+    } else {
+        try testing.expect(info.*.libidn == null);
     }
     if (backend_options.ssl != .none) {
         try testing.expect(info.*.ssl_version != null);
@@ -215,27 +274,39 @@ test "curl_version_info feature bits match backend_options" {
         try testing.expect(info.*.nghttp2_version != null);
         try testing.expect(info.*.nghttp2_ver_num != 0);
     }
+}
+
+test "curl_version_info feature_names list matches build options" {
+    const info = curl_version_info(c.CURLVERSION_NOW) orelse return error.NullVersionInfo;
+    const names = info.*.feature_names orelse return error.NullFeatureNames;
 
     const expect_apple_sectrust = backend_options.apple_sectrust orelse
         (backend_options.ssl == .openssl and builtin.os.tag.isDarwin());
-    var found_apple_sectrust = false;
-    var found_ssl_feat = false;
-    var found_hsts_feat = false;
-    var found_https_proxy_feat = false;
-    if (info.*.feature_names) |names| {
-        var idx: usize = 0;
-        while (names[idx]) |feat_name| : (idx += 1) {
-            const name_slice = std.mem.span(feat_name);
-            if (std.mem.eql(u8, name_slice, "AppleSecTrust")) found_apple_sectrust = true;
-            if (std.mem.eql(u8, name_slice, "SSL")) found_ssl_feat = true;
-            if (std.mem.eql(u8, name_slice, "HSTS")) found_hsts_feat = true;
-            if (std.mem.eql(u8, name_slice, "HTTPS-proxy")) found_https_proxy_feat = true;
-        }
-    }
-    try testing.expectEqual(backend_options.ssl != .none and expect_apple_sectrust, found_apple_sectrust);
-    try testing.expectEqual(backend_options.ssl != .none, found_ssl_feat);
-    try testing.expectEqual(backend_options.ssl != .none, found_hsts_feat);
-    try testing.expectEqual(backend_options.ssl != .none, found_https_proxy_feat);
+
+    try testing.expectEqual(backend_options.ssl != .none and expect_apple_sectrust, hasFeature(names, "AppleSecTrust"));
+    try testing.expectEqual(backend_options.ssl != .none, hasFeature(names, "SSL"));
+    try testing.expectEqual(backend_options.ssl != .none, hasFeature(names, "HSTS"));
+    try testing.expectEqual(backend_options.ssl != .none, hasFeature(names, "HTTPS-proxy"));
+    try testing.expectEqual(backend_options.zstd, hasFeature(names, "zstd"));
+    try testing.expectEqual(backend_options.zlib, hasFeature(names, "libz"));
+    try testing.expectEqual(backend_options.brotli, hasFeature(names, "brotli"));
+    try testing.expectEqual(backend_options.psl, hasFeature(names, "PSL"));
+    try testing.expectEqual(backend_options.idn != .none, hasFeature(names, "IDN"));
+    try testing.expectEqual(backend_options.nghttp2, hasFeature(names, "HTTP2"));
+}
+
+test "curl_version string reflects enabled backends" {
+    const ver_ptr = curl_version() orelse return error.NullVersionString;
+    const ver = std.mem.span(ver_ptr);
+
+    try testing.expectEqual(backend_options.brotli, std.mem.indexOf(u8, ver, "brotli/") != null);
+    try testing.expectEqual(backend_options.psl, std.mem.indexOf(u8, ver, "libpsl/") != null);
+    try testing.expectEqual(backend_options.idn == .libidn2, std.mem.indexOf(u8, ver, "libidn2/") != null);
+    try testing.expectEqual(backend_options.idn == .winidn, std.mem.indexOf(u8, ver, "WinIDN") != null);
+    try testing.expectEqual(backend_options.idn == .appleidn, std.mem.indexOf(u8, ver, "AppleIDN") != null);
+    try testing.expectEqual(backend_options.zlib, std.mem.indexOf(u8, ver, "zlib/") != null);
+    try testing.expectEqual(backend_options.zstd, std.mem.indexOf(u8, ver, "zstd/") != null);
+    try testing.expectEqual(backend_options.nghttp2, std.mem.indexOf(u8, ver, "nghttp2/") != null);
 }
 
 test "curl_global_sslset and curl_easy_setopt TLS capability matrix" {
@@ -439,6 +510,23 @@ test "SslBackend and Apple SecTrust target validation" {
         try testing.expect(opts.isValidForTarget(.macos));
         try testing.expect(!opts.useAppleSectrust(.macos));
     }
+
+    try testing.expectEqual(@as(usize, 4), std.enums.values(backends.IdnBackend).len);
+
+    const libidn2_opts = backends.Options{ .idn = .libidn2 };
+    try testing.expect(libidn2_opts.isValidForTarget(.linux));
+    try testing.expect(libidn2_opts.isValidForTarget(.macos));
+    try testing.expect(libidn2_opts.isValidForTarget(.windows));
+
+    const winidn_opts = backends.Options{ .idn = .winidn };
+    try testing.expect(winidn_opts.isValidForTarget(.windows));
+    try testing.expect(!winidn_opts.isValidForTarget(.linux));
+    try testing.expect(!winidn_opts.isValidForTarget(.macos));
+
+    const appleidn_opts = backends.Options{ .idn = .appleidn };
+    try testing.expect(appleidn_opts.isValidForTarget(.macos));
+    try testing.expect(!appleidn_opts.isValidForTarget(.linux));
+    try testing.expect(!appleidn_opts.isValidForTarget(.windows));
 }
 
 const loopback_tls = struct {
@@ -1287,4 +1375,531 @@ test "local loopback HTTPS handshake and certificate verification matrix" {
         });
         try testing.expectEqual(c.CURLE_SSL_PINNEDPUBKEYNOTMATCH, res.code);
     }
+}
+
+const loopback_http = struct {
+    const net = std.Io.net;
+
+    const BodySink = struct {
+        buf: [4096]u8 = undefined,
+        len: usize = 0,
+
+        fn slice(self: *const BodySink) []const u8 {
+            return self.buf[0..self.len];
+        }
+    };
+
+    fn writeCallback(
+        ptr: [*c]const u8,
+        size: usize,
+        nmemb: usize,
+        userdata: ?*anyopaque,
+    ) callconv(.c) usize {
+        const total = size * nmemb;
+        const sink: *BodySink = @ptrCast(@alignCast(userdata orelse return 0));
+        if (sink.len + total <= sink.buf.len) {
+            @memcpy(sink.buf[sink.len .. sink.len + total], ptr[0..total]);
+            sink.len += total;
+        }
+        return total;
+    }
+
+    const SingleResponseServer = struct {
+        server: *net.Server,
+        response: []const u8,
+        chunks: ?[]const []const u8 = null,
+        request_buf: [2048]u8 = undefined,
+        request_len: usize = 0,
+
+        fn run(ctx: *SingleResponseServer) void {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            var stream = ctx.server.accept(io) catch return;
+            defer stream.close(io);
+
+            var rbuf: [1024]u8 = undefined;
+            var reader = stream.reader(io, &rbuf);
+            while (ctx.request_len < ctx.request_buf.len) {
+                var slice = [_][]u8{ctx.request_buf[ctx.request_len..]};
+                const n = reader.interface.readVec(&slice) catch break;
+                if (n == 0) break;
+                ctx.request_len += n;
+                if (std.mem.indexOf(u8, ctx.request_buf[0..ctx.request_len], "\r\n\r\n") != null) break;
+            }
+
+            var wbuf: [1024]u8 = undefined;
+            var writer = stream.writer(io, &wbuf);
+            writer.interface.writeAll(ctx.response) catch return;
+            writer.interface.flush() catch return;
+
+            if (ctx.chunks) |chunks| {
+                for (chunks) |chunk| {
+                    std.Thread.yield() catch {};
+                    writer.interface.writeAll(chunk) catch return;
+                    writer.interface.flush() catch return;
+                }
+            }
+        }
+
+        fn requestSlice(self: *const SingleResponseServer) []const u8 {
+            return self.request_buf[0..self.request_len];
+        }
+    };
+
+    const SequentialServer = struct {
+        server: *net.Server,
+        responses: []const []const u8,
+
+        fn run(ctx: *SequentialServer) void {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            for (ctx.responses) |resp| {
+                var stream = ctx.server.accept(io) catch return;
+                defer stream.close(io);
+
+                var req_buf: [2048]u8 = undefined;
+                var req_len: usize = 0;
+                var rbuf: [1024]u8 = undefined;
+                var reader = stream.reader(io, &rbuf);
+                while (req_len < req_buf.len) {
+                    var slice = [_][]u8{req_buf[req_len..]};
+                    const n = reader.interface.readVec(&slice) catch break;
+                    if (n == 0) break;
+                    req_len += n;
+                    if (std.mem.indexOf(u8, req_buf[0..req_len], "\r\n\r\n") != null) break;
+                }
+
+                var wbuf: [1024]u8 = undefined;
+                var writer = stream.writer(io, &wbuf);
+                writer.interface.writeAll(resp) catch return;
+                writer.interface.flush() catch return;
+            }
+        }
+    };
+
+    fn hasAcceptEncodingToken(raw_request: []const u8, token: []const u8) bool {
+        var lines = std.mem.splitSequence(u8, raw_request, "\r\n");
+        while (lines.next()) |line| {
+            const prefix = "Accept-Encoding:";
+            if (line.len >= prefix.len and std.ascii.eqlIgnoreCase(line[0..prefix.len], prefix)) {
+                const value = std.mem.trim(u8, line[prefix.len..], " \t");
+                var parts = std.mem.splitScalar(u8, value, ',');
+                while (parts.next()) |part| {
+                    const trimmed = std.mem.trim(u8, part, " \t");
+                    if (std.mem.eql(u8, trimmed, token)) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    fn hasCookie(list: ?*c.curl_slist, name: []const u8, value: []const u8) bool {
+        var cur = list;
+        while (cur) |node| : (cur = node.next) {
+            const data_ptr = node.data orelse continue;
+            const line = std.mem.span(data_ptr);
+            var cols = std.mem.splitScalar(u8, line, '\t');
+            var col_idx: usize = 0;
+            var matched_name = false;
+            while (cols.next()) |col| : (col_idx += 1) {
+                if (col_idx == 5 and std.mem.eql(u8, col, name)) {
+                    matched_name = true;
+                } else if (col_idx == 6 and matched_name and std.mem.eql(u8, col, value)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    fn hasCookieLinePrefix(list: ?*c.curl_slist, prefix: []const u8, name: []const u8, value: []const u8) bool {
+        var cur = list;
+        while (cur) |node| : (cur = node.next) {
+            const data_ptr = node.data orelse continue;
+            const line = std.mem.span(data_ptr);
+            if (!std.mem.startsWith(u8, line, prefix)) continue;
+            var cols = std.mem.splitScalar(u8, line, '\t');
+            var col_idx: usize = 0;
+            var matched_name = false;
+            while (cols.next()) |col| : (col_idx += 1) {
+                if (col_idx == 5 and std.mem.eql(u8, col, name)) {
+                    matched_name = true;
+                } else if (col_idx == 6 and matched_name and std.mem.eql(u8, col, value)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    fn bufPrintZ(buf: []u8, comptime fmt: []const u8, args: anytype) ![*:0]const u8 {
+        const s = try std.fmt.bufPrint(buf, fmt ++ "\x00", args);
+        return @ptrCast(s.ptr);
+    }
+
+    fn ensureUtf8Locale() void {
+        if (comptime (builtin.os.tag != .windows)) {
+            const c_locale = struct {
+                extern fn setlocale(category: c_int, locale: ?[*:0]const u8) callconv(.c) ?[*:0]u8;
+            };
+            _ = c_locale.setlocale(0, "C.UTF-8") orelse
+                c_locale.setlocale(0, "en_US.UTF-8") orelse
+                c_locale.setlocale(0, "");
+        }
+    }
+};
+
+test "Brotli Accept-Encoding negotiation and Content-Encoding decompression" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const bind_addr = try std.Io.net.IpAddress.parseIp4("127.0.0.1", 0);
+
+    // 1. Automatic CURLOPT_ACCEPT_ENCODING = "" includes "br" iff backend_options.brotli is true
+    {
+        var server = try bind_addr.listen(io, .{ .reuse_address = true });
+        defer server.deinit(io);
+        const port = server.socket.address.getPort();
+
+        var srv_ctx = loopback_http.SingleResponseServer{
+            .server = &server,
+            .response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+        };
+        const thread = try std.Thread.spawn(.{}, loopback_http.SingleResponseServer.run, .{&srv_ctx});
+        defer thread.join();
+
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        var url_buf: [128]u8 = undefined;
+        const url = try loopback_http.bufPrintZ(&url_buf, "http://127.0.0.1:{d}/accept-encoding", .{port});
+        var sink = loopback_http.BodySink{};
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 10_000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_ACCEPT_ENCODING, @as([*:0]const u8, "")));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, @as(?*anyopaque, @ptrCast(&sink))));
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+        try testing.expectEqualStrings("ok", sink.slice());
+        try testing.expectEqual(
+            backend_options.brotli,
+            loopback_http.hasAcceptEncodingToken(srv_ctx.requestSlice(), "br"),
+        );
+    }
+
+    if (!backend_options.brotli) return;
+
+    // 23-byte Brotli stream encoding "hello brotlihello brotlihello brotli" (36 bytes)
+    const br_payload = "\x1b\x23\x00\x00\x04\x1c\x87\xd7\xbb\xfb\xee\x8b\x88\x54\x83\xd0\x53\x8b\xe7\xf4\x42\xeb\x63";
+    const expected_plain = "hello brotlihello brotlihello brotli";
+
+    // 2. Single-chunk Content-Encoding: br response decompresses to original plaintext
+    {
+        var server = try bind_addr.listen(io, .{ .reuse_address = true });
+        defer server.deinit(io);
+        const port = server.socket.address.getPort();
+
+        const resp = "HTTP/1.1 200 OK\r\nContent-Encoding: br\r\nContent-Length: 23\r\nConnection: close\r\n\r\n" ++ br_payload;
+        var srv_ctx = loopback_http.SingleResponseServer{
+            .server = &server,
+            .response = resp,
+        };
+        const thread = try std.Thread.spawn(.{}, loopback_http.SingleResponseServer.run, .{&srv_ctx});
+        defer thread.join();
+
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        var url_buf: [128]u8 = undefined;
+        const url = try loopback_http.bufPrintZ(&url_buf, "http://127.0.0.1:{d}/single-br", .{port});
+        var sink = loopback_http.BodySink{};
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 10_000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_ACCEPT_ENCODING, @as([*:0]const u8, "br")));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, @as(?*anyopaque, @ptrCast(&sink))));
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+        try testing.expectEqualStrings(expected_plain, sink.slice());
+    }
+
+    // 3. Multi-chunk streaming Content-Encoding: br response decompresses to original plaintext
+    {
+        var server = try bind_addr.listen(io, .{ .reuse_address = true });
+        defer server.deinit(io);
+        const port = server.socket.address.getPort();
+
+        const chunks = [_][]const u8{
+            br_payload[0..5],
+            br_payload[5..13],
+            br_payload[13..23],
+        };
+        var srv_ctx = loopback_http.SingleResponseServer{
+            .server = &server,
+            .response = "HTTP/1.1 200 OK\r\nContent-Encoding: br\r\nContent-Length: 23\r\nConnection: close\r\n\r\n",
+            .chunks = &chunks,
+        };
+        const thread = try std.Thread.spawn(.{}, loopback_http.SingleResponseServer.run, .{&srv_ctx});
+        defer thread.join();
+
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        var url_buf: [128]u8 = undefined;
+        const url = try loopback_http.bufPrintZ(&url_buf, "http://127.0.0.1:{d}/chunked-br", .{port});
+        var sink = loopback_http.BodySink{};
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 10_000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_ACCEPT_ENCODING, @as([*:0]const u8, "br")));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, @as(?*anyopaque, @ptrCast(&sink))));
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+        try testing.expectEqualStrings(expected_plain, sink.slice());
+    }
+
+    // 4. Corrupt Content-Encoding: br response returns CURLE_BAD_CONTENT_ENCODING
+    {
+        var server = try bind_addr.listen(io, .{ .reuse_address = true });
+        defer server.deinit(io);
+        const port = server.socket.address.getPort();
+
+        var srv_ctx = loopback_http.SingleResponseServer{
+            .server = &server,
+            .response = "HTTP/1.1 200 OK\r\nContent-Encoding: br\r\nContent-Length: 8\r\nConnection: close\r\n\r\n\xff\xff\xff\xff\xff\xff\xff\xff",
+        };
+        const thread = try std.Thread.spawn(.{}, loopback_http.SingleResponseServer.run, .{&srv_ctx});
+        defer thread.join();
+
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        var url_buf: [128]u8 = undefined;
+        const url = try loopback_http.bufPrintZ(&url_buf, "http://127.0.0.1:{d}/corrupt-br", .{port});
+        var sink = loopback_http.BodySink{};
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 10_000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_ACCEPT_ENCODING, @as([*:0]const u8, "br")));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, @as(?*anyopaque, @ptrCast(&sink))));
+
+        try testing.expectEqual(c.CURLE_BAD_CONTENT_ENCODING, curl_easy_perform(easy));
+    }
+
+    // 5. Trailing garbage bytes after a completed Brotli stream return CURLE_WRITE_ERROR
+    {
+        var server = try bind_addr.listen(io, .{ .reuse_address = true });
+        defer server.deinit(io);
+        const port = server.socket.address.getPort();
+
+        const resp = "HTTP/1.1 200 OK\r\nContent-Encoding: br\r\nContent-Length: 30\r\nConnection: close\r\n\r\n" ++ br_payload ++ "GARBAGE";
+        var srv_ctx = loopback_http.SingleResponseServer{
+            .server = &server,
+            .response = resp,
+        };
+        const thread = try std.Thread.spawn(.{}, loopback_http.SingleResponseServer.run, .{&srv_ctx});
+        defer thread.join();
+
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        var url_buf: [128]u8 = undefined;
+        const url = try loopback_http.bufPrintZ(&url_buf, "http://127.0.0.1:{d}/trailing-garbage-br", .{port});
+        var sink = loopback_http.BodySink{};
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 10_000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_ACCEPT_ENCODING, @as([*:0]const u8, "br")));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, @as(?*anyopaque, @ptrCast(&sink))));
+
+        try testing.expectEqual(c.CURLE_WRITE_ERROR, curl_easy_perform(easy));
+    }
+}
+
+test "PSL share lock option and cookie domain filtering for multi-label public suffix" {
+    // 1. curl_share_setopt(sh, CURLSHOPT_SHARE, CURL_LOCK_DATA_PSL) matches backend_options.psl
+    {
+        const sh = curl_share_init() orelse return error.ShareInitFailed;
+        defer _ = curl_share_cleanup(sh);
+
+        const rc = curl_share_setopt(sh, c.CURLSHOPT_SHARE, @as(c_int, c.CURL_LOCK_DATA_PSL));
+        try testing.expectEqual(
+            if (backend_options.psl) c.CURLSHE_OK else c.CURLSHE_NOT_BUILT_IN,
+            rc,
+        );
+    }
+
+    // 2. Loopback HTTP cookie engine test with multi-label public suffix co.uk
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const bind_addr = try std.Io.net.IpAddress.parseIp4("127.0.0.1", 0);
+    var server = try bind_addr.listen(io, .{ .reuse_address = true });
+    defer server.deinit(io);
+    const port = server.socket.address.getPort();
+
+    const responses = [_][]const u8{
+        "HTTP/1.1 200 OK\r\n" ++
+            "Set-Cookie: pub=1; Domain=co.uk; Path=/\r\n" ++
+            "Set-Cookie: reg=2; Domain=example.co.uk; Path=/\r\n" ++
+            "Content-Length: 2\r\n" ++
+            "Connection: close\r\n\r\nok",
+        "HTTP/1.1 200 OK\r\n" ++
+            "Set-Cookie: hostonly=3; Path=/\r\n" ++
+            "Content-Length: 2\r\n" ++
+            "Connection: close\r\n\r\nok",
+    };
+
+    var srv_ctx = loopback_http.SequentialServer{
+        .server = &server,
+        .responses = &responses,
+    };
+    const thread = try std.Thread.spawn(.{}, loopback_http.SequentialServer.run, .{&srv_ctx});
+    defer thread.join();
+
+    const easy = curl_easy_init() orelse return error.EasyInitFailed;
+    defer curl_easy_cleanup(easy);
+
+    var resolve_sub_buf: [128]u8 = undefined;
+    const resolve_sub = try loopback_http.bufPrintZ(&resolve_sub_buf, "sub.example.co.uk:{d}:127.0.0.1", .{port});
+    var resolve_psl_buf: [128]u8 = undefined;
+    const resolve_psl = try loopback_http.bufPrintZ(&resolve_psl_buf, "co.uk:{d}:127.0.0.1", .{port});
+
+    var resolve_list = curl_slist_append(null, resolve_sub) orelse return error.SlistAppendFailed;
+    defer curl_slist_free_all(resolve_list);
+    resolve_list = curl_slist_append(resolve_list, resolve_psl) orelse return error.SlistAppendFailed;
+
+    var sink = loopback_http.BodySink{};
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 10_000)));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_COOKIEFILE, @as([*:0]const u8, "")));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_RESOLVE, resolve_list));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, @as(?*anyopaque, @ptrCast(&sink))));
+
+    var url1_buf: [128]u8 = undefined;
+    const url1 = try loopback_http.bufPrintZ(&url1_buf, "http://sub.example.co.uk:{d}/", .{port});
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url1));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+
+    var url2_buf: [128]u8 = undefined;
+    const url2 = try loopback_http.bufPrintZ(&url2_buf, "http://co.uk:{d}/", .{port});
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url2));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+
+    var cookies: ?*c.curl_slist = null;
+    try testing.expectEqual(c.CURLE_OK, curl_easy_getinfo(easy, c.CURLINFO_COOKIELIST, &cookies));
+    defer if (cookies) |list| curl_slist_free_all(list);
+
+    // Domain=co.uk from sub.example.co.uk is rejected when PSL is enabled, accepted when disabled
+    try testing.expectEqual(!backend_options.psl, loopback_http.hasCookie(cookies, "pub", "1"));
+    // Domain=example.co.uk from sub.example.co.uk is accepted
+    try testing.expect(loopback_http.hasCookie(cookies, "reg", "2"));
+    // Host-only Set-Cookie from http://co.uk:<port>/ is accepted and stored as host-only (tailmatch = FALSE)
+    try testing.expect(loopback_http.hasCookieLinePrefix(cookies, "co.uk\tFALSE\t", "hostonly", "3"));
+}
+
+test "IDN URL API punycode conversions and loopback HTTP transfer" {
+    loopback_http.ensureUtf8Locale();
+
+    // 1. URL API curl_url_set / curl_url_get with CURLU_PUNYCODE and CURLU_PUNY2IDN
+    if (backend_options.idn != .none) {
+        {
+            const u = curl_url() orelse return error.UrlInitFailed;
+            defer curl_url_cleanup(u);
+
+            try testing.expectEqual(c.CURLUE_OK, curl_url_set(u, c.CURLUPART_URL, "https://m\xc3\xbcnchen.de/test", 0));
+            var host: ?[*:0]u8 = null;
+            try testing.expectEqual(c.CURLUE_OK, curl_url_get(u, c.CURLUPART_HOST, &host, c.CURLU_PUNYCODE));
+            defer curl_free(@ptrCast(host));
+            try testing.expect(host != null);
+            try testing.expectEqualStrings("xn--mnchen-3ya.de", std.mem.span(host.?));
+        }
+
+        {
+            const u = curl_url() orelse return error.UrlInitFailed;
+            defer curl_url_cleanup(u);
+
+            try testing.expectEqual(c.CURLUE_OK, curl_url_set(u, c.CURLUPART_URL, "https://xn--mnchen-3ya.de/test", 0));
+            var host: ?[*:0]u8 = null;
+            try testing.expectEqual(c.CURLUE_OK, curl_url_get(u, c.CURLUPART_HOST, &host, c.CURLU_PUNY2IDN));
+            defer curl_free(@ptrCast(host));
+            try testing.expect(host != null);
+            try testing.expectEqualStrings("m\xc3\xbcnchen.de", std.mem.span(host.?));
+        }
+
+        if (backend_options.idn != .appleidn) {
+            const u = curl_url() orelse return error.UrlInitFailed;
+            defer curl_url_cleanup(u);
+
+            try testing.expectEqual(c.CURLUE_OK, curl_url_set(u, c.CURLUPART_URL, "https://xn---.com/", 0));
+            var host: ?[*:0]u8 = null;
+            try testing.expectEqual(c.CURLUE_BAD_HOSTNAME, curl_url_get(u, c.CURLUPART_HOST, &host, c.CURLU_PUNY2IDN));
+        }
+    } else {
+        {
+            const u = curl_url() orelse return error.UrlInitFailed;
+            defer curl_url_cleanup(u);
+
+            try testing.expectEqual(c.CURLUE_OK, curl_url_set(u, c.CURLUPART_URL, "https://m\xc3\xbcnchen.de/test", 0));
+            var host: ?[*:0]u8 = null;
+            try testing.expectEqual(c.CURLUE_LACKS_IDN, curl_url_get(u, c.CURLUPART_HOST, &host, c.CURLU_PUNYCODE));
+        }
+
+        {
+            const u = curl_url() orelse return error.UrlInitFailed;
+            defer curl_url_cleanup(u);
+
+            try testing.expectEqual(c.CURLUE_OK, curl_url_set(u, c.CURLUPART_URL, "https://xn--mnchen-3ya.de/test", 0));
+            var host: ?[*:0]u8 = null;
+            try testing.expectEqual(c.CURLUE_LACKS_IDN, curl_url_get(u, c.CURLUPART_HOST, &host, c.CURLU_PUNY2IDN));
+        }
+    }
+
+    // 2. Loopback HTTP transfer to an IDN hostname verifying Host header uses Punycode
+    if (backend_options.idn == .none) return;
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const bind_addr = try std.Io.net.IpAddress.parseIp4("127.0.0.1", 0);
+    var server = try bind_addr.listen(io, .{ .reuse_address = true });
+    defer server.deinit(io);
+    const port = server.socket.address.getPort();
+
+    var srv_ctx = loopback_http.SingleResponseServer{
+        .server = &server,
+        .response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+    };
+    const thread = try std.Thread.spawn(.{}, loopback_http.SingleResponseServer.run, .{&srv_ctx});
+    defer thread.join();
+
+    const easy = curl_easy_init() orelse return error.EasyInitFailed;
+    defer curl_easy_cleanup(easy);
+
+    var resolve_buf: [128]u8 = undefined;
+    const resolve_entry = try loopback_http.bufPrintZ(&resolve_buf, "xn--mnchen-3ya.de:{d}:127.0.0.1", .{port});
+    const resolve_list = curl_slist_append(null, resolve_entry) orelse return error.SlistAppendFailed;
+    defer curl_slist_free_all(resolve_list);
+
+    var url_buf: [128]u8 = undefined;
+    const url = try loopback_http.bufPrintZ(&url_buf, "http://m\xc3\xbcnchen.de:{d}/hello", .{port});
+    var sink = loopback_http.BodySink{};
+
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 10_000)));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_RESOLVE, resolve_list));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, @as(?*anyopaque, @ptrCast(&sink))));
+
+    try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+    try testing.expectEqualStrings("ok", sink.slice());
+
+    var expected_host_buf: [128]u8 = undefined;
+    const expected_host = try std.fmt.bufPrint(&expected_host_buf, "Host: xn--mnchen-3ya.de:{d}\r\n", .{port});
+    try testing.expect(std.mem.indexOf(u8, srv_ctx.requestSlice(), expected_host) != null);
 }

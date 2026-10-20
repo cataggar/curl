@@ -32,7 +32,7 @@ jobs:
       - name: Install TLS system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libssl-dev libmbedtls-dev libgnutls28-dev nettle-dev libwolfssl-dev
+          sudo apt-get install -y --no-install-recommends libssl-dev libmbedtls-dev libgnutls28-dev nettle-dev libwolfssl-dev zlib1g-dev libzstd-dev libnghttp2-dev libbrotli-dev libpsl-dev libidn2-dev
           git clone --depth 1 --branch v0.15.5 https://github.com/rustls/rustls-ffi.git /tmp/rustls-ffi
           cargo build --release --manifest-path /tmp/rustls-ffi/Cargo.toml
           sudo cp /tmp/rustls-ffi/target/release/librustls_ffi.a /usr/lib/x86_64-linux-gnu/librustls.a
@@ -65,6 +65,12 @@ jobs:
       - name: Build and test (-Dzstd=true)
         run: zig build test -Dzstd=true --summary all
 
+      - name: Run backend tests (brotli + psl + libidn2)
+        run: zig build test-backends -Dbrotli=true -Dpsl=true -Didn=libidn2 --summary all
+
+      - name: Run backend tests (OpenSSL + zlib + zstd + nghttp2 + brotli + psl + libidn2)
+        run: zig build test-backends -Dssl=openssl -Dzlib=true -Dzstd=true -Dnghttp2=true -Dbrotli=true -Dpsl=true -Didn=libidn2 --summary all
+
       - name: Verify CLI --version
         run: |
           zig build run -- --version
@@ -82,9 +88,9 @@ jobs:
           - target: aarch64-linux-musl
             extra_args: ""
           - target: x86_64-windows-gnu
-            extra_args: "-Dssl=schannel"
+            extra_args: "-Dssl=schannel -Didn=winidn"
           - target: aarch64-windows-gnu
-            extra_args: "-Dssl=schannel"
+            extra_args: "-Dssl=schannel -Didn=winidn"
           - target: aarch64-macos
             extra_args: ""
     steps:
