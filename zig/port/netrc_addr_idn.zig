@@ -222,14 +222,14 @@ const appleidn = struct {
             outlen.* -= iconv_outlen;
             _ = iconv_close(cd);
             if (iconv_result == invalid_cd) {
-                return if (std.c._errno().* == @intFromEnum(std.c.E.NOMEM))
+                return if (std.c._errno().* == @backingInt(std.c.E.NOMEM))
                     CURLE_OUT_OF_MEMORY
                 else
                     CURLE_URL_MALFORMAT;
             }
             return CURLE_OK;
         } else {
-            return if (std.c._errno().* == @intFromEnum(std.c.E.NOMEM))
+            return if (std.c._errno().* == @backingInt(std.c.E.NOMEM))
                 CURLE_OUT_OF_MEMORY
             else
                 CURLE_FAILED_INIT;
