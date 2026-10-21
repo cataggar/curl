@@ -173,9 +173,29 @@ fn curlThreadCreateThunk(arg: ?*anyopaque) callconv(.c) ?*anyopaque {
     const func = ac.func;
     const real_arg = ac.arg;
 
-    mem.free(ac);
+    mem.freeSized(ac, @sizeOf(CurlActualCall));
     _ = func(real_arg);
     return null;
+}
+
+fn createPosixThread(f: ThreadFunc, arg: ?*anyopaque) error{ OutOfMemory, ThreadCreateFailed }!*usize {
+    const t_raw = mem.malloc(@sizeOf(usize)) orelse return error.OutOfMemory;
+    errdefer mem.freeSized(t_raw, @sizeOf(usize));
+
+    const ac_raw = mem.malloc(@sizeOf(CurlActualCall)) orelse return error.OutOfMemory;
+    errdefer mem.freeSized(ac_raw, @sizeOf(CurlActualCall));
+
+    const t: *usize = @ptrCast(@alignCast(t_raw));
+    const ac: *CurlActualCall = @ptrCast(@alignCast(ac_raw));
+    ac.func = f;
+    ac.arg = arg;
+
+    const rc = posix.pthread_create(t, null, &curlThreadCreateThunk, ac);
+    if (rc != 0) {
+        std.c._errno().* = rc;
+        return error.ThreadCreateFailed;
+    }
+    return t;
 }
 
 pub export fn Curl_thread_create(func: ?ThreadFunc, arg: ?*anyopaque) callconv(.c) curl_thread_t {
@@ -192,29 +212,7 @@ pub export fn Curl_thread_create(func: ?ThreadFunc, arg: ?*anyopaque) callconv(.
         }
         return t;
     } else {
-        const t_raw = mem.malloc(@sizeOf(usize));
-        var ac_raw: ?[*]u8 = null;
-        if (t_raw != null) {
-            ac_raw = mem.malloc(@sizeOf(CurlActualCall));
-        }
-        if (t_raw == null or ac_raw == null) {
-            mem.free(t_raw);
-            mem.free(ac_raw);
-            return null;
-        }
-        const t: *usize = @ptrCast(@alignCast(t_raw.?));
-        const ac: *CurlActualCall = @ptrCast(@alignCast(ac_raw.?));
-        ac.func = f;
-        ac.arg = arg;
-
-        const rc = posix.pthread_create(t, null, &curlThreadCreateThunk, ac);
-        if (rc != 0) {
-            std.c._errno().* = rc;
-            mem.free(t_raw);
-            mem.free(ac_raw);
-            return null;
-        }
-        return t;
+        return createPosixThread(f, arg) catch null;
     }
 }
 
@@ -228,7 +226,7 @@ pub export fn Curl_thread_destroy(hnd: ?*curl_thread_t) callconv(.c) void {
     } else {
         if (h.*) |t| {
             _ = posix.pthread_detach(t.*);
-            mem.free(t);
+            mem.freeSized(t, @sizeOf(usize));
             h.* = null;
         }
     }
@@ -243,7 +241,7 @@ pub export fn Curl_thread_join(hnd: ?*curl_thread_t) callconv(.c) c_int {
     } else {
         const t = h.* orelse return 0;
         const ret: c_int = @intFromBool(posix.pthread_join(t.*, null) == 0);
-        mem.free(t);
+        mem.freeSized(t, @sizeOf(usize));
         h.* = null;
         return ret;
     }
@@ -375,7 +373,7 @@ const libcurl_trc = struct {
 
 fn thrdslotDestroy(tslot: *thrdslot) void {
     condDestroy(&tslot.await_cond);
-    mem.free(tslot);
+    mem.freeSized(tslot, @sizeOf(thrdslot));
 }
 
 fn thrdslotDone(tslot: *thrdslot) void {
@@ -498,7 +496,7 @@ fn thrdpoolUnlink(tpool: *curl_thrdpool, locked: bool) bool {
     }
     condDestroy(&tpool.await_cond);
     mutexDestroy(&tpool.lock);
-    mem.free(tpool);
+    mem.freeSized(tpool, @sizeOf(curl_thrdpool));
     return true;
 }
 
@@ -785,7 +783,7 @@ fn thrdqItemDestroy(qitem: *thrdq_item) void {
     if (qitem.item) |it| {
         qitem.fn_free(it);
     }
-    mem.free(qitem);
+    mem.freeSized(qitem, @sizeOf(thrdq_item));
 }
 
 fn thrdqItemListDtor(user_data: ?*anyopaque, elem: ?*anyopaque) callconv(.c) void {
@@ -890,7 +888,7 @@ fn thrdqUnlink(tqueue: *curl_thrdq, locked: bool, join: bool) void {
         mutexRelease(&tqueue.lock);
     }
     mutexDestroy(&tqueue.lock);
-    mem.free(tqueue);
+    mem.freeSized(tqueue, @sizeOf(curl_thrdq));
 }
 
 pub export fn Curl_thrdq_create(
@@ -1108,6 +1106,20 @@ const PSL_TTL: curlx_time_net.time_t = 72 * 3600;
 const CURL_LOCK_DATA_PSL: c_uint = 6;
 const CURL_LOCK_ACCESS_SHARED: c_uint = 1;
 const CURL_LOCK_ACCESS_SINGLE: c_uint = 2;
+pub const MAX_PSL_HOSTNAME_LEN: usize = 255;
+
+pub fn validatePslHostname(hostname: [*:0]const u8) error{InvalidHostname}![:0]const u8 {
+    const slice = std.mem.span(hostname);
+    if (slice.len == 0 or slice.len > MAX_PSL_HOSTNAME_LEN) {
+        return error.InvalidHostname;
+    }
+    for (slice) |b| {
+        if (b < 0x20 or b == 0x7f) {
+            return error.InvalidHostname;
+        }
+    }
+    return slice;
+}
 
 extern fn psl_free(psl: ?*psl_ctx_t) callconv(.c) void;
 extern fn psl_latest(fname: ?[*:0]const u8) callconv(.c) ?*psl_ctx_t;

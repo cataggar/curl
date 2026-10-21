@@ -893,7 +893,7 @@ export fn Curl_async_destroy(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) 
         a.httpsrr = null;
     }
     Curl_peer_unlink(&a.peer);
-    mem.free(a);
+    mem.freeSized(a, @sizeOf(Curl_resolv_async));
 }
 
 export fn Curl_async_failed(
@@ -935,7 +935,8 @@ fn cf_recvbuf_destroy(cf: *Curl_cfilter, data: ?*Curl_easy) callconv(.c) void {
     if (cf.ctx) |raw| {
         const ctx: *cf_recvbuf_ctx = @ptrCast(@alignCast(raw));
         io_buffers.Curl_bufq_free(&ctx.recvbuf);
-        mem.free(ctx);
+        mem.freeSized(ctx, @sizeOf(cf_recvbuf_ctx));
+        cf.ctx = null;
     }
 }
 
@@ -1012,7 +1013,7 @@ export fn Curl_cf_recvbuf_add(
     }
     if (result != CURLE_OK) {
         io_buffers.Curl_bufq_free(&ctx.recvbuf);
-        mem.free(ctx);
+        mem.freeSized(ctx, @sizeOf(cf_recvbuf_ctx));
         return result;
     }
 
@@ -1044,7 +1045,7 @@ fn cf_haproxy_ctx_reset(ctx: *cf_haproxy_ctx) void {
 fn cf_haproxy_ctx_free(ctx: ?*cf_haproxy_ctx) void {
     if (ctx) |c| {
         curlx_dyn_free(&c.data_out);
-        mem.free(c);
+        mem.freeSized(c, @sizeOf(cf_haproxy_ctx));
     }
 }
 
@@ -1282,7 +1283,7 @@ fn cw_pause_buf_create(wtype: c_int, buflen: usize) ?*cw_pause_buf {
 fn cw_pause_buf_free(cwbuf: ?*cw_pause_buf) void {
     if (cwbuf) |b| {
         io_buffers.Curl_bufq_free(&b.b);
-        mem.free(b);
+        mem.freeSized(b, @sizeOf(cw_pause_buf));
     }
 }
 
@@ -1497,7 +1498,8 @@ fn cf_capsule_destroy(cf: *Curl_cfilter, data: ?*Curl_easy) callconv(.c) void {
     trcCf(data, cf, "destroy", .{});
     if (ctx) |c| {
         cf_capsule_ctx_clear(c);
-        mem.free(c);
+        mem.freeSized(c, @sizeOf(cf_capsule_ctx));
+        cf.ctx = null;
     }
 }
 
@@ -1708,7 +1710,7 @@ export fn Curl_cf_capsule_insert_after(cf_at: *Curl_cfilter, data: ?*Curl_easy) 
     const result = Curl_cf_create(&cf, &Curl_cft_capsule, ctx);
     if (result != CURLE_OK) {
         cf_capsule_ctx_clear(ctx);
-        mem.free(ctx);
+        mem.freeSized(ctx, @sizeOf(cf_capsule_ctx));
         return result;
     }
 

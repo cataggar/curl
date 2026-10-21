@@ -1577,7 +1577,7 @@ fn cf_https_proxy_ctx_free(ctx_opt: ?*cf_proxy_ctx) void {
     if (ctx_opt) |ctx| {
         altsvc_hsts_peer.Curl_peer_unlink(&ctx.peer);
         altsvc_hsts_peer.Curl_peer_unlink(&ctx.tunnel_peer);
-        mem.free(ctx);
+        mem.freeSized(ctx, @sizeOf(cf_proxy_ctx));
     }
 }
 
@@ -1797,7 +1797,7 @@ fn tunnel_free(ts_opt: ?*h1_tunnel_state, data: ?*Curl_easy) void {
         containers.curlx_dyn_free(&ts.rcvbuf);
         containers.curlx_dyn_free(&ts.request_data);
         Curl_httpchunk_free(data, &ts.ch);
-        mem.free(ts);
+        mem.freeSized(ts, @sizeOf(h1_tunnel_state));
     }
 }
 
@@ -2389,7 +2389,7 @@ fn cf_h1_proxy_destroy(cf: *Curl_cfilter, data: ?*Curl_easy) callconv(.c) void {
         const pctx: *cf_h1_proxy_ctx = @ptrCast(@alignCast(raw));
         cf_tunnel_free(cf, data);
         altsvc_hsts_peer.Curl_peer_unlink(&pctx.peer);
-        mem.free(cf.ctx);
+        mem.freeSized(pctx, @sizeOf(cf_h1_proxy_ctx));
         cf.ctx = null;
     }
 }
@@ -2481,7 +2481,7 @@ pub export fn Curl_cf_h1_proxy_insert_after(
     const result = Curl_cf_create(&cf, &Curl_cft_h1_proxy, pctx);
     if (result != CURLE_OK) {
         altsvc_hsts_peer.Curl_peer_unlink(&pctx.peer);
-        mem.free(pctx);
+        mem.freeSized(pctx, @sizeOf(cf_h1_proxy_ctx));
         return result;
     }
     ts = null;
@@ -2776,6 +2776,9 @@ fn deflate_do_close(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) void 
     const zp: *zlib_writer = @ptrCast(@alignCast(writer.ctx));
     const z = &zp.z;
     _ = exit_zlib(data, z, &zp.zlib_init, CURLE_OK);
+    mem.secureZero(&zp.buffer, DECOMPRESS_BUFFER_SIZE);
+    zp.z = .{};
+    zp.trailerlen = 0;
 }
 
 const deflate_encoding: Curl_cwtype = .{
@@ -2829,6 +2832,9 @@ fn gzip_do_close(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) void {
     const zp: *zlib_writer = @ptrCast(@alignCast(writer.ctx));
     const z = &zp.z;
     _ = exit_zlib(data, z, &zp.zlib_init, CURLE_OK);
+    mem.secureZero(&zp.buffer, DECOMPRESS_BUFFER_SIZE);
+    zp.z = .{};
+    zp.trailerlen = 0;
 }
 
 const gzip_encoding: Curl_cwtype = .{
@@ -2905,7 +2911,7 @@ fn brotli_do_write(
         return CURLE_WRITE_ERROR;
 
     const decomp = mem.malloc(DECOMPRESS_BUFFER_SIZE) orelse return CURLE_OUT_OF_MEMORY;
-    defer mem.free(decomp);
+    defer mem.freeSized(decomp, DECOMPRESS_BUFFER_SIZE);
 
     var src: ?[*]const u8 = buf;
     var src_len: usize = nbytes;
@@ -3071,6 +3077,7 @@ fn zstd_do_close(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) void {
         _ = zstd_c.ZSTD_freeDStream(zds);
         zp.zds = null;
     }
+    mem.secureZero(&zp.buffer, DECOMPRESS_BUFFER_SIZE);
 }
 
 const zstd_encoding: Curl_cwtype = .{
