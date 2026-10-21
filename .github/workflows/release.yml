@@ -191,15 +191,12 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: Generate SHA-256 manifest and verify asset allowlist
+      - name: Verify asset allowlist
         shell: bash
         env:
           VERSION: ${{ needs.verify.outputs.version }}
         run: |
           set -euo pipefail
-          zig-out/bin/curl_release generate-checksums \
-            --assets-directory release-assets \
-            --version "$VERSION"
           zig-out/bin/curl_release verify-assets \
             --assets-directory release-assets \
             --version "$VERSION"
@@ -207,9 +204,7 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: |
-            release-assets/curl-${{ needs.verify.outputs.version }}-*.tar.gz
-            release-assets/curl-${{ needs.verify.outputs.version }}-SHA256SUMS.txt
+          subject-path: release-assets/curl-${{ needs.verify.outputs.version }}-*.tar.gz
 
       - name: Re-verify asset allowlist before publication
         shell: bash

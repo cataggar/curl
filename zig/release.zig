@@ -384,7 +384,7 @@ pub fn writeAtomic(io: Io, path: []const u8, data: []const u8) !void {
     try stage.replace(io);
 }
 
-/// Validates a fork prerelease SemVer string (e.g. `8.23.1-zig.1` or `8.23.1-rc.1`).
+/// Validates a fork prerelease SemVer string (e.g. `8.23.0-zig.1` or `8.23.0-rc.1`).
 /// Rejects bare upstream versions without a prerelease suffix and rejects `-dev`/`-DEV`.
 pub fn validateReleaseVersion(
     version: []const u8,
@@ -596,7 +596,7 @@ pub fn renderPackageReadme(
         \\
         \\## Layout
         \\
-        \\- `bin/{s}` — curl command-line executable
+        \\- `{s}` — curl command-line executable
         \\- `COPYING` — curl license and copyright notice
         \\- `README.md` — this usage and capability summary
         \\
@@ -608,11 +608,11 @@ pub fn renderPackageReadme(
         \\ghr install {s}@v{s}
         \\```
         \\
-        \\Or extract directly and add `bin/` to your `PATH`:
+        \\Or extract directly and run from the current directory or add to your `PATH`:
         \\
         \\```console
         \\tar xzf curl-{s}-{s}.tar.gz
-        \\./curl-{s}-{s}/bin/{s} --version
+        \\./{s} --version
         \\```
         \\
         \\## Platform & Runtime Requirements
@@ -646,8 +646,6 @@ pub fn renderPackageReadme(
             platform.executable,
             default_repository,
             version,
-            version,
-            platform.suffix,
             version,
             platform.suffix,
             platform.executable,
@@ -734,18 +732,15 @@ pub fn packageArchive(
     Dir.cwd().deleteTree(io, stage_root) catch {};
     defer Dir.cwd().deleteTree(io, stage_root) catch {};
 
-    const stage_bin = std.fs.path.join(allocator, &.{ stage_root, "bin" }) catch
-        return error.OutOfMemory;
-    defer allocator.free(stage_bin);
-    Dir.cwd().createDirPath(io, stage_bin) catch |err| return diagnostic.fail(
+    Dir.cwd().createDirPath(io, stage_root) catch |err| return diagnostic.fail(
         error.Failed,
         "cannot create staging directory {s}: {t}",
-        .{ stage_bin, err },
+        .{ stage_root, err },
     );
 
     const staged_exe_path = std.fs.path.join(
         allocator,
-        &.{ stage_bin, platform.executable },
+        &.{ stage_root, platform.executable },
     ) catch return error.OutOfMemory;
     defer allocator.free(staged_exe_path);
 
@@ -802,7 +797,7 @@ pub fn packageArchive(
     const tar_res = runCapture(
         allocator,
         io,
-        &.{ "tar", "-czf", archive_path, "-C", output_dir, pkg_name },
+        &.{ "tar", "-czf", archive_path, "-C", stage_root, platform.executable, "COPYING", "README.md" },
     ) catch |err| return diagnostic.fail(
         error.Failed,
         "cannot execute tar to create {s}: {t}",
@@ -838,24 +833,10 @@ pub fn inspectArchiveListText(
         .{platform_suffix},
     );
 
-    var prefix_buf: [256]u8 = undefined;
-    const prefix = std.fmt.bufPrint(
-        &prefix_buf,
-        "curl-{s}-{s}/",
-        .{ version, platform.suffix },
-    ) catch return diagnostic.fail(error.Failed, "archive prefix is too long", .{});
-
-    var expected_bin_buf: [256]u8 = undefined;
-    const expected_bin = std.fmt.bufPrint(
-        &expected_bin_buf,
-        "bin/{s}",
-        .{platform.executable},
-    ) catch return diagnostic.fail(error.Failed, "executable path is too long", .{});
-
     var has_exe = false;
     var has_copying = false;
     var has_readme = false;
-    var bin_file_count: usize = 0;
+    var exe_count: usize = 0;
 
     var lines = std.mem.splitScalar(u8, entries_text, '\n');
     while (lines.next()) |raw_line| {
@@ -878,24 +859,7 @@ pub fn inspectArchiveListText(
             );
         }
 
-        const root_dir = prefix[0 .. prefix.len - 1];
-        if (std.mem.eql(u8, line, root_dir) or std.mem.eql(u8, line, prefix)) {
-            continue;
-        }
-        if (!std.mem.startsWith(u8, line, prefix)) {
-            return diagnostic.fail(
-                error.Failed,
-                "archive entry {s} is outside expected root {s}",
-                .{ line, prefix },
-            );
-        }
-
-        const rel = line[prefix.len..];
-        if (rel.len == 0 or std.mem.eql(u8, rel, "bin") or std.mem.eql(u8, rel, "bin/")) {
-            continue;
-        }
-
-        if (isLibcurlDevPath(rel)) {
+        if (isLibcurlDevPath(line)) {
             return diagnostic.fail(
                 error.Failed,
                 "archive contains out-of-scope libcurl development entry: {s}",
@@ -903,20 +867,34 @@ pub fn inspectArchiveListText(
             );
         }
 
-        if (std.mem.startsWith(u8, rel, "bin/")) {
-            bin_file_count += 1;
-            if (std.mem.eql(u8, rel, expected_bin)) {
-                has_exe = true;
-            } else {
+        if (std.mem.indexOfScalar(u8, line, '/') != null) {
+            return diagnostic.fail(
+                error.Failed,
+                "archive entry {s} must be at the top level of the archive",
+                .{line},
+            );
+        }
+
+        if (std.mem.eql(u8, line, platform.executable)) {
+            exe_count += 1;
+            has_exe = true;
+        } else if (std.mem.eql(u8, line, "COPYING")) {
+            if (has_copying) {
                 return diagnostic.fail(
                     error.Failed,
-                    "archive contains unexpected executable under bin/: {s}",
-                    .{line},
+                    "archive contains duplicate COPYING entry",
+                    .{},
                 );
             }
-        } else if (std.mem.eql(u8, rel, "COPYING")) {
             has_copying = true;
-        } else if (std.mem.eql(u8, rel, "README.md")) {
+        } else if (std.mem.eql(u8, line, "README.md")) {
+            if (has_readme) {
+                return diagnostic.fail(
+                    error.Failed,
+                    "archive contains duplicate README.md entry",
+                    .{},
+                );
+            }
             has_readme = true;
         } else {
             return diagnostic.fail(
@@ -927,11 +905,11 @@ pub fn inspectArchiveListText(
         }
     }
 
-    if (bin_file_count != 1 or !has_exe) {
+    if (exe_count != 1 or !has_exe) {
         return diagnostic.fail(
             error.Failed,
             "archive for {s} must contain exactly one executable ({s})",
-            .{ platform.suffix, expected_bin },
+            .{ platform.suffix, platform.executable },
         );
     }
     if (!has_copying) {
@@ -1407,22 +1385,21 @@ pub fn verifyPackage(
         );
     }
 
-    const root_name = std.fmt.allocPrint(
-        allocator,
-        "curl-{s}-{s}",
-        .{ version, platform.suffix },
-    ) catch return error.OutOfMemory;
-    defer allocator.free(root_name);
-
     const unpacked_copying = std.fs.path.join(
         allocator,
-        &.{ temp_dir, root_name, "COPYING" },
+        &.{ temp_dir, "COPYING" },
     ) catch return error.OutOfMemory;
     defer allocator.free(unpacked_copying);
 
+    const unpacked_readme = std.fs.path.join(
+        allocator,
+        &.{ temp_dir, "README.md" },
+    ) catch return error.OutOfMemory;
+    defer allocator.free(unpacked_readme);
+
     const unpacked_exe = std.fs.path.join(
         allocator,
-        &.{ temp_dir, root_name, "bin", platform.executable },
+        &.{ temp_dir, platform.executable },
     ) catch return error.OutOfMemory;
     defer allocator.free(unpacked_exe);
 
@@ -1442,6 +1419,25 @@ pub fn verifyPackage(
             error.Failed,
             "unpacked COPYING {s} is missing copyright notice",
             .{unpacked_copying},
+        );
+    }
+
+    const readme_bytes = readBounded(
+        allocator,
+        io,
+        unpacked_readme,
+        1024 * 1024,
+    ) catch |err| return diagnostic.fail(
+        error.Failed,
+        "cannot read unpacked README.md {s}: {t}",
+        .{ unpacked_readme, err },
+    );
+    defer allocator.free(readme_bytes);
+    if (readme_bytes.len == 0) {
+        return diagnostic.fail(
+            error.Failed,
+            "unpacked README.md {s} is empty",
+            .{unpacked_readme},
         );
     }
 
@@ -1718,11 +1714,9 @@ pub fn freeAssets(allocator: Allocator, assets: []Asset) void {
     allocator.free(assets);
 }
 
-/// Validates the local release assets directory against the strict #63 allowlist:
+/// Validates the local release assets directory against the strict 6-archive allowlist:
 /// - The 6 `curl-<version>-<platform>.tar.gz` archives (inspected for layout and no SBOM/SPDX)
-/// - The `curl-<version>-SHA256SUMS.txt` manifest (verified against the 6 archives)
-/// - Optional detached signature `curl-<version>-SHA256SUMS.txt.asc` or `.sig`
-/// Rejects any other file in `assets_directory`, including any SBOM or SPDX file.
+/// Rejects any other file in `assets_directory`, including `SHA256SUMS.txt` or any SBOM or SPDX file.
 pub fn verifyAssetsDirectory(
     allocator: Allocator,
     io: Io,
@@ -1744,24 +1738,6 @@ pub fn verifyAssetsDirectory(
         expected_archives_init += 1;
     }
 
-    const manifest_name = checksumManifestName(allocator, version) catch
-        return error.OutOfMemory;
-    defer allocator.free(manifest_name);
-
-    const sig_asc_name = std.fmt.allocPrint(
-        allocator,
-        "{s}.asc",
-        .{manifest_name},
-    ) catch return error.OutOfMemory;
-    defer allocator.free(sig_asc_name);
-
-    const sig_bin_name = std.fmt.allocPrint(
-        allocator,
-        "{s}.sig",
-        .{manifest_name},
-    ) catch return error.OutOfMemory;
-    defer allocator.free(sig_bin_name);
-
     var directory = Dir.cwd().openDir(io, assets_directory, .{
         .iterate = true,
     }) catch |err| return diagnostic.fail(
@@ -1771,7 +1747,6 @@ pub fn verifyAssetsDirectory(
     );
     defer directory.close(io);
 
-    var found_sig_name: ?[]const u8 = null;
     var iterator = directory.iterate();
     while (iterator.next(io) catch |err| return diagnostic.fail(
         error.Failed,
@@ -1800,29 +1775,6 @@ pub fn verifyAssetsDirectory(
                 break;
             }
         }
-        if (std.mem.eql(u8, entry.name, manifest_name)) {
-            is_allowed = true;
-        } else if (std.mem.eql(u8, entry.name, sig_asc_name)) {
-            if (found_sig_name != null) {
-                return diagnostic.fail(
-                    error.Failed,
-                    "multiple manifest signatures present in release assets directory",
-                    .{},
-                );
-            }
-            found_sig_name = sig_asc_name;
-            is_allowed = true;
-        } else if (std.mem.eql(u8, entry.name, sig_bin_name)) {
-            if (found_sig_name != null) {
-                return diagnostic.fail(
-                    error.Failed,
-                    "multiple manifest signatures present in release assets directory",
-                    .{},
-                );
-            }
-            found_sig_name = sig_bin_name;
-            is_allowed = true;
-        }
 
         if (!is_allowed) {
             return diagnostic.fail(
@@ -1841,9 +1793,6 @@ pub fn verifyAssetsDirectory(
         }
         list.deinit(allocator);
     }
-
-    var expected_manifest_text: std.ArrayList(u8) = .empty;
-    defer expected_manifest_text.deinit(allocator);
 
     for (platforms, expected_archives) |platform, archive_name| {
         const archive_path = std.fs.path.join(
@@ -1876,86 +1825,6 @@ pub fn verifyAssetsDirectory(
             .digest_hex = hashed.hex,
             .size = hashed.size,
             .identity = hashed.identity,
-        }) catch return error.OutOfMemory;
-
-        var line_buf: [512]u8 = undefined;
-        const line = std.fmt.bufPrint(
-            &line_buf,
-            "{s}  {s}\n",
-            .{ &hashed.hex, archive_name },
-        ) catch unreachable;
-        expected_manifest_text.appendSlice(allocator, line) catch return error.OutOfMemory;
-    }
-
-    // Validate the SHA-256 checksum manifest
-    const manifest_path = std.fs.path.join(
-        allocator,
-        &.{ assets_directory, manifest_name },
-    ) catch return error.OutOfMemory;
-    errdefer allocator.free(manifest_path);
-
-    const manifest_bytes = readBounded(allocator, io, manifest_path, 64 * 1024) catch |err|
-        return diagnostic.fail(
-            error.Failed,
-            "cannot read SHA-256 manifest {s}: {t}",
-            .{ manifest_name, err },
-        );
-    defer allocator.free(manifest_bytes);
-
-    if (!std.mem.eql(u8, manifest_bytes, expected_manifest_text.items)) {
-        return diagnostic.fail(
-            error.Failed,
-            "SHA-256 manifest {s} does not match the exact 6 release archives",
-            .{manifest_name},
-        );
-    }
-
-    const manifest_hashed = hashRegularNoSymlink(io, manifest_path) catch |err|
-        return diagnostic.fail(
-            error.Failed,
-            "SHA-256 manifest {s} is not a stable regular file: {t}",
-            .{ manifest_name, err },
-        );
-    const dup_manifest_name = allocator.dupe(u8, manifest_name) catch return error.OutOfMemory;
-    errdefer allocator.free(dup_manifest_name);
-
-    list.append(allocator, .{
-        .name = dup_manifest_name,
-        .path = manifest_path,
-        .digest_hex = manifest_hashed.hex,
-        .size = manifest_hashed.size,
-        .identity = manifest_hashed.identity,
-    }) catch return error.OutOfMemory;
-
-    if (found_sig_name) |sig_name| {
-        const sig_path = std.fs.path.join(
-            allocator,
-            &.{ assets_directory, sig_name },
-        ) catch return error.OutOfMemory;
-        errdefer allocator.free(sig_path);
-
-        const sig_hashed = hashRegularNoSymlink(io, sig_path) catch |err|
-            return diagnostic.fail(
-                error.Failed,
-                "manifest signature {s} is not a stable regular file: {t}",
-                .{ sig_name, err },
-            );
-        if (sig_hashed.size == 0) {
-            return diagnostic.fail(
-                error.Failed,
-                "manifest signature is empty: {s}",
-                .{sig_name},
-            );
-        }
-        const dup_sig_name = allocator.dupe(u8, sig_name) catch return error.OutOfMemory;
-        errdefer allocator.free(dup_sig_name);
-
-        list.append(allocator, .{
-            .name = dup_sig_name,
-            .path = sig_path,
-            .digest_hex = sig_hashed.hex,
-            .size = sig_hashed.size,
-            .identity = sig_hashed.identity,
         }) catch return error.OutOfMemory;
     }
 
@@ -2001,7 +1870,7 @@ pub fn renderReleaseNotes(
         \\
         \\## Highlights
         \\
-        \\- **Six-platform Zig-built `curl` CLI archives.** Publishes `linux-musl-x64`, `linux-musl-arm64`, `macos-x64`, `macos-arm64`, `windows-x64`, and `windows-arm64` archives (`curl-{s}-<platform>.tar.gz`) with a verified `curl-{s}-SHA256SUMS.txt` manifest and zero SBOM or SPDX assets.
+        \\- **Six-platform Zig-built `curl` CLI archives.** Publishes `linux-musl-x64`, `linux-musl-arm64`, `macos-x64`, `macos-arm64`, `windows-x64`, and `windows-arm64` archives (`curl-{s}-<platform>.tar.gz`) with GitHub build provenance attestations and zero SBOM or SPDX assets.
         \\- **Pure Zig port of `libcurl` and the `curl` CLI.** Core transfer engine, HTTP/1.1, SOCKS4/5, DNS resolver, MIME, cookie engine, HSTS, alt-svc, WebSockets, FTP, SMTP, IMAP, POP3, RTSP, TFTP, DICT, GOPHER, MQTT, TELNET, and FILE are compiled directly via `zig build`.
         \\- **Native Windows OS integration on Windows x64 and Arm64.** Windows archives enable Schannel TLS (`-Dssl=schannel`), WinIDN (`-Didn=winidn`), WinLDAP (`-Dldap=winldap`), and Windows SSPI (`-Dsspi=true`) out of the box using standard Windows system DLLs.
         \\- **Zero external shared library dependencies on Linux musl and macOS.** Linux musl binaries are statically linked; macOS binaries link only system `libSystem.B.dylib`.
@@ -2010,12 +1879,12 @@ pub fn renderReleaseNotes(
         \\
         \\| Archive | Zig target | Binary | Runtime dependencies |
         \\|---|---|---|---|
-        \\| `curl-{s}-linux-musl-x64.tar.gz` | `x86_64-linux-musl` | `bin/curl` | Static musl binary (none) |
-        \\| `curl-{s}-linux-musl-arm64.tar.gz` | `aarch64-linux-musl` | `bin/curl` | Static musl binary (none) |
-        \\| `curl-{s}-macos-x64.tar.gz` | `x86_64-macos` | `bin/curl` | macOS `libSystem.B.dylib` |
-        \\| `curl-{s}-macos-arm64.tar.gz` | `aarch64-macos` | `bin/curl` | macOS `libSystem.B.dylib` |
-        \\| `curl-{s}-windows-x64.tar.gz` | `x86_64-windows-gnu` | `bin/curl.exe` | Windows system DLLs (`ws2_32`, `secur32`, `crypt32`, `advapi32`, `bcrypt`, `normaliz`, `wldap32`) |
-        \\| `curl-{s}-windows-arm64.tar.gz` | `aarch64-windows-gnu` | `bin/curl.exe` | Windows system DLLs (`ws2_32`, `secur32`, `crypt32`, `advapi32`, `bcrypt`, `normaliz`, `wldap32`) |
+        \\| `curl-{s}-linux-musl-x64.tar.gz` | `x86_64-linux-musl` | `curl` | Static musl binary (none) |
+        \\| `curl-{s}-linux-musl-arm64.tar.gz` | `aarch64-linux-musl` | `curl` | Static musl binary (none) |
+        \\| `curl-{s}-macos-x64.tar.gz` | `x86_64-macos` | `curl` | macOS `libSystem.B.dylib` |
+        \\| `curl-{s}-macos-arm64.tar.gz` | `aarch64-macos` | `curl` | macOS `libSystem.B.dylib` |
+        \\| `curl-{s}-windows-x64.tar.gz` | `x86_64-windows-gnu` | `curl.exe` | Windows system DLLs (`ws2_32`, `secur32`, `crypt32`, `advapi32`, `bcrypt`, `normaliz`, `wldap32`) |
+        \\| `curl-{s}-windows-arm64.tar.gz` | `aarch64-windows-gnu` | `curl.exe` | Windows system DLLs (`ws2_32`, `secur32`, `crypt32`, `advapi32`, `bcrypt`, `normaliz`, `wldap32`) |
         \\
         \\## Known Limitations
         \\
@@ -2030,7 +1899,6 @@ pub fn renderReleaseNotes(
             tag,
             repository_name,
             repository_name,
-            version,
             version,
             version,
             version,
@@ -2730,7 +2598,7 @@ const Publisher = struct {
         var buffer: [4096]u8 = undefined;
         const text = std.fmt.bufPrint(
             &buffer,
-            "### curl Zig-port release published\n\n- Release: https://github.com/{s}/releases/tag/{s}\n- Commit: `{s}`\n- Assets: {d} allowlisted files (6 platform archives + SHA-256 manifest, zero SBOM/SPDX assets), independently downloaded and verified\n",
+            "### curl Zig-port release published\n\n- Release: https://github.com/{s}/releases/tag/{s}\n- Commit: `{s}`\n- Assets: {d} allowlisted platform archives (zero SBOM/SPDX assets), independently downloaded and verified\n",
             .{
                 self.options.repository_name,
                 self.metadata.tag,
@@ -3193,38 +3061,38 @@ test "version contract accepts fork prereleases and rejects dev or stable upstre
     var diagnostic: Diagnostic = .{};
 
     try std.testing.expectEqualStrings(
-        "8.23.1-zig.1",
-        try versionFromTag("v8.23.1-zig.1", &diagnostic),
+        "8.23.0-zig.1",
+        try versionFromTag("v8.23.0-zig.1", &diagnostic),
     );
     try std.testing.expectEqualStrings(
-        "8.23.1-rc.1",
-        try versionFromTag("v8.23.1-rc.1", &diagnostic),
+        "8.23.0-rc.1",
+        try versionFromTag("v8.23.0-rc.1", &diagnostic),
     );
-    try validateVersionTag("8.23.1-zig.1", "v8.23.1-zig.1", &diagnostic);
+    try validateVersionTag("8.23.0-zig.1", "v8.23.0-zig.1", &diagnostic);
 
     // Reject missing 'v' prefix
     try std.testing.expectError(
         error.Failed,
-        versionFromTag("8.23.1-zig.1", &diagnostic),
+        versionFromTag("8.23.0-zig.1", &diagnostic),
     );
     // Reject bare upstream version without prerelease suffix
     try std.testing.expectError(
         error.Failed,
-        versionFromTag("v8.23.1", &diagnostic),
+        versionFromTag("v8.23.0", &diagnostic),
     );
     // Reject -dev / -DEV
     try std.testing.expectError(
         error.Failed,
-        versionFromTag("v8.23.1-dev", &diagnostic),
+        versionFromTag("v8.23.0-dev", &diagnostic),
     );
     try std.testing.expectError(
         error.Failed,
-        versionFromTag("v8.23.1-DEV", &diagnostic),
+        versionFromTag("v8.23.0-DEV", &diagnostic),
     );
     // Reject +build metadata
     try std.testing.expectError(
         error.Failed,
-        versionFromTag("v8.23.1-zig.1+20261021", &diagnostic),
+        versionFromTag("v8.23.0-zig.1+20261021", &diagnostic),
     );
 }
 
@@ -3232,26 +3100,26 @@ test "extractZonVersion and manifest validation" {
     const sample =
         \\.{
         \\    .name = .curl,
-        \\    .version = "8.23.1-zig.1",
+        \\    .version = "8.23.0-zig.1",
         \\    .minimum_zig_version = "0.17.0",
         \\}
     ;
-    try std.testing.expectEqualStrings("8.23.1-zig.1", extractZonVersion(sample).?);
+    try std.testing.expectEqualStrings("8.23.0-zig.1", extractZonVersion(sample).?);
 }
 
 test "SBOM, SPDX, and libcurl dev path detectors reject prohibited entries" {
-    try std.testing.expect(isSbOmOrSpdxPath("curl-8.23.1-zig.1-linux-musl-x64.sbom.json"));
-    try std.testing.expect(isSbOmOrSpdxPath("curl-8.23.1-zig.1.spdx.json"));
-    try std.testing.expect(isSbOmOrSpdxPath("curl-8.23.1-zig.1-linux-musl-x64/SBOM.txt"));
-    try std.testing.expect(!isSbOmOrSpdxPath("curl-8.23.1-zig.1-linux-musl-x64/COPYING"));
-    try std.testing.expect(!isSbOmOrSpdxPath("curl-8.23.1-zig.1-linux-musl-x64.tar.gz"));
+    try std.testing.expect(isSbOmOrSpdxPath("curl-8.23.0-zig.1-linux-musl-x64.sbom.json"));
+    try std.testing.expect(isSbOmOrSpdxPath("curl-8.23.0-zig.1.spdx.json"));
+    try std.testing.expect(isSbOmOrSpdxPath("SBOM.txt"));
+    try std.testing.expect(!isSbOmOrSpdxPath("COPYING"));
+    try std.testing.expect(!isSbOmOrSpdxPath("curl-8.23.0-zig.1-linux-musl-x64.tar.gz"));
 
     try std.testing.expect(isLibcurlDevPath("include/curl/curl.h"));
     try std.testing.expect(isLibcurlDevPath("lib/libcurl.a"));
     try std.testing.expect(isLibcurlDevPath("libcurl.so"));
     try std.testing.expect(isLibcurlDevPath("libcurl.pc"));
-    try std.testing.expect(!isLibcurlDevPath("bin/curl"));
-    try std.testing.expect(!isLibcurlDevPath("bin/curl.exe"));
+    try std.testing.expect(!isLibcurlDevPath("curl"));
+    try std.testing.expect(!isLibcurlDevPath("curl.exe"));
     try std.testing.expect(!isLibcurlDevPath("COPYING"));
     try std.testing.expect(!isLibcurlDevPath("README.md"));
 }
@@ -3259,44 +3127,52 @@ test "SBOM, SPDX, and libcurl dev path detectors reject prohibited entries" {
 test "inspectArchiveListText validates exact layout and rejects SBOM, SPDX, and dev files" {
     var diagnostic: Diagnostic = .{};
     const valid_unix =
-        \\curl-8.23.1-zig.1-linux-musl-x64/
-        \\curl-8.23.1-zig.1-linux-musl-x64/bin/
-        \\curl-8.23.1-zig.1-linux-musl-x64/bin/curl
-        \\curl-8.23.1-zig.1-linux-musl-x64/COPYING
-        \\curl-8.23.1-zig.1-linux-musl-x64/README.md
+        \\curl
+        \\COPYING
+        \\README.md
         \\
     ;
-    try inspectArchiveListText(valid_unix, "8.23.1-zig.1", "linux-musl-x64", &diagnostic);
+    try inspectArchiveListText(valid_unix, "8.23.0-zig.1", "linux-musl-x64", &diagnostic);
 
     const valid_win =
-        \\curl-8.23.1-zig.1-windows-x64/
-        \\curl-8.23.1-zig.1-windows-x64/bin/
-        \\curl-8.23.1-zig.1-windows-x64/bin/curl.exe
-        \\curl-8.23.1-zig.1-windows-x64/COPYING
-        \\curl-8.23.1-zig.1-windows-x64/README.md
+        \\curl.exe
+        \\COPYING
+        \\README.md
         \\
     ;
-    try inspectArchiveListText(valid_win, "8.23.1-zig.1", "windows-x64", &diagnostic);
+    try inspectArchiveListText(valid_win, "8.23.0-zig.1", "windows-x64", &diagnostic);
 
-    // Reject SBOM inside archive
-    const with_sbom = valid_unix ++ "curl-8.23.1-zig.1-linux-musl-x64/curl.spdx.json\n";
+    // Reject nested directory entries
+    const nested =
+        \\curl-8.23.0-zig.1-linux-musl-x64/bin/curl
+        \\curl-8.23.0-zig.1-linux-musl-x64/COPYING
+        \\curl-8.23.0-zig.1-linux-musl-x64/README.md
+        \\
+    ;
     try std.testing.expectError(
         error.Failed,
-        inspectArchiveListText(with_sbom, "8.23.1-zig.1", "linux-musl-x64", &diagnostic),
+        inspectArchiveListText(nested, "8.23.0-zig.1", "linux-musl-x64", &diagnostic),
+    );
+
+    // Reject SBOM inside archive
+    const with_sbom = valid_unix ++ "curl.spdx.json\n";
+    try std.testing.expectError(
+        error.Failed,
+        inspectArchiveListText(with_sbom, "8.23.0-zig.1", "linux-musl-x64", &diagnostic),
     );
 
     // Reject libcurl dev header inside archive
-    const with_header = valid_unix ++ "curl-8.23.1-zig.1-linux-musl-x64/include/curl/curl.h\n";
+    const with_header = valid_unix ++ "include/curl/curl.h\n";
     try std.testing.expectError(
         error.Failed,
-        inspectArchiveListText(with_header, "8.23.1-zig.1", "linux-musl-x64", &diagnostic),
+        inspectArchiveListText(with_header, "8.23.0-zig.1", "linux-musl-x64", &diagnostic),
     );
 
-    // Reject second executable under bin/
-    const with_extra_bin = valid_unix ++ "curl-8.23.1-zig.1-linux-musl-x64/bin/curl-config\n";
+    // Reject second executable
+    const with_extra_bin = valid_unix ++ "curl-config\n";
     try std.testing.expectError(
         error.Failed,
-        inspectArchiveListText(with_extra_bin, "8.23.1-zig.1", "linux-musl-x64", &diagnostic),
+        inspectArchiveListText(with_extra_bin, "8.23.0-zig.1", "linux-musl-x64", &diagnostic),
     );
 }
 
@@ -3317,15 +3193,15 @@ test "isSafeArchiveEntryPath rejects traversal, absolute, drive, dot, NUL, and c
         "C:/foo",
         "d:bar",
         "bin/curl\x00.txt",
-        "curl-8.23.1-zig.1-linux-musl-x64/bin/curl\x00.txt",
-        "curl-8.23.1-zig.1-linux-musl-x64/../etc/passwd",
-        "curl-8.23.1-zig.1-linux-musl-x64/./bin/curl",
-        "curl-8.23.1-zig.1-linux-musl-x64/bin//curl",
-        "curl-8.23.1-zig.1-linux-musl-x64//",
-        "curl-8.23.1-zig.1-linux-musl-x64/bin/curl\x01",
-        "curl-8.23.1-zig.1-linux-musl-x64/bin/curl\x1f",
-        "curl-8.23.1-zig.1-linux-musl-x64/bin/curl\x7f",
-        "curl-8.23.1-zig.1-linux-musl-x64/bin\\curl",
+        "curl-8.23.0-zig.1-linux-musl-x64/bin/curl\x00.txt",
+        "curl-8.23.0-zig.1-linux-musl-x64/../etc/passwd",
+        "curl-8.23.0-zig.1-linux-musl-x64/./bin/curl",
+        "curl-8.23.0-zig.1-linux-musl-x64/bin//curl",
+        "curl-8.23.0-zig.1-linux-musl-x64//",
+        "curl-8.23.0-zig.1-linux-musl-x64/bin/curl\x01",
+        "curl-8.23.0-zig.1-linux-musl-x64/bin/curl\x1f",
+        "curl-8.23.0-zig.1-linux-musl-x64/bin/curl\x7f",
+        "curl-8.23.0-zig.1-linux-musl-x64/bin\\curl",
     };
     for (unsafe_paths) |p| {
         try std.testing.expect(!isSafeArchiveEntryPath(p));
@@ -3333,14 +3209,18 @@ test "isSafeArchiveEntryPath rejects traversal, absolute, drive, dot, NUL, and c
 
     // Accept valid archive relative paths
     const valid_paths = [_][]const u8{
-        "curl-8.23.1-zig.1-linux-musl-x64",
-        "curl-8.23.1-zig.1-linux-musl-x64/",
-        "curl-8.23.1-zig.1-linux-musl-x64/bin",
-        "curl-8.23.1-zig.1-linux-musl-x64/bin/",
-        "curl-8.23.1-zig.1-linux-musl-x64/bin/curl",
-        "curl-8.23.1-zig.1-windows-x64/bin/curl.exe",
-        "curl-8.23.1-zig.1-linux-musl-x64/COPYING",
-        "curl-8.23.1-zig.1-linux-musl-x64/README.md",
+        "curl",
+        "curl.exe",
+        "COPYING",
+        "README.md",
+        "curl-8.23.0-zig.1-linux-musl-x64",
+        "curl-8.23.0-zig.1-linux-musl-x64/",
+        "curl-8.23.0-zig.1-linux-musl-x64/bin",
+        "curl-8.23.0-zig.1-linux-musl-x64/bin/",
+        "curl-8.23.0-zig.1-linux-musl-x64/bin/curl",
+        "curl-8.23.0-zig.1-windows-x64/bin/curl.exe",
+        "curl-8.23.0-zig.1-linux-musl-x64/COPYING",
+        "curl-8.23.0-zig.1-linux-musl-x64/README.md",
     };
     for (valid_paths) |p| {
         try std.testing.expect(isSafeArchiveEntryPath(p));
@@ -3349,11 +3229,9 @@ test "isSafeArchiveEntryPath rejects traversal, absolute, drive, dot, NUL, and c
     // Ensure inspectArchiveListText deterministically fails on unsafe tar entries
     var diagnostic: Diagnostic = .{};
     const base_listing =
-        \\curl-8.23.1-zig.1-linux-musl-x64/
-        \\curl-8.23.1-zig.1-linux-musl-x64/bin/
-        \\curl-8.23.1-zig.1-linux-musl-x64/bin/curl
-        \\curl-8.23.1-zig.1-linux-musl-x64/COPYING
-        \\curl-8.23.1-zig.1-linux-musl-x64/README.md
+        \\curl
+        \\COPYING
+        \\README.md
         \\
     ;
     const unsafe_listings = [_][]const u8{
@@ -3361,16 +3239,16 @@ test "isSafeArchiveEntryPath rejects traversal, absolute, drive, dot, NUL, and c
         base_listing ++ "a/../../b\n",
         base_listing ++ "/etc/passwd\n",
         base_listing ++ "C:\\foo\n",
-        base_listing ++ "bin/curl\x00.txt\n",
-        base_listing ++ "curl-8.23.1-zig.1-linux-musl-x64/./COPYING\n",
-        base_listing ++ "curl-8.23.1-zig.1-linux-musl-x64/../COPYING\n",
-        base_listing ++ "curl-8.23.1-zig.1-linux-musl-x64/bin/curl\x7f\n",
+        base_listing ++ "curl\x00.txt\n",
+        base_listing ++ "./COPYING\n",
+        base_listing ++ "../COPYING\n",
+        base_listing ++ "curl\x7f\n",
     };
     for (unsafe_listings) |listing| {
         diagnostic = .{};
         try std.testing.expectError(
             error.Failed,
-            inspectArchiveListText(listing, "8.23.1-zig.1", "linux-musl-x64", &diagnostic),
+            inspectArchiveListText(listing, "8.23.0-zig.1", "linux-musl-x64", &diagnostic),
         );
         try std.testing.expect(std.mem.indexOf(u8, diagnostic.message(), "unsafe path entry") != null);
     }
@@ -3393,7 +3271,7 @@ test "release platform zig build args default to ReleaseSafe optimize mode" {
     }
 }
 
-test "end-to-end packaging, checksum manifest generation, allowlist verification, and SBOM rejection" {
+test "end-to-end packaging, allowlist verification, and SBOM/sidecar rejection" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -3411,11 +3289,11 @@ test "end-to-end packaging, checksum manifest generation, allowlist verification
     const assets_dir = try std.fs.path.join(allocator, &.{ root, "assets" });
     defer allocator.free(assets_dir);
 
-    try writeAtomic(io, fake_unix_exe, "#!/bin/sh\necho 'curl 8.23.1-zig.1'\n");
+    try writeAtomic(io, fake_unix_exe, "#!/bin/sh\necho 'curl 8.23.0-zig.1'\n");
     try writeAtomic(io, fake_win_exe, "MZ-fake-windows-curl-binary");
     try writeAtomic(io, fake_copying, "Copyright (C) Daniel Stenberg\nSPDX-License-Identifier: curl\n");
 
-    const version = "8.23.1-zig.1";
+    const version = "8.23.0-zig.1";
     var diagnostic: Diagnostic = .{};
 
     for (platforms) |platform| {
@@ -3435,17 +3313,15 @@ test "end-to-end packaging, checksum manifest generation, allowlist verification
         );
     }
 
-    try generateChecksums(allocator, io, assets_dir, version, null, &diagnostic);
-
-    // Verify the complete 7-file allowlist (6 archives + SHA256SUMS.txt)
+    // Verify the strict 6-archive allowlist
     const assets = try verifyAssetsDirectory(allocator, io, assets_dir, version, &diagnostic);
     defer freeAssets(allocator, assets);
-    try std.testing.expectEqual(@as(usize, 7), assets.len);
+    try std.testing.expectEqual(@as(usize, 6), assets.len);
 
     // Adding an SBOM file in the assets directory must fail closed
     const sbom_path = try std.fs.path.join(
         allocator,
-        &.{ assets_dir, "curl-8.23.1-zig.1-linux-musl-x64.sbom.spdx.json" },
+        &.{ assets_dir, "curl-8.23.0-zig.1-linux-musl-x64.sbom.spdx.json" },
     );
     defer allocator.free(sbom_path);
     try writeAtomic(io, sbom_path, "{}");
@@ -3456,30 +3332,34 @@ test "end-to-end packaging, checksum manifest generation, allowlist verification
     try std.testing.expect(std.mem.indexOf(u8, diagnostic.message(), "SBOM/SPDX") != null);
     try Dir.cwd().deleteFile(io, sbom_path);
 
-    // Optional detached signature on the checksum manifest is allowed
-    const sig_path = try std.fs.path.join(
+    // Adding SHA256SUMS.txt in the assets directory must fail closed
+    const checksums_path = try std.fs.path.join(
         allocator,
-        &.{ assets_dir, "curl-8.23.1-zig.1-SHA256SUMS.txt.asc" },
+        &.{ assets_dir, "curl-8.23.0-zig.1-SHA256SUMS.txt" },
     );
-    defer allocator.free(sig_path);
-    try writeAtomic(io, sig_path, "-----BEGIN PGP SIGNATURE-----\nfake\n-----END PGP SIGNATURE-----\n");
-    const assets_with_sig = try verifyAssetsDirectory(allocator, io, assets_dir, version, &diagnostic);
-    defer freeAssets(allocator, assets_with_sig);
-    try std.testing.expectEqual(@as(usize, 8), assets_with_sig.len);
+    defer allocator.free(checksums_path);
+    try generateChecksums(allocator, io, assets_dir, version, checksums_path, &diagnostic);
+    try std.testing.expectError(
+        error.Failed,
+        verifyAssetsDirectory(allocator, io, assets_dir, version, &diagnostic),
+    );
+    try Dir.cwd().deleteFile(io, checksums_path);
 
     // Verify release notes rendering
     const notes = try renderReleaseNotes(
         allocator,
         default_repository,
-        "v8.23.1-zig.1",
+        "v8.23.0-zig.1",
         version,
         null,
         &diagnostic,
     );
     defer allocator.free(notes);
-    try std.testing.expect(std.mem.indexOf(u8, notes, "ghr install cataggar/curl@v8.23.1-zig.1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, notes, "ghr install cataggar/curl@v8.23.0-zig.1") != null);
     try std.testing.expect(std.mem.indexOf(u8, notes, "Zig-port distribution") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notes, "curl-8.23.1-zig.1-windows-arm64.tar.gz") != null);
+    try std.testing.expect(std.mem.indexOf(u8, notes, "curl-8.23.0-zig.1-windows-arm64.tar.gz") != null);
+    try std.testing.expect(std.mem.indexOf(u8, notes, "| `curl-8.23.0-zig.1-linux-musl-x64.tar.gz` | `x86_64-linux-musl` | `curl` |") != null);
+    try std.testing.expect(std.mem.indexOf(u8, notes, "| `curl-8.23.0-zig.1-windows-x64.tar.gz` | `x86_64-windows-gnu` | `curl.exe` |") != null);
 }
 
 test "Publisher.parseRelease and validateRemoteAssets enforce draft-first publication contract" {
@@ -3501,11 +3381,11 @@ test "Publisher.parseRelease and validateRemoteAssets enforce draft-first public
     const assets_dir = try std.fs.path.join(allocator, &.{ root, "assets" });
     defer allocator.free(assets_dir);
 
-    try writeAtomic(io, fake_unix_exe, "#!/bin/sh\necho 'curl 8.23.1-zig.1'\n");
+    try writeAtomic(io, fake_unix_exe, "#!/bin/sh\necho 'curl 8.23.0-zig.1'\n");
     try writeAtomic(io, fake_win_exe, "MZ-fake-windows-curl-binary");
     try writeAtomic(io, fake_copying, "Copyright (C) Daniel Stenberg\nSPDX-License-Identifier: curl\n");
 
-    const version = "8.23.1-zig.1";
+    const version = "8.23.0-zig.1";
     var diagnostic: Diagnostic = .{};
     for (platforms) |platform| {
         const exe_src = if (std.mem.endsWith(u8, platform.executable, ".exe"))
@@ -3523,7 +3403,6 @@ test "Publisher.parseRelease and validateRemoteAssets enforce draft-first public
             &diagnostic,
         );
     }
-    try generateChecksums(allocator, io, assets_dir, version, null, &diagnostic);
     const assets = try verifyAssetsDirectory(allocator, io, assets_dir, version, &diagnostic);
     defer freeAssets(allocator, assets);
 
@@ -3533,7 +3412,7 @@ test "Publisher.parseRelease and validateRemoteAssets enforce draft-first public
         .diagnostic = &diagnostic,
         .options = .{
             .repository_name = default_repository,
-            .tag = "v8.23.1-zig.1",
+            .tag = "v8.23.0-zig.1",
             .version = version,
             .commit = "0123456789abcdef0123456789abcdef01234567",
             .assets_directory = assets_dir,
@@ -3542,19 +3421,19 @@ test "Publisher.parseRelease and validateRemoteAssets enforce draft-first public
         },
         .assets = assets,
         .metadata = .{
-            .tag = "v8.23.1-zig.1",
+            .tag = "v8.23.0-zig.1",
             .commit = "0123456789abcdef0123456789abcdef01234567",
             .prerelease = true,
-            .title = "v8.23.1-zig.1",
+            .title = "v8.23.0-zig.1",
             .body = "release body",
         },
     };
 
-    // Build valid draft JSON matching all 7 local assets
+    // Build valid draft JSON matching all 6 local assets
     var json_buf: std.Io.Writer.Allocating = .init(allocator);
     defer json_buf.deinit();
     try json_buf.writer.writeAll(
-        "{\"id\":42,\"draft\":true,\"prerelease\":true,\"tag_name\":\"v8.23.1-zig.1\",\"body\":\"release body\",\"assets\":[",
+        "{\"id\":42,\"draft\":true,\"prerelease\":true,\"tag_name\":\"v8.23.0-zig.1\",\"body\":\"release body\",\"assets\":[",
     );
     for (assets, 0..) |asset, idx| {
         if (idx > 0) try json_buf.writer.writeAll(",");
@@ -3578,7 +3457,7 @@ test "Publisher.parseRelease and validateRemoteAssets enforce draft-first public
     const bad_prerelease = try std.json.parseFromSlice(
         Value,
         allocator,
-        "{\"id\":42,\"draft\":true,\"prerelease\":false,\"tag_name\":\"v8.23.1-zig.1\",\"body\":\"release body\",\"assets\":[]}",
+        "{\"id\":42,\"draft\":true,\"prerelease\":false,\"tag_name\":\"v8.23.0-zig.1\",\"body\":\"release body\",\"assets\":[]}",
         .{},
     );
     defer bad_prerelease.deinit();
@@ -3591,7 +3470,7 @@ test "Publisher.parseRelease and validateRemoteAssets enforce draft-first public
     const bad_sbom = try std.json.parseFromSlice(
         Value,
         allocator,
-        "{\"id\":42,\"draft\":true,\"prerelease\":true,\"tag_name\":\"v8.23.1-zig.1\",\"body\":\"release body\",\"assets\":[{\"id\":1,\"name\":\"curl.spdx.json\",\"size\":10,\"digest\":null,\"state\":\"uploaded\"}]}",
+        "{\"id\":42,\"draft\":true,\"prerelease\":true,\"tag_name\":\"v8.23.0-zig.1\",\"body\":\"release body\",\"assets\":[{\"id\":1,\"name\":\"curl.spdx.json\",\"size\":10,\"digest\":null,\"state\":\"uploaded\"}]}",
         .{},
     );
     defer bad_sbom.deinit();
