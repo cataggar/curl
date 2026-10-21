@@ -23,6 +23,12 @@ pub const QuicBackend = enum {
     quiche,
 };
 
+pub const SshBackend = enum {
+    none,
+    libssh2,
+    libssh,
+};
+
 pub const Options = struct {
     ssl: SslBackend = .none,
     apple_sectrust: ?bool = null,
@@ -40,6 +46,7 @@ pub const Options = struct {
     quic: QuicBackend = .none,
     quiche_include_dir: ?[]const u8 = null,
     quiche_lib_dir: ?[]const u8 = null,
+    ssh: SshBackend = .none,
 
     pub fn useThreadedResolver(self: Options) bool {
         return self.threaded_resolver orelse !self.ares;
@@ -111,6 +118,7 @@ pub fn fromBuild(b: *std.Build) Options {
         .quic = b.option(QuicBackend, "quic", "QUIC/HTTP3 backend (none, ngtcp2, quiche; default: none)") orelse .none,
         .quiche_include_dir = b.option([]const u8, "quiche-include", "Custom include directory for quiche"),
         .quiche_lib_dir = b.option([]const u8, "quiche-lib", "Custom library directory for quiche"),
+        .ssh = b.option(SshBackend, "ssh", "SSH/SFTP/SCP backend (none, libssh2, libssh; default: none)") orelse .none,
     };
 }
 
@@ -229,6 +237,12 @@ pub fn applyCMacros(mod: *std.Build.Module, target: std.Build.ResolvedTarget, op
             mod.addCMacro("HAVE_QUICHE_CONN_SET_QLOG_FD", "1");
         },
     }
+
+    switch (opts.ssh) {
+        .none => {},
+        .libssh2 => mod.addCMacro("USE_LIBSSH2", "1"),
+        .libssh => mod.addCMacro("USE_LIBSSH", "1"),
+    }
 }
 
 pub fn linkBackends(mod: *std.Build.Module, target: std.Build.ResolvedTarget, opts: Options) void {
@@ -321,6 +335,12 @@ pub fn linkBackends(mod: *std.Build.Module, target: std.Build.ResolvedTarget, op
             mod.linkSystemLibrary("quiche", .{});
         },
     }
+
+    switch (opts.ssh) {
+        .none => {},
+        .libssh2 => mod.linkSystemLibrary("ssh2", .{}),
+        .libssh => mod.linkSystemLibrary("ssh", .{}),
+    }
 }
 
 pub fn createOptionsStep(b: *std.Build, opts: Options) *std.Build.Step.Options {
@@ -342,5 +362,6 @@ pub fn createOptionsStep(b: *std.Build, opts: Options) *std.Build.Step.Options {
     step.addOption(QuicBackend, "quic", opts.quic);
     step.addOption(bool, "http3", opts.hasHttp3());
     step.addOption(bool, "proxy_http3", opts.hasProxyHttp3());
+    step.addOption(SshBackend, "ssh", opts.ssh);
     return step;
 }

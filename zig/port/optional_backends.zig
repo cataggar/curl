@@ -1,5 +1,6 @@
 const std = @import("std");
 const vquic_core = @import("vquic_core.zig");
+const vssh = @import("vssh.zig");
 
 // Zig port of optional/disabled backend modules (Phase 7 Session 38):
 //   - lib/ldap.c, lib/openldap.c (lib/curl_ldap.h)
@@ -222,240 +223,39 @@ pub const Curl_quic_ver = vquic_core.Curl_quic_ver;
 pub const CURL_META_SSH_EASY = "meta:proto:ssh:easy";
 pub const CURL_META_SSH_CONN = "meta:proto:ssh:conn";
 
-/// All possible states in the SSH/SFTP/SCP state machine (`lib/vssh/ssh.h`).
-pub const sshstate = enum(c_int) {
-    SSH_NO_STATE = -1,
-    SSH_STOP = 0,
-    SSH_INIT,
-    SSH_S_STARTUP,
-    SSH_HOSTKEY,
-    SSH_AUTHLIST,
-    SSH_AUTH_PKEY_INIT,
-    SSH_AUTH_PKEY,
-    SSH_AUTH_PASS_INIT,
-    SSH_AUTH_PASS,
-    SSH_AUTH_AGENT_INIT,
-    SSH_AUTH_AGENT_LIST,
-    SSH_AUTH_AGENT,
-    SSH_AUTH_HOST_INIT,
-    SSH_AUTH_HOST,
-    SSH_AUTH_KEY_INIT,
-    SSH_AUTH_KEY,
-    SSH_AUTH_GSSAPI,
-    SSH_AUTH_DONE,
-    SSH_SFTP_INIT,
-    SSH_SFTP_REALPATH,
-    SSH_SFTP_QUOTE_INIT,
-    SSH_SFTP_POSTQUOTE_INIT,
-    SSH_SFTP_QUOTE,
-    SSH_SFTP_NEXT_QUOTE,
-    SSH_SFTP_QUOTE_STAT,
-    SSH_SFTP_QUOTE_SETSTAT,
-    SSH_SFTP_QUOTE_SYMLINK,
-    SSH_SFTP_QUOTE_MKDIR,
-    SSH_SFTP_QUOTE_RMDIR,
-    SSH_SFTP_QUOTE_RENAME,
-    SSH_SFTP_QUOTE_UNLINK,
-    SSH_SFTP_QUOTE_STATVFS,
-    SSH_SFTP_GETINFO,
-    SSH_SFTP_FILETIME,
-    SSH_SFTP_TRANS_INIT,
-    SSH_SFTP_UPLOAD_INIT,
-    SSH_SFTP_CREATE_DIRS_INIT,
-    SSH_SFTP_CREATE_DIRS,
-    SSH_SFTP_CREATE_DIRS_MKDIR,
-    SSH_SFTP_READDIR_INIT,
-    SSH_SFTP_READDIR,
-    SSH_SFTP_READDIR_LINK,
-    SSH_SFTP_READDIR_BOTTOM,
-    SSH_SFTP_READDIR_DONE,
-    SSH_SFTP_DOWNLOAD_INIT,
-    SSH_SFTP_DOWNLOAD_STAT,
-    SSH_SFTP_CLOSE,
-    SSH_SFTP_SHUTDOWN,
-    SSH_SCP_TRANS_INIT,
-    SSH_SCP_UPLOAD_INIT,
-    SSH_SCP_DOWNLOAD_INIT,
-    SSH_SCP_DOWNLOAD,
-    SSH_SCP_DONE,
-    SSH_SCP_SEND_EOF,
-    SSH_SCP_WAIT_EOF,
-    SSH_SCP_WAIT_CLOSE,
-    SSH_SCP_CHANNEL_FREE,
-    SSH_SESSION_DISCONNECT,
-    SSH_SESSION_FREE,
-    SSH_QUIT,
-    SSH_LAST,
-};
-
-const ssh_statenames = [_][*:0]const u8{
-    "SSH_STOP",
-    "SSH_INIT",
-    "SSH_S_STARTUP",
-    "SSH_HOSTKEY",
-    "SSH_AUTHLIST",
-    "SSH_AUTH_PKEY_INIT",
-    "SSH_AUTH_PKEY",
-    "SSH_AUTH_PASS_INIT",
-    "SSH_AUTH_PASS",
-    "SSH_AUTH_AGENT_INIT",
-    "SSH_AUTH_AGENT_LIST",
-    "SSH_AUTH_AGENT",
-    "SSH_AUTH_HOST_INIT",
-    "SSH_AUTH_HOST",
-    "SSH_AUTH_KEY_INIT",
-    "SSH_AUTH_KEY",
-    "SSH_AUTH_GSSAPI",
-    "SSH_AUTH_DONE",
-    "SSH_SFTP_INIT",
-    "SSH_SFTP_REALPATH",
-    "SSH_SFTP_QUOTE_INIT",
-    "SSH_SFTP_POSTQUOTE_INIT",
-    "SSH_SFTP_QUOTE",
-    "SSH_SFTP_NEXT_QUOTE",
-    "SSH_SFTP_QUOTE_STAT",
-    "SSH_SFTP_QUOTE_SETSTAT",
-    "SSH_SFTP_QUOTE_SYMLINK",
-    "SSH_SFTP_QUOTE_MKDIR",
-    "SSH_SFTP_QUOTE_RMDIR",
-    "SSH_SFTP_QUOTE_RENAME",
-    "SSH_SFTP_QUOTE_UNLINK",
-    "SSH_SFTP_QUOTE_STATVFS",
-    "SSH_SFTP_GETINFO",
-    "SSH_SFTP_FILETIME",
-    "SSH_SFTP_TRANS_INIT",
-    "SSH_SFTP_UPLOAD_INIT",
-    "SSH_SFTP_CREATE_DIRS_INIT",
-    "SSH_SFTP_CREATE_DIRS",
-    "SSH_SFTP_CREATE_DIRS_MKDIR",
-    "SSH_SFTP_READDIR_INIT",
-    "SSH_SFTP_READDIR",
-    "SSH_SFTP_READDIR_LINK",
-    "SSH_SFTP_READDIR_BOTTOM",
-    "SSH_SFTP_READDIR_DONE",
-    "SSH_SFTP_DOWNLOAD_INIT",
-    "SSH_SFTP_DOWNLOAD_STAT",
-    "SSH_SFTP_CLOSE",
-    "SSH_SFTP_SHUTDOWN",
-    "SSH_SCP_TRANS_INIT",
-    "SSH_SCP_UPLOAD_INIT",
-    "SSH_SCP_DOWNLOAD_INIT",
-    "SSH_SCP_DOWNLOAD",
-    "SSH_SCP_DONE",
-    "SSH_SCP_SEND_EOF",
-    "SSH_SCP_WAIT_EOF",
-    "SSH_SCP_WAIT_CLOSE",
-    "SSH_SCP_CHANNEL_FREE",
-    "SSH_SESSION_DISCONNECT",
-    "SSH_SESSION_FREE",
-    "QUIT",
-};
-
-comptime {
-    std.debug.assert(ssh_statenames.len == @backingInt(sshstate.SSH_LAST));
-}
-
-/// Return the state name for an `sshstate` value (`lib/vssh/vssh.c`).
-pub export fn Curl_ssh_statename(state: sshstate) callconv(.c) [*:0]const u8 {
-    const raw: c_int = @backingInt(state);
-    if (raw >= 0 and raw < @as(c_int, @intCast(ssh_statenames.len))) {
-        return ssh_statenames[@intCast(raw)];
-    }
-    return "";
-}
-
-pub const LIBSSH2_FX_OK: c_ulong = 0;
-pub const LIBSSH2_FX_EOF: c_ulong = 1;
-pub const LIBSSH2_FX_NO_SUCH_FILE: c_ulong = 2;
-pub const LIBSSH2_FX_PERMISSION_DENIED: c_ulong = 3;
-pub const LIBSSH2_FX_FAILURE: c_ulong = 4;
-pub const LIBSSH2_FX_BAD_MESSAGE: c_ulong = 5;
-pub const LIBSSH2_FX_NO_CONNECTION: c_ulong = 6;
-pub const LIBSSH2_FX_CONNECTION_LOST: c_ulong = 7;
-pub const LIBSSH2_FX_OP_UNSUPPORTED: c_ulong = 8;
-pub const LIBSSH2_FX_INVALID_HANDLE: c_ulong = 9;
-pub const LIBSSH2_FX_NO_SUCH_PATH: c_ulong = 10;
-pub const LIBSSH2_FX_FILE_ALREADY_EXISTS: c_ulong = 11;
-pub const LIBSSH2_FX_WRITE_PROTECT: c_ulong = 12;
-pub const LIBSSH2_FX_NO_MEDIA: c_ulong = 13;
-pub const LIBSSH2_FX_NO_SPACE_ON_FILESYSTEM: c_ulong = 14;
-pub const LIBSSH2_FX_QUOTA_EXCEEDED: c_ulong = 15;
-pub const LIBSSH2_FX_UNKNOWN_PRINCIPLE: c_ulong = 16;
-pub const LIBSSH2_FX_LOCK_CONFlICT: c_ulong = 17;
-pub const LIBSSH2_FX_DIR_NOT_EMPTY: c_ulong = 18;
-pub const LIBSSH2_FX_NOT_A_DIRECTORY: c_ulong = 19;
-pub const LIBSSH2_FX_INVALID_FILENAME: c_ulong = 20;
-pub const LIBSSH2_FX_LINK_LOOP: c_ulong = 21;
-
-/// Map a libssh2 SFTP status code to its descriptive message (`lib/vssh/libssh2.c`).
-pub fn sftpLibssh2Strerror(err: c_ulong) [*:0]const u8 {
-    return switch (err) {
-        LIBSSH2_FX_NO_SUCH_FILE => "No such file or directory",
-        LIBSSH2_FX_PERMISSION_DENIED => "Permission denied",
-        LIBSSH2_FX_FAILURE => "Operation failed",
-        LIBSSH2_FX_BAD_MESSAGE => "Bad message from SFTP server",
-        LIBSSH2_FX_NO_CONNECTION => "Not connected to SFTP server",
-        LIBSSH2_FX_CONNECTION_LOST => "Connection to SFTP server lost",
-        LIBSSH2_FX_OP_UNSUPPORTED => "Operation not supported by SFTP server",
-        LIBSSH2_FX_INVALID_HANDLE => "Invalid handle",
-        LIBSSH2_FX_NO_SUCH_PATH => "No such file or directory",
-        LIBSSH2_FX_FILE_ALREADY_EXISTS => "File already exists",
-        LIBSSH2_FX_WRITE_PROTECT => "File is write protected",
-        LIBSSH2_FX_NO_MEDIA => "No media",
-        LIBSSH2_FX_NO_SPACE_ON_FILESYSTEM => "Disk full",
-        LIBSSH2_FX_QUOTA_EXCEEDED => "User quota exceeded",
-        LIBSSH2_FX_UNKNOWN_PRINCIPLE => "Unknown principle",
-        LIBSSH2_FX_LOCK_CONFlICT => "File lock conflict",
-        LIBSSH2_FX_DIR_NOT_EMPTY => "Directory not empty",
-        LIBSSH2_FX_NOT_A_DIRECTORY => "Not a directory",
-        LIBSSH2_FX_INVALID_FILENAME => "Invalid filename",
-        LIBSSH2_FX_LINK_LOOP => "Link points to itself",
-        else => "Unknown error in libssh2",
-    };
-}
-
-/// Map an SFTP `SSH_FX_*` / `LIBSSH2_FX_*` error code to `CURLcode`
-/// (`sftp_error_to_CURLE` in `lib/vssh/libssh.c` and `sftp_libssh2_error_to_CURLE` in `lib/vssh/libssh2.c`).
-pub fn sftpErrorToCurle(err: c_ulong) CURLcode {
-    return switch (err) {
-        LIBSSH2_FX_OK => CURLE_OK,
-        LIBSSH2_FX_NO_SUCH_FILE, LIBSSH2_FX_NO_SUCH_PATH => CURLE_REMOTE_FILE_NOT_FOUND,
-        LIBSSH2_FX_PERMISSION_DENIED, LIBSSH2_FX_WRITE_PROTECT, LIBSSH2_FX_LOCK_CONFlICT => CURLE_REMOTE_ACCESS_DENIED,
-        LIBSSH2_FX_NO_SPACE_ON_FILESYSTEM, LIBSSH2_FX_QUOTA_EXCEEDED => CURLE_REMOTE_DISK_FULL,
-        LIBSSH2_FX_CONNECTION_LOST => CURLE_SEND_ERROR,
-        LIBSSH2_FX_FILE_ALREADY_EXISTS => CURLE_REMOTE_FILE_EXISTS,
-        LIBSSH2_FX_DIR_NOT_EMPTY => CURLE_QUOTE_ERROR,
-        else => CURLE_SSH,
-    };
-}
-
 pub const CURLE_QUOTE_ERROR: CURLcode = 21;
 
-pub fn Curl_ssh_init() callconv(.c) CURLcode {
-    return CURLE_OK;
-}
-
-pub fn Curl_ssh_cleanup() callconv(.c) void {}
-
-pub fn Curl_ssh_version(buffer: [*]u8, buflen: usize) callconv(.c) void {
-    if (buflen > 0) {
-        buffer[0] = 0;
-    }
-}
-
-fn sshDisabledDo(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
-    _ = data;
-    done.* = false;
-    return CURLE_NOT_BUILT_IN;
-}
-
-pub const Curl_protocol_scp = Curl_protocol{
-    .do_it = sshDisabledDo,
-};
-
-pub const Curl_protocol_sftp = Curl_protocol{
-    .do_it = sshDisabledDo,
-};
+pub const sshstate = vssh.sshstate;
+pub const Curl_ssh_statename = vssh.Curl_ssh_statename;
+pub const LIBSSH2_FX_OK = vssh.LIBSSH2_FX_OK;
+pub const LIBSSH2_FX_EOF = vssh.LIBSSH2_FX_EOF;
+pub const LIBSSH2_FX_NO_SUCH_FILE = vssh.LIBSSH2_FX_NO_SUCH_FILE;
+pub const LIBSSH2_FX_PERMISSION_DENIED = vssh.LIBSSH2_FX_PERMISSION_DENIED;
+pub const LIBSSH2_FX_FAILURE = vssh.LIBSSH2_FX_FAILURE;
+pub const LIBSSH2_FX_BAD_MESSAGE = vssh.LIBSSH2_FX_BAD_MESSAGE;
+pub const LIBSSH2_FX_NO_CONNECTION = vssh.LIBSSH2_FX_NO_CONNECTION;
+pub const LIBSSH2_FX_CONNECTION_LOST = vssh.LIBSSH2_FX_CONNECTION_LOST;
+pub const LIBSSH2_FX_OP_UNSUPPORTED = vssh.LIBSSH2_FX_OP_UNSUPPORTED;
+pub const LIBSSH2_FX_INVALID_HANDLE = vssh.LIBSSH2_FX_INVALID_HANDLE;
+pub const LIBSSH2_FX_NO_SUCH_PATH = vssh.LIBSSH2_FX_NO_SUCH_PATH;
+pub const LIBSSH2_FX_FILE_ALREADY_EXISTS = vssh.LIBSSH2_FX_FILE_ALREADY_EXISTS;
+pub const LIBSSH2_FX_WRITE_PROTECT = vssh.LIBSSH2_FX_WRITE_PROTECT;
+pub const LIBSSH2_FX_NO_MEDIA = vssh.LIBSSH2_FX_NO_MEDIA;
+pub const LIBSSH2_FX_NO_SPACE_ON_FILESYSTEM = vssh.LIBSSH2_FX_NO_SPACE_ON_FILESYSTEM;
+pub const LIBSSH2_FX_QUOTA_EXCEEDED = vssh.LIBSSH2_FX_QUOTA_EXCEEDED;
+pub const LIBSSH2_FX_UNKNOWN_PRINCIPLE = vssh.LIBSSH2_FX_UNKNOWN_PRINCIPLE;
+pub const LIBSSH2_FX_LOCK_CONFlICT = vssh.LIBSSH2_FX_LOCK_CONFlICT;
+pub const LIBSSH2_FX_DIR_NOT_EMPTY = vssh.LIBSSH2_FX_DIR_NOT_EMPTY;
+pub const LIBSSH2_FX_NOT_A_DIRECTORY = vssh.LIBSSH2_FX_NOT_A_DIRECTORY;
+pub const LIBSSH2_FX_INVALID_FILENAME = vssh.LIBSSH2_FX_INVALID_FILENAME;
+pub const LIBSSH2_FX_LINK_LOOP = vssh.LIBSSH2_FX_LINK_LOOP;
+pub const sftpLibssh2Strerror = vssh.sftpLibssh2Strerror;
+pub const sftpErrorToCurle = vssh.sftpErrorToCurle;
+pub const Curl_ssh_init = vssh.Curl_ssh_init;
+pub const Curl_ssh_cleanup = vssh.Curl_ssh_cleanup;
+pub const Curl_ssh_version = vssh.Curl_ssh_version;
+pub const Curl_protocol_scp = vssh.Curl_protocol_scp;
+pub const Curl_protocol_sftp = vssh.Curl_protocol_sftp;
 
 // ============================================================================
 // 4. Optional VTLS Backends: GnuTLS, Rustls, wolfSSL

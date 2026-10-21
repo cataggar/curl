@@ -15,6 +15,7 @@ const cookie_getinfo_trc = @import("cookie_getinfo_trc.zig");
 const altsvc_hsts_peer = @import("altsvc_hsts_peer.zig");
 const protocol_version_mime = @import("protocol_version_mime.zig");
 const vquic_core = @import("vquic_core.zig");
+const vssh = @import("vssh.zig");
 
 const use_c_vastart = switch (builtin.cpu.arch) {
     .x86_64 => builtin.os.tag != .windows,
@@ -2542,6 +2543,9 @@ fn global_init(flags: c_long, memoryfuncs: bool) CURLcode {
     if (vquic_core.Curl_vquic_init() == 0)
         return global_init_fail();
 
+    if (vssh.Curl_ssh_init() != CURLE_OK)
+        return global_init_fail();
+
     if (threads_psl.Curl_amiga_init() != CURLE_OK)
         return global_init_fail();
 
@@ -2616,6 +2620,7 @@ pub export fn curl_global_cleanup() callconv(.c) void {
     if (backend_options.ssl != .none)
         Curl_ssl_cleanup();
     vquic_core.Curl_vquic_cleanup();
+    vssh.Curl_ssh_cleanup();
     Curl_async_global_cleanup();
     threads_psl.Curl_amiga_cleanup();
 
