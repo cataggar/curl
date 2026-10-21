@@ -44,8 +44,9 @@ const use_ssl = switch (backend_options.ssl) {
     .none => false,
 };
 const use_openssl = backend_options.ssl == .openssl;
-const use_windows_sspi = backend_options.ssl == .schannel;
-const use_spnego = use_windows_sspi;
+const use_gssapi = if (@hasDecl(backend_options, "gssapi")) backend_options.gssapi else false;
+const use_windows_sspi = builtin.os.tag == .windows and (if (@hasDecl(backend_options, "sspi")) (backend_options.sspi orelse (backend_options.ssl == .schannel)) else (backend_options.ssl == .schannel));
+const use_spnego = use_windows_sspi or use_gssapi;
 const use_ntlm = false;
 const use_http2 = backend_options.nghttp2;
 const use_http3 = if (@hasDecl(backend_options, "http3")) backend_options.http3 else false;
@@ -1273,7 +1274,7 @@ fn setoptLongBool(data: *Curl_easy, option: CURLoption, arg: c_long) CURLcode {
         },
         CURLOPT_PROXY_TRANSFER_MODE => Curl_setopt_set_bit(data, BIT_PROXY_TRANSFER_MODE, enabled),
         CURLOPT_SOCKS5_GSSAPI_NEC => {
-            if (!use_windows_sspi) return CURLE_UNKNOWN_OPTION;
+            if (!use_windows_sspi and !use_gssapi) return CURLE_UNKNOWN_OPTION;
             Curl_setopt_set_bit(data, BIT_SOCKS5_GSSAPI_NEC, enabled);
         },
         CURLOPT_DIRLISTONLY => Curl_setopt_set_bit(data, BIT_LIST_ONLY, enabled),
@@ -1759,7 +1760,7 @@ fn setoptLongMisc(data: *Curl_easy, option: CURLoption, arg: c_long) CURLcode {
             return Curl_altsvc_ctrl(@ptrCast(@alignCast(asi_ref)), arg);
         },
         CURLOPT_GSSAPI_DELEGATION => {
-            if (!use_windows_sspi) return CURLE_UNKNOWN_OPTION;
+            if (!use_windows_sspi and !use_gssapi) return CURLE_UNKNOWN_OPTION;
             Curl_setopt_set_i64(
                 data,
                 FIELD_GSSAPI_DELEGATION,

@@ -46,7 +46,8 @@ CURLcode Curl_blockread_all(struct Curl_cfilter *cf,
 /*
  * This function handles the SOCKS5 GSS-API negotiation and initialization
  */
-CURLcode Curl_SOCKS5_gssapi_negotiate_ex(struct Curl_cfilter *cf_next,
+CURLcode Curl_SOCKS5_gssapi_negotiate_ex(struct Curl_cfilter *cf,
+                                         struct Curl_cfilter *cf_next,
                                          struct Curl_easy *data,
                                          struct Curl_creds *creds,
                                          curl_socket_t sock,
@@ -55,7 +56,7 @@ CURLcode Curl_SOCKS5_gssapi_negotiate_ex(struct Curl_cfilter *cf_next,
                                          bool socks5_gssapi_nec,
                                          int *socks5_gssapi_enctype);
 #define Curl_SOCKS5_gssapi_negotiate(cf, data, creds)                         \
-  Curl_SOCKS5_gssapi_negotiate_ex((cf)->next, (data), (creds),                \
+  Curl_SOCKS5_gssapi_negotiate_ex((cf), (cf)->next, (data), (creds),          \
                                   (cf)->conn->sock[(cf)->sockindex],          \
                                   CURL_EASY_STR((data),                       \
                                                 STRING_PROXY_SERVICE_NAME),   \

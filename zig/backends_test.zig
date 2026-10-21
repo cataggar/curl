@@ -67,6 +67,7 @@ const c = struct {
     pub const CURLcode = c_uint;
     pub const CURLE_OK: CURLcode = 0;
     pub const CURLE_NOT_BUILT_IN: CURLcode = 4;
+    pub const CURLE_COULDNT_CONNECT: CURLcode = 7;
     pub const CURLE_WRITE_ERROR: CURLcode = 23;
     pub const CURLE_LDAP_CANNOT_BIND: CURLcode = 38;
     pub const CURLE_LDAP_SEARCH_FAILED: CURLcode = 39;
@@ -75,6 +76,7 @@ const c = struct {
     pub const CURLE_BAD_CONTENT_ENCODING: CURLcode = 61;
     pub const CURLE_LOGIN_DENIED: CURLcode = 67;
     pub const CURLE_SSL_PINNEDPUBKEYNOTMATCH: CURLcode = 90;
+    pub const CURLE_PROXY: CURLcode = 97;
 
     pub const CURLsslset = c_uint;
     pub const CURLSSLSET_OK: CURLsslset = 0;
@@ -156,7 +158,21 @@ const c = struct {
 
     pub const CURL_HTTP_VERSION_3: c_long = 30;
     pub const CURL_HTTP_VERSION_3ONLY: c_long = 31;
+    pub const CURLPROXY_SOCKS5: c_long = 5;
+    pub const CURLPROXY_SOCKS5_HOSTNAME: c_long = 7;
     pub const CURLPROXY_HTTPS3: c_long = 8;
+    pub const CURLOPT_PROXYAUTH: CURLoption = CURLOPTTYPE_LONG + 111;
+    pub const CURLOPT_SOCKS5_GSSAPI_NEC: CURLoption = CURLOPTTYPE_LONG + 180;
+    pub const CURLOPT_GSSAPI_DELEGATION: CURLoption = CURLOPTTYPE_LONG + 210;
+    pub const CURLOPT_PROXY_SERVICE_NAME: CURLoption = CURLOPTTYPE_OBJECTPOINT + 235;
+    pub const CURLOPT_SOCKS5_AUTH: CURLoption = CURLOPTTYPE_LONG + 267;
+    pub const CURLAUTH_BASIC: c_long = 1 << 0;
+    pub const CURLAUTH_NEGOTIATE: c_long = 1 << 2;
+    pub const CURLAUTH_GSSAPI: c_long = CURLAUTH_NEGOTIATE;
+    pub const CURLAUTH_ONLY: c_long = @bitCast(@as(c_ulong, 1) << 31);
+    pub const CURLGSSAPI_DELEGATION_FLAG: c_long = 1 << 1;
+    pub const CURLINFO_PROXY_ERROR: CURLINFO = CURLINFO_LONG + 59;
+    pub const CURLPX_GSSAPI_PROTECTION: c_long = 6;
     pub const CURLOPT_COOKIELIST: CURLoption = 10135;
     pub const CURLOPT_TIMEOUT_MS: CURLoption = CURLOPTTYPE_LONG + 155;
     pub const CURLOPT_CRLFILE: CURLoption = CURLOPTTYPE_OBJECTPOINT + 169;
@@ -293,6 +309,7 @@ fn hasFeature(names: [*:null]const ?[*:0]const u8, target: []const u8) bool {
 test "curl_version_info feature flags match build options" {
     const info = curl_version_info(c.CURLVERSION_NOW) orelse return error.NullVersionInfo;
 
+    const expect_sspi = builtin.os.tag == .windows and (backend_options.sspi orelse (backend_options.ssl == .schannel));
     try testing.expect((info.*.features & c.CURL_VERSION_ZSTD != 0) == backend_options.zstd);
     try testing.expect((info.*.features & c.CURL_VERSION_LIBZ != 0) == backend_options.zlib);
     try testing.expect((info.*.features & c.CURL_VERSION_BROTLI != 0) == backend_options.brotli);
@@ -303,7 +320,10 @@ test "curl_version_info feature flags match build options" {
     try testing.expect((info.*.features & c.CURL_VERSION_HTTP3 != 0) == backend_options.http3);
     try testing.expect((info.*.features & c.CURL_VERSION_HSTS != 0) == (backend_options.ssl != .none));
     try testing.expect((info.*.features & c.CURL_VERSION_HTTPS_PROXY != 0) == (backend_options.ssl != .none));
-    try testing.expect((info.*.features & c.CURL_VERSION_SSPI != 0) == (backend_options.ssl == .schannel));
+    try testing.expect((info.*.features & c.CURL_VERSION_SSPI != 0) == expect_sspi);
+    try testing.expect((info.*.features & c.CURL_VERSION_GSSAPI != 0) == backend_options.gssapi);
+    try testing.expect((info.*.features & c.CURL_VERSION_KERBEROS5 != 0) == (backend_options.gssapi or expect_sspi));
+    try testing.expect((info.*.features & c.CURL_VERSION_SPNEGO != 0) == (backend_options.gssapi or expect_sspi));
 
     if (backend_options.zstd) {
         try testing.expect(info.*.zstd_version != null);
@@ -410,6 +430,11 @@ test "curl_version_info feature_names list matches build options" {
         backend_options.use_resolv_ares or backend_options.use_resolv_threaded,
         hasFeature(names, "AsynchDNS"),
     );
+    const expect_sspi = builtin.os.tag == .windows and (backend_options.sspi orelse (backend_options.ssl == .schannel));
+    try testing.expectEqual(backend_options.gssapi, hasFeature(names, "GSS-API"));
+    try testing.expectEqual(backend_options.gssapi or expect_sspi, hasFeature(names, "Kerberos"));
+    try testing.expectEqual(backend_options.gssapi or expect_sspi, hasFeature(names, "SPNEGO"));
+    try testing.expectEqual(expect_sspi, hasFeature(names, "SSPI"));
 }
 
 test "curl_version string reflects enabled backends" {
@@ -4168,6 +4193,364 @@ test "LDAP StartTLS loopback: upgrade cleartext ldap:// to TLS before search" {
     try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, &cap));
     try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url_z.ptr));
 
+    try testing.expectEqual(ca_path_z.ptr, ca_path_z.ptr);
     try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
     try testing.expect(std.mem.indexOf(u8, cap.slice(), "DN: cn=Alice,dc=example,dc=com\n") != null);
+}
+
+test "GSS-API / SSPI CURLOPT_SOCKS5_GSSAPI_NEC, CURLOPT_GSSAPI_DELEGATION, and CURLAUTH_NEGOTIATE match build options" {
+    const easy = curl_easy_init() orelse return error.EasyInitFailed;
+    defer curl_easy_cleanup(easy);
+
+    const expect_sspi = builtin.os.tag == .windows and (backend_options.sspi orelse (backend_options.ssl == .schannel));
+    const expect_gss_or_sspi = backend_options.gssapi or expect_sspi;
+    const expected_opt: c.CURLcode = if (expect_gss_or_sspi) c.CURLE_OK else c.CURLE_UNKNOWN_OPTION;
+    const expected_negotiate: c.CURLcode = if (expect_gss_or_sspi) c.CURLE_OK else c.CURLE_NOT_BUILT_IN;
+
+    try testing.expectEqual(expected_opt, curl_easy_setopt(easy, c.CURLOPT_SOCKS5_GSSAPI_NEC, @as(c_long, 1)));
+    try testing.expectEqual(expected_opt, curl_easy_setopt(easy, c.CURLOPT_GSSAPI_DELEGATION, c.CURLGSSAPI_DELEGATION_FLAG));
+    try testing.expectEqual(expected_negotiate, curl_easy_setopt(easy, c.CURLOPT_PROXYAUTH, c.CURLAUTH_NEGOTIATE));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SOCKS5_AUTH, c.CURLAUTH_GSSAPI | c.CURLAUTH_ONLY));
+}
+
+const loopback_socks5_gssapi = struct {
+    extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+    extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+    const Mode = enum {
+        rfc1961_ok,
+        nec_multi_round_ok,
+        enctype_confidentiality_reject,
+        server_auth_reject,
+        real_gssapi_no_kdc,
+    };
+
+    const ProxyConfig = struct {
+        listen_fd: c_int,
+        mode: Mode,
+        expected_token_prefix: []const u8 = "",
+        http_body: []const u8 = "socks5-gssapi-ok!",
+    };
+
+    fn readExact(fd: c_int, buf: []u8) bool {
+        var off: usize = 0;
+        while (off < buf.len) {
+            const n = loopback_tls.sock_c.recv(fd, buf[off..].ptr, buf.len - off, 0);
+            if (n <= 0) return false;
+            off += @intCast(n);
+        }
+        return true;
+    }
+
+    fn writeAll(fd: c_int, data: []const u8) bool {
+        var off: usize = 0;
+        while (off < data.len) {
+            const n = loopback_tls.sock_c.send(fd, data[off..].ptr, data.len - off, 0);
+            if (n <= 0) return false;
+            off += @intCast(n);
+        }
+        return true;
+    }
+
+    fn serveOnce(cfg: ProxyConfig) void {
+        const client_fd = loopback_tls.sock_c.accept(cfg.listen_fd, null, null);
+        if (client_fd < 0) return;
+        defer _ = loopback_tls.sock_c.close(client_fd);
+
+        var tv = loopback_dns.timeval{ .tv_sec = 5, .tv_usec = 0 };
+        _ = loopback_dns.setsockopt(client_fd, loopback_dns.SOL_SOCKET, loopback_dns.SO_RCVTIMEO, &tv, @sizeOf(loopback_dns.timeval));
+        _ = loopback_dns.setsockopt(client_fd, loopback_dns.SOL_SOCKET, loopback_dns.SO_SNDTIMEO, &tv, @sizeOf(loopback_dns.timeval));
+
+        // 1. SOCKS5 method greeting: [5, nmethods, methods...]
+        var greet_hdr: [2]u8 = undefined;
+        if (!readExact(client_fd, &greet_hdr)) return;
+        if (greet_hdr[0] != 5 or greet_hdr[1] == 0) return;
+        var methods_buf: [255]u8 = undefined;
+        if (!readExact(client_fd, methods_buf[0..greet_hdr[1]])) return;
+
+        var has_gssapi = false;
+        for (methods_buf[0..greet_hdr[1]]) |m| {
+            if (m == 1) has_gssapi = true;
+        }
+        if (!has_gssapi) {
+            _ = writeAll(client_fd, &[_]u8{ 5, 0xFF });
+            return;
+        }
+
+        // Select method 1 (GSS-API)
+        if (!writeAll(client_fd, &[_]u8{ 5, 1 })) return;
+
+        if (cfg.mode == .real_gssapi_no_kdc) {
+            // Client will fail in gss_init_sec_context when no local KDC/ccache is present
+            var tmp_buf: [16]u8 = undefined;
+            _ = loopback_tls.sock_c.recv(client_fd, &tmp_buf, tmp_buf.len, 0);
+            return;
+        }
+
+        // 2. Read first GSS-API authentication token: [1, 1, len_hi, len_lo, token...]
+        var tok_hdr: [4]u8 = undefined;
+        if (!readExact(client_fd, &tok_hdr)) return;
+        if (tok_hdr[0] != 1 or tok_hdr[1] != 1) return;
+        const tok_len = std.mem.readInt(u16, tok_hdr[2..4], .big);
+        var tok_buf: [512]u8 = undefined;
+        if (tok_len == 0 or tok_len > tok_buf.len) return;
+        if (!readExact(client_fd, tok_buf[0..tok_len])) return;
+
+        if (cfg.expected_token_prefix.len > 0) {
+            if (!std.mem.startsWith(u8, tok_buf[0..tok_len], cfg.expected_token_prefix)) {
+                _ = writeAll(client_fd, &[_]u8{ 1, 255, 0, 0 });
+                return;
+            }
+        }
+
+        if (cfg.mode == .server_auth_reject) {
+            _ = writeAll(client_fd, &[_]u8{ 1, 255, 0, 0 });
+            return;
+        }
+
+        if (cfg.mode == .nec_multi_round_ok) {
+            // Send 'C' (continue needed) first
+            if (!writeAll(client_fd, &[_]u8{ 1, 1, 0, 1, 'C' })) return;
+            // Read second GSS-API authentication token
+            if (!readExact(client_fd, &tok_hdr)) return;
+            if (tok_hdr[0] != 1 or tok_hdr[1] != 1) return;
+            const tok2_len = std.mem.readInt(u16, tok_hdr[2..4], .big);
+            if (tok2_len == 0 or tok2_len > tok_buf.len) return;
+            if (!readExact(client_fd, tok_buf[0..tok2_len])) return;
+        }
+
+        // Send 'D' (authentication complete)
+        if (!writeAll(client_fd, &[_]u8{ 1, 1, 0, 1, 'D' })) return;
+
+        // 3. Read GSS-API protection level negotiation: [1, 2, 0, 1, gss_enc]
+        var enc_req: [5]u8 = undefined;
+        if (!readExact(client_fd, &enc_req)) return;
+        if (enc_req[0] != 1 or enc_req[1] != 2 or enc_req[2] != 0 or enc_req[3] != 1) return;
+
+        if (cfg.mode == .enctype_confidentiality_reject) {
+            // Respond with protection level 2 (confidentiality), which client rejects with CURLPX_GSSAPI_PROTECTION
+            _ = writeAll(client_fd, &[_]u8{ 1, 2, 0, 1, 2 });
+            return;
+        }
+
+        // Respond with protection level 0 (no per-message protection)
+        if (!writeAll(client_fd, &[_]u8{ 1, 2, 0, 1, 0 })) return;
+
+        // 4. Read SOCKS5 CONNECT request: [5, 1, 0, atyp, ...]
+        var req_hdr: [4]u8 = undefined;
+        if (!readExact(client_fd, &req_hdr)) return;
+        if (req_hdr[0] != 5 or req_hdr[1] != 1) return;
+        switch (req_hdr[3]) {
+            1 => { // IPv4 (4 bytes + 2 port bytes)
+                var ipv4_port: [6]u8 = undefined;
+                if (!readExact(client_fd, &ipv4_port)) return;
+            },
+            3 => { // Domain name (1 len byte + domain + 2 port bytes)
+                var dlen: [1]u8 = undefined;
+                if (!readExact(client_fd, &dlen)) return;
+                var dom_port: [260]u8 = undefined;
+                if (!readExact(client_fd, dom_port[0 .. @as(usize, dlen[0]) + 2])) return;
+            },
+            4 => { // IPv6 (16 bytes + 2 port bytes)
+                var ipv6_port: [18]u8 = undefined;
+                if (!readExact(client_fd, &ipv6_port)) return;
+            },
+            else => return,
+        }
+
+        // Reply SOCKS5 CONNECT succeeded: [5, 0, 0, 1, 127, 0, 0, 1, 0, 0]
+        if (!writeAll(client_fd, &[_]u8{ 5, 0, 0, 1, 127, 0, 0, 1, 0, 0 })) return;
+
+        // 5. Read tunneled HTTP request headers until \r\n\r\n
+        var http_req: [1024]u8 = undefined;
+        var req_used: usize = 0;
+        while (req_used < http_req.len) {
+            const n = loopback_tls.sock_c.recv(client_fd, http_req[req_used..].ptr, http_req.len - req_used, 0);
+            if (n <= 0) return;
+            req_used += @intCast(n);
+            if (std.mem.indexOf(u8, http_req[0..req_used], "\r\n\r\n") != null) break;
+        }
+
+        var resp_buf: [512]u8 = undefined;
+        const resp = std.fmt.bufPrint(
+            &resp_buf,
+            "HTTP/1.1 200 OK\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}",
+            .{ cfg.http_body.len, cfg.http_body },
+        ) catch return;
+        _ = writeAll(client_fd, resp);
+    }
+};
+
+test "SOCKS5 GSS-API loopback: RFC 1961 wrapped protection, NEC mode, multi-round challenge, encryption rejection, and server auth rejection" {
+    if (!backend_options.gssapi) return;
+    if (builtin.os.tag == .windows) return;
+
+    // 1. Real libgssapi_krb5 path (no CURL_STUB_GSS_CREDS): verifies gss_import_name + gss_init_sec_context + gss_display_status error path
+    {
+        _ = loopback_socks5_gssapi.unsetenv("CURL_STUB_GSS_CREDS");
+        var port: u16 = 0;
+        const listen_fd = try loopback_tls.openLoopbackListener(&port);
+        defer _ = loopback_tls.sock_c.close(listen_fd);
+
+        const srv_thread = try std.Thread.spawn(.{}, loopback_socks5_gssapi.serveOnce, .{loopback_socks5_gssapi.ProxyConfig{
+            .listen_fd = listen_fd,
+            .mode = .real_gssapi_no_kdc,
+        }});
+        defer srv_thread.join();
+
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        var proxy_buf: [64]u8 = undefined;
+        const proxy_host = try loopback_http.bufPrintZ(&proxy_buf, "127.0.0.1:{d}", .{port});
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_PROXYTYPE, c.CURLPROXY_SOCKS5));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_PROXY, proxy_host));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SOCKS5_AUTH, c.CURLAUTH_GSSAPI | c.CURLAUTH_ONLY));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, @as([*:0]const u8, "http://127.0.0.1:80/test")));
+
+        const rc = curl_easy_perform(easy);
+        try testing.expect(rc == c.CURLE_COULDNT_CONNECT or rc == c.CURLE_PROXY);
+    }
+
+    // Enable deterministic GSS-API stub credentials for full protocol state-machine verification
+    _ = loopback_socks5_gssapi.setenv("CURL_STUB_GSS_CREDS", "alice:KRB5", 1);
+    defer _ = loopback_socks5_gssapi.unsetenv("CURL_STUB_GSS_CREDS");
+
+    // 2. Full RFC 1961 SOCKS5 GSS-API handshake (non-NEC wrapped protection byte) + HTTP GET tunnel
+    {
+        var port: u16 = 0;
+        const listen_fd = try loopback_tls.openLoopbackListener(&port);
+        defer _ = loopback_tls.sock_c.close(listen_fd);
+
+        const srv_thread = try std.Thread.spawn(.{}, loopback_socks5_gssapi.serveOnce, .{loopback_socks5_gssapi.ProxyConfig{
+            .listen_fd = listen_fd,
+            .mode = .rfc1961_ok,
+            .expected_token_prefix = "alice:KRB5:rcmd@127.0.0.1:1:",
+            .http_body = "socks5-gssapi-rfc1961-ok!",
+        }});
+        defer srv_thread.join();
+
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        var proxy_buf: [64]u8 = undefined;
+        const proxy_host = try loopback_http.bufPrintZ(&proxy_buf, "127.0.0.1:{d}", .{port});
+
+        var cap = loopback_http.BodySink{};
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_PROXYTYPE, c.CURLPROXY_SOCKS5_HOSTNAME));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_PROXY, proxy_host));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SOCKS5_AUTH, c.CURLAUTH_GSSAPI | c.CURLAUTH_ONLY));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SOCKS5_GSSAPI_NEC, @as(c_long, 0)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, &cap));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, @as([*:0]const u8, "http://example.com/gssapi")));
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+        try testing.expectEqualStrings("socks5-gssapi-rfc1961-ok!", cap.slice());
+    }
+
+    // 3. NEC mode (CURLOPT_SOCKS5_GSSAPI_NEC = 1) + custom service name containing '/' + multi-round 'C' -> 'D' token exchange
+    {
+        _ = loopback_socks5_gssapi.setenv("CURL_STUB_GSS_CREDS", "bob:KRB5_NTLM", 1);
+        var port: u16 = 0;
+        const listen_fd = try loopback_tls.openLoopbackListener(&port);
+        defer _ = loopback_tls.sock_c.close(listen_fd);
+
+        const srv_thread = try std.Thread.spawn(.{}, loopback_socks5_gssapi.serveOnce, .{loopback_socks5_gssapi.ProxyConfig{
+            .listen_fd = listen_fd,
+            .mode = .nec_multi_round_ok,
+            .expected_token_prefix = "bob:KRB5_NTLM:customsvc/proxy.example.com:1:",
+            .http_body = "socks5-gssapi-nec-ok!",
+        }});
+        defer srv_thread.join();
+
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        var proxy_buf: [64]u8 = undefined;
+        const proxy_host = try loopback_http.bufPrintZ(&proxy_buf, "127.0.0.1:{d}", .{port});
+
+        var cap = loopback_http.BodySink{};
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_PROXYTYPE, c.CURLPROXY_SOCKS5_HOSTNAME));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_PROXY, proxy_host));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SOCKS5_AUTH, c.CURLAUTH_GSSAPI | c.CURLAUTH_ONLY));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SOCKS5_GSSAPI_NEC, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_PROXY_SERVICE_NAME, @as([*:0]const u8, "customsvc/proxy.example.com")));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_GSSAPI_DELEGATION, c.CURLGSSAPI_DELEGATION_FLAG));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, &cap));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, @as([*:0]const u8, "http://example.com/nec")));
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+        try testing.expectEqualStrings("socks5-gssapi-nec-ok!", cap.slice());
+    }
+
+    // 4. Server demands per-message confidentiality protection (enctype = 2) -> fails with CURLE_PROXY and CURLPX_GSSAPI_PROTECTION
+    {
+        _ = loopback_socks5_gssapi.setenv("CURL_STUB_GSS_CREDS", "alice:KRB5:SOCKS5_CONF", 1);
+        var port: u16 = 0;
+        const listen_fd = try loopback_tls.openLoopbackListener(&port);
+        defer _ = loopback_tls.sock_c.close(listen_fd);
+
+        const srv_thread = try std.Thread.spawn(.{}, loopback_socks5_gssapi.serveOnce, .{loopback_socks5_gssapi.ProxyConfig{
+            .listen_fd = listen_fd,
+            .mode = .enctype_confidentiality_reject,
+        }});
+        defer srv_thread.join();
+
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        var proxy_buf: [64]u8 = undefined;
+        const proxy_host = try loopback_http.bufPrintZ(&proxy_buf, "127.0.0.1:{d}", .{port});
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_PROXYTYPE, c.CURLPROXY_SOCKS5_HOSTNAME));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_PROXY, proxy_host));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SOCKS5_AUTH, c.CURLAUTH_GSSAPI | c.CURLAUTH_ONLY));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, @as([*:0]const u8, "http://example.com/enctype")));
+
+        try testing.expectEqual(c.CURLE_PROXY, curl_easy_perform(easy));
+        var proxy_err: c_long = 0;
+        try testing.expectEqual(c.CURLE_OK, curl_easy_getinfo(easy, c.CURLINFO_PROXY_ERROR, &proxy_err));
+        try testing.expectEqual(c.CURLPX_GSSAPI_PROTECTION, proxy_err);
+    }
+
+    // 5. Server rejects authentication token ([1, 255, 0, 0]) -> fails cleanly
+    {
+        _ = loopback_socks5_gssapi.setenv("CURL_STUB_GSS_CREDS", "alice:KRB5", 1);
+        var port: u16 = 0;
+        const listen_fd = try loopback_tls.openLoopbackListener(&port);
+        defer _ = loopback_tls.sock_c.close(listen_fd);
+
+        const srv_thread = try std.Thread.spawn(.{}, loopback_socks5_gssapi.serveOnce, .{loopback_socks5_gssapi.ProxyConfig{
+            .listen_fd = listen_fd,
+            .mode = .server_auth_reject,
+        }});
+        defer srv_thread.join();
+
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        var proxy_buf: [64]u8 = undefined;
+        const proxy_host = try loopback_http.bufPrintZ(&proxy_buf, "127.0.0.1:{d}", .{port});
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_PROXYTYPE, c.CURLPROXY_SOCKS5_HOSTNAME));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_PROXY, proxy_host));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SOCKS5_AUTH, c.CURLAUTH_GSSAPI | c.CURLAUTH_ONLY));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, @as([*:0]const u8, "http://example.com/reject")));
+
+        const rc = curl_easy_perform(easy);
+        try testing.expect(rc == c.CURLE_COULDNT_CONNECT or rc == c.CURLE_PROXY);
+    }
 }

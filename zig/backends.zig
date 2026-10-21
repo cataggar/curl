@@ -55,6 +55,8 @@ pub const Options = struct {
     quiche_lib_dir: ?[]const u8 = null,
     ssh: SshBackend = .none,
     ldap: LdapBackend = .none,
+    gssapi: bool = false,
+    sspi: ?bool = null,
 
     pub fn useThreadedResolver(self: Options) bool {
         return self.threaded_resolver orelse !self.ares;
@@ -66,6 +68,10 @@ pub const Options = struct {
 
     pub fn useAppleSectrust(self: Options, os_tag: std.Target.Os.Tag) bool {
         return self.apple_sectrust orelse (self.ssl == .openssl and os_tag.isDarwin());
+    }
+
+    pub fn useSspi(self: Options, os_tag: std.Target.Os.Tag) bool {
+        return os_tag == .windows and (self.sspi orelse (self.ssl == .schannel));
     }
 
     pub fn hasHttp3(self: Options) bool {
@@ -96,6 +102,8 @@ pub const Options = struct {
         if (self.quic == .ngtcp2 and self.ssl != .openssl and self.ssl != .gnutls and self.ssl != .wolfssl) return false;
         if (self.ldap == .winldap and os_tag != .windows) return false;
         if (self.ldap == .openldap and os_tag == .windows) return false;
+        if (self.sspi == true and os_tag != .windows) return false;
+        if (self.gssapi and os_tag == .windows) return false;
         return true;
     }
 
@@ -120,6 +128,12 @@ pub const Options = struct {
         }
         if (self.ldap == .openldap and os_tag == .windows) {
             @panic("OpenLDAP backend (-Dldap=openldap) is not supported on Windows targets; use -Dldap=winldap");
+        }
+        if (self.sspi == true and os_tag != .windows) {
+            @panic("Windows SSPI (-Dsspi=true) is only supported on Windows targets");
+        }
+        if (self.gssapi and os_tag == .windows) {
+            @panic("GSS-API (-Dgssapi=true) is not supported on Windows targets; use -Dsspi=true");
         }
     }
 
@@ -148,6 +162,8 @@ pub fn fromBuild(b: *std.Build) Options {
         .quiche_lib_dir = b.option([]const u8, "quiche-lib", "Custom library directory for quiche"),
         .ssh = b.option(SshBackend, "ssh", "SSH/SFTP/SCP backend (none, libssh2, libssh; default: none)") orelse .none,
         .ldap = b.option(LdapBackend, "ldap", "LDAP/LDAPS backend (none, openldap, ldap, winldap; default: none)") orelse .none,
+        .gssapi = b.option(bool, "gssapi", "Enable GSS-API / Kerberos5 / SPNEGO via system libgssapi_krb5 or Apple GSS (default: false)") orelse false,
+        .sspi = b.option(bool, "sspi", "Enable Windows SSPI authentication (default: true with -Dssl=schannel on Windows)"),
     };
 }
 
@@ -294,6 +310,19 @@ pub fn applyCMacros(mod: *std.Build.Module, target: std.Build.ResolvedTarget, op
             }
         },
     }
+
+    if (opts.useSspi(target.result.os.tag) and opts.ssl != .schannel) {
+        mod.addCMacro("USE_WINDOWS_SSPI", "1");
+    }
+
+    if (opts.gssapi) {
+        mod.addCMacro("HAVE_GSSAPI", "1");
+        if (target.result.os.tag.isDarwin()) {
+            mod.addCMacro("HAVE_GSSAPPLE", "1");
+        } else {
+            mod.addCMacro("HAVE_GSS_SET_NEG_MECHS", "1");
+        }
+    }
 }
 
 pub fn linkBackends(mod: *std.Build.Module, target: std.Build.ResolvedTarget, opts: Options) void {
@@ -405,6 +434,21 @@ pub fn linkBackends(mod: *std.Build.Module, target: std.Build.ResolvedTarget, op
         },
         .winldap => mod.linkSystemLibrary("wldap32", .{}),
     }
+
+    if (opts.useSspi(target.result.os.tag) and opts.ssl != .schannel) {
+        mod.linkSystemLibrary("secur32", .{});
+        mod.linkSystemLibrary("crypt32", .{});
+        mod.linkSystemLibrary("advapi32", .{});
+    }
+
+    if (opts.gssapi) {
+        if (target.result.os.tag.isDarwin()) {
+            mod.linkFramework("GSS", .{});
+        } else {
+            mod.linkSystemLibrary("gssapi_krb5", .{});
+            mod.linkSystemLibrary("krb5", .{});
+        }
+    }
 }
 
 pub fn createOptionsStep(b: *std.Build, opts: Options) *std.Build.Step.Options {
@@ -430,5 +474,7 @@ pub fn createOptionsStep(b: *std.Build, opts: Options) *std.Build.Step.Options {
     step.addOption(LdapBackend, "ldap", opts.ldap);
     step.addOption(bool, "has_ldap", opts.hasLdap());
     step.addOption(bool, "has_ldaps", opts.hasLdaps());
+    step.addOption(bool, "gssapi", opts.gssapi);
+    step.addOption(?bool, "sspi", opts.sspi);
     return step;
 }

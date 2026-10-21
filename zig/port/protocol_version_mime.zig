@@ -619,6 +619,7 @@ const CURL_VERSION_LARGEFILE: c_int = 1 << 9;
 const CURL_VERSION_IDN: c_int = 1 << 10;
 const CURL_VERSION_SSPI: c_int = 1 << 11;
 const CURL_VERSION_HTTP2: c_int = 1 << 16;
+const CURL_VERSION_GSSAPI: c_int = 1 << 17;
 const CURL_VERSION_KERBEROS5: c_int = 1 << 18;
 const CURL_VERSION_UNIX_SOCKETS: c_int = 1 << 19;
 const CURL_VERSION_PSL: c_int = 1 << 20;
@@ -630,6 +631,8 @@ const CURL_VERSION_ZSTD: c_int = 1 << 26;
 
 const use_http3 = if (@hasDecl(backend_options, "http3")) backend_options.http3 else false;
 const use_proxy_http3 = if (@hasDecl(backend_options, "proxy_http3")) backend_options.proxy_http3 else false;
+const use_gssapi = if (@hasDecl(backend_options, "gssapi")) backend_options.gssapi else false;
+const use_sspi = is_windows and (if (@hasDecl(backend_options, "sspi")) (backend_options.sspi orelse (backend_options.ssl == .schannel)) else (backend_options.ssl == .schannel));
 const CURL_VERSION_UNICODE: c_int = 1 << 27;
 const CURL_VERSION_HSTS: c_int = 1 << 28;
 const CURL_VERSION_THREADSAFE: c_int = 1 << 30;
@@ -967,6 +970,10 @@ const features_table = blk: {
         list[n] = .{ .name = "brotli", .bitmask = CURL_VERSION_BROTLI };
         n += 1;
     }
+    if (use_gssapi) {
+        list[n] = .{ .name = "GSS-API", .bitmask = CURL_VERSION_GSSAPI };
+        n += 1;
+    }
     if (backend_options.ssl != .none) {
         list[n] = .{ .name = "HSTS", .bitmask = CURL_VERSION_HSTS };
         n += 1;
@@ -995,7 +1002,7 @@ const features_table = blk: {
     }
     list[n] = .{ .name = "IPv6", .bitmask = CURL_VERSION_IPV6 };
     n += 1;
-    if (backend_options.ssl == .schannel) {
+    if (use_gssapi or use_sspi) {
         list[n] = .{ .name = "Kerberos", .bitmask = CURL_VERSION_KERBEROS5 };
         n += 1;
     }
@@ -1017,7 +1024,7 @@ const features_table = blk: {
         list[n] = .{ .name = "AppleSecTrust", .bitmask = 0 };
         n += 1;
     }
-    if (backend_options.ssl == .schannel) {
+    if (use_gssapi or use_sspi) {
         list[n] = .{ .name = "SPNEGO", .bitmask = CURL_VERSION_SPNEGO };
         n += 1;
     }
@@ -1025,7 +1032,7 @@ const features_table = blk: {
         list[n] = .{ .name = "SSL", .bitmask = CURL_VERSION_SSL };
         n += 1;
     }
-    if (backend_options.ssl == .schannel) {
+    if (use_sspi) {
         list[n] = .{ .name = "SSPI", .bitmask = CURL_VERSION_SSPI };
         n += 1;
     }
