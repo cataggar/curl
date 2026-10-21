@@ -229,5 +229,5 @@ jobs:
             --version "$VERSION" \
             --commit "$GITHUB_SHA" \
             --assets-directory release-assets \
-            --workspace "$GITHUB_WORKSPACE" \
+            --workspace "$GITHUB_WORKSPACE/.curl-release" \
             --github-step-summary "$GITHUB_STEP_SUMMARY"
