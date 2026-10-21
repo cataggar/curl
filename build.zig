@@ -108,6 +108,8 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     port_test_mod.addOptions("backend_options", backend_options_step);
+    backends.applyCMacros(port_test_mod, target, backend_opts);
+    backends.linkBackends(port_test_mod, target, backend_opts);
     port_test_mod.linkLibrary(lib);
     const port_tests = b.addTest(.{
         .root_module = port_test_mod,

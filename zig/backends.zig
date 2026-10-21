@@ -17,6 +17,12 @@ pub const IdnBackend = enum {
     appleidn,
 };
 
+pub const QuicBackend = enum {
+    none,
+    ngtcp2,
+    quiche,
+};
+
 pub const Options = struct {
     ssl: SslBackend = .none,
     apple_sectrust: ?bool = null,
@@ -31,6 +37,9 @@ pub const Options = struct {
     threaded_resolver: ?bool = null,
     ca_bundle: ?[]const u8 = null,
     ca_fallback: bool = false,
+    quic: QuicBackend = .none,
+    quiche_include_dir: ?[]const u8 = null,
+    quiche_lib_dir: ?[]const u8 = null,
 
     pub fn useThreadedResolver(self: Options) bool {
         return self.threaded_resolver orelse !self.ares;
@@ -44,11 +53,20 @@ pub const Options = struct {
         return self.apple_sectrust orelse (self.ssl == .openssl and os_tag.isDarwin());
     }
 
+    pub fn hasHttp3(self: Options) bool {
+        return self.quic != .none;
+    }
+
+    pub fn hasProxyHttp3(self: Options) bool {
+        return self.quic == .ngtcp2;
+    }
+
     pub fn isValidForTarget(self: Options, os_tag: std.Target.Os.Tag) bool {
         if (self.ssl == .schannel and os_tag != .windows) return false;
         if (self.apple_sectrust == true and (self.ssl != .openssl or !os_tag.isDarwin())) return false;
         if (self.idn == .winidn and os_tag != .windows) return false;
         if (self.idn == .appleidn and !os_tag.isDarwin()) return false;
+        if (self.quic == .ngtcp2 and self.ssl != .openssl and self.ssl != .gnutls and self.ssl != .wolfssl) return false;
         return true;
     }
 
@@ -65,6 +83,13 @@ pub const Options = struct {
         if (self.idn == .appleidn and !os_tag.isDarwin()) {
             @panic("AppleIDN backend (-Didn=appleidn) is only supported on Darwin targets");
         }
+        if (self.quic == .ngtcp2 and self.ssl != .openssl and self.ssl != .gnutls and self.ssl != .wolfssl) {
+            @panic("ngtcp2 requires -Dssl=openssl, -Dssl=gnutls, or -Dssl=wolfssl");
+        }
+    }
+
+    pub fn addOptionsModule(self: Options, b: *std.Build) *std.Build.Module {
+        return createOptionsStep(b, self).createModule();
     }
 };
 
@@ -83,6 +108,9 @@ pub fn fromBuild(b: *std.Build) Options {
         .threaded_resolver = b.option(bool, "threaded-resolver", "Use threaded DNS resolver (default: !ares; set true with -Dares=true for hybrid threaded+c-ares HTTPS-RR)"),
         .ca_bundle = b.option([]const u8, "ca-bundle", "Custom CA certificate bundle path"),
         .ca_fallback = b.option(bool, "ca-fallback", "Use TLS backend built-in CA store fallback (default: false)") orelse false,
+        .quic = b.option(QuicBackend, "quic", "QUIC/HTTP3 backend (none, ngtcp2, quiche; default: none)") orelse .none,
+        .quiche_include_dir = b.option([]const u8, "quiche-include", "Custom include directory for quiche"),
+        .quiche_lib_dir = b.option([]const u8, "quiche-lib", "Custom library directory for quiche"),
     };
 }
 
@@ -178,6 +206,29 @@ pub fn applyCMacros(mod: *std.Build.Module, target: std.Build.ResolvedTarget, op
     if (opts.httpsrr) {
         mod.addCMacro("USE_HTTPSRR", "1");
     }
+
+    switch (opts.quic) {
+        .none => {},
+        .ngtcp2 => {
+            if (opts.ssl != .openssl and opts.ssl != .gnutls and opts.ssl != .wolfssl) {
+                @panic("ngtcp2 requires -Dssl=openssl, -Dssl=gnutls, or -Dssl=wolfssl");
+            }
+            mod.addCMacro("USE_HTTP3", "1");
+            mod.addCMacro("USE_NGTCP2", "1");
+            mod.addCMacro("USE_NGHTTP3", "1");
+            mod.addCMacro("USE_PROXY_HTTP3", "1");
+            mod.addCMacro("NGTCP2_STATICLIB", "1");
+            mod.addCMacro("NGHTTP3_STATICLIB", "1");
+            if (opts.ssl == .openssl) {
+                mod.addCMacro("OPENSSL_QUIC_API2", "1");
+            }
+        },
+        .quiche => {
+            mod.addCMacro("USE_HTTP3", "1");
+            mod.addCMacro("USE_QUICHE", "1");
+            mod.addCMacro("HAVE_QUICHE_CONN_SET_QLOG_FD", "1");
+        },
+    }
 }
 
 pub fn linkBackends(mod: *std.Build.Module, target: std.Build.ResolvedTarget, opts: Options) void {
@@ -247,6 +298,29 @@ pub fn linkBackends(mod: *std.Build.Module, target: std.Build.ResolvedTarget, op
     if (opts.ares) {
         mod.linkSystemLibrary("cares", .{});
     }
+
+    switch (opts.quic) {
+        .none => {},
+        .ngtcp2 => {
+            mod.linkSystemLibrary("ngtcp2", .{});
+            mod.linkSystemLibrary("nghttp3", .{});
+            switch (opts.ssl) {
+                .openssl => mod.linkSystemLibrary("ngtcp2_crypto_ossl", .{}),
+                .gnutls => mod.linkSystemLibrary("ngtcp2_crypto_gnutls", .{}),
+                .wolfssl => mod.linkSystemLibrary("ngtcp2_crypto_wolfssl", .{}),
+                else => unreachable,
+            }
+        },
+        .quiche => {
+            if (opts.quiche_include_dir) |inc_dir| {
+                mod.addIncludePath(.{ .cwd_relative = inc_dir });
+            }
+            if (opts.quiche_lib_dir) |lib_dir| {
+                mod.addLibraryPath(.{ .cwd_relative = lib_dir });
+            }
+            mod.linkSystemLibrary("quiche", .{});
+        },
+    }
 }
 
 pub fn createOptionsStep(b: *std.Build, opts: Options) *std.Build.Step.Options {
@@ -265,5 +339,8 @@ pub fn createOptionsStep(b: *std.Build, opts: Options) *std.Build.Step.Options {
     step.addOption(bool, "use_resolv_threaded", opts.useThreadedResolver());
     step.addOption(?[]const u8, "ca_bundle", opts.ca_bundle);
     step.addOption(bool, "ca_fallback", opts.ca_fallback);
+    step.addOption(QuicBackend, "quic", opts.quic);
+    step.addOption(bool, "http3", opts.hasHttp3());
+    step.addOption(bool, "proxy_http3", opts.hasProxyHttp3());
     return step;
 }

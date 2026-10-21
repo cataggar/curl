@@ -45,6 +45,7 @@ pub const vtls_backends = @import("vtls_backends.zig");
 pub const vtls_gtls = @import("vtls_gtls.zig");
 pub const vtls_rustls = @import("vtls_rustls.zig");
 pub const vtls_wolfssl = @import("vtls_wolfssl.zig");
+pub const vquic_core = @import("vquic_core.zig");
 pub const sendf = @import("sendf.zig");
 pub const ftp = @import("ftp.zig");
 pub const url = @import("url.zig");
@@ -98,6 +99,7 @@ comptime {
     _ = http2_h2proxy;
     _ = setopt;
     _ = vtls_backends;
+    _ = vquic_core;
     _ = sendf;
     _ = ftp;
     _ = url;

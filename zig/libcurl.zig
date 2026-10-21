@@ -331,3 +331,13 @@ pub fn addLibcurl(b: *std.Build, options: Options) *std.Build.Step.Compile {
 
     return lib;
 }
+
+const backends = @import("backends.zig");
+
+pub fn applyBackendDefines(mod: *std.Build.Module, target: std.Build.ResolvedTarget, opts: backends.Options) void {
+    backends.applyCMacros(mod, target, opts);
+}
+
+pub fn linkSystemLibraries(mod: *std.Build.Module, target: std.Build.ResolvedTarget, opts: backends.Options) void {
+    backends.linkBackends(mod, target, opts);
+}

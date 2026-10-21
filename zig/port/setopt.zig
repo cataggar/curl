@@ -48,7 +48,8 @@ const use_windows_sspi = backend_options.ssl == .schannel;
 const use_spnego = use_windows_sspi;
 const use_ntlm = false;
 const use_http2 = backend_options.nghttp2;
-const use_http3 = false;
+const use_http3 = if (@hasDecl(backend_options, "http3")) backend_options.http3 else false;
+const use_proxy_http3 = if (@hasDecl(backend_options, "proxy_http3")) backend_options.proxy_http3 else false;
 const use_ssh = false;
 const use_ech = false;
 const use_ares = if (@hasDecl(backend_options, "ares")) backend_options.ares else false;
@@ -1143,7 +1144,7 @@ fn setoptHttpVersion(data: *Curl_easy, arg: c_long) CURLcode {
         CURL_HTTP_VERSION_3,
         CURL_HTTP_VERSION_3ONLY,
         => {
-            if (!use_http3) return CURLE_UNSUPPORTED_PROTOCOL;
+            if (!use_http3) return CURLE_NOT_BUILT_IN;
         },
         else => {
             if (arg < CURL_HTTP_VERSION_NONE) {
@@ -1525,7 +1526,7 @@ fn setoptLongProxy(data: *Curl_easy, option: CURLoption, arg: c_long) CURLcode {
         CURLOPT_PROXYAUTH => return httpauth(data, true, @bitCast(arg)),
         CURLOPT_PROXYTYPE => {
             if (arg < CURLPROXY_HTTP or arg > CURLPROXY_HTTPS3) return CURLE_BAD_FUNCTION_ARGUMENT;
-            if (arg == CURLPROXY_HTTPS3) return CURLE_NOT_BUILT_IN;
+            if (!use_proxy_http3 and arg == CURLPROXY_HTTPS3) return CURLE_NOT_BUILT_IN;
             Curl_setopt_set_i64(data, FIELD_PROXYTYPE, arg);
         },
         CURLOPT_SOCKS5_AUTH => {

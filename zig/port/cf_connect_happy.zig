@@ -232,6 +232,31 @@ extern fn Curl_cf_unix_create(
     tunnel_peer: ?*Curl_peer,
     tunnel_transport: u8,
 ) callconv(.c) CURLcode;
+extern fn Curl_cf_quic_create(
+    pcf: *?*Curl_cfilter,
+    data: ?*Curl_easy,
+    origin: ?*Curl_peer,
+    peer: ?*Curl_peer,
+    transport_peer: u8,
+    conn: ?*connectdata,
+    addr: *Curl_sockaddr_ex,
+    tunnel_peer: ?*Curl_peer,
+    tunnel_transport: u8,
+) callconv(.c) CURLcode;
+extern fn Curl_cf_h3_proxy_create(
+    pcf: *?*Curl_cfilter,
+    data: ?*Curl_easy,
+    origin: ?*Curl_peer,
+    peer: ?*Curl_peer,
+    transport_peer: u8,
+    conn: ?*connectdata,
+    addr: *Curl_sockaddr_ex,
+    tunnel_peer: ?*Curl_peer,
+    tunnel_transport: u8,
+) callconv(.c) CURLcode;
+
+const use_http3 = if (@hasDecl(backend_options, "http3")) backend_options.http3 else false;
+const use_proxy_http3 = if (@hasDecl(backend_options, "proxy_http3")) backend_options.proxy_http3 else false;
 
 // C accessors defined in lib/cf-socket.c
 extern fn Curl_zig_connect_timeleft_info(
@@ -1355,12 +1380,32 @@ const transport_provider = struct {
     tunnel: bool,
 };
 
-var transport_providers = [_]transport_provider{
-    .{ .cf_create = Curl_cf_tcp_create, .transport = TRNSPRT_TCP, .tunnel = false },
-    .{ .cf_create = Curl_cf_tcp_create, .transport = TRNSPRT_TCP, .tunnel = true },
-    .{ .cf_create = Curl_cf_udp_create, .transport = TRNSPRT_UDP, .tunnel = false },
-    .{ .cf_create = Curl_cf_unix_create, .transport = TRNSPRT_UNIX, .tunnel = false },
-    .{ .cf_create = Curl_cf_unix_create, .transport = TRNSPRT_UNIX, .tunnel = true },
+var transport_providers = blk: {
+    var list: [7]transport_provider = undefined;
+    var n: usize = 0;
+    list[n] = .{ .cf_create = Curl_cf_tcp_create, .transport = TRNSPRT_TCP, .tunnel = false };
+    n += 1;
+    list[n] = .{ .cf_create = Curl_cf_tcp_create, .transport = TRNSPRT_TCP, .tunnel = true };
+    n += 1;
+    list[n] = .{ .cf_create = Curl_cf_udp_create, .transport = TRNSPRT_UDP, .tunnel = false };
+    n += 1;
+    list[n] = .{ .cf_create = Curl_cf_unix_create, .transport = TRNSPRT_UNIX, .tunnel = false };
+    n += 1;
+    list[n] = .{ .cf_create = Curl_cf_unix_create, .transport = TRNSPRT_UNIX, .tunnel = true };
+    n += 1;
+    if (use_http3) {
+        list[n] = .{ .cf_create = Curl_cf_quic_create, .transport = TRNSPRT_QUIC, .tunnel = false };
+        n += 1;
+    }
+    if (use_proxy_http3) {
+        list[n] = .{ .cf_create = Curl_cf_h3_proxy_create, .transport = TRNSPRT_QUIC, .tunnel = true };
+        n += 1;
+    }
+    var final: [n]transport_provider = undefined;
+    for (0..n) |i| {
+        final[i] = list[i];
+    }
+    break :blk final;
 };
 
 fn get_cf_create(transport: u8, tunnel: bool) ?cf_ip_connect_create {
@@ -3109,7 +3154,8 @@ test "Curl_cft_http_connect and Curl_cft_ip_happy vtable properties" {
     try std.testing.expect(get_cf_create(TRNSPRT_TCP, false) != null);
     try std.testing.expect(get_cf_create(TRNSPRT_UDP, false) != null);
     try std.testing.expect(get_cf_create(TRNSPRT_UNIX, true) != null);
-    try std.testing.expect(get_cf_create(TRNSPRT_QUIC, false) == null);
+    try std.testing.expectEqual(use_http3, get_cf_create(TRNSPRT_QUIC, false) != null);
+    try std.testing.expectEqual(use_proxy_http3, get_cf_create(TRNSPRT_QUIC, true) != null);
 }
 
 test "Curl_async_global_init and async_thrdd_ctx flags" {

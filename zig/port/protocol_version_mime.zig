@@ -10,6 +10,7 @@ const imap_ws = @import("imap_ws.zig");
 const pop3_smtp = @import("pop3_smtp.zig");
 const ftp = @import("ftp.zig");
 const http_mod = @import("http.zig");
+const vquic_core = @import("vquic_core.zig");
 
 pub const CURLcode = c_uint;
 pub const CURLE_OK: CURLcode = 0;
@@ -619,7 +620,11 @@ const CURL_VERSION_PSL: c_int = 1 << 20;
 const CURL_VERSION_HTTPS_PROXY: c_int = 1 << 21;
 const CURL_VERSION_BROTLI: c_int = 1 << 23;
 const CURL_VERSION_ALTSVC: c_int = 1 << 24;
+const CURL_VERSION_HTTP3: c_int = 1 << 25;
 const CURL_VERSION_ZSTD: c_int = 1 << 26;
+
+const use_http3 = if (@hasDecl(backend_options, "http3")) backend_options.http3 else false;
+const use_proxy_http3 = if (@hasDecl(backend_options, "proxy_http3")) backend_options.proxy_http3 else false;
 const CURL_VERSION_UNICODE: c_int = 1 << 27;
 const CURL_VERSION_HSTS: c_int = 1 << 28;
 const CURL_VERSION_THREADSAFE: c_int = 1 << 30;
@@ -707,6 +712,7 @@ var version_cares_buf: [30]u8 = undefined;
 var version_idn_buf: [30]u8 = undefined;
 var version_psl_buf: [30]u8 = undefined;
 var version_h2_buf: [30]u8 = undefined;
+var version_h3_buf: [30]u8 = undefined;
 
 pub export fn curl_version() callconv(.c) [*:0]u8 {
     var src: [16][*:0]const u8 = undefined;
@@ -793,6 +799,12 @@ pub export fn curl_version() callconv(.c) [*:0]u8 {
     if (comptime backend_options.nghttp2) {
         Curl_http2_ver(&version_h2_buf, version_h2_buf.len);
         src[i] = @ptrCast(&version_h2_buf);
+        i += 1;
+    }
+
+    if (comptime use_http3) {
+        vquic_core.Curl_quic_ver(&version_h3_buf, version_h3_buf.len);
+        src[i] = @ptrCast(&version_h3_buf);
         i += 1;
     }
 
@@ -903,6 +915,10 @@ const features_table = blk: {
         list[n] = .{ .name = "HTTP2", .bitmask = CURL_VERSION_HTTP2 };
         n += 1;
     }
+    if (use_http3) {
+        list[n] = .{ .name = "HTTP3", .bitmask = CURL_VERSION_HTTP3 };
+        n += 1;
+    }
     if (use_ssl) {
         list[n] = .{ .name = "HTTPS-proxy", .present = https_proxy_present, .bitmask = CURL_VERSION_HTTPS_PROXY };
         n += 1;
@@ -927,6 +943,10 @@ const features_table = blk: {
     n += 1;
     if (backend_options.zlib) {
         list[n] = .{ .name = "libz", .bitmask = CURL_VERSION_LIBZ };
+        n += 1;
+    }
+    if (use_proxy_http3) {
+        list[n] = .{ .name = "proxy-HTTP3", .bitmask = 0 };
         n += 1;
     }
     if (backend_options.psl) {
@@ -973,6 +993,7 @@ var feature_names_buf: [features_table.len + 1]?[*:0]const u8 = @splat(null);
 var info_ssl_buffer: [80]u8 = undefined;
 var info_brotli_buffer: [30]u8 = undefined;
 var info_zstd_buffer: [30]u8 = undefined;
+var info_quic_buffer: [80]u8 = undefined;
 
 const effective_ca_bundle: ?[*:0]const u8 = blk: {
     if (backend_options.ca_bundle) |bundle| {
@@ -1049,6 +1070,11 @@ pub export fn curl_version_info(stamp: c_uint) callconv(.c) *curl_version_info_d
         const h2 = nghttp2_version(0);
         version_info.nghttp2_ver_num = @intCast(h2.version_num);
         version_info.nghttp2_version = h2.version_str;
+    }
+
+    if (comptime use_http3) {
+        vquic_core.Curl_quic_ver(&info_quic_buffer, info_quic_buffer.len);
+        version_info.quic_version = @ptrCast(&info_quic_buffer);
     }
 
     if (comptime backend_options.zstd) {

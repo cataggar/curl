@@ -1,4 +1,5 @@
 const std = @import("std");
+const vquic_core = @import("vquic_core.zig");
 
 // Zig port of optional/disabled backend modules (Phase 7 Session 38):
 //   - lib/ldap.c, lib/openldap.c (lib/curl_ldap.h)
@@ -206,53 +207,13 @@ pub const Curl_cft_h3_proxy_desc = VquicCftypeDescriptor{
 /// Convert an HTTP/3 error code (RFC 9114) into a human-readable string.
 /// Matches `Curl_vquic_h3_err_str()` in `lib/vquic/vquic.c`.
 pub fn Curl_vquic_h3_err_str(error_code: u64) callconv(.c) [*:0]const u8 {
-    return switch (error_code) {
-        @backingInt(vquic_h3_error.CURL_H3_ERR_NO_ERROR) => "NO_ERROR",
-        @backingInt(vquic_h3_error.CURL_H3_ERR_GENERAL_PROTOCOL_ERROR) => "GENERAL_PROTOCOL_ERROR",
-        @backingInt(vquic_h3_error.CURL_H3_ERR_INTERNAL_ERROR) => "INTERNAL_ERROR",
-        @backingInt(vquic_h3_error.CURL_H3_ERR_STREAM_CREATION_ERROR) => "STREAM_CREATION_ERROR",
-        @backingInt(vquic_h3_error.CURL_H3_ERR_CLOSED_CRITICAL_STREAM) => "CLOSED_CRITICAL_STREAM",
-        @backingInt(vquic_h3_error.CURL_H3_ERR_FRAME_UNEXPECTED) => "FRAME_UNEXPECTED",
-        @backingInt(vquic_h3_error.CURL_H3_ERR_FRAME_ERROR) => "FRAME_ERROR",
-        @backingInt(vquic_h3_error.CURL_H3_ERR_EXCESSIVE_LOAD) => "EXCESSIVE_LOAD",
-        @backingInt(vquic_h3_error.CURL_H3_ERR_ID_ERROR) => "ID_ERROR",
-        @backingInt(vquic_h3_error.CURL_H3_ERR_SETTINGS_ERROR) => "SETTINGS_ERROR",
-        @backingInt(vquic_h3_error.CURL_H3_ERR_MISSING_SETTINGS) => "MISSING_SETTINGS",
-        @backingInt(vquic_h3_error.CURL_H3_ERR_REQUEST_REJECTED) => "REQUEST_REJECTED",
-        @backingInt(vquic_h3_error.CURL_H3_ERR_REQUEST_CANCELLED) => "REQUEST_CANCELLED",
-        @backingInt(vquic_h3_error.CURL_H3_ERR_REQUEST_INCOMPLETE) => "REQUEST_INCOMPLETE",
-        @backingInt(vquic_h3_error.CURL_H3_ERR_MESSAGE_ERROR) => "MESSAGE_ERROR",
-        @backingInt(vquic_h3_error.CURL_H3_ERR_CONNECT_ERROR) => "CONNECT_ERROR",
-        @backingInt(vquic_h3_error.CURL_H3_ERR_VERSION_FALLBACK) => "VERSION_FALLBACK",
-        else => {
-            // RFC 9114 Section 8.1 reserved error codes of the form 0x1f * N + 0x21
-            if (error_code >= 0x21 and ((error_code - 0x21) % 0x1f) == 0) {
-                return "NO_ERROR";
-            }
-            return "unknown";
-        },
-    };
+    return vquic_core.Curl_vquic_h3_err_str(error_code);
 }
 
-/// Exported C symbol required by `lib/cf-https-connect.c` and `lib/http.c`
-/// when `USE_HTTP3` is not enabled. Matches `lib/vquic/vquic.c`.
-pub export fn Curl_conn_may_http3(data: ?*anyopaque, conn: ?*anyopaque) callconv(.c) CURLcode {
-    _ = data;
-    _ = conn;
-    return CURLE_NOT_BUILT_IN;
-}
-
-pub fn Curl_vquic_init() callconv(.c) c_int {
-    return 1;
-}
-
-pub fn Curl_vquic_cleanup() callconv(.c) void {}
-
-pub fn Curl_quic_ver(p: [*]u8, len: usize) callconv(.c) void {
-    if (len > 0) {
-        p[0] = 0;
-    }
-}
+pub const Curl_conn_may_http3 = vquic_core.Curl_conn_may_http3;
+pub const Curl_vquic_init = vquic_core.Curl_vquic_init;
+pub const Curl_vquic_cleanup = vquic_core.Curl_vquic_cleanup;
+pub const Curl_quic_ver = vquic_core.Curl_quic_ver;
 
 // ============================================================================
 // 3. VSSH / libssh / libssh2 (lib/vssh/vssh.c, libssh.c, libssh2.c, ssh.h)
@@ -598,8 +559,12 @@ pub const Curl_ssl_wolfssl_desc = OptionalSslBackendDescriptor{
 // ============================================================================
 
 test "Curl_conn_may_http3 returns CURLE_NOT_BUILT_IN when HTTP/3 disabled" {
-    try std.testing.expectEqual(CURLE_NOT_BUILT_IN, Curl_conn_may_http3(null, null));
-    try std.testing.expectEqual(@as(CURLcode, 4), Curl_conn_may_http3(null, null));
+    if (!vquic_core.use_http3) {
+        try std.testing.expectEqual(CURLE_NOT_BUILT_IN, Curl_conn_may_http3(null, null));
+        try std.testing.expectEqual(@as(CURLcode, 4), Curl_conn_may_http3(null, null));
+    } else {
+        try std.testing.expectEqual(CURLE_QUIC_CONNECT_ERROR, Curl_conn_may_http3(null, null));
+    }
 }
 
 test "Curl_vquic_h3_err_str maps standard and RFC 9114 reserved HTTP/3 error codes" {
