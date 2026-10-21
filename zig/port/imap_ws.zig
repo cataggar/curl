@@ -1144,28 +1144,44 @@ fn imap_state_login_resp(data: ?*Curl_easy, imapc: *imap_conn, imapcode: c_int, 
 }
 
 fn imap_find_literal(line_in: [*]const u8, len_in: usize) ?[*:0]const u8 {
-    var line = line_in;
-    var len = len_in;
+    var slice = line_in[0..len_in];
     var quoted: bool = false;
 
-    while (len >= 4) {
+    while (slice.len >= 4) {
         if (quoted) {
-            if (line[0] == '\\') {
-                line += 2;
-                len -= 2;
+            if (slice[0] == '\\') {
+                slice = slice[2..];
                 continue;
-            } else if (line[0] == '"') {
+            } else if (slice[0] == '"') {
                 quoted = false;
             }
-        } else if (line[0] == '"') {
+        } else if (slice[0] == '"') {
             quoted = true;
-        } else if (line[0] == '{') {
-            return @ptrCast(line);
+        } else if (slice[0] == '{') {
+            return @ptrCast(slice.ptr);
         }
-        line += 1;
-        len -= 1;
+        slice = slice[1..];
     }
     return null;
+}
+
+pub fn imap_parse_literal(line_slice: []const u8) ?curl_off_t {
+    const lit_ptr = imap_find_literal(line_slice.ptr, line_slice.len) orelse return null;
+    const offset = @intFromPtr(lit_ptr) - @intFromPtr(line_slice.ptr);
+    if (offset >= line_slice.len) return null;
+    const rem = line_slice[offset + 1 ..];
+    if (rem.len < 4) return null; // at least 1 digit + "}\r\n"
+
+    var idx: usize = 0;
+    var acc: curl_off_t = 0;
+    while (idx < rem.len and rem[idx] >= '0' and rem[idx] <= '9') : (idx += 1) {
+        const digit = std.math.cast(curl_off_t, rem[idx] - '0') orelse return null;
+        const scaled = std.math.mul(curl_off_t, acc, 10) catch return null;
+        acc = std.math.add(curl_off_t, scaled, digit) catch return null;
+    }
+    if (idx == 0) return null;
+    if (!std.mem.eql(u8, rem[idx..], "}\r\n")) return null;
+    return acc;
 }
 
 fn imap_state_listsearch_resp(data: ?*Curl_easy, imap: *IMAP, imapc: *imap_conn, imapcode: c_int, line_in: [*:0]const u8) CURLcode {
@@ -1180,17 +1196,8 @@ fn imap_state_listsearch_resp(data: ?*Curl_easy, imap: *IMAP, imapc: *imap_conn,
             return Curl_client_write(data, CLIENTWRITE_BODY, line, len);
         }
 
-        const lit = imap_find_literal(line, len);
-        if (lit) |lit_ptr| {
-            var p: [*:0]const u8 = lit_ptr + 1;
-            if (curlx_str_number(&p, &size, std.math.maxInt(curl_off_t)) != 0 or
-                curlx_str_single(&p, '}') != 0 or
-                curlx_str_single(&p, '\r') != 0 or
-                curlx_str_single(&p, '\n') != 0 or
-                p[0] != 0)
-            {
-                size = 0;
-            }
+        if (imap_parse_literal(line[0..len])) |parsed_size| {
+            size = parsed_size;
         }
 
         if (size > 0) {
@@ -1204,15 +1211,17 @@ fn imap_state_listsearch_resp(data: ?*Curl_easy, imap: *IMAP, imapc: *imap_conn,
                 _ = curlx_dyn_tail(&imapc.pp.recvbuf, chunk);
                 imapc.pp.overflow = 0;
 
-                if (chunk > @as(usize, @intCast(size))) {
-                    chunk = @intCast(size);
+                const size_uz = std.math.cast(usize, size) orelse std.math.maxInt(usize);
+                if (chunk > size_uz) {
+                    chunk = size_uz;
                 }
 
                 const recv_ptr = containers.curlx_dyn_ptr(&imapc.pp.recvbuf) orelse return CURLE_WEIRD_SERVER_REPLY;
                 result = Curl_client_write(data, CLIENTWRITE_BODY, recv_ptr, chunk);
                 if (result != CURLE_OK) return result;
 
-                size -= @intCast(chunk);
+                const chunk_off = std.math.cast(curl_off_t, chunk) orelse return CURLE_WEIRD_SERVER_REPLY;
+                size -= chunk_off;
                 infofFmt(data, "Written {d} bytes, {d} bytes are left for transfer", .{ chunk, size });
 
                 if (containers.curlx_dyn_len(&imapc.pp.recvbuf) > chunk) {
@@ -1296,16 +1305,9 @@ fn imap_state_fetch_resp(data: ?*Curl_easy, imap: *IMAP, imapc: *imap_conn, imap
     }
 
     const len = std.mem.len(line);
-    if (imap_find_literal(line, len)) |lit_ptr| {
-        var ptr: [*:0]const u8 = lit_ptr + 1;
-        if (curlx_str_number(&ptr, &size, std.math.maxInt(curl_off_t)) == 0 and
-            curlx_str_single(&ptr, '}') == 0 and
-            curlx_str_single(&ptr, '\r') == 0 and
-            curlx_str_single(&ptr, '\n') == 0 and
-            ptr[0] == 0)
-        {
-            parsed = true;
-        }
+    if (imap_parse_literal(line[0..len])) |parsed_size| {
+        size = parsed_size;
+        parsed = true;
     }
 
     if (parsed) {
@@ -1317,8 +1319,9 @@ fn imap_state_fetch_resp(data: ?*Curl_easy, imap: *IMAP, imapc: *imap_conn, imap
             _ = curlx_dyn_tail(&imapc.pp.recvbuf, chunk);
             imapc.pp.overflow = 0;
 
-            if (chunk > @as(usize, @intCast(size))) {
-                chunk = @intCast(size);
+            const size_uz = std.math.cast(usize, size) orelse std.math.maxInt(usize);
+            if (chunk > size_uz) {
+                chunk = size_uz;
             }
 
             if (chunk == 0) {
@@ -1330,7 +1333,8 @@ fn imap_state_fetch_resp(data: ?*Curl_easy, imap: *IMAP, imapc: *imap_conn, imap
             result = Curl_client_write(data, CLIENTWRITE_BODY, recv_ptr, chunk);
             if (result != CURLE_OK) return result;
 
-            size -= @intCast(chunk);
+            const chunk_off = std.math.cast(curl_off_t, chunk) orelse return CURLE_WEIRD_SERVER_REPLY;
+            size -= chunk_off;
             infofFmt(data, "Written {d} bytes, {d} bytes are left for transfer", .{ chunk, size });
 
             if (containers.curlx_dyn_len(&imapc.pp.recvbuf) > chunk) {
@@ -1481,7 +1485,7 @@ fn imap_easy_dtor(key: [*:0]const u8, klen: usize, entry: ?*anyopaque) callconv(
     freeOptStr(&imap.query);
     freeOptStr(&imap.custom);
     freeOptStr(&imap.custom_params);
-    mem.free(p);
+    mem.freeSized(p, @sizeOf(IMAP));
 }
 
 fn imap_conn_dtor(key: [*:0]const u8, klen: usize, entry: ?*anyopaque) callconv(.c) void {
@@ -1491,7 +1495,7 @@ fn imap_conn_dtor(key: [*:0]const u8, klen: usize, entry: ?*anyopaque) callconv(
     const imapc: *imap_conn = @ptrCast(@alignCast(p));
     _ = Curl_pp_disconnect(&imapc.pp);
     freeOptStr(&imapc.mailbox);
-    mem.free(p);
+    mem.freeSized(p, @sizeOf(imap_conn));
 }
 
 fn imap_pollset(data: ?*Curl_easy, ps: ?*easy_pollset) callconv(.c) CURLcode {
@@ -2137,7 +2141,9 @@ fn ws_dec_read_head(dec: *ws_decoder, data: ?*Curl_easy, inraw: *bufq) CURLcode 
     var inlen: usize = 0;
 
     while (io_buffers.Curl_bufq_peek(inraw, &inbuf, &inlen)) {
-        const src = inbuf orelse break;
+        const src_ptr = inbuf orelse break;
+        if (inlen == 0) break;
+        const src = src_ptr[0..inlen];
         if (dec.head_len == 0) {
             dec.head[0] = src[0];
             io_buffers.Curl_bufq_skip(inraw, 1);
@@ -2160,32 +2166,40 @@ fn ws_dec_read_head(dec: *ws_decoder, data: ?*Curl_easy, inraw: *bufq) CURLcode 
             io_buffers.Curl_bufq_skip(inraw, 1);
             dec.head_len = 2;
 
-            if ((dec.head[1] & WSBIT_MASK) != 0) {
+            const head_prefix = dec.head[0..2];
+            if ((head_prefix[1] & WSBIT_MASK) != 0) {
                 failfFmt(data, "[WS] masked input frame", .{});
                 ws_dec_reset(dec);
                 return CURLE_RECV_ERROR;
             }
             const uflags: c_uint = @bitCast(dec.frame_flags);
-            if ((uflags & CURLWS_PING) != 0 and dec.head[1] > WS_MAX_CNTRL_LEN) {
-                failfFmt(data, "[WS] received PING frame is too big", .{});
-                ws_dec_reset(dec);
-                return CURLE_RECV_ERROR;
-            }
-            if ((uflags & CURLWS_PONG) != 0 and dec.head[1] > WS_MAX_CNTRL_LEN) {
-                failfFmt(data, "[WS] received PONG frame is too big", .{});
-                ws_dec_reset(dec);
-                return CURLE_RECV_ERROR;
-            }
-            if ((uflags & CURLWS_CLOSE) != 0 and dec.head[1] > WS_MAX_CNTRL_LEN) {
-                failfFmt(data, "[WS] received CLOSE frame is too big", .{});
-                ws_dec_reset(dec);
-                return CURLE_RECV_ERROR;
+            if ((uflags & (CURLWS_PING | CURLWS_PONG | CURLWS_CLOSE)) != 0) {
+                if ((head_prefix[0] & WSBIT_FIN) == 0 or (uflags & CURLWS_CONT) != 0) {
+                    failfFmt(data, "[WS] control frame must not be fragmented", .{});
+                    ws_dec_reset(dec);
+                    return CURLE_RECV_ERROR;
+                }
+                if ((uflags & CURLWS_PING) != 0 and head_prefix[1] > WS_MAX_CNTRL_LEN) {
+                    failfFmt(data, "[WS] received PING frame is too big", .{});
+                    ws_dec_reset(dec);
+                    return CURLE_RECV_ERROR;
+                }
+                if ((uflags & CURLWS_PONG) != 0 and head_prefix[1] > WS_MAX_CNTRL_LEN) {
+                    failfFmt(data, "[WS] received PONG frame is too big", .{});
+                    ws_dec_reset(dec);
+                    return CURLE_RECV_ERROR;
+                }
+                if ((uflags & CURLWS_CLOSE) != 0 and head_prefix[1] > WS_MAX_CNTRL_LEN) {
+                    failfFmt(data, "[WS] received CLOSE frame is too big", .{});
+                    ws_dec_reset(dec);
+                    return CURLE_RECV_ERROR;
+                }
             }
 
-            if (dec.head[1] == 126) {
+            if (head_prefix[1] == 126) {
                 dec.head_total = 4;
                 continue;
-            } else if (dec.head[1] == 127) {
+            } else if (head_prefix[1] == 127) {
                 dec.head_total = 10;
                 continue;
             } else {
@@ -2193,8 +2207,13 @@ fn ws_dec_read_head(dec: *ws_decoder, data: ?*Curl_easy, inraw: *bufq) CURLcode 
             }
         }
 
+        const head_total_uz = std.math.cast(usize, dec.head_total) orelse return CURLE_WEIRD_SERVER_REPLY;
+        if (head_total_uz > dec.head.len) return CURLE_WEIRD_SERVER_REPLY;
+        const head_slice = dec.head[0..head_total_uz];
+
         if (dec.head_len < dec.head_total) {
-            dec.head[@intCast(dec.head_len)] = src[0];
+            const head_len_uz = std.math.cast(usize, dec.head_len) orelse return CURLE_WEIRD_SERVER_REPLY;
+            head_slice[head_len_uz] = src[0];
             io_buffers.Curl_bufq_skip(inraw, 1);
             dec.head_len += 1;
             if (dec.head_len < dec.head_total) {
@@ -2202,27 +2221,21 @@ fn ws_dec_read_head(dec: *ws_decoder, data: ?*Curl_easy, inraw: *bufq) CURLcode 
             }
         }
 
-        switch (dec.head_total) {
+        switch (head_slice.len) {
             2 => {
-                dec.payload_len = @intCast(dec.head[1]);
+                dec.payload_len = @intCast(head_slice[1]);
             },
             4 => {
-                dec.payload_len = (@as(curl_off_t, dec.head[2]) << 8) | @as(curl_off_t, dec.head[3]);
+                const len16 = std.mem.readInt(u16, head_slice[2..4], .big);
+                dec.payload_len = @intCast(len16);
             },
             10 => {
-                if (dec.head[2] > 127) {
+                const len64 = std.mem.readInt(u64, head_slice[2..10], .big);
+                dec.payload_len = std.math.cast(curl_off_t, len64) orelse {
                     failfFmt(data, "[WS] frame length longer than 63 bits not supported", .{});
-                    return CURLE_RECV_ERROR;
-                }
-                dec.payload_len =
-                    (@as(curl_off_t, dec.head[2]) << 56) |
-                    (@as(curl_off_t, dec.head[3]) << 48) |
-                    (@as(curl_off_t, dec.head[4]) << 40) |
-                    (@as(curl_off_t, dec.head[5]) << 32) |
-                    (@as(curl_off_t, dec.head[6]) << 24) |
-                    (@as(curl_off_t, dec.head[7]) << 16) |
-                    (@as(curl_off_t, dec.head[8]) << 8) |
-                    @as(curl_off_t, dec.head[9]);
+                    ws_dec_reset(dec);
+                    return CURLE_WEIRD_SERVER_REPLY;
+                };
             },
             else => {
                 failfFmt(data, "[WS] unexpected frame header length", .{});
@@ -2950,7 +2963,7 @@ fn ws_conn_dtor(key: [*:0]const u8, klen: usize, entry: ?*anyopaque) callconv(.c
     const ws: *websocket = @ptrCast(@alignCast(p));
     io_buffers.Curl_bufq_free(&ws.recvbuf);
     io_buffers.Curl_bufq_free(&ws.sendbuf);
-    mem.free(p);
+    mem.freeSized(p, @sizeOf(websocket));
 }
 
 pub export fn Curl_ws_request(data: ?*Curl_easy, req: *dynbuf) callconv(.c) CURLcode {
@@ -3596,4 +3609,38 @@ test "ws_decoder decodes unmasked text frame" {
     try std.testing.expectEqual(CURLE_OK, ws_dec_read_head(&dec, null, &inq));
     try std.testing.expectEqual(@as(curl_off_t, 5), dec.payload_len);
     try std.testing.expectEqual(@as(c_int, @intCast(CURLWS_TEXT)), dec.frame_flags);
+}
+
+test "ws_decoder rejects 64-bit MSB-set frame and oversized/fragmented control frames" {
+    var dec: ws_decoder = undefined;
+    var inq: bufq = undefined;
+    io_buffers.Curl_bufq_init2(&inq, 1024, 1, io_buffers.BUFQ_OPT_SOFT_LIMIT);
+    defer io_buffers.Curl_bufq_free(&inq);
+
+    // 64-bit WebSocket frame with MSB set (0x8000_0000_0000_0000) -> CURLE_WEIRD_SERVER_REPLY
+    ws_dec_init(&dec);
+    const msb_frame = [_]u8{ 0x82, 127, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    var written: usize = 0;
+    try std.testing.expectEqual(CURLE_OK, io_buffers.Curl_bufq_write(&inq, &msb_frame, msb_frame.len, &written));
+    try std.testing.expectEqual(CURLE_WEIRD_SERVER_REPLY, ws_dec_read_head(&dec, null, &inq));
+    io_buffers.Curl_bufq_reset(&inq);
+
+    // Oversized PING control frame (payload len indicator 126 > 125)
+    ws_dec_init(&dec);
+    const big_ping = [_]u8{ WSBIT_OPCODE_PING | WSBIT_FIN, 126, 0x00, 0x7e };
+    try std.testing.expectEqual(CURLE_OK, io_buffers.Curl_bufq_write(&inq, &big_ping, big_ping.len, &written));
+    try std.testing.expectEqual(CURLE_RECV_ERROR, ws_dec_read_head(&dec, null, &inq));
+    io_buffers.Curl_bufq_reset(&inq);
+
+    // Fragmented PING control frame (FIN = 0)
+    ws_dec_init(&dec);
+    const frag_ping = [_]u8{ WSBIT_OPCODE_PING, 0x02, 'h', 'i' };
+    try std.testing.expectEqual(CURLE_OK, io_buffers.Curl_bufq_write(&inq, &frag_ping, frag_ping.len, &written));
+    try std.testing.expectEqual(CURLE_RECV_ERROR, ws_dec_read_head(&dec, null, &inq));
+    io_buffers.Curl_bufq_reset(&inq);
+
+    // IMAP literal parsing checked arithmetic
+    try std.testing.expectEqual(@as(?curl_off_t, 42), imap_parse_literal("* 1 FETCH (BODY[] {42}\r\n"));
+    try std.testing.expectEqual(@as(?curl_off_t, null), imap_parse_literal("* 1 FETCH (BODY[] {99999999999999999999}\r\n"));
+    try std.testing.expectEqual(@as(?curl_off_t, null), imap_parse_literal("* 1 FETCH (BODY[] {-5}\r\n"));
 }

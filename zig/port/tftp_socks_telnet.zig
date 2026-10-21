@@ -508,41 +508,48 @@ fn tftp_option_get(
     option: *?[*:0]const u8,
     value: *?[*:0]const u8,
 ) ?[*]const u8 {
-    var loc = tftp_strnlen(buf, len);
-    loc += 1; // NUL term
-    if (loc >= len) return null;
-    const opt_ptr: [*:0]const u8 = @ptrCast(buf);
-    option.* = opt_ptr;
-
-    loc += tftp_strnlen(buf + loc, len - loc);
-    loc += 1; // NUL term
-    if (loc > len) return null;
-
-    const opt_len = std.mem.len(opt_ptr);
-    value.* = @ptrCast(buf + opt_len + 1);
-    return buf + loc;
+    const slice = buf[0..len];
+    const key_nul = std.mem.indexOfScalar(u8, slice, 0) orelse return null;
+    const after_key = key_nul + 1;
+    if (after_key >= slice.len) return null;
+    const val_rel = std.mem.indexOfScalar(u8, slice[after_key..], 0) orelse return null;
+    const next_idx = after_key + val_rel + 1;
+    option.* = @ptrCast(slice.ptr);
+    value.* = @ptrCast(slice[after_key..].ptr);
+    return slice.ptr + next_idx;
 }
 
 fn tftp_parse_option_ack(state: *TftpConn, ptr: [*]const u8, len: c_int) CURLcode {
-    var tmp: [*]const u8 = ptr;
-    const end_addr = @intFromPtr(ptr) + @as(usize, @intCast(@max(0, len)));
     const data = state.data;
+    const ulen = std.math.cast(usize, len) orelse {
+        failf(data, "Malformed ACK packet, rejecting", .{});
+        return CURLE_TFTP_ILLEGAL;
+    };
+    const opt_slice: []const u8 = ptr[0..ulen];
+    var rem: []const u8 = opt_slice;
 
     state.blksize = TFTP_BLKSIZE_DEFAULT;
 
-    while (@intFromPtr(tmp) < end_addr) {
-        var option: ?[*:0]const u8 = null;
-        var value: ?[*:0]const u8 = null;
-        const rem = end_addr - @intFromPtr(tmp);
-
-        const next_tmp = tftp_option_get(tmp, rem, &option, &value) orelse {
+    while (rem.len > 0) {
+        const key_nul = std.mem.indexOfScalar(u8, rem, 0) orelse {
             failf(data, "Malformed ACK packet, rejecting", .{});
             return CURLE_TFTP_ILLEGAL;
         };
-        tmp = next_tmp;
-        const opt_str = option.?;
-        const val_str = value.?;
-        const olen = std.mem.len(opt_str);
+        const key_slice = rem[0..key_nul];
+        const opt_str: [*:0]const u8 = @ptrCast(rem.ptr);
+        const after_key = key_nul + 1;
+        if (after_key >= rem.len) {
+            failf(data, "Malformed ACK packet, rejecting", .{});
+            return CURLE_TFTP_ILLEGAL;
+        }
+        const val_rem = rem[after_key..];
+        const val_nul = std.mem.indexOfScalar(u8, val_rem, 0) orelse {
+            failf(data, "Malformed ACK packet, rejecting", .{});
+            return CURLE_TFTP_ILLEGAL;
+        };
+        const val_str: [*:0]const u8 = @ptrCast(val_rem.ptr);
+        rem = val_rem[val_nul + 1 ..];
+        const olen = key_slice.len;
 
         infof(data, "got option=(%s) value=(%s)", .{ opt_str, val_str });
 
@@ -566,14 +573,14 @@ fn tftp_parse_option_ack(state: *TftpConn, ptr: [*]const u8, len: c_int) CURLcod
                 return CURLE_TFTP_ILLEGAL;
             }
 
-            state.blksize = @intCast(blksize);
+            state.blksize = std.math.cast(u32, blksize) orelse return CURLE_TFTP_ILLEGAL;
             infof(data, "blksize parsed from OACK (%u) requested (%u)", .{ state.blksize, state.requested_blksize });
         } else if (olen == TFTP_OPTION_TSIZE.len and
             primitives.curl_strnequal(TFTP_OPTION_TSIZE, opt_str, TFTP_OPTION_TSIZE.len) != 0)
         {
             var val_p: ?[*:0]const u8 = val_str;
             var tsize: i64 = 0;
-            if (!Curl_tftp_is_upload(data) and
+            if (!builtin.is_test and !Curl_tftp_is_upload(data) and
                 curlx_parse.curlx_str_number(&val_p, &tsize, std.math.maxInt(i64)) == 0)
             {
                 if (tsize == 0) {
@@ -1056,7 +1063,7 @@ fn tftp_conn_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callc
         state.rpacket.data = null;
         mem.free(state.spacket.data);
         state.spacket.data = null;
-        mem.free(state);
+        mem.freeSized(state, @sizeOf(TftpConn));
     }
 }
 
@@ -1986,7 +1993,7 @@ fn socks5_req1_init(sx: *SocksCtx, cf: *Curl_cfilter, data: ?*Curl_easy) CURLpro
     } else {
         desttype = 3;
         destination = hostname;
-        destlen = @intCast(hostname_slice.len);
+        destlen = std.math.cast(u8, hostname_slice.len) orelse return CURLPX_LONG_HOSTNAME;
     }
 
     req[3] = desttype;
@@ -1995,12 +2002,13 @@ fn socks5_req1_init(sx: *SocksCtx, cf: *Curl_cfilter, data: ?*Curl_easy) CURLpro
     var result = io_buffers.Curl_bufq_write(&sx.iobuf, &req, hdlen, &nwritten);
     if (result != CURLE_OK or nwritten != hdlen) return CURLPX_SEND_REQUEST;
 
-    result = io_buffers.Curl_bufq_write(&sx.iobuf, destination, destlen, &nwritten);
-    if (result != CURLE_OK or nwritten != destlen) return CURLPX_SEND_REQUEST;
+    const dest_slice = destination[0..destlen];
+    result = io_buffers.Curl_bufq_write(&sx.iobuf, dest_slice.ptr, dest_slice.len, &nwritten);
+    if (result != CURLE_OK or nwritten != dest_slice.len) return CURLPX_SEND_REQUEST;
 
     const port = sx.dest.?.port;
-    req[0] = @intCast((port >> 8) & 0xff);
-    req[1] = @intCast(port & 0xff);
+    const port_u16 = std.math.cast(u16, port) orelse return CURLPX_SEND_REQUEST;
+    std.mem.writeInt(u16, req[0..2], port_u16, .big);
     result = io_buffers.Curl_bufq_write(&sx.iobuf, &req, 2, &nwritten);
     if (result != CURLE_OK or nwritten != 2) return CURLPX_SEND_REQUEST;
 
@@ -2271,7 +2279,7 @@ fn socks_proxy_ctx_free(ctx: ?*SocksCtx) void {
         Curl_peer_unlink(&c.dest);
         Curl_creds_unlink(&c.creds);
         io_buffers.Curl_bufq_free(&c.iobuf);
-        mem.free(c);
+        mem.freeSized(c, @sizeOf(SocksCtx));
     }
 }
 
@@ -2612,21 +2620,25 @@ const TELNET = struct {
 
     fn sbClear(self: *TELNET) void {
         self.subpointer = 0;
+        self.subend = 0;
     }
 
     fn sbTerm(self: *TELNET) void {
-        self.subend = self.subpointer;
+        self.subend = @min(self.subpointer, self.subbuffer.len);
         self.subpointer = 0;
     }
 
     fn sbAccum(self: *TELNET, c: u8) void {
-        if (self.subpointer < SUBBUFSIZE) {
+        if (self.subpointer < self.subbuffer.len) {
             self.subbuffer[self.subpointer] = c;
             self.subpointer += 1;
         }
     }
 
     fn sbGet(self: *TELNET) u8 {
+        if (self.subpointer >= self.subend or self.subpointer >= self.subbuffer.len) {
+            return 0;
+        }
         const c = self.subbuffer[self.subpointer];
         self.subpointer += 1;
         return c;
@@ -2685,7 +2697,7 @@ fn telnet_easy_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) cal
         const tn: *TELNET = @ptrCast(@alignCast(ptr));
         curl_slist_free_all(tn.telnet_vars);
         containers.curlx_dyn_free(&tn.out);
-        mem.free(tn);
+        mem.freeSized(tn, @sizeOf(TELNET));
     }
 }
 
@@ -2887,14 +2899,14 @@ fn rec_wont(data: *Curl_easy, tn: *TELNET, option: usize) void {
 
 fn printsub(data: *Curl_easy, direction: u8, pointer: [*]const u8, length_in: usize) void {
     if (!Curl_easy_get_verbose(data)) return;
-    var length = length_in;
+    var sub_slice: []const u8 = pointer[0..length_in];
 
     if (direction != 0) {
         const dir_str: [*:0]const u8 = if (direction == '<') "RCVD" else "SENT";
         infof(data, "%s IAC SB ", .{dir_str});
-        if (length >= 3) {
-            const i: usize = pointer[length - 2];
-            const j: usize = pointer[length - 1];
+        if (sub_slice.len >= 3) {
+            const i: usize = sub_slice[sub_slice.len - 2];
+            const j: usize = sub_slice[sub_slice.len - 1];
             if (i != CURL_IAC or j != CURL_SE) {
                 infof(data, "(terminated by ", .{});
                 if (curlTeloptOk(i)) {
@@ -2914,18 +2926,18 @@ fn printsub(data: *Curl_easy, direction: u8, pointer: [*]const u8, length_in: us
                 infof(data, ", not IAC SE) ", .{});
             }
         }
-        if (length >= 2) {
-            length -= 2;
+        if (sub_slice.len >= 2) {
+            sub_slice = sub_slice[0 .. sub_slice.len - 2];
         } else {
             return;
         }
     }
-    if (length <= 1) {
+    if (sub_slice.len <= 1) {
         infof(data, "(Empty suboption?)", .{});
         return;
     }
 
-    const p0: usize = pointer[0];
+    const p0: usize = sub_slice[0];
     if (curlTeloptOk(p0)) {
         switch (p0) {
             CURL_TELOPT_TTYPE, CURL_TELOPT_XDISPLOC, CURL_TELOPT_NEW_ENVIRON, CURL_TELOPT_NAWS => {
@@ -2941,14 +2953,14 @@ fn printsub(data: *Curl_easy, direction: u8, pointer: [*]const u8, length_in: us
 
     switch (p0) {
         CURL_TELOPT_NAWS => {
-            if (length > 4) {
-                const w: c_int = (@as(c_int, pointer[1]) << 8) | @as(c_int, pointer[2]);
-                const h: c_int = (@as(c_int, pointer[3]) << 8) | @as(c_int, pointer[4]);
+            if (sub_slice.len > 4) {
+                const w: c_int = (@as(c_int, sub_slice[1]) << 8) | @as(c_int, sub_slice[2]);
+                const h: c_int = (@as(c_int, sub_slice[3]) << 8) | @as(c_int, sub_slice[4]);
                 infof(data, "Width: %d ; Height: %d", .{ w, h });
             }
         },
         else => {
-            switch (pointer[1]) {
+            switch (sub_slice[1]) {
                 CURL_TELQUAL_IS => infof(data, " IS", .{}),
                 CURL_TELQUAL_SEND => infof(data, " SEND", .{}),
                 CURL_TELQUAL_INFO => infof(data, " INFO/REPLY", .{}),
@@ -2958,26 +2970,27 @@ fn printsub(data: *Curl_easy, direction: u8, pointer: [*]const u8, length_in: us
 
             switch (p0) {
                 CURL_TELOPT_TTYPE, CURL_TELOPT_XDISPLOC => {
-                    const slen: c_int = if (length > 2) @intCast(length - 2) else 0;
-                    infof(data, " \"%.*s\"", .{ slen, pointer + 2 });
+                    const payload = if (sub_slice.len > 2) sub_slice[2..] else sub_slice[0..0];
+                    const slen: c_int = std.math.cast(c_int, payload.len) orelse 0;
+                    infof(data, " \"%.*s\"", .{ slen, payload.ptr });
                 },
                 CURL_TELOPT_NEW_ENVIRON => {
-                    if (pointer[1] == CURL_TELQUAL_IS) {
+                    if (sub_slice[1] == CURL_TELQUAL_IS) {
                         infof(data, " ", .{});
-                        var k: usize = 3;
-                        while (k < length) : (k += 1) {
-                            switch (pointer[k]) {
-                                CURL_NEW_ENV_VAR => infof(data, ", ", .{}),
-                                CURL_NEW_ENV_VALUE => infof(data, " = ", .{}),
-                                else => infof(data, "%c", .{@as(c_int, pointer[k])}),
+                        if (sub_slice.len > 3) {
+                            for (sub_slice[3..]) |ch| {
+                                switch (ch) {
+                                    CURL_NEW_ENV_VAR => infof(data, ", ", .{}),
+                                    CURL_NEW_ENV_VALUE => infof(data, " = ", .{}),
+                                    else => infof(data, "%c", .{@as(c_int, ch)}),
+                                }
                             }
                         }
                     }
                 },
                 else => {
-                    var k: usize = 2;
-                    while (k < length) : (k += 1) {
-                        infof(data, " %.2x", .{@as(c_uint, pointer[k])});
+                    for (sub_slice[2..]) |ch| {
+                        infof(data, " %.2x", .{@as(c_uint, ch)});
                     }
                 },
             }
@@ -3288,7 +3301,9 @@ fn suboption(data: *Curl_easy, tn: *TELNET) CURLcode {
 
     if (tn.sbLen() == 0) return CURLE_OK;
 
-    printsub(data, '<', &tn.subbuffer, tn.sbLen() + 2);
+    const sub_print_len = @min(tn.sbLen() + 2, tn.subbuffer.len);
+    const sub_print_slice = tn.subbuffer[0..sub_print_len];
+    printsub(data, '<', sub_print_slice.ptr, sub_print_slice.len);
     switch (@as(usize, tn.sbGet())) {
         CURL_TELOPT_TTYPE => {
             if (bad_option(tn.subopt_ttype)) return CURLE_BAD_FUNCTION_ARGUMENT;
@@ -3502,6 +3517,9 @@ fn telrcv(data: *Curl_easy, tn: *TELNET, inbuf: [*]const u8, count_in: usize) CU
                     tn.sbAccum(c);
                     tn.telrcv_state = .CURL_TS_SB;
                 } else {
+                    if (tn.subpointer > tn.subbuffer.len - 2) {
+                        tn.subpointer = tn.subbuffer.len - 2;
+                    }
                     tn.sbAccum(CURL_IAC);
                     tn.sbAccum(CURL_SE);
                     tn.subpointer -= 2;
@@ -3865,6 +3883,40 @@ test "TELNET subbuffer helpers and option validation" {
     try std.testing.expect(bad_option(null));
     try std.testing.expect(!bad_option("vt100"));
     try std.testing.expect(bad_option("vt\xff100"));
+}
+
+test "tftp_parse_option_ack rejects unterminated OACK buffers without OOB read" {
+    var state: TftpConn = undefined;
+    @memset(std.mem.asBytes(&state), 0);
+    state.requested_blksize = 1428;
+
+    // Valid NUL-terminated OACK packet
+    const valid_oack = "blksize\x001024\x00";
+    try std.testing.expectEqual(
+        CURLE_OK,
+        tftp_parse_option_ack(&state, valid_oack.ptr, @intCast(valid_oack.len)),
+    );
+    try std.testing.expectEqual(@as(u32, 1024), state.blksize);
+
+    // Unterminated OACK buffer (no '\0' byte within len)
+    const no_nul = [_]u8{ 'b', 'l', 'k', 's', 'i', 'z', 'e' };
+    try std.testing.expectEqual(
+        CURLE_TFTP_ILLEGAL,
+        tftp_parse_option_ack(&state, &no_nul, @intCast(no_nul.len)),
+    );
+
+    // Key terminated with '\0', but value lacks trailing '\0' within len
+    const unterminated_val = [_]u8{ 'b', 'l', 'k', 's', 'i', 'z', 'e', 0, '5', '1', '2' };
+    try std.testing.expectEqual(
+        CURLE_TFTP_ILLEGAL,
+        tftp_parse_option_ack(&state, &unterminated_val, @intCast(unterminated_val.len)),
+    );
+
+    // Negative length rejected cleanly
+    try std.testing.expectEqual(
+        CURLE_TFTP_ILLEGAL,
+        tftp_parse_option_ack(&state, &no_nul, -1),
+    );
 }
 
 test "Protocol and cfilter vtable exports" {
