@@ -134,6 +134,7 @@ const c = struct {
     pub const CURLOPT_DNS_LOCAL_IP6: CURLoption = CURLOPTTYPE_OBJECTPOINT + 223;
     pub const CURLOPT_PINNEDPUBLICKEY: CURLoption = CURLOPTTYPE_OBJECTPOINT + 230;
     pub const CURLOPT_TLS13_CIPHERS: CURLoption = CURLOPTTYPE_OBJECTPOINT + 276;
+    pub const CURLOPT_DOH_URL: CURLoption = CURLOPTTYPE_OBJECTPOINT + 279;
     pub const CURLOPT_SSL_EC_CURVES: CURLoption = CURLOPTTYPE_OBJECTPOINT + 298;
     pub const CURLOPT_CAINFO_BLOB: CURLoption = CURLOPTTYPE_BLOB + 309;
     pub const CURLOPT_SSL_SIGNATURE_ALGORITHMS: CURLoption = CURLOPTTYPE_OBJECTPOINT + 328;
@@ -1934,4 +1935,531 @@ test "IDN URL API punycode conversions and loopback HTTP transfer" {
     var expected_host_buf: [128]u8 = undefined;
     const expected_host = try std.fmt.bufPrint(&expected_host_buf, "Host: xn--mnchen-3ya.de:{d}\r\n", .{port});
     try testing.expect(std.mem.indexOf(u8, srv_ctx.requestSlice(), expected_host) != null);
+}
+
+const loopback_dns = struct {
+    const AF_INET: c_int = 2;
+    const SOCK_STREAM: c_int = 1;
+    const SOCK_DGRAM: c_int = 2;
+    const SOL_SOCKET: c_int = 1;
+    const SO_REUSEADDR: c_int = 2;
+    const SO_RCVTIMEO: c_int = 20;
+    const SO_SNDTIMEO: c_int = 21;
+
+    const ALPN_none: u8 = 0;
+    const ALPN_h1: u8 = 1 << 3;
+    const ALPN_h2: u8 = 1 << 4;
+
+    const Curl_https_rrinfo = extern struct {
+        target: ?[*:0]u8,
+        ipv4hints: ?[*]u8,
+        ipv4hints_len: usize,
+        echconfiglist: ?[*]u8,
+        echconfiglist_len: usize,
+        ipv6hints: ?[*]u8,
+        ipv6hints_len: usize,
+        alpns: [4]u8,
+        port: u16,
+        priority: u16,
+        flags: u32,
+        _pad: u32 = 0,
+
+        fn portSet(self: *const Curl_https_rrinfo) bool {
+            return (self.flags & 4) != 0;
+        }
+    };
+
+    const httpsrr_c = struct {
+        extern fn doh_resp_decode_httpsrr(
+            data: ?*anyopaque,
+            cp: [*]const u8,
+            len: usize,
+            hrr: *?*Curl_https_rrinfo,
+        ) callconv(.c) c.CURLcode;
+        extern fn Curl_httpsrr_destroy(rrinfo: ?*Curl_https_rrinfo) callconv(.c) void;
+    };
+
+    const sockaddr_in = if (builtin.os.tag == .macos or
+        builtin.os.tag == .ios or
+        builtin.os.tag == .freebsd or
+        builtin.os.tag == .netbsd or
+        builtin.os.tag == .openbsd)
+        extern struct {
+            sin_len: u8 = 16,
+            sin_family: u8 = @intCast(AF_INET),
+            sin_port: u16 = 0,
+            sin_addr: u32 = 0,
+            sin_zero: [8]u8 = @splat(0),
+        }
+    else
+        extern struct {
+            sin_family: u16 = @intCast(AF_INET),
+            sin_port: u16 = 0,
+            sin_addr: u32 = 0,
+            sin_zero: [8]u8 = @splat(0),
+        };
+
+    const timeval = extern struct {
+        tv_sec: c_long,
+        tv_usec: c_long,
+    };
+
+    extern "c" fn socket(domain: c_int, sock_type: c_int, protocol: c_int) c_int;
+    extern "c" fn setsockopt(sockfd: c_int, level: c_int, optname: c_int, optval: *const anyopaque, optlen: u32) c_int;
+    extern "c" fn bind(sockfd: c_int, addr: *const sockaddr_in, addrlen: u32) c_int;
+    extern "c" fn listen(sockfd: c_int, backlog: c_int) c_int;
+    extern "c" fn getsockname(sockfd: c_int, addr: *sockaddr_in, addrlen: *u32) c_int;
+    extern "c" fn accept(sockfd: c_int, addr: ?*anyopaque, addrlen: ?*u32) c_int;
+    extern "c" fn connect(sockfd: c_int, addr: *const sockaddr_in, addrlen: u32) c_int;
+    extern "c" fn recv(sockfd: c_int, buf: [*]u8, len: usize, flags: c_int) isize;
+    extern "c" fn send(sockfd: c_int, buf: [*]const u8, len: usize, flags: c_int) isize;
+    extern "c" fn recvfrom(sockfd: c_int, buf: [*]u8, len: usize, flags: c_int, src_addr: ?*sockaddr_in, addrlen: ?*u32) isize;
+    extern "c" fn sendto(sockfd: c_int, buf: [*]const u8, len: usize, flags: c_int, dest_addr: *const sockaddr_in, addrlen: u32) isize;
+    extern "c" fn close(fd: c_int) c_int;
+
+    fn setSocketTimeouts(fd: c_int) void {
+        if (builtin.os.tag == .linux) {
+            const tv = timeval{ .tv_sec = 5, .tv_usec = 0 };
+            _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, @sizeOf(timeval));
+            _ = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, @sizeOf(timeval));
+        }
+    }
+
+    fn buildDnsReply(
+        query: []const u8,
+        out_buf: []u8,
+        saw_a: *std.atomic.Value(bool),
+        saw_aaaa: *std.atomic.Value(bool),
+        saw_https: *std.atomic.Value(bool),
+    ) ?[]const u8 {
+        if (query.len < 17) return null;
+        var pos: usize = 12;
+        while (pos < query.len and query[pos] != 0) {
+            const llen: usize = query[pos];
+            if ((llen & 0xc0) != 0) return null;
+            pos += 1 + llen;
+        }
+        if (pos + 5 > query.len) return null;
+        pos += 1; // skip root label 0x00
+        const qtype: u16 = (@as(u16, query[pos]) << 8) | @as(u16, query[pos + 1]);
+        const qend: usize = pos + 4;
+        const question = query[12..qend];
+        if (12 + question.len + 32 > out_buf.len) return null;
+
+        // DNS Header: QR=1, RD=1, RA=1, QDCOUNT=1
+        out_buf[0] = query[0];
+        out_buf[1] = query[1];
+        out_buf[2] = 0x81;
+        out_buf[3] = 0x80;
+        out_buf[4] = 0x00;
+        out_buf[5] = 0x01;
+        out_buf[6] = 0x00;
+        out_buf[7] = if (qtype == 1 or qtype == 65) 0x01 else 0x00;
+        out_buf[8] = 0x00;
+        out_buf[9] = 0x00;
+        out_buf[10] = 0x00;
+        out_buf[11] = 0x00;
+
+        @memcpy(out_buf[12 .. 12 + question.len], question);
+        var wpos: usize = 12 + question.len;
+
+        switch (qtype) {
+            1 => {
+                saw_a.store(true, .release);
+                const ans_a = [_]u8{
+                    0xc0, 0x0c, // name pointer to offset 12
+                    0x00, 0x01, // TYPE = A (1)
+                    0x00, 0x01, // CLASS = IN (1)
+                    0x00, 0x00, 0x00, 0x3c, // TTL = 60
+                    0x00, 0x04, // RDLENGTH = 4
+                    127, 0, 0, 1, // RDATA = 127.0.0.1
+                };
+                @memcpy(out_buf[wpos .. wpos + ans_a.len], &ans_a);
+                wpos += ans_a.len;
+            },
+            28 => {
+                saw_aaaa.store(true, .release);
+            },
+            65 => {
+                saw_https.store(true, .release);
+                const ans_https = [_]u8{
+                    0xc0, 0x0c, // name pointer to offset 12
+                    0x00, 0x41, // TYPE = HTTPS (65)
+                    0x00, 0x01, // CLASS = IN (1)
+                    0x00, 0x00, 0x00, 0x3c, // TTL = 60
+                    0x00, 0x10, // RDLENGTH = 16
+                    0x00, 0x01, // priority = 1
+                    0x00, // target = "."
+                    0x00, 0x01, // SvcParamKey = alpn (1)
+                    0x00, 0x09, // SvcParamValueLen = 9
+                    0x08, 'h',
+                    't',  't',
+                    'p',  '/',
+                    '1',  '.',
+                    '1',
+                };
+                @memcpy(out_buf[wpos .. wpos + ans_https.len], &ans_https);
+                wpos += ans_https.len;
+            },
+            else => {},
+        }
+        return out_buf[0..wpos];
+    }
+
+    const UdpDnsServer = struct {
+        udp_fd: c_int,
+        port: u16,
+        stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        saw_a: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        saw_aaaa: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        saw_https: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+        fn init() !UdpDnsServer {
+            const fd = socket(AF_INET, SOCK_DGRAM, 0);
+            if (fd < 0) return error.SocketFailed;
+            errdefer _ = close(fd);
+
+            setSocketTimeouts(fd);
+
+            var addr = sockaddr_in{
+                .sin_port = 0,
+                .sin_addr = std.mem.nativeToBig(u32, 0x7f000001),
+            };
+            if (bind(fd, &addr, @sizeOf(sockaddr_in)) != 0) return error.BindFailed;
+
+            var bound_addr = sockaddr_in{};
+            var addr_len: u32 = @sizeOf(sockaddr_in);
+            if (getsockname(fd, &bound_addr, &addr_len) != 0) return error.GetsocknameFailed;
+
+            return .{
+                .udp_fd = fd,
+                .port = std.mem.bigToNative(u16, bound_addr.sin_port),
+            };
+        }
+
+        fn deinit(self: *UdpDnsServer) void {
+            _ = close(self.udp_fd);
+        }
+
+        fn run(self: *UdpDnsServer) void {
+            while (!self.stop.load(.acquire)) {
+                var pkt: [512]u8 = undefined;
+                var peer_addr = sockaddr_in{};
+                var peer_len: u32 = @sizeOf(sockaddr_in);
+                const n = recvfrom(self.udp_fd, &pkt, pkt.len, 0, &peer_addr, &peer_len);
+                if (n <= 0) continue;
+                if (self.stop.load(.acquire)) break;
+
+                var reply_buf: [512]u8 = undefined;
+                if (buildDnsReply(
+                    pkt[0..@intCast(n)],
+                    &reply_buf,
+                    &self.saw_a,
+                    &self.saw_aaaa,
+                    &self.saw_https,
+                )) |reply| {
+                    _ = sendto(self.udp_fd, reply.ptr, reply.len, 0, &peer_addr, peer_len);
+                }
+            }
+        }
+
+        fn stopAndJoin(self: *UdpDnsServer, thread: std.Thread) void {
+            self.stop.store(true, .release);
+            const wake_fd = socket(AF_INET, SOCK_DGRAM, 0);
+            if (wake_fd >= 0) {
+                defer _ = close(wake_fd);
+                var dst = sockaddr_in{
+                    .sin_port = std.mem.nativeToBig(u16, self.port),
+                    .sin_addr = std.mem.nativeToBig(u32, 0x7f000001),
+                };
+                const dummy = [_]u8{0};
+                _ = sendto(wake_fd, &dummy, dummy.len, 0, &dst, @sizeOf(sockaddr_in));
+            }
+            thread.join();
+        }
+    };
+
+    fn parseContentLength(headers: []const u8) ?usize {
+        var lines = std.mem.splitSequence(u8, headers, "\r\n");
+        while (lines.next()) |line| {
+            const prefix = "Content-Length:";
+            if (line.len >= prefix.len and std.ascii.eqlIgnoreCase(line[0..prefix.len], prefix)) {
+                const val_str = std.mem.trim(u8, line[prefix.len..], " \t");
+                return std.fmt.parseInt(usize, val_str, 10) catch null;
+            }
+        }
+        return null;
+    }
+
+    const DohHttpServer = struct {
+        listen_fd: c_int,
+        port: u16,
+        stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        saw_a: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        saw_aaaa: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        saw_https: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+        fn init() !DohHttpServer {
+            const fd = socket(AF_INET, SOCK_STREAM, 0);
+            if (fd < 0) return error.SocketFailed;
+            errdefer _ = close(fd);
+
+            const one: c_int = 1;
+            _ = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, @sizeOf(c_int));
+            setSocketTimeouts(fd);
+
+            var addr = sockaddr_in{
+                .sin_port = 0,
+                .sin_addr = std.mem.nativeToBig(u32, 0x7f000001),
+            };
+            if (bind(fd, &addr, @sizeOf(sockaddr_in)) != 0) return error.BindFailed;
+            if (listen(fd, 16) != 0) return error.ListenFailed;
+
+            var bound_addr = sockaddr_in{};
+            var addr_len: u32 = @sizeOf(sockaddr_in);
+            if (getsockname(fd, &bound_addr, &addr_len) != 0) return error.GetsocknameFailed;
+
+            return .{
+                .listen_fd = fd,
+                .port = std.mem.bigToNative(u16, bound_addr.sin_port),
+            };
+        }
+
+        fn deinit(self: *DohHttpServer) void {
+            _ = close(self.listen_fd);
+        }
+
+        fn run(self: *DohHttpServer) void {
+            while (!self.stop.load(.acquire)) {
+                const client_fd = accept(self.listen_fd, null, null);
+                if (client_fd < 0) continue;
+                defer _ = close(client_fd);
+                if (self.stop.load(.acquire)) break;
+                setSocketTimeouts(client_fd);
+
+                var req_buf: [4096]u8 = undefined;
+                var req_len: usize = 0;
+                var header_end: ?usize = null;
+                var content_len: usize = 0;
+
+                while (req_len < req_buf.len) {
+                    const n = recv(client_fd, req_buf[req_len..].ptr, req_buf.len - req_len, 0);
+                    if (n <= 0) break;
+                    req_len += @intCast(n);
+                    if (header_end == null) {
+                        if (std.mem.indexOf(u8, req_buf[0..req_len], "\r\n\r\n")) |idx| {
+                            header_end = idx + 4;
+                            content_len = parseContentLength(req_buf[0..idx]) orelse 0;
+                        }
+                    }
+                    if (header_end) |hend| {
+                        if (req_len >= hend + content_len) break;
+                    }
+                }
+
+                const hend = header_end orelse continue;
+                if (req_len < hend + content_len) continue;
+                const body = req_buf[hend .. hend + content_len];
+
+                var dns_reply_buf: [512]u8 = undefined;
+                const dns_reply = buildDnsReply(
+                    body,
+                    &dns_reply_buf,
+                    &self.saw_a,
+                    &self.saw_aaaa,
+                    &self.saw_https,
+                ) orelse continue;
+
+                var resp_buf: [1024]u8 = undefined;
+                const hdr = std.fmt.bufPrint(
+                    &resp_buf,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n",
+                    .{dns_reply.len},
+                ) catch continue;
+                _ = send(client_fd, hdr.ptr, hdr.len, 0);
+                _ = send(client_fd, dns_reply.ptr, dns_reply.len, 0);
+            }
+        }
+
+        fn stopAndJoin(self: *DohHttpServer, thread: std.Thread) void {
+            self.stop.store(true, .release);
+            const wake_fd = socket(AF_INET, SOCK_STREAM, 0);
+            if (wake_fd >= 0) {
+                defer _ = close(wake_fd);
+                var dst = sockaddr_in{
+                    .sin_port = std.mem.nativeToBig(u16, self.port),
+                    .sin_addr = std.mem.nativeToBig(u32, 0x7f000001),
+                };
+                _ = connect(wake_fd, &dst, @sizeOf(sockaddr_in));
+            }
+            thread.join();
+        }
+    };
+};
+
+test "c-ares loopback UDP DNS server resolution via CURLOPT_DNS_SERVERS" {
+    if (comptime (!backend_options.use_resolv_ares or builtin.os.tag == .windows)) return;
+
+    var dns_srv = try loopback_dns.UdpDnsServer.init();
+    defer dns_srv.deinit();
+    const dns_thread = try std.Thread.spawn(.{}, loopback_dns.UdpDnsServer.run, .{&dns_srv});
+    defer dns_srv.stopAndJoin(dns_thread);
+
+    var dns_servers_buf: [64]u8 = undefined;
+    const dns_servers = try loopback_http.bufPrintZ(&dns_servers_buf, "127.0.0.1:{d}", .{dns_srv.port});
+
+    // 1. Resolve http://ares-loopback.test:<http_port>/hello via loopback UDP DNS server (no CURLOPT_RESOLVE)
+    {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const bind_addr = try std.Io.net.IpAddress.parseIp4("127.0.0.1", 0);
+        var server = try bind_addr.listen(io, .{ .reuse_address = true });
+        defer server.deinit(io);
+        const http_port = server.socket.address.getPort();
+
+        var srv_ctx = loopback_http.SingleResponseServer{
+            .server = &server,
+            .response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+        };
+        const http_thread = try std.Thread.spawn(.{}, loopback_http.SingleResponseServer.run, .{&srv_ctx});
+        defer http_thread.join();
+
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        var url_buf: [128]u8 = undefined;
+        const url = try loopback_http.bufPrintZ(&url_buf, "http://ares-loopback.test:{d}/hello", .{http_port});
+        var sink = loopback_http.BodySink{};
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 10_000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_DNS_SERVERS, dns_servers));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, @as(?*anyopaque, @ptrCast(&sink))));
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+        try testing.expectEqualStrings("ok", sink.slice());
+        try testing.expect(dns_srv.saw_a.load(.acquire));
+    }
+
+    // 2. When HTTPS-RR and OpenSSL are enabled, perform an https:// transfer and verify QTYPE 65 (HTTPS) query
+    if (comptime (backend_options.httpsrr and backend_options.ssl == .openssl)) {
+        var https_port: u16 = 0;
+        const listen_fd = try loopback_tls.openLoopbackListener(&https_port);
+        defer _ = loopback_tls.sock_c.close(listen_fd);
+        loopback_tls.setSocketTimeouts(listen_fd);
+
+        const tls_thread = try std.Thread.spawn(.{}, loopback_tls.serveOpenSslOnce, .{listen_fd});
+        defer tls_thread.join();
+
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        var url_buf: [128]u8 = undefined;
+        const url = try loopback_http.bufPrintZ(&url_buf, "https://ares-httpsrr.test:{d}/hello", .{https_port});
+        var sink = loopback_http.BodySink{};
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 10_000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_DNS_SERVERS, dns_servers));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 0)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 0)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, @as(?*anyopaque, @ptrCast(&sink))));
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+        try testing.expectEqualStrings("ok", sink.slice());
+        try testing.expect(dns_srv.saw_https.load(.acquire));
+    }
+}
+
+test "DoH loopback DNS-over-HTTPS resolution with HTTPS-RR" {
+    // 1. Direct HTTPS-RR wire format decode via doh_resp_decode_httpsrr
+    if (comptime backend_options.httpsrr) {
+        const https_rdata = [_]u8{
+            0x00, 0x01, // priority = 1
+            0x00, // target = "."
+            // SvcParam 1: alpn = "h2,http/1.1"
+            0x00, 0x01, // key = 1 (alpn)
+            0x00, 0x0c, // len = 12
+            0x02, 'h',
+            '2',  0x08,
+            'h',  't',
+            't',  'p',
+            '/',  '1',
+            '.',  '1',
+            // SvcParam 2: port = 8443 (0x20fb)
+            0x00, 0x03, // key = 3 (port)
+            0x00, 0x02, // len = 2
+            0x20, 0xfb,
+            // SvcParam 3: ipv4hint = 127.0.0.1
+            0x00, 0x04, // key = 4 (ipv4hint)
+            0x00, 0x04, // len = 4
+            127,  0,
+            0,    1,
+        };
+
+        var hrr: ?*loopback_dns.Curl_https_rrinfo = null;
+        try testing.expectEqual(
+            c.CURLE_OK,
+            loopback_dns.httpsrr_c.doh_resp_decode_httpsrr(null, &https_rdata, https_rdata.len, &hrr),
+        );
+        defer loopback_dns.httpsrr_c.Curl_httpsrr_destroy(hrr);
+
+        const rr = hrr orelse return error.NullHttpsRrInfo;
+        try testing.expectEqual(@as(u16, 1), rr.priority);
+        try testing.expect(rr.target != null);
+        try testing.expectEqualStrings(".", std.mem.span(rr.target.?));
+        try testing.expect(rr.portSet());
+        try testing.expectEqual(@as(u16, 8443), rr.port);
+        try testing.expectEqual(loopback_dns.ALPN_h2, rr.alpns[0]);
+        try testing.expectEqual(loopback_dns.ALPN_h1, rr.alpns[1]);
+        try testing.expectEqual(loopback_dns.ALPN_none, rr.alpns[2]);
+        try testing.expectEqual(@as(usize, 4), rr.ipv4hints_len);
+        try testing.expect(rr.ipv4hints != null);
+        try testing.expectEqualSlices(u8, &[_]u8{ 127, 0, 0, 1 }, rr.ipv4hints.?[0..4]);
+    }
+
+    // 2. End-to-end loopback DoH HTTP server + target HTTP server via CURLOPT_DOH_URL
+    if (comptime (builtin.os.tag == .windows)) return;
+
+    var doh_srv = try loopback_dns.DohHttpServer.init();
+    defer doh_srv.deinit();
+    const doh_thread = try std.Thread.spawn(.{}, loopback_dns.DohHttpServer.run, .{&doh_srv});
+    defer doh_srv.stopAndJoin(doh_thread);
+
+    var doh_url_buf: [128]u8 = undefined;
+    const doh_url = try loopback_http.bufPrintZ(&doh_url_buf, "http://127.0.0.1:{d}/dns-query", .{doh_srv.port});
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const bind_addr = try std.Io.net.IpAddress.parseIp4("127.0.0.1", 0);
+    var target_server = try bind_addr.listen(io, .{ .reuse_address = true });
+    defer target_server.deinit(io);
+    const target_port = target_server.socket.address.getPort();
+
+    var srv_ctx = loopback_http.SingleResponseServer{
+        .server = &target_server,
+        .response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+    };
+    const target_thread = try std.Thread.spawn(.{}, loopback_http.SingleResponseServer.run, .{&srv_ctx});
+    defer target_thread.join();
+
+    const easy = curl_easy_init() orelse return error.EasyInitFailed;
+    defer curl_easy_cleanup(easy);
+
+    var url_buf: [128]u8 = undefined;
+    const url = try loopback_http.bufPrintZ(&url_buf, "http://doh-test.example:{d}/", .{target_port});
+    var sink = loopback_http.BodySink{};
+
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 10_000)));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_DOH_URL, doh_url));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, @as(?*anyopaque, @ptrCast(&sink))));
+
+    try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+    try testing.expectEqualStrings("ok", sink.slice());
+    try testing.expect(doh_srv.saw_a.load(.acquire));
 }

@@ -174,6 +174,7 @@ pub const CURLMOPT_MAXCONNECTS: c_uint = 6;
 pub const CURLMOPT_QUICK_EXIT: c_uint = 18;
 
 pub const CURL_HTTP_VERSION_2TLS: c_long = 4;
+pub const CURLPROTO_HTTP: c_long = 1 << 0;
 pub const CURLPROTO_HTTPS: c_long = 1 << 1;
 pub const CURLSSLOPT_AUTO_CLIENT_CERT: c_long = 1 << 5;
 
@@ -780,7 +781,7 @@ fn doh_probe_run(
         if (!setoptChecked(doh_h, CURLOPT_PIPEWAIT, @as(c_long, 1), &result)) return doh_probe_run_error(&doh, doh_req, result);
     }
 
-    if (!setoptChecked(doh_h, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS, &result)) return doh_probe_run_error(&doh, doh_req, result);
+    if (!setoptChecked(doh_h, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS, &result)) return doh_probe_run_error(&doh, doh_req, result);
     if (!setoptChecked(doh_h, CURLOPT_TIMEOUT_MS, @as(c_long, @intCast(timeout_ms)), &result)) return doh_probe_run_error(&doh, doh_req, result);
     if (!setoptChecked(doh_h, CURLOPT_SHARE, Curl_easy_get_share(data), &result)) return doh_probe_run_error(&doh, doh_req, result);
 
