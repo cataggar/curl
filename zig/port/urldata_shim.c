@@ -15081,7 +15081,7 @@ const char *Curl_vssh_get_conn_host_name(const struct connectdata *conn)
 {
   if(!conn || !conn->origin)
     return "";
-  if(conn->origin->ipv6 && conn->origin->user_hostname)
+  if(conn->origin->ipv6 && conn->origin->user_hostname[0])
     return conn->origin->user_hostname;
   return conn->origin->hostname ? conn->origin->hostname : "";
 }
@@ -15402,3 +15402,370 @@ ssize_t Curl_libssh_sftp_write(sftp_file file, const void *buf, size_t count)
 #endif
 }
 #endif
+
+bool Curl_ldap_url_has_creds_or_options(const struct Curl_easy *data);
+bool Curl_ldap_url_has_creds_or_options(const struct Curl_easy *data)
+{
+  return (data->state.creds && (data->state.creds->source == CREDS_URL)) ||
+         (data->state.up.options != NULL);
+}
+
+const char *Curl_ldap_get_state_url(const struct Curl_easy *data);
+const char *Curl_ldap_get_state_url(const struct Curl_easy *data)
+{
+  return Curl_bufref_ptr(&data->state.url);
+}
+
+bool Curl_ldap_has_state_creds(const struct Curl_easy *data);
+bool Curl_ldap_has_state_creds(const struct Curl_easy *data)
+{
+  return data->state.creds != NULL;
+}
+
+const char *Curl_ldap_get_state_creds_user(const struct Curl_easy *data);
+const char *Curl_ldap_get_state_creds_user(const struct Curl_easy *data)
+{
+  return data->state.creds ? data->state.creds->user : NULL;
+}
+
+const char *Curl_ldap_get_state_creds_passwd(const struct Curl_easy *data);
+const char *Curl_ldap_get_state_creds_passwd(const struct Curl_easy *data)
+{
+  return data->state.creds ? data->state.creds->passwd : NULL;
+}
+
+const char *Curl_ldap_get_conn_options(const struct connectdata *conn);
+const char *Curl_ldap_get_conn_options(const struct connectdata *conn)
+{
+  return conn ? conn->options : NULL;
+}
+
+const char *Curl_ldap_get_conn_scheme_name(const struct connectdata *conn);
+const char *Curl_ldap_get_conn_scheme_name(const struct connectdata *conn)
+{
+  return (conn && conn->scheme) ? conn->scheme->name : "";
+}
+
+const char *Curl_ldap_get_origin_scheme_name(const struct Curl_easy *data);
+const char *Curl_ldap_get_origin_scheme_name(const struct Curl_easy *data)
+{
+  return (data->state.origin && data->state.origin->scheme) ?
+         data->state.origin->scheme->name : "";
+}
+
+char *Curl_ldap_format_hosturl(const struct connectdata *conn);
+char *Curl_ldap_format_hosturl(const struct connectdata *conn)
+{
+  if(!conn || !conn->scheme || !conn->origin)
+    return NULL;
+  return curl_maprintf("%s://%s:%u",
+                       conn->scheme->name,
+                       conn->origin->ipv6 ?
+                       conn->origin->user_hostname :
+                       conn->origin->hostname,
+                       conn->origin->port);
+}
+
+Curl_recv *Curl_ldap_get_conn_recv(const struct connectdata *conn,
+                                   int8_t sockindex);
+Curl_recv *Curl_ldap_get_conn_recv(const struct connectdata *conn,
+                                   int8_t sockindex)
+{
+  return (conn && CONN_SOCK_IDX_VALID(sockindex)) ? conn->recv[sockindex] : NULL;
+}
+
+void Curl_ldap_set_conn_recv(struct connectdata *conn, Curl_recv *recv_fn);
+void Curl_ldap_set_conn_recv(struct connectdata *conn, Curl_recv *recv_fn)
+{
+  if(conn)
+    conn->recv[FIRSTSOCKET] = recv_fn;
+}
+
+Curl_send *Curl_ldap_get_conn_send(const struct connectdata *conn,
+                                   int8_t sockindex);
+Curl_send *Curl_ldap_get_conn_send(const struct connectdata *conn,
+                                   int8_t sockindex)
+{
+  return (conn && CONN_SOCK_IDX_VALID(sockindex)) ? conn->send[sockindex] : NULL;
+}
+
+void Curl_ldap_set_sockerrno_einval(void);
+void Curl_ldap_set_sockerrno_einval(void)
+{
+  SET_SOCKERRNO(SOCKEINVAL);
+}
+
+void Curl_ldap_set_sockerrno_ewouldblock(void);
+void Curl_ldap_set_sockerrno_ewouldblock(void)
+{
+  SET_SOCKERRNO(SOCKEWOULDBLOCK);
+}
+
+curl_socket_t Curl_ldap_dup_socket(curl_socket_t s);
+curl_socket_t Curl_ldap_dup_socket(curl_socket_t s)
+{
+#ifdef _WIN32
+  SOCKET dupfd = INVALID_SOCKET;
+  WSAPROTOCOL_INFO pi;
+  if(!WSADuplicateSocket(s, GetCurrentProcessId(), &pi))
+    dupfd = CURL_SOCKET(pi.iAddressFamily, pi.iSocketType, pi.iProtocol);
+  return dupfd;
+#elif defined(F_DUPFD_CLOEXEC)
+  return fcntl(s, F_DUPFD_CLOEXEC, 0);
+#else
+  int dupfd = dup(s);
+#ifdef HAVE_FCNTL
+  if((dupfd != CURL_SOCKET_BAD) &&
+     (fcntl(dupfd, F_SETFD, FD_CLOEXEC) < 0)) {
+    sclose(dupfd);
+    dupfd = CURL_SOCKET_BAD;
+  }
+#endif
+  return dupfd;
+#endif
+}
+
+void Curl_ldap_sclose(curl_socket_t s);
+void Curl_ldap_sclose(curl_socket_t s)
+{
+  if(s != CURL_SOCKET_BAD)
+    sclose(s);
+}
+
+bool Curl_ldap_get_ssl_verifypeer(const struct connectdata *conn);
+bool Curl_ldap_get_ssl_verifypeer(const struct connectdata *conn)
+{
+  return conn ? (bool)conn->ssl_config.verifypeer : FALSE;
+}
+
+bool Curl_ldap_get_ssl_verifyhost(const struct connectdata *conn);
+bool Curl_ldap_get_ssl_verifyhost(const struct connectdata *conn)
+{
+  return conn ? (bool)conn->ssl_config.verifyhost : FALSE;
+}
+
+const char *Curl_ldap_get_ssl_cafile(const struct connectdata *conn);
+const char *Curl_ldap_get_ssl_cafile(const struct connectdata *conn)
+{
+  return conn ? conn->ssl_config.CAfile : NULL;
+}
+
+const char *Curl_ldap_get_ssl_cert_type(const struct connectdata *conn);
+const char *Curl_ldap_get_ssl_cert_type(const struct connectdata *conn)
+{
+  return conn ? conn->ssl_config.cert_type : NULL;
+}
+
+bool Curl_ldap_conn_is_ssl(const struct connectdata *conn);
+bool Curl_ldap_conn_is_ssl(const struct connectdata *conn)
+{
+  return conn ? Curl_conn_is_ssl((struct connectdata *)conn, FIRSTSOCKET) : FALSE;
+}
+
+CURLcode Curl_ldap_add_ssl_cfilter(struct Curl_easy *data,
+                                   struct connectdata *conn);
+CURLcode Curl_ldap_add_ssl_cfilter(struct Curl_easy *data,
+                                   struct connectdata *conn)
+{
+#ifdef USE_SSL
+  return Curl_ssl_cfilter_add(data, Curl_conn_get_origin(conn, FIRSTSOCKET),
+                              conn, FIRSTSOCKET);
+#else
+  (void)data;
+  (void)conn;
+  return CURLE_NOT_BUILT_IN;
+#endif
+}
+
+void Curl_ldap_set_info_httpcode(struct Curl_easy *data, int code);
+void Curl_ldap_set_info_httpcode(struct Curl_easy *data, int code)
+{
+  data->info.httpcode = code;
+}
+
+void Curl_ldap_set_req_size_from_bytecount(struct Curl_easy *data);
+void Curl_ldap_set_req_size_from_bytecount(struct Curl_easy *data)
+{
+  data->req.size = data->req.bytecount;
+}
+
+CURLcode Curl_ldap_get_remote_port(struct Curl_easy *data,
+                                   struct connectdata *conn,
+                                   int *pport);
+CURLcode Curl_ldap_get_remote_port(struct Curl_easy *data,
+                                   struct connectdata *conn,
+                                   int *pport)
+{
+  struct ip_quadruple ipquad;
+  bool is_ipv6;
+  CURLcode result = Curl_conn_get_ip_info(data, conn, FIRSTSOCKET,
+                                          &is_ipv6, &ipquad);
+  if(!result && pport)
+    *pport = (int)ipquad.remote_port;
+  return result;
+}
+
+const char *Curl_ldap_get_conn_hostname(const struct connectdata *conn);
+const char *Curl_ldap_get_conn_hostname(const struct connectdata *conn)
+{
+  return (conn && conn->origin && conn->origin->hostname) ?
+         conn->origin->hostname : "";
+}
+
+const char *Curl_ldap_get_conn_user_hostname(const struct connectdata *conn);
+const char *Curl_ldap_get_conn_user_hostname(const struct connectdata *conn)
+{
+  return (conn && conn->origin) ? conn->origin->user_hostname : "";
+}
+
+const char *Curl_ldap_get_up_path(const struct Curl_easy *data);
+const char *Curl_ldap_get_up_path(const struct Curl_easy *data)
+{
+  return data->state.up.path;
+}
+
+const char *Curl_ldap_get_up_query(const struct Curl_easy *data);
+const char *Curl_ldap_get_up_query(const struct Curl_easy *data)
+{
+  return data->state.up.query;
+}
+
+void Curl_ldap_connclose(struct connectdata *conn);
+void Curl_ldap_connclose(struct connectdata *conn)
+{
+  if(conn)
+    connclose(conn);
+}
+
+#ifndef CURL_DISABLE_LDAP
+#ifdef USE_WIN32_LDAP
+#include <subauth.h>
+#include <winldap.h>
+#ifndef WITHOUT_MM_LIBC
+#include <winber.h>
+#endif
+#include "curlx/multibyte.h"
+#include "curl_sspi.h"
+#else
+#define LDAP_DEPRECATED 1
+#ifdef HAVE_LBER_H
+#include <lber.h>
+#endif
+#include <ldap.h>
+#endif
+
+const char *Curl_ldap_get_vendor_name(void);
+const char *Curl_ldap_get_vendor_name(void)
+{
+#ifdef LDAP_VENDOR_NAME
+  return LDAP_VENDOR_NAME;
+#else
+  return "LDAP";
+#endif
+}
+
+int Curl_ldap_get_vendor_version(void);
+int Curl_ldap_get_vendor_version(void)
+{
+#if defined(LDAP_VENDOR_VERSION) && (LDAP_VENDOR_VERSION > 0)
+  return (int)LDAP_VENDOR_VERSION;
+#else
+  return 0;
+#endif
+}
+
+#ifdef USE_WIN32_LDAP
+static BOOLEAN ldap_win_bypass_cert_verify(PLDAP Connection,
+                                           PCCERT_CONTEXT *ppServerCert)
+{
+  (void)Connection;
+  CertFreeCertificateContext(*ppServerCert);
+  return TRUE;
+}
+
+void Curl_ldap_set_win32_bypass_cert_verify(void *server_ptr);
+void Curl_ldap_set_win32_bypass_cert_verify(void *server_ptr)
+{
+  ldap_set_option((LDAP *)server_ptr, LDAP_OPT_SERVER_CERTIFICATE,
+                  (void *)(uintptr_t)ldap_win_bypass_cert_verify);
+}
+
+#ifdef USE_WINDOWS_SSPI
+static int ldap_win_bind_auth(LDAP *server, const char *user,
+                              const char *passwd, unsigned long authflags)
+{
+  ULONG method = 0;
+  SEC_WINNT_AUTH_IDENTITY cred;
+  int rc = LDAP_AUTH_METHOD_NOT_SUPPORTED;
+
+  memset(&cred, 0, sizeof(cred));
+
+#ifdef USE_SPNEGO
+  if(authflags & CURLAUTH_NEGOTIATE)
+    method = LDAP_AUTH_NEGOTIATE;
+  else
+#endif
+#ifdef USE_NTLM
+  if(authflags & CURLAUTH_NTLM)
+    method = LDAP_AUTH_NTLM;
+  else
+#endif
+#ifndef CURL_DISABLE_DIGEST_AUTH
+  if(authflags & CURLAUTH_DIGEST)
+    method = LDAP_AUTH_DIGEST;
+  else
+#endif
+  {
+  }
+
+  if(method) {
+    if(user && passwd) {
+      CURLcode res = Curl_create_sspi_identity(user, passwd, &cred);
+      if(res)
+        return LDAP_NO_MEMORY;
+      rc = (int)ldap_bind_s(server, NULL, (TCHAR *)&cred, method);
+      Curl_sspi_free_identity(&cred);
+    }
+    else {
+      method = LDAP_AUTH_NEGOTIATE;
+      rc = (int)ldap_bind_s(server, NULL, NULL, method);
+    }
+  }
+  return rc;
+}
+#endif /* USE_WINDOWS_SSPI */
+
+int Curl_ldap_win_bind(struct Curl_easy *data, void *server_ptr,
+                       const char *user, const char *passwd);
+int Curl_ldap_win_bind(struct Curl_easy *data, void *server_ptr,
+                       const char *user, const char *passwd)
+{
+  LDAP *server = (LDAP *)server_ptr;
+  int rc = LDAP_INVALID_CREDENTIALS;
+  PTCHAR inuser = NULL;
+  PTCHAR inpass = NULL;
+
+  if(user && passwd && (data->state.authhost.picked & CURLAUTH_BASIC)) {
+    inuser = curlx_convert_UTF8_to_tchar(user);
+    inpass = curlx_convert_UTF8_to_tchar(passwd);
+    if(!inuser || !inpass) {
+      curlx_free(inuser);
+      curlx_free(inpass);
+      return LDAP_NO_MEMORY;
+    }
+
+    rc = (int)ldap_simple_bind_s(server, inuser, inpass);
+
+    curlx_free(inuser);
+    curlx_free(inpass);
+  }
+#ifdef USE_WINDOWS_SSPI
+  else {
+    rc = ldap_win_bind_auth(server, user, passwd, data->state.authhost.picked);
+  }
+#endif
+
+  return rc;
+}
+#endif /* USE_WIN32_LDAP */
+#endif /* !CURL_DISABLE_LDAP */

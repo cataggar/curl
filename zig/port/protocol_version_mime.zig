@@ -10,6 +10,7 @@ const imap_ws = @import("imap_ws.zig");
 const pop3_smtp = @import("pop3_smtp.zig");
 const ftp = @import("ftp.zig");
 const http_mod = @import("http.zig");
+const ldap = @import("ldap.zig");
 const vquic_core = @import("vquic_core.zig");
 const vssh = @import("vssh.zig");
 
@@ -47,6 +48,8 @@ const use_resolv_ares = if (@hasDecl(backend_options, "use_resolv_ares")) backen
 const use_resolv_threaded = if (@hasDecl(backend_options, "use_resolv_threaded")) backend_options.use_resolv_threaded else true;
 const use_apple_sectrust = backend_options.apple_sectrust orelse (backend_options.ssl == .openssl and builtin.os.tag.isDarwin());
 const use_ssh = if (@hasDecl(backend_options, "ssh")) backend_options.ssh != .none else false;
+const has_ldap = if (@hasDecl(backend_options, "has_ldap")) backend_options.has_ldap else false;
+const has_ldaps = if (@hasDecl(backend_options, "has_ldaps")) backend_options.has_ldaps else false;
 
 // ============================================================================
 // 1. lib/protocol.c + lib/protocol.h
@@ -249,7 +252,7 @@ pub export const Curl_scheme_imaps: Curl_scheme = .{
 
 pub export const Curl_scheme_ldap: Curl_scheme = .{
     .name = "ldap",
-    .run = null,
+    .run = if (has_ldap) @ptrCast(&ldap.Curl_protocol_ldap) else null,
     .protocol = CURLPROTO_LDAP,
     .family = CURLPROTO_LDAP,
     .flags = PROTOPT_SSL_REUSE,
@@ -258,7 +261,7 @@ pub export const Curl_scheme_ldap: Curl_scheme = .{
 
 pub export const Curl_scheme_ldaps: Curl_scheme = .{
     .name = "ldaps",
-    .run = null,
+    .run = if (has_ldaps) @ptrCast(&ldap.Curl_protocol_ldap) else null,
     .protocol = CURLPROTO_LDAPS,
     .family = CURLPROTO_LDAP,
     .flags = PROTOPT_SSL,
@@ -716,6 +719,7 @@ var version_psl_buf: [30]u8 = undefined;
 var version_ssh_buf: [30]u8 = undefined;
 var version_h2_buf: [30]u8 = undefined;
 var version_h3_buf: [30]u8 = undefined;
+var version_ldap_buf: [30]u8 = undefined;
 
 pub export fn curl_version() callconv(.c) [*:0]u8 {
     var src: [16][*:0]const u8 = undefined;
@@ -817,6 +821,12 @@ pub export fn curl_version() callconv(.c) [*:0]u8 {
         i += 1;
     }
 
+    if (comptime has_ldap) {
+        ldap.Curl_ldap_version(&version_ldap_buf, version_ldap_buf.len);
+        src[i] = @ptrCast(&version_ldap_buf);
+        i += 1;
+    }
+
     var outp: usize = 0;
     for (0..i) |j| {
         const s = std.mem.span(src[j]);
@@ -864,6 +874,14 @@ const supported_protocols = blk: {
     if (use_ssl) {
         list[n] = "imaps";
         n += 1;
+    }
+    if (has_ldap) {
+        list[n] = "ldap";
+        n += 1;
+        if (has_ldaps) {
+            list[n] = "ldaps";
+            n += 1;
+        }
     }
     list[n] = "mqtt";
     n += 1;

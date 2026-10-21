@@ -42,8 +42,6 @@ pub fn createConfigHeader(b: *std.Build, target: std.Build.ResolvedTarget) *std.
         .include_path = "curl_config.h",
     }, .{
         .CURL_OS = os_str,
-        .CURL_DISABLE_LDAP = 1,
-        .CURL_DISABLE_LDAPS = 1,
         .USE_IPV6 = 1,
         .USE_UNIX_SOCKETS = 1,
         .SIZEOF_INT = 4,
