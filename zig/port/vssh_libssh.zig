@@ -309,7 +309,8 @@ extern fn Curl_pgrsSetUploadSize(data: *Curl_easy, size: curl_off_t) callconv(.c
 extern fn Curl_pgrsReset(data: *Curl_easy) callconv(.c) void;
 extern fn Curl_pgrsTime(data: *Curl_easy, timer: c_uint) callconv(.c) void;
 extern fn Curl_pgrsCheck(data: *Curl_easy) callconv(.c) CURLcode;
-extern fn Curl_pgrsDone(data: *Curl_easy) callconv(.c) c_int;
+extern fn Curl_pgrs_now(data: *Curl_easy) callconv(.c) ?*const anyopaque;
+extern fn Curl_pgrsDone(data: *Curl_easy, pnow: ?*const anyopaque) callconv(.c) c_int;
 
 extern fn Curl_ftp_acc_get_conn(data: *Curl_easy) callconv(.c) ?*connectdata;
 extern fn Curl_ftp_acc_get_upload(data: *Curl_easy) callconv(.c) bool;
@@ -2620,7 +2621,7 @@ fn myssh_done(data: *Curl_easy, sshc: *ssh_conn_libssh, status: CURLcode) CURLco
     } else {
         result = status;
     }
-    if (Curl_pgrsDone(data) != 0) {
+    if (Curl_pgrsDone(data, Curl_pgrs_now(data)) != 0) {
         return CURLE_ABORTED_BY_CALLBACK;
     }
     Curl_vssh_clear_req_io(data);
