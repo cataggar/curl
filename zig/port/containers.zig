@@ -181,7 +181,7 @@ export fn curlx_dyn_vaddf(s: *dynbuf, fmt: [*:0]const u8, ap: CVaListParam) call
 
 const use_c_vastart = switch (builtin.cpu.arch) {
     .x86_64 => builtin.os.tag != .windows,
-    .aarch64, .aarch64_be => builtin.os.tag.isDarwin(),
+    .aarch64, .aarch64_be => builtin.os.tag.isDarwin() or builtin.os.tag == .windows,
     else => false,
 };
 
@@ -210,21 +210,24 @@ const addf_impl = if (use_c_vastart) struct {
             \\sub sp, sp, #256
             \\stp x29, x30, [sp, #240]
             \\add x29, sp, #240
-            \\stp x2, x3, [x29, #-112]
-            \\stp x4, x5, [x29, #-96]
-            \\stp x6, x7, [x29, #-80]
-            \\stp q0, q1, [sp]
-            \\stp q2, q3, [sp, #32]
-            \\stp q4, q5, [sp, #64]
-            \\stp q6, q7, [sp, #96]
-            \\add x9, x29, #16
-            \\sub x8, x29, #64
-            \\stp x9, x8, [x29, #-64]
-            \\add x9, sp, #128
-            \\mov x8, #-48
-            \\movk x8, #65408, lsl #32
-            \\stp x9, x8, [x29, #-48]
-            \\sub x2, x29, #64
+            \\stp x2, x3, [x29, #-48]
+            \\stp x4, x5, [x29, #-32]
+            \\stp x6, x7, [x29, #-16]
+            \\stp q0, q1, [sp, #32]
+            \\stp q2, q3, [sp, #64]
+            \\stp q4, q5, [sp, #96]
+            \\stp q6, q7, [sp, #128]
+            \\add x8, x29, #16
+            \\str x8, [sp, #0]
+            \\sub x8, x29, #0
+            \\str x8, [sp, #8]
+            \\add x8, sp, #160
+            \\str x8, [sp, #16]
+            \\mov w8, #-48
+            \\str w8, [sp, #24]
+            \\mov w8, #-128
+            \\str w8, [sp, #28]
+            \\mov x2, sp
             \\bl curlx_dyn_vaddf
             \\ldp x29, x30, [sp, #240]
             \\add sp, sp, #256
