@@ -115,6 +115,7 @@ const c = struct {
 
     pub const CURLOPT_WRITEDATA: CURLoption = CURLOPTTYPE_OBJECTPOINT + 1;
     pub const CURLOPT_URL: CURLoption = CURLOPTTYPE_OBJECTPOINT + 2;
+    pub const CURLOPT_PROXY: CURLoption = CURLOPTTYPE_OBJECTPOINT + 4;
     pub const CURLOPT_COOKIEFILE: CURLoption = 10031;
     pub const CURLOPT_SSL_VERIFYPEER: CURLoption = CURLOPTTYPE_LONG + 64;
     pub const CURLOPT_CAINFO: CURLoption = CURLOPTTYPE_OBJECTPOINT + 65;
@@ -124,6 +125,8 @@ const c = struct {
     pub const CURLOPT_NOSIGNAL: CURLoption = CURLOPTTYPE_LONG + 99;
     pub const CURLOPT_PROXYTYPE: CURLoption = CURLOPTTYPE_LONG + 101;
     pub const CURLOPT_ACCEPT_ENCODING: CURLoption = CURLOPTTYPE_OBJECTPOINT + 102;
+    pub const CURLOPT_PROXY_SSL_VERIFYPEER: CURLoption = CURLOPTTYPE_LONG + 248;
+    pub const CURLOPT_PROXY_SSL_VERIFYHOST: CURLoption = CURLOPTTYPE_LONG + 249;
 
     pub const CURL_HTTP_VERSION_3: c_long = 30;
     pub const CURL_HTTP_VERSION_3ONLY: c_long = 31;
@@ -2495,4 +2498,235 @@ test "DoH loopback DNS-over-HTTPS resolution with HTTPS-RR" {
     try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
     try testing.expectEqualStrings("ok", sink.slice());
     try testing.expect(doh_srv.saw_a.load(.acquire));
+}
+
+const loopback_quic = struct {
+    const c_cf = struct {
+        const CurlCftype = extern struct {
+            name: [*:0]const u8,
+            flags: c_uint,
+            log_level: c_int,
+            destroy: *const fn (cf: *CurlCfilter, data: ?*anyopaque) callconv(.c) void,
+            do_connect: *const anyopaque,
+            do_shutdown: *const anyopaque,
+            adjust_pollset: *const anyopaque,
+            has_data_pending: *const anyopaque,
+            do_send: *const anyopaque,
+            do_recv: *const anyopaque,
+            cntrl: *const anyopaque,
+            is_alive: *const anyopaque,
+            keep_alive: *const anyopaque,
+            query: *const anyopaque,
+        };
+
+        const CurlCfilter = extern struct {
+            cft: *const CurlCftype,
+            next: ?*CurlCfilter,
+            ctx: ?*anyopaque,
+            conn: ?*anyopaque,
+            sockindex: c_int,
+            bits: u8,
+        };
+
+        extern fn Curl_cf_quic_create(
+            pcf: *?*CurlCfilter,
+            data: ?*anyopaque,
+            origin: ?*anyopaque,
+            peer: ?*anyopaque,
+            transport_peer: u8,
+            conn: ?*anyopaque,
+            addr: ?*anyopaque,
+            tunnel_peer: ?*anyopaque,
+            tunnel_transport: u8,
+        ) callconv(.c) c.CURLcode;
+    };
+
+    const UdpQuicInitialServer = struct {
+        udp_fd: c_int,
+        port: u16,
+        pkt_buf: [2048]u8 = @splat(0),
+        pkt_len: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+
+        fn init() !UdpQuicInitialServer {
+            const fd = loopback_dns.socket(loopback_dns.AF_INET, loopback_dns.SOCK_DGRAM, 0);
+            if (fd < 0) return error.SocketFailed;
+            errdefer _ = loopback_dns.close(fd);
+
+            loopback_dns.setSocketTimeouts(fd);
+
+            var addr = loopback_dns.sockaddr_in{
+                .sin_port = 0,
+                .sin_addr = std.mem.nativeToBig(u32, 0x7f000001),
+            };
+            if (loopback_dns.bind(fd, &addr, @sizeOf(loopback_dns.sockaddr_in)) != 0) return error.BindFailed;
+
+            var bound_addr = loopback_dns.sockaddr_in{};
+            var addr_len: u32 = @sizeOf(loopback_dns.sockaddr_in);
+            if (loopback_dns.getsockname(fd, &bound_addr, &addr_len) != 0) return error.GetsocknameFailed;
+
+            return .{
+                .udp_fd = fd,
+                .port = std.mem.bigToNative(u16, bound_addr.sin_port),
+            };
+        }
+
+        fn deinit(self: *UdpQuicInitialServer) void {
+            _ = loopback_dns.close(self.udp_fd);
+        }
+
+        fn runOnce(self: *UdpQuicInitialServer) void {
+            var peer_addr = loopback_dns.sockaddr_in{};
+            var peer_len: u32 = @sizeOf(loopback_dns.sockaddr_in);
+            const n = loopback_dns.recvfrom(self.udp_fd, &self.pkt_buf, self.pkt_buf.len, 0, &peer_addr, &peer_len);
+            if (n <= 0) return;
+            const pkt_n: usize = @intCast(n);
+            self.pkt_len.store(pkt_n, .release);
+
+            // Send back a QUIC Version Negotiation packet (RFC 9000 Section 17.2.1)
+            // with an unsupported version so ngtcp2 terminates the handshake immediately.
+            if (pkt_n >= 7) {
+                const dcid_len: usize = self.pkt_buf[5];
+                if (6 + dcid_len < pkt_n) {
+                    const dcid = self.pkt_buf[6 .. 6 + dcid_len];
+                    const scid_len: usize = self.pkt_buf[6 + dcid_len];
+                    if (7 + dcid_len + scid_len <= pkt_n) {
+                        const scid = self.pkt_buf[7 + dcid_len .. 7 + dcid_len + scid_len];
+                        var vn_pkt: [128]u8 = @splat(0);
+                        if (7 + scid_len + dcid_len + 4 <= vn_pkt.len) {
+                            vn_pkt[0] = 0xc0; // Long Header Form | Fixed Bit
+                            // Version = 0x00000000 (bytes 1..5)
+                            vn_pkt[5] = @intCast(scid_len);
+                            @memcpy(vn_pkt[6 .. 6 + scid_len], scid);
+                            vn_pkt[6 + scid_len] = @intCast(dcid_len);
+                            @memcpy(vn_pkt[7 + scid_len .. 7 + scid_len + dcid_len], dcid);
+                            const v_off = 7 + scid_len + dcid_len;
+                            vn_pkt[v_off + 0] = 0x0a;
+                            vn_pkt[v_off + 1] = 0x0a;
+                            vn_pkt[v_off + 2] = 0x0a;
+                            vn_pkt[v_off + 3] = 0x0a;
+                            _ = loopback_dns.sendto(
+                                self.udp_fd,
+                                &vn_pkt,
+                                v_off + 4,
+                                0,
+                                &peer_addr,
+                                peer_len,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    };
+};
+
+test "HTTP/3 ngtcp2 filter creation and UDP loopback QUIC Initial packet generation" {
+    // 1. Direct Curl_cf_quic_create filter creation verification
+    {
+        var cf: ?*loopback_quic.c_cf.CurlCfilter = null;
+        var dummy_addr: [256]u8 align(8) = @splat(0);
+        const rc = loopback_quic.c_cf.Curl_cf_quic_create(&cf, null, null, null, 5, null, &dummy_addr, null, 0);
+        if (backend_options.quic == .ngtcp2) {
+            try testing.expectEqual(c.CURLE_OK, rc);
+            try testing.expect(cf != null);
+            const h3_cf = cf.?;
+            defer {
+                if (h3_cf.next) |udp_cf| {
+                    udp_cf.cft.destroy(udp_cf, null);
+                    curl_free(udp_cf);
+                }
+                h3_cf.cft.destroy(h3_cf, null);
+                curl_free(h3_cf);
+            }
+            try testing.expectEqualStrings("HTTP/3", std.mem.span(h3_cf.cft.name));
+            try testing.expect(h3_cf.next != null);
+            try testing.expectEqualStrings("UDP", std.mem.span(h3_cf.next.?.cft.name));
+        } else {
+            try testing.expectEqual(c.CURLE_NOT_BUILT_IN, rc);
+            try testing.expect(cf == null);
+        }
+    }
+
+    if (comptime (backend_options.quic != .ngtcp2 or builtin.os.tag == .windows)) return;
+
+    // 2. End-to-end HTTP/3 (CURL_HTTP_VERSION_3ONLY) UDP loopback QUIC v1 Initial packet generation
+    {
+        var quic_srv = try loopback_quic.UdpQuicInitialServer.init();
+        defer quic_srv.deinit();
+        const srv_thread = try std.Thread.spawn(.{}, loopback_quic.UdpQuicInitialServer.runOnce, .{&quic_srv});
+        defer srv_thread.join();
+
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        var resolve_buf: [128]u8 = undefined;
+        const resolve_entry = try loopback_http.bufPrintZ(&resolve_buf, "localhost:{d}:127.0.0.1", .{quic_srv.port});
+        const resolve_list = curl_slist_append(null, resolve_entry) orelse return error.SlistAppendFailed;
+        defer curl_slist_free_all(resolve_list);
+
+        var url_buf: [128]u8 = undefined;
+        const url = try loopback_http.bufPrintZ(&url_buf, "https://localhost:{d}/h3-initial", .{quic_srv.port});
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 1500)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_HTTP_VERSION, c.CURL_HTTP_VERSION_3ONLY));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 0)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 0)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_RESOLVE, resolve_list));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
+
+        _ = curl_easy_perform(easy);
+
+        const pkt_len = quic_srv.pkt_len.load(.acquire);
+        // RFC 9000 Section 14.1: QUIC Initial UDP datagram must be at least 1200 bytes
+        try testing.expect(pkt_len >= 1200);
+        const pkt = quic_srv.pkt_buf[0..pkt_len];
+        // Long header form (bit 7 = 1) and Fixed bit (bit 6 = 1)
+        try testing.expectEqual(@as(u8, 0xc0), pkt[0] & 0xc0);
+        // QUIC v1 version (0x00000001)
+        const version = std.mem.readInt(u32, pkt[1..5], .big);
+        try testing.expectEqual(@as(u32, 0x00000001), version);
+        // 20-byte DCID and 20-byte SCID (NGTCP2_MAX_CIDLEN)
+        const dcid_len = pkt[5];
+        try testing.expectEqual(@as(u8, 20), dcid_len);
+        const scid_len = pkt[6 + dcid_len];
+        try testing.expectEqual(@as(u8, 20), scid_len);
+    }
+
+    // 3. When proxy-HTTP3 is enabled, verify CURLPROXY_HTTPS3 emits a QUIC v1 Initial UDP datagram via Curl_cft_h3_proxy
+    if (comptime backend_options.proxy_http3) {
+        var proxy_srv = try loopback_quic.UdpQuicInitialServer.init();
+        defer proxy_srv.deinit();
+        const srv_thread = try std.Thread.spawn(.{}, loopback_quic.UdpQuicInitialServer.runOnce, .{&proxy_srv});
+        defer srv_thread.join();
+
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        var resolve_buf: [128]u8 = undefined;
+        const resolve_entry = try loopback_http.bufPrintZ(&resolve_buf, "localhost:{d}:127.0.0.1", .{proxy_srv.port});
+        const resolve_list = curl_slist_append(null, resolve_entry) orelse return error.SlistAppendFailed;
+        defer curl_slist_free_all(resolve_list);
+
+        var proxy_buf: [128]u8 = undefined;
+        const proxy_url = try loopback_http.bufPrintZ(&proxy_buf, "https://localhost:{d}", .{proxy_srv.port});
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 1500)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_PROXYTYPE, c.CURLPROXY_HTTPS3));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_PROXY, proxy_url));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_PROXY_SSL_VERIFYPEER, @as(c_long, 0)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_PROXY_SSL_VERIFYHOST, @as(c_long, 0)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_RESOLVE, resolve_list));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, @as([*:0]const u8, "https://example.com/")));
+
+        _ = curl_easy_perform(easy);
+
+        const pkt_len = proxy_srv.pkt_len.load(.acquire);
+        try testing.expect(pkt_len >= 1200);
+        const pkt = proxy_srv.pkt_buf[0..pkt_len];
+        try testing.expectEqual(@as(u8, 0xc0), pkt[0] & 0xc0);
+        const version = std.mem.readInt(u32, pkt[1..5], .big);
+        try testing.expectEqual(@as(u32, 0x00000001), version);
+    }
 }

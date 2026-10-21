@@ -1121,7 +1121,7 @@ const vtls_core_impl = struct {
     }
 
     pub fn multisslVersion(buffer: [*]u8, size: usize) callconv(.c) usize {
-        _ = multisslSetup(null);
+        if (multisslSetup(null) != 0) return 0;
         return vtls_impl.Curl_ssl.version(buffer, size);
     }
 
@@ -5971,10 +5971,12 @@ pub const openssl_backend = struct {
 
     fn resolveOsslCtxAndSslCtx(cf: *CurlCfilter, arg: ?*anyopaque) struct { octx: ?*OsslCtx, ssl_ctx: ?*SSL_CTX } {
         var octx: ?*OsslCtx = null;
-        if (cf.ctx) |ctx_raw| {
-            const connssl: *SslConnectData = @ptrCast(@alignCast(ctx_raw));
-            if (connssl.backend) |b_raw| {
-                octx = @ptrCast(@alignCast(b_raw));
+        if (cf.cft == &vtls_impl.Curl_cft_ssl or cf.cft == &vtls_impl.Curl_cft_ssl_proxy) {
+            if (cf.ctx) |ctx_raw| {
+                const connssl: *SslConnectData = @ptrCast(@alignCast(ctx_raw));
+                if (connssl.backend) |b_raw| {
+                    octx = @ptrCast(@alignCast(b_raw));
+                }
             }
         }
         if (octx) |oc| {

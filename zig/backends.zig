@@ -58,7 +58,7 @@ pub const Options = struct {
     }
 
     pub fn hasProxyHttp3(self: Options) bool {
-        return self.quic == .ngtcp2;
+        return self.quic == .ngtcp2 and self.ssl == .openssl;
     }
 
     pub fn isValidForTarget(self: Options, os_tag: std.Target.Os.Tag) bool {
@@ -216,7 +216,9 @@ pub fn applyCMacros(mod: *std.Build.Module, target: std.Build.ResolvedTarget, op
             mod.addCMacro("USE_HTTP3", "1");
             mod.addCMacro("USE_NGTCP2", "1");
             mod.addCMacro("USE_NGHTTP3", "1");
-            mod.addCMacro("USE_PROXY_HTTP3", "1");
+            if (opts.hasProxyHttp3()) {
+                mod.addCMacro("USE_PROXY_HTTP3", "1");
+            }
             mod.addCMacro("NGTCP2_STATICLIB", "1");
             mod.addCMacro("NGHTTP3_STATICLIB", "1");
             if (opts.ssl == .openssl) {
