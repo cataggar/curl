@@ -257,6 +257,7 @@ pub const ssh_conn_libssh = struct {
     sftp_file: ?sftp_file = null,
     sftp_dir: ?sftp_dir = null,
     sftp_recv_state: c_uint = 0,
+    sftp_file_index: c_int = 0,
     sftp_recv_aio: ?sftp_aio = null,
     sftp_send_aio: ?sftp_aio = null,
     sftp_send_state: c_uint = 0,
@@ -473,11 +474,15 @@ extern fn sftp_open(sftp: sftp_session, file: [*:0]const u8, accesstype: c_int, 
 extern fn sftp_close(file: sftp_file) callconv(.c) c_int;
 extern fn sftp_file_set_nonblocking(handle: sftp_file) callconv(.c) void;
 extern fn sftp_seek64(file: sftp_file, new_offset: u64) callconv(.c) c_int;
-extern fn sftp_aio_free(aio: ?sftp_aio) callconv(.c) void;
-extern fn sftp_aio_begin_read(file: sftp_file, len: usize, aio: *?sftp_aio) callconv(.c) isize;
-extern fn sftp_aio_wait_read(aio: *?sftp_aio, buf: *anyopaque, buf_size: usize) callconv(.c) isize;
-extern fn sftp_aio_begin_write(file: sftp_file, buf: *const anyopaque, len: usize, aio: *?sftp_aio) callconv(.c) isize;
-extern fn sftp_aio_wait_write(aio: *?sftp_aio) callconv(.c) isize;
+extern fn Curl_libssh_has_sftp_aio() callconv(.c) bool;
+extern fn Curl_libssh_sftp_aio_free(aio: ?sftp_aio) callconv(.c) void;
+extern fn Curl_libssh_sftp_aio_begin_read(file: sftp_file, len: usize, aio: *?sftp_aio) callconv(.c) isize;
+extern fn Curl_libssh_sftp_aio_wait_read(aio: *?sftp_aio, buf: *anyopaque, buf_size: usize) callconv(.c) isize;
+extern fn Curl_libssh_sftp_aio_begin_write(file: sftp_file, buf: *const anyopaque, len: usize, aio: *?sftp_aio) callconv(.c) isize;
+extern fn Curl_libssh_sftp_aio_wait_write(aio: *?sftp_aio) callconv(.c) isize;
+extern fn Curl_libssh_sftp_async_read_begin(file: sftp_file, len: u32) callconv(.c) c_int;
+extern fn Curl_libssh_sftp_async_read(file: sftp_file, data: *anyopaque, len: u32, id: u32) callconv(.c) c_int;
+extern fn Curl_libssh_sftp_write(file: sftp_file, buf: *const anyopaque, count: usize) callconv(.c) isize;
 
 const STRING_SSH_PRIVATE_KEY = setopt.STRING_SSH_PRIVATE_KEY;
 const STRING_SSH_PUBLIC_KEY = setopt.STRING_SSH_PUBLIC_KEY;
@@ -1432,11 +1437,11 @@ fn myssh_in_SFTP_SHUTDOWN(data: *Curl_easy, sshc: *ssh_conn_libssh) c_int {
         ssh_set_blocking(s, 0);
     }
     if (sshc.sftp_send_aio) |aio| {
-        sftp_aio_free(aio);
+        Curl_libssh_sftp_aio_free(aio);
         sshc.sftp_send_aio = null;
     }
     if (sshc.sftp_recv_aio) |aio| {
-        sftp_aio_free(aio);
+        Curl_libssh_sftp_aio_free(aio);
         sshc.sftp_recv_aio = null;
     }
     if (sshc.sftp_file) |f| {
@@ -2086,11 +2091,11 @@ fn myssh_SESSION_DISCONNECT(data: *Curl_easy, sshc: *ssh_conn_libssh) void {
 fn sshc_cleanup(sshc: *ssh_conn_libssh) void {
     if (sshc.initialized) {
         if (sshc.sftp_send_aio) |aio| {
-            sftp_aio_free(aio);
+            Curl_libssh_sftp_aio_free(aio);
             sshc.sftp_send_aio = null;
         }
         if (sshc.sftp_recv_aio) |aio| {
-            sftp_aio_free(aio);
+            Curl_libssh_sftp_aio_free(aio);
             sshc.sftp_recv_aio = null;
         }
         if (sshc.sftp_file) |f| {
@@ -2758,31 +2763,40 @@ fn sftp_send(
     const sshc: *ssh_conn_libssh = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
     const file = sshc.sftp_file orelse return CURLE_FAILED_INIT;
 
-    switch (sshc.sftp_send_state) {
-        0 => {
-            sftp_file_set_nonblocking(file);
-            if (sftp_aio_begin_write(file, buf, len, &sshc.sftp_send_aio) == SSH_ERROR) {
-                return CURLE_SEND_ERROR;
-            }
-            sshc.sftp_send_state = 1;
-            const nwrite = sftp_aio_wait_write(&sshc.sftp_send_aio);
-            myssh_block2waitfor(sshc, nwrite == SSH_AGAIN);
-            if (nwrite == SSH_AGAIN) return CURLE_AGAIN;
-            if (nwrite < 0) return CURLE_SEND_ERROR;
-            sshc.sftp_send_state = 0;
-            pnwritten.* = @intCast(nwrite);
-            return CURLE_OK;
-        },
-        1 => {
-            const nwrite = sftp_aio_wait_write(&sshc.sftp_send_aio);
-            myssh_block2waitfor(sshc, nwrite == SSH_AGAIN);
-            if (nwrite == SSH_AGAIN) return CURLE_AGAIN;
-            if (nwrite < 0) return CURLE_SEND_ERROR;
-            sshc.sftp_send_state = 0;
-            pnwritten.* = @intCast(nwrite);
-            return CURLE_OK;
-        },
-        else => return CURLE_SEND_ERROR,
+    if (Curl_libssh_has_sftp_aio()) {
+        switch (sshc.sftp_send_state) {
+            0 => {
+                sftp_file_set_nonblocking(file);
+                if (Curl_libssh_sftp_aio_begin_write(file, buf, len, &sshc.sftp_send_aio) == SSH_ERROR) {
+                    return CURLE_SEND_ERROR;
+                }
+                sshc.sftp_send_state = 1;
+                const nwrite = Curl_libssh_sftp_aio_wait_write(&sshc.sftp_send_aio);
+                myssh_block2waitfor(sshc, nwrite == SSH_AGAIN);
+                if (nwrite == SSH_AGAIN) return CURLE_AGAIN;
+                if (nwrite < 0) return CURLE_SEND_ERROR;
+                sshc.sftp_send_state = 0;
+                pnwritten.* = @intCast(nwrite);
+                return CURLE_OK;
+            },
+            1 => {
+                const nwrite = Curl_libssh_sftp_aio_wait_write(&sshc.sftp_send_aio);
+                myssh_block2waitfor(sshc, nwrite == SSH_AGAIN);
+                if (nwrite == SSH_AGAIN) return CURLE_AGAIN;
+                if (nwrite < 0) return CURLE_SEND_ERROR;
+                sshc.sftp_send_state = 0;
+                pnwritten.* = @intCast(nwrite);
+                return CURLE_OK;
+            },
+            else => return CURLE_SEND_ERROR,
+        }
+    } else {
+        const write_len = @min(len, 32768);
+        const nwrite = Curl_libssh_sftp_write(file, buf, write_len);
+        myssh_block2waitfor(sshc, false);
+        if (nwrite < 0) return CURLE_SSH;
+        pnwritten.* = @intCast(nwrite);
+        return CURLE_OK;
     }
 }
 
@@ -2799,13 +2813,24 @@ fn sftp_recv(
     const sshc: *ssh_conn_libssh = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
     const file = sshc.sftp_file orelse return CURLE_FAILED_INIT;
 
+    const has_aio = Curl_libssh_has_sftp_aio();
     switch (sshc.sftp_recv_state) {
         0 => {
-            if (sftp_aio_begin_read(file, len, &sshc.sftp_recv_aio) == SSH_ERROR) {
-                return CURLE_RECV_ERROR;
+            if (has_aio) {
+                if (Curl_libssh_sftp_aio_begin_read(file, len, &sshc.sftp_recv_aio) == SSH_ERROR) {
+                    return CURLE_RECV_ERROR;
+                }
+            } else {
+                sshc.sftp_file_index = Curl_libssh_sftp_async_read_begin(file, @intCast(len));
+                if (sshc.sftp_file_index < 0) {
+                    return CURLE_RECV_ERROR;
+                }
             }
             sshc.sftp_recv_state = 1;
-            const nread = sftp_aio_wait_read(&sshc.sftp_recv_aio, buf, len);
+            const nread: isize = if (has_aio)
+                Curl_libssh_sftp_aio_wait_read(&sshc.sftp_recv_aio, buf, len)
+            else
+                Curl_libssh_sftp_async_read(file, buf, @intCast(len), @intCast(sshc.sftp_file_index));
             myssh_block2waitfor(sshc, nread == SSH_AGAIN);
             if (nread == SSH_AGAIN) return CURLE_AGAIN;
             if (nread < 0) return CURLE_RECV_ERROR;
@@ -2814,7 +2839,10 @@ fn sftp_recv(
             return CURLE_OK;
         },
         1 => {
-            const nread = sftp_aio_wait_read(&sshc.sftp_recv_aio, buf, len);
+            const nread: isize = if (has_aio)
+                Curl_libssh_sftp_aio_wait_read(&sshc.sftp_recv_aio, buf, len)
+            else
+                Curl_libssh_sftp_async_read(file, buf, @intCast(len), @intCast(sshc.sftp_file_index));
             myssh_block2waitfor(sshc, nread == SSH_AGAIN);
             if (nread == SSH_AGAIN) return CURLE_AGAIN;
             if (nread < 0) return CURLE_RECV_ERROR;

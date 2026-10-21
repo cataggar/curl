@@ -15278,3 +15278,127 @@ LIBSSH2_CHANNEL *Curl_libssh2_scp_recv2_size(LIBSSH2_SESSION *session,
   return ch;
 }
 #endif
+
+#ifdef USE_LIBSSH
+#include <libssh/libssh.h>
+#include <libssh/sftp.h>
+
+bool Curl_libssh_has_sftp_aio(void);
+bool Curl_libssh_has_sftp_aio(void)
+{
+#if LIBSSH_VERSION_INT > SSH_VERSION_INT(0, 11, 0)
+  return TRUE;
+#else
+  return FALSE;
+#endif
+}
+
+void Curl_libssh_sftp_aio_free(void *aio);
+void Curl_libssh_sftp_aio_free(void *aio)
+{
+#if LIBSSH_VERSION_INT > SSH_VERSION_INT(0, 11, 0)
+  if(aio)
+    sftp_aio_free((sftp_aio)aio);
+#else
+  (void)aio;
+#endif
+}
+
+ssize_t Curl_libssh_sftp_aio_begin_read(sftp_file file, size_t len,
+                                        void **paio);
+ssize_t Curl_libssh_sftp_aio_begin_read(sftp_file file, size_t len,
+                                        void **paio)
+{
+#if LIBSSH_VERSION_INT > SSH_VERSION_INT(0, 11, 0)
+  return sftp_aio_begin_read(file, len, (sftp_aio *)paio);
+#else
+  (void)file;
+  (void)len;
+  (void)paio;
+  return SSH_ERROR;
+#endif
+}
+
+ssize_t Curl_libssh_sftp_aio_wait_read(void **paio, void *buf,
+                                       size_t buf_size);
+ssize_t Curl_libssh_sftp_aio_wait_read(void **paio, void *buf,
+                                       size_t buf_size)
+{
+#if LIBSSH_VERSION_INT > SSH_VERSION_INT(0, 11, 0)
+  return sftp_aio_wait_read((sftp_aio *)paio, buf, buf_size);
+#else
+  (void)paio;
+  (void)buf;
+  (void)buf_size;
+  return SSH_ERROR;
+#endif
+}
+
+ssize_t Curl_libssh_sftp_aio_begin_write(sftp_file file, const void *buf,
+                                         size_t len, void **paio);
+ssize_t Curl_libssh_sftp_aio_begin_write(sftp_file file, const void *buf,
+                                         size_t len, void **paio)
+{
+#if LIBSSH_VERSION_INT > SSH_VERSION_INT(0, 11, 0)
+  return sftp_aio_begin_write(file, buf, len, (sftp_aio *)paio);
+#else
+  (void)file;
+  (void)buf;
+  (void)len;
+  (void)paio;
+  return SSH_ERROR;
+#endif
+}
+
+ssize_t Curl_libssh_sftp_aio_wait_write(void **paio);
+ssize_t Curl_libssh_sftp_aio_wait_write(void **paio)
+{
+#if LIBSSH_VERSION_INT > SSH_VERSION_INT(0, 11, 0)
+  return sftp_aio_wait_write((sftp_aio *)paio);
+#else
+  (void)paio;
+  return SSH_ERROR;
+#endif
+}
+
+int Curl_libssh_sftp_async_read_begin(sftp_file file, uint32_t len);
+int Curl_libssh_sftp_async_read_begin(sftp_file file, uint32_t len)
+{
+#if LIBSSH_VERSION_INT > SSH_VERSION_INT(0, 11, 0)
+  (void)file;
+  (void)len;
+  return -1;
+#else
+  return sftp_async_read_begin(file, len);
+#endif
+}
+
+int Curl_libssh_sftp_async_read(sftp_file file, void *data, uint32_t len,
+                                uint32_t id);
+int Curl_libssh_sftp_async_read(sftp_file file, void *data, uint32_t len,
+                                uint32_t id)
+{
+#if LIBSSH_VERSION_INT > SSH_VERSION_INT(0, 11, 0)
+  (void)file;
+  (void)data;
+  (void)len;
+  (void)id;
+  return SSH_ERROR;
+#else
+  return sftp_async_read(file, data, len, id);
+#endif
+}
+
+ssize_t Curl_libssh_sftp_write(sftp_file file, const void *buf, size_t count);
+ssize_t Curl_libssh_sftp_write(sftp_file file, const void *buf, size_t count)
+{
+#if LIBSSH_VERSION_INT > SSH_VERSION_INT(0, 11, 0)
+  (void)file;
+  (void)buf;
+  (void)count;
+  return SSH_ERROR;
+#else
+  return sftp_write(file, buf, count);
+#endif
+}
+#endif
