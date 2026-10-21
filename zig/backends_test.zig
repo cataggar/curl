@@ -371,6 +371,8 @@ test "curl_version_info feature flags match build options" {
     if (info.*.protocols) |protos| {
         try testing.expectEqual(backend_options.ssh != .none, hasFeature(protos, "scp"));
         try testing.expectEqual(backend_options.ssh != .none, hasFeature(protos, "sftp"));
+        try testing.expectEqual(backend_options.has_ldap, hasFeature(protos, "ldap"));
+        try testing.expectEqual(backend_options.has_ldaps, hasFeature(protos, "ldaps"));
     }
 }
 
@@ -422,6 +424,11 @@ test "curl_version string reflects enabled backends" {
     try testing.expectEqual(backend_options.ares, std.mem.indexOf(u8, ver, "c-ares/") != null);
     try testing.expectEqual(backend_options.ssh == .libssh2, std.mem.indexOf(u8, ver, "libssh2/") != null);
     try testing.expectEqual(backend_options.ssh == .libssh, std.mem.indexOf(u8, ver, "libssh/") != null);
+    try testing.expectEqual(
+        backend_options.ldap == .openldap or backend_options.ldap == .ldap,
+        std.mem.indexOf(u8, ver, "OpenLDAP") != null or std.mem.indexOf(u8, ver, "LDAP/") != null,
+    );
+    try testing.expectEqual(backend_options.ldap == .winldap, std.mem.indexOf(u8, ver, "WinLDAP") != null);
 }
 
 test "HTTP/3 CURLOPT_HTTP_VERSION and CURLOPT_PROXYTYPE match build options" {

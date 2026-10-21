@@ -1,4 +1,5 @@
 const std = @import("std");
+const ldap = @import("ldap.zig");
 const vquic_core = @import("vquic_core.zig");
 const vssh = @import("vssh.zig");
 
@@ -74,80 +75,13 @@ pub const Curl_protocol = extern struct {
 // 1. LDAP / OpenLDAP (lib/ldap.c, lib/openldap.c, lib/curl_ldap.h)
 // ============================================================================
 
-pub const CURL_META_LDAP_EASY = "meta:proto:ldap:easy";
-pub const CURL_META_LDAP_CONN = "meta:proto:ldap:conn";
-
-pub const ldapstate = enum(c_uint) {
-    OLDAP_STOP = 0,
-    OLDAP_SSL,
-    OLDAP_STARTTLS,
-    OLDAP_TLS,
-    OLDAP_MECHS,
-    OLDAP_SASL,
-    OLDAP_BIND,
-    OLDAP_BINDV2,
-    OLDAP_LAST,
-};
-
-const oldap_statenames = [_][*:0]const u8{
-    "STOP",
-    "SSL",
-    "STARTTLS",
-    "TLS",
-    "MECHS",
-    "SASL",
-    "BIND",
-    "BINDV2",
-};
-
-pub fn oldapStateName(state: ldapstate) [*:0]const u8 {
-    const idx: usize = @backingInt(state);
-    if (idx < oldap_statenames.len) {
-        return oldap_statenames[idx];
-    }
-    return "";
-}
-
-/// Check for the presence of characters in `s` that cannot be represented
-/// as an LDIF SAFE-STRING (RFC 2849) and therefore require base64 encoding.
-/// Matches `str_needs_base64()` in `lib/openldap.c`.
-pub fn oldapStrNeedsBase64(s: []const u8) bool {
-    if (s.len == 0) return false;
-    // Not a SAFE-INIT-CHAR (`:` or `<`)
-    if (s[0] == ':' or s[0] == '<') return true;
-    // Leading or trailing space / horizontal tab (`ISBLANK`)
-    if (isBlank(s[0]) or isBlank(s[s.len - 1])) return true;
-    for (s) |ch| {
-        if (!isPrintAscii(ch)) return true;
-    }
-    return false;
-}
-
-fn isBlank(ch: u8) bool {
-    return ch == ' ' or ch == '\t';
-}
-
-fn isPrintAscii(ch: u8) bool {
-    return ch >= 0x20 and ch <= 0x7e;
-}
-
-pub fn Curl_ldap_version(buf: [*]u8, bufsz: usize) callconv(.c) void {
-    if (bufsz == 0) return;
-    const prefix = "OpenLDAP";
-    const copy_len = @min(prefix.len, bufsz - 1);
-    @memcpy(buf[0..copy_len], prefix[0..copy_len]);
-    buf[copy_len] = 0;
-}
-
-fn ldapDisabledDo(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
-    _ = data;
-    done.* = false;
-    return CURLE_NOT_BUILT_IN;
-}
-
-pub const Curl_protocol_ldap = Curl_protocol{
-    .do_it = ldapDisabledDo,
-};
+pub const CURL_META_LDAP_EASY = ldap.CURL_META_LDAP_EASY;
+pub const CURL_META_LDAP_CONN = ldap.CURL_META_LDAP_CONN;
+pub const ldapstate = ldap.ldapstate;
+pub const oldapStateName = ldap.oldapStateName;
+pub const oldapStrNeedsBase64 = ldap.oldapStrNeedsBase64;
+pub const Curl_ldap_version = ldap.Curl_ldap_version;
+pub const Curl_protocol_ldap = ldap.Curl_protocol_ldap;
 
 // ============================================================================
 // 2. VQUIC / HTTP/3 (lib/vquic/vquic.c, cf-ngtcp2*.c, cf-quiche.c, vquic-tls.c)

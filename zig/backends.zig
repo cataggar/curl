@@ -29,6 +29,13 @@ pub const SshBackend = enum {
     libssh,
 };
 
+pub const LdapBackend = enum {
+    none,
+    openldap,
+    ldap,
+    winldap,
+};
+
 pub const Options = struct {
     ssl: SslBackend = .none,
     apple_sectrust: ?bool = null,
@@ -47,6 +54,7 @@ pub const Options = struct {
     quiche_include_dir: ?[]const u8 = null,
     quiche_lib_dir: ?[]const u8 = null,
     ssh: SshBackend = .none,
+    ldap: LdapBackend = .none,
 
     pub fn useThreadedResolver(self: Options) bool {
         return self.threaded_resolver orelse !self.ares;
@@ -68,12 +76,26 @@ pub const Options = struct {
         return self.quic == .ngtcp2 and self.ssl == .openssl;
     }
 
+    pub fn hasLdap(self: Options) bool {
+        return self.ldap != .none;
+    }
+
+    pub fn hasLdaps(self: Options) bool {
+        return switch (self.ldap) {
+            .none => false,
+            .openldap => self.ssl != .none,
+            .ldap, .winldap => true,
+        };
+    }
+
     pub fn isValidForTarget(self: Options, os_tag: std.Target.Os.Tag) bool {
         if (self.ssl == .schannel and os_tag != .windows) return false;
         if (self.apple_sectrust == true and (self.ssl != .openssl or !os_tag.isDarwin())) return false;
         if (self.idn == .winidn and os_tag != .windows) return false;
         if (self.idn == .appleidn and !os_tag.isDarwin()) return false;
         if (self.quic == .ngtcp2 and self.ssl != .openssl and self.ssl != .gnutls and self.ssl != .wolfssl) return false;
+        if (self.ldap == .winldap and os_tag != .windows) return false;
+        if (self.ldap == .openldap and os_tag == .windows) return false;
         return true;
     }
 
@@ -92,6 +114,12 @@ pub const Options = struct {
         }
         if (self.quic == .ngtcp2 and self.ssl != .openssl and self.ssl != .gnutls and self.ssl != .wolfssl) {
             @panic("ngtcp2 requires -Dssl=openssl, -Dssl=gnutls, or -Dssl=wolfssl");
+        }
+        if (self.ldap == .winldap and os_tag != .windows) {
+            @panic("WinLDAP backend (-Dldap=winldap) is only supported on Windows targets");
+        }
+        if (self.ldap == .openldap and os_tag == .windows) {
+            @panic("OpenLDAP backend (-Dldap=openldap) is not supported on Windows targets; use -Dldap=winldap");
         }
     }
 
@@ -119,6 +147,7 @@ pub fn fromBuild(b: *std.Build) Options {
         .quiche_include_dir = b.option([]const u8, "quiche-include", "Custom include directory for quiche"),
         .quiche_lib_dir = b.option([]const u8, "quiche-lib", "Custom library directory for quiche"),
         .ssh = b.option(SshBackend, "ssh", "SSH/SFTP/SCP backend (none, libssh2, libssh; default: none)") orelse .none,
+        .ldap = b.option(LdapBackend, "ldap", "LDAP/LDAPS backend (none, openldap, ldap, winldap; default: none)") orelse .none,
     };
 }
 
@@ -243,6 +272,28 @@ pub fn applyCMacros(mod: *std.Build.Module, target: std.Build.ResolvedTarget, op
         .libssh2 => mod.addCMacro("USE_LIBSSH2", "1"),
         .libssh => mod.addCMacro("USE_LIBSSH", "1"),
     }
+
+    switch (opts.ldap) {
+        .none => {
+            mod.addCMacro("CURL_DISABLE_LDAP", "1");
+            mod.addCMacro("CURL_DISABLE_LDAPS", "1");
+        },
+        .openldap => {
+            mod.addCMacro("USE_OPENLDAP", "1");
+            if (!opts.hasLdaps()) {
+                mod.addCMacro("CURL_DISABLE_LDAPS", "1");
+            }
+        },
+        .ldap, .winldap => {
+            mod.addCMacro("HAVE_LDAP_SSL", "1");
+            if (target.result.os.tag == .windows or opts.ldap == .winldap) {
+                mod.addCMacro("USE_WIN32_LDAP", "1");
+            } else {
+                mod.addCMacro("HAVE_LBER_H", "1");
+                mod.addCMacro("HAVE_LDAP_URL_PARSE", "1");
+            }
+        },
+    }
 }
 
 pub fn linkBackends(mod: *std.Build.Module, target: std.Build.ResolvedTarget, opts: Options) void {
@@ -341,6 +392,19 @@ pub fn linkBackends(mod: *std.Build.Module, target: std.Build.ResolvedTarget, op
         .libssh2 => mod.linkSystemLibrary("ssh2", .{}),
         .libssh => mod.linkSystemLibrary("ssh", .{}),
     }
+
+    switch (opts.ldap) {
+        .none => {},
+        .openldap, .ldap => {
+            if (target.result.os.tag == .windows) {
+                mod.linkSystemLibrary("wldap32", .{});
+            } else {
+                mod.linkSystemLibrary("ldap", .{});
+                mod.linkSystemLibrary("lber", .{});
+            }
+        },
+        .winldap => mod.linkSystemLibrary("wldap32", .{}),
+    }
 }
 
 pub fn createOptionsStep(b: *std.Build, opts: Options) *std.Build.Step.Options {
@@ -363,5 +427,8 @@ pub fn createOptionsStep(b: *std.Build, opts: Options) *std.Build.Step.Options {
     step.addOption(bool, "http3", opts.hasHttp3());
     step.addOption(bool, "proxy_http3", opts.hasProxyHttp3());
     step.addOption(SshBackend, "ssh", opts.ssh);
+    step.addOption(LdapBackend, "ldap", opts.ldap);
+    step.addOption(bool, "has_ldap", opts.hasLdap());
+    step.addOption(bool, "has_ldaps", opts.hasLdaps());
     return step;
 }

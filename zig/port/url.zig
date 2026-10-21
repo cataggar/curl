@@ -161,7 +161,7 @@ else
 pub const TRNSPRT_TCP: u8 = 3;
 pub const TRNSPRT_QUIC: u8 = 5;
 pub const TRNSPRT_UNIX: u8 = 6;
-pub const CURL_CF_SSL_DEFAULT: c_int = 0;
+pub const CURL_CF_SSL_DEFAULT: c_int = -1;
 
 // Cpool match result
 pub const cpool_match_result = c_int;
