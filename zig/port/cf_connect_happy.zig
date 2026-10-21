@@ -2346,15 +2346,21 @@ const ares_c = if (use_ares) struct {
     ) callconv(.c) c_int;
     extern fn ares_destroy(channel: ?*anyopaque) callconv(.c) void;
     extern fn ares_set_servers_ports_csv(channel: ?*anyopaque, servers: [*:0]const u8) callconv(.c) c_int;
-    extern fn ares_query_dnsrec(
+    extern fn ares_query(
         channel: ?*anyopaque,
         name: [*:0]const u8,
-        dnsclass: c_uint,
-        rec_type: c_uint,
-        callback: ares_callback_dnsrec,
+        dnsclass: c_int,
+        rec_type: c_int,
+        callback: *const fn (?*anyopaque, c_int, c_int, ?[*]const u8, c_int) callconv(.c) void,
         arg: ?*anyopaque,
-        qid: ?*c_ushort,
+    ) callconv(.c) void;
+    extern fn ares_dns_parse(
+        buf: [*]const u8,
+        buf_len: usize,
+        flags: c_uint,
+        dnsrec: *?*anyopaque,
     ) callconv(.c) c_int;
+    extern fn ares_dns_record_destroy(dnsrec: ?*anyopaque) callconv(.c) void;
 } else struct {};
 
 extern fn curlx_dyn_init(s: *containers.dynbuf, toobig: usize) callconv(.c) void;
@@ -2404,6 +2410,24 @@ fn async_thrdd_rr_done(
     }
 }
 
+fn async_thrdd_rr_query_cb(
+    user_data: ?*anyopaque,
+    status: c_int,
+    timeouts: c_int,
+    abuf: ?[*]const u8,
+    alen: c_int,
+) callconv(.c) void {
+    if (comptime use_httpsrr_ares) {
+        var dnsrec: ?*anyopaque = null;
+        var eff_status = status;
+        if (status == ARES_SUCCESS and abuf != null and alen > 0) {
+            eff_status = ares_c.ares_dns_parse(abuf.?, @intCast(alen), 0, &dnsrec);
+        }
+        defer if (dnsrec != null) ares_c.ares_dns_record_destroy(dnsrec);
+        async_thrdd_rr_done(user_data, eff_status, @intCast(@max(timeouts, 0)), dnsrec);
+    }
+}
+
 fn async_rr_init(data: *Curl_easy, a: *Curl_resolv_async) CURLcode {
     _ = data;
     if (comptime use_httpsrr_ares) {
@@ -2437,14 +2461,13 @@ fn async_rr_start(data: *Curl_easy, a: *Curl_resolv_async) void {
         }
         trcDns(data, "[%u] starting HTTPS-RR for %s", .{ a.id, hostname });
         a.queries_ongoing |= CURL_DNSQ_HTTPS;
-        _ = ares_c.ares_query_dnsrec(
+        ares_c.ares_query(
             thrdd.rr.channel,
             hostname,
-            ARES_CLASS_IN,
-            ARES_REC_TYPE_HTTPS,
-            async_thrdd_rr_done,
+            @intCast(ARES_CLASS_IN),
+            @intCast(ARES_REC_TYPE_HTTPS),
+            async_thrdd_rr_query_cb,
             a,
-            null,
         );
         mem.free(@ptrCast(rrname));
     }
