@@ -328,6 +328,10 @@ const quiche_ext = if (use_quiche) struct {
         out_len: usize,
     ) callconv(.c) isize;
     extern fn quiche_h3_conn_free(conn: *quiche_h3_conn) callconv(.c) void;
+    extern fn Curl_vtls_acc_ssl_cainfo(data: ?*CurlEasy, is_proxy: bool) callconv(.c) ?[*:0]u8;
+    extern fn d2i_X509(a: ?*?*anyopaque, ppin: *[*]const u8, length: c_long) callconv(.c) ?*anyopaque;
+    extern fn X509_free(x: ?*anyopaque) callconv(.c) void;
+    extern fn Curl_ossl_verifyhost(data: ?*CurlEasy, conn: ?*anyopaque, peer: *anyopaque, server_cert: *anyopaque) callconv(.c) CURLcode;
 } else struct {};
 
 const posix_io = if (!is_windows) struct {
@@ -905,6 +909,10 @@ fn recv_pkt(
         &recv_info,
     );
     if (rc < 0) {
+        if (rc == @backingInt(QuicheError.QUICHE_ERR_TLS_FAIL)) {
+            Curl_failf(rctx.data, "SSL: certificate verification failed (quiche)");
+            return CURLE_PEER_FAILED_VERIFICATION;
+        }
         Curl_failf(rctx.data, "quiche_conn_recv() == %zd", rc);
         return CURLE_RECV_ERROR;
     }
@@ -1244,6 +1252,7 @@ fn h3_open_stream(
     data: *CurlEasy,
     buf: [*]const u8,
     len: usize,
+    eos: bool,
     pnwritten: *usize,
 ) CURLcode {
     pnwritten.* = 0;
@@ -1294,24 +1303,16 @@ fn h3_open_stream(
         };
     }
 
-    s.upload_left = 0;
-    const httpreq_kind: i64 = Curl_zig_url_data_get_i64(data, 9);
-    if (httpreq_kind >= 2 and httpreq_kind <= 5) {
-        const infilesize = Curl_zig_easy_state_infilesize(data);
-        if (infilesize != -1) {
-            s.upload_left = @intCast(infilesize);
-        } else {
-            s.upload_left = std.math.maxInt(usize);
-        }
-    }
+    const rest_len = len - nparsed;
+    const send_fin = eos and (rest_len == 0);
+    s.upload_left = if (send_fin) 0 else if (eos) rest_len else std.math.maxInt(usize);
 
-    const request_has_body = (s.upload_left > 0);
     const stream3_id = quiche_ext.quiche_h3_send_request(
         h3c,
         qconn,
         nva,
         nheaders,
-        !request_has_body,
+        send_fin,
     );
     if (stream3_id < 0) {
         if (stream3_id == QUICHE_H3_ERR_STREAM_BLOCKED) {
@@ -1328,11 +1329,10 @@ fn h3_open_stream(
     s.id = stream3_id;
     s.closed = false;
     s.reset = false;
-    s.send_closed = !request_has_body;
+    s.send_closed = send_fin;
 
     if (nparsed < len) {
         const rest = buf + nparsed;
-        const rest_len = len - nparsed;
         var bw: usize = 0;
         var sctx = SendBodyCtx{ .cf = cf, .data = data, .stream = s };
         const berr = cf_quiche_send_body(&sctx, rest, rest_len, &bw);
@@ -1375,7 +1375,7 @@ fn cf_quiche_send(
 
     const stream = H3_STREAM_CTX(ctx, d);
     if (stream == null or stream.?.id < 0) {
-        result = h3_open_stream(cf, d, buf, len, pnwritten);
+        result = h3_open_stream(cf, d, buf, len, eos, pnwritten);
         if (result != CURLE_OK) {
             const result2 = flush_egress(cf, d);
             return Curl_1st_fatal(result, result2);
@@ -1590,8 +1590,9 @@ fn cf_quiche_ctx_open(
 
     if (vtls_backends.vtls_impl.Curl_ssl_cf_get_filter_config(cf)) |conn_config| {
         quiche_ext.quiche_config_verify_peer(cfg, conn_config.verifypeer());
-        if (conn_config.CAfile) |cafile| {
-            _ = quiche_ext.quiche_config_load_verify_locations_from_file(cfg, cafile);
+        const cafile = conn_config.CAfile orelse quiche_ext.Curl_vtls_acc_ssl_cainfo(data, false);
+        if (cafile) |ca| {
+            _ = quiche_ext.quiche_config_load_verify_locations_from_file(cfg, ca);
         }
         if (conn_config.CApath) |capath| {
             _ = quiche_ext.quiche_config_load_verify_locations_from_directory(cfg, capath);
@@ -1633,8 +1634,12 @@ fn cf_quiche_ctx_open(
         remote_len = addr.?.addrlen;
     }
 
+    const server_name: ?[*:0]const u8 = if (vtls_backends.vtls_impl.Curl_ssl_cf_get_filter_config(cf)) |conn_config|
+        (if (conn_config.verifyhost()) ctx.ssl_peer.sni else null)
+    else
+        ctx.ssl_peer.sni;
     ctx.qconn = quiche_ext.quiche_connect(
-        ctx.ssl_peer.sni,
+        server_name,
         &ctx.scid,
         ctx.scid.len,
         local_ptr,
@@ -1687,6 +1692,16 @@ fn cf_quiche_verify_peer(
         if (cert_der == null or cert_der_len == 0) {
             Curl_failf(data, "SSL: couldn't get peer certificate!");
             return CURLE_PEER_FAILED_VERIFICATION;
+        }
+        if (conn_config.verifyhost() and backend_options.ssl == .openssl) {
+            var p: [*]const u8 = cert_der.?;
+            const x509 = quiche_ext.d2i_X509(null, &p, @intCast(cert_der_len)) orelse {
+                Curl_failf(data, "SSL: failed to parse peer DER certificate");
+                return CURLE_PEER_FAILED_VERIFICATION;
+            };
+            defer quiche_ext.X509_free(x509);
+            const vh_rc = quiche_ext.Curl_ossl_verifyhost(data, cf.conn, &ctx.ssl_peer, x509);
+            if (vh_rc != CURLE_OK) return vh_rc;
         }
     } else {
         const rc = vquic_core.Curl_vquic_tls_verify_peer(&ctx.tls, cf, data, &ctx.ssl_peer);
@@ -2066,8 +2081,8 @@ fn cf_quiche_query(
         },
         CF_QUERY_ALPN_NEGOTIATED => {
             if (pres2) |p2| {
-                const palpn: *c_int = @ptrCast(@alignCast(p2));
-                palpn.* = if (cf.isConnected()) ALPN_h3 else 0;
+                const palpn: *?[*:0]const u8 = @ptrCast(@alignCast(p2));
+                palpn.* = if (cf.isConnected()) "h3" else null;
             }
             return CURLE_OK;
         },

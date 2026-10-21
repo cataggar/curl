@@ -956,14 +956,12 @@ fn start_req(
     if (p_idx + 1 > line_len) return CURLE_URL_MALFORMAT;
     const target: [*]const u8 = line + p_idx + 1;
     var target_len: usize = 0;
-    var hv: ?[*]const u8 = null;
     var hv_len: usize = 0;
 
     var i: usize = line_len;
     while (i > m_len) {
         i -= 1;
         if (line[i] == ' ') {
-            hv = line + i + 1;
             hv_len = line_len - (i + 1);
             if (i > p_idx + 1) {
                 target_len = i - (p_idx + 1);
@@ -972,9 +970,6 @@ fn start_req(
         }
     }
     if (target_len == 0 or hv_len == 0)
-        return CURLE_URL_MALFORMAT;
-    const hv_slice = hv.?[0..hv_len];
-    if (hv_len != 8 or !std.mem.startsWith(u8, hv_slice, "HTTP/1.") or (hv_slice[7] != '0' and hv_slice[7] != '1'))
         return CURLE_URL_MALFORMAT;
 
     var scheme: ?[*]const u8 = null;

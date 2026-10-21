@@ -13962,4 +13962,1089 @@ size_t Curl_zig_abi_sizeof_mimepart(void)
   return sizeof(struct curl_mimepart);
 }
 
+#ifdef USE_NGTCP2
+#include <ngtcp2/ngtcp2.h>
+#include <ngtcp2/ngtcp2_crypto.h>
+#include <nghttp3/nghttp3.h>
+#if defined(USE_OPENSSL)
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <ngtcp2/ngtcp2_crypto_ossl.h>
+#elif defined(USE_GNUTLS)
+#include <gnutls/gnutls.h>
+#include <ngtcp2/ngtcp2_crypto_gnutls.h>
+#endif
+
+void Curl_ngtcp2_settings_default(ngtcp2_settings *settings);
+void Curl_ngtcp2_settings_default(ngtcp2_settings *settings)
+{
+  ngtcp2_settings_default(settings);
+}
+
+void Curl_ngtcp2_transport_params_default(ngtcp2_transport_params *params);
+void Curl_ngtcp2_transport_params_default(ngtcp2_transport_params *params)
+{
+  ngtcp2_transport_params_default(params);
+}
+
+int Curl_ngtcp2_conn_client_new(ngtcp2_conn **pconn, const ngtcp2_cid *dcid,
+                                const ngtcp2_cid *scid, const ngtcp2_path *path,
+                                uint32_t client_chosen_version,
+                                const ngtcp2_callbacks *callbacks,
+                                const ngtcp2_settings *settings,
+                                const ngtcp2_transport_params *params,
+                                const ngtcp2_mem *mem, void *user_data);
+int Curl_ngtcp2_conn_client_new(ngtcp2_conn **pconn, const ngtcp2_cid *dcid,
+                                const ngtcp2_cid *scid, const ngtcp2_path *path,
+                                uint32_t client_chosen_version,
+                                const ngtcp2_callbacks *callbacks,
+                                const ngtcp2_settings *settings,
+                                const ngtcp2_transport_params *params,
+                                const ngtcp2_mem *mem, void *user_data)
+{
+  return ngtcp2_conn_client_new(pconn, dcid, scid, path, client_chosen_version,
+                                callbacks, settings, params, mem, user_data);
+}
+
+int Curl_ngtcp2_conn_read_pkt(ngtcp2_conn *conn, const ngtcp2_path *path,
+                              const ngtcp2_pkt_info *pi, const uint8_t *pkt,
+                              size_t pktlen, ngtcp2_tstamp ts);
+int Curl_ngtcp2_conn_read_pkt(ngtcp2_conn *conn, const ngtcp2_path *path,
+                              const ngtcp2_pkt_info *pi, const uint8_t *pkt,
+                              size_t pktlen, ngtcp2_tstamp ts)
+{
+  return ngtcp2_conn_read_pkt(conn, path, pi, pkt, pktlen, ts);
+}
+
+ngtcp2_ssize Curl_ngtcp2_conn_writev_stream(ngtcp2_conn *conn,
+                                            ngtcp2_path *path,
+                                            ngtcp2_pkt_info *pi, uint8_t *dest,
+                                            size_t destlen,
+                                            ngtcp2_ssize *pdatalen,
+                                            uint32_t flags, int64_t stream_id,
+                                            const ngtcp2_vec *datav,
+                                            size_t datavcnt, ngtcp2_tstamp ts);
+ngtcp2_ssize Curl_ngtcp2_conn_writev_stream(ngtcp2_conn *conn,
+                                            ngtcp2_path *path,
+                                            ngtcp2_pkt_info *pi, uint8_t *dest,
+                                            size_t destlen,
+                                            ngtcp2_ssize *pdatalen,
+                                            uint32_t flags, int64_t stream_id,
+                                            const ngtcp2_vec *datav,
+                                            size_t datavcnt, ngtcp2_tstamp ts)
+{
+  return ngtcp2_conn_writev_stream(conn, path, pi, dest, destlen, pdatalen,
+                                   flags, stream_id, datav, datavcnt, ts);
+}
+
+ngtcp2_ssize Curl_ngtcp2_conn_writev_datagram(ngtcp2_conn *conn,
+                                              ngtcp2_path *path,
+                                              ngtcp2_pkt_info *pi,
+                                              uint8_t *dest, size_t destlen,
+                                              int *paccepted, uint32_t flags,
+                                              uint64_t dgram_id,
+                                              const ngtcp2_vec *datav,
+                                              size_t datavcnt,
+                                              ngtcp2_tstamp ts);
+ngtcp2_ssize Curl_ngtcp2_conn_writev_datagram(ngtcp2_conn *conn,
+                                              ngtcp2_path *path,
+                                              ngtcp2_pkt_info *pi,
+                                              uint8_t *dest, size_t destlen,
+                                              int *paccepted, uint32_t flags,
+                                              uint64_t dgram_id,
+                                              const ngtcp2_vec *datav,
+                                              size_t datavcnt,
+                                              ngtcp2_tstamp ts)
+{
+  return ngtcp2_conn_writev_datagram(conn, path, pi, dest, destlen, paccepted,
+                                     flags, dgram_id, datav, datavcnt, ts);
+}
+
+ngtcp2_ssize Curl_ngtcp2_conn_write_connection_close(ngtcp2_conn *conn,
+                                                     ngtcp2_path *path,
+                                                     ngtcp2_pkt_info *pi,
+                                                     uint8_t *dest,
+                                                     size_t destlen,
+                                                     const ngtcp2_ccerr *ccerr,
+                                                     ngtcp2_tstamp ts);
+ngtcp2_ssize Curl_ngtcp2_conn_write_connection_close(ngtcp2_conn *conn,
+                                                     ngtcp2_path *path,
+                                                     ngtcp2_pkt_info *pi,
+                                                     uint8_t *dest,
+                                                     size_t destlen,
+                                                     const ngtcp2_ccerr *ccerr,
+                                                     ngtcp2_tstamp ts)
+{
+  return ngtcp2_conn_write_connection_close(conn, path, pi, dest, destlen,
+                                            ccerr, ts);
+}
+
+void Curl_nghttp3_settings_default(nghttp3_settings *settings);
+void Curl_nghttp3_settings_default(nghttp3_settings *settings)
+{
+  nghttp3_settings_default(settings);
+}
+
+int Curl_nghttp3_conn_client_new(nghttp3_conn **pconn,
+                                 const nghttp3_callbacks *callbacks,
+                                 const nghttp3_settings *settings,
+                                 const nghttp3_mem *mem, void *conn_user_data);
+int Curl_nghttp3_conn_client_new(nghttp3_conn **pconn,
+                                 const nghttp3_callbacks *callbacks,
+                                 const nghttp3_settings *settings,
+                                 const nghttp3_mem *mem, void *conn_user_data)
+{
+  return nghttp3_conn_client_new(pconn, callbacks, settings, mem,
+                                 conn_user_data);
+}
+#endif /* USE_NGTCP2 */
+
+#ifdef USE_QUICHE
+#include <quiche.h>
+#endif
+
+#if defined(USE_NGTCP2) || defined(USE_QUICHE)
+#include <poll.h>
+#include <time.h>
+
+static uint64_t h3_test_now_ns(void)
+{
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+struct h3_test_stream {
+  int64_t stream_id;
+  char method[16];
+  char path[128];
+  uint8_t req_body[4096];
+  size_t req_body_len;
+  uint8_t resp_body[4096];
+  size_t resp_body_len;
+  char content_length_str[32];
+  bool in_use;
+  bool resp_submitted;
+};
+
+static void h3_test_build_response(struct h3_test_stream *st)
+{
+  if(strcmp(st->method, "POST") == 0) {
+    const char *prefix = "post-echo:";
+    size_t plen = strlen(prefix);
+    memcpy(st->resp_body, prefix, plen);
+    size_t copy_len = st->req_body_len;
+    if(plen + copy_len > sizeof(st->resp_body))
+      copy_len = sizeof(st->resp_body) - plen;
+    if(copy_len > 0)
+      memcpy(st->resp_body + plen, st->req_body, copy_len);
+    st->resp_body_len = plen + copy_len;
+  }
+  else if(strcmp(st->path, "/stream1") == 0) {
+    const char *msg = "h3-stream-1-ok";
+    st->resp_body_len = strlen(msg);
+    memcpy(st->resp_body, msg, st->resp_body_len);
+  }
+  else if(strcmp(st->path, "/stream2") == 0) {
+    const char *msg = "h3-stream-2-ok";
+    st->resp_body_len = strlen(msg);
+    memcpy(st->resp_body, msg, st->resp_body_len);
+  }
+  else {
+    const char *msg = "hello-http3";
+    st->resp_body_len = strlen(msg);
+    memcpy(st->resp_body, msg, st->resp_body_len);
+  }
+  curl_msnprintf(st->content_length_str, sizeof(st->content_length_str),
+                 "%zu", st->resp_body_len);
+}
+#endif
+
+#if defined(USE_NGTCP2)
+struct h3_ngtcp2_srv {
+  ngtcp2_crypto_conn_ref conn_ref;
+  ngtcp2_conn *qconn;
+  nghttp3_conn *h3conn;
+  struct sockaddr_storage local_addr;
+  socklen_t local_addrlen;
+  struct sockaddr_storage client_addr;
+  socklen_t client_addrlen;
+  struct h3_test_stream streams[16];
+  uint8_t next_cid_seq;
+#if defined(USE_OPENSSL)
+  SSL_CTX *ssl_ctx;
+  SSL *ssl;
+  ngtcp2_crypto_ossl_ctx *ossl_ctx;
+#elif defined(USE_GNUTLS)
+  gnutls_certificate_credentials_t cred;
+  gnutls_session_t session;
+#endif
+};
+
+static ngtcp2_conn *h3_srv_get_conn(ngtcp2_crypto_conn_ref *conn_ref)
+{
+  struct h3_ngtcp2_srv *srv = (struct h3_ngtcp2_srv *)conn_ref->user_data;
+  return srv->qconn;
+}
+
+static struct h3_test_stream *h3_srv_get_stream(struct h3_ngtcp2_srv *srv,
+                                                int64_t stream_id)
+{
+  size_t i;
+  for(i = 0; i < 16; i++) {
+    if(srv->streams[i].in_use && srv->streams[i].stream_id == stream_id)
+      return &srv->streams[i];
+  }
+  for(i = 0; i < 16; i++) {
+    if(!srv->streams[i].in_use) {
+      memset(&srv->streams[i], 0, sizeof(srv->streams[i]));
+      srv->streams[i].in_use = TRUE;
+      srv->streams[i].stream_id = stream_id;
+      return &srv->streams[i];
+    }
+  }
+  return NULL;
+}
+
+static void h3_srv_rand(uint8_t *dest, size_t destlen,
+                        const ngtcp2_rand_ctx *rand_ctx)
+{
+  size_t i;
+  (void)rand_ctx;
+  for(i = 0; i < destlen; i++)
+    dest[i] = (uint8_t)(i * 37 + 13);
+}
+
+static int h3_srv_get_new_connection_id(ngtcp2_conn *conn, ngtcp2_cid *cid,
+                                        uint8_t *token, size_t cidlen,
+                                        void *user_data)
+{
+  struct h3_ngtcp2_srv *srv = (struct h3_ngtcp2_srv *)user_data;
+  uint8_t seq = srv ? ++srv->next_cid_seq : 1;
+  size_t i;
+  (void)conn;
+  for(i = 0; i < cidlen; i++)
+    cid->data[i] = (uint8_t)(0x40 + seq * 17 + i);
+  cid->datalen = cidlen;
+  if(token)
+    memset(token, (int)(0xa0 + seq), NGTCP2_STATELESS_RESET_TOKENLEN);
+  return 0;
+}
+
+static nghttp3_ssize h3_srv_h3_read_data(nghttp3_conn *conn, int64_t stream_id,
+                                         nghttp3_vec *vec, size_t veccnt,
+                                         uint32_t *pflags, void *conn_user_data,
+                                         void *stream_user_data)
+{
+  struct h3_ngtcp2_srv *srv = (struct h3_ngtcp2_srv *)conn_user_data;
+  struct h3_test_stream *st = (struct h3_test_stream *)stream_user_data;
+  (void)conn;
+  (void)veccnt;
+  if(!st)
+    st = h3_srv_get_stream(srv, stream_id);
+  if(!st || st->resp_body_len == 0) {
+    *pflags = NGHTTP3_DATA_FLAG_EOF;
+    return 0;
+  }
+  vec[0].base = st->resp_body;
+  vec[0].len = st->resp_body_len;
+  *pflags = NGHTTP3_DATA_FLAG_EOF;
+  return 1;
+}
+
+static void h3_srv_submit_response(struct h3_ngtcp2_srv *srv,
+                                   struct h3_test_stream *st)
+{
+  nghttp3_nv nva[3];
+  nghttp3_data_reader dr;
+  if(!st || st->resp_submitted || !srv->h3conn)
+    return;
+  st->resp_submitted = TRUE;
+  h3_test_build_response(st);
+
+  nva[0].name = (const uint8_t *)":status";
+  nva[0].namelen = 7;
+  nva[0].value = (const uint8_t *)"200";
+  nva[0].valuelen = 3;
+  nva[0].flags = NGHTTP3_NV_FLAG_NONE;
+
+  nva[1].name = (const uint8_t *)"content-type";
+  nva[1].namelen = 12;
+  nva[1].value = (const uint8_t *)"text/plain";
+  nva[1].valuelen = 10;
+  nva[1].flags = NGHTTP3_NV_FLAG_NONE;
+
+  nva[2].name = (const uint8_t *)"content-length";
+  nva[2].namelen = 14;
+  nva[2].value = (const uint8_t *)st->content_length_str;
+  nva[2].valuelen = strlen(st->content_length_str);
+  nva[2].flags = NGHTTP3_NV_FLAG_NONE;
+
+  memset(&dr, 0, sizeof(dr));
+  dr.read_data = h3_srv_h3_read_data;
+  (void)nghttp3_conn_submit_response(srv->h3conn, st->stream_id, nva, 3, &dr);
+}
+
+static int h3_srv_h3_begin_headers(nghttp3_conn *conn, int64_t stream_id,
+                                   void *conn_user_data, void *stream_user_data)
+{
+  struct h3_ngtcp2_srv *srv = (struct h3_ngtcp2_srv *)conn_user_data;
+  struct h3_test_stream *st = h3_srv_get_stream(srv, stream_id);
+  (void)stream_user_data;
+  if(st)
+    (void)nghttp3_conn_set_stream_user_data(conn, stream_id, st);
+  return 0;
+}
+
+static int h3_srv_h3_recv_header(nghttp3_conn *conn, int64_t stream_id,
+                                 int32_t token, nghttp3_rcbuf *name,
+                                 nghttp3_rcbuf *value, uint8_t flags,
+                                 void *conn_user_data, void *stream_user_data)
+{
+  struct h3_ngtcp2_srv *srv = (struct h3_ngtcp2_srv *)conn_user_data;
+  struct h3_test_stream *st = (struct h3_test_stream *)stream_user_data;
+  nghttp3_vec nvec = nghttp3_rcbuf_get_buf(name);
+  nghttp3_vec vvec = nghttp3_rcbuf_get_buf(value);
+  (void)conn;
+  (void)token;
+  (void)flags;
+  if(!st)
+    st = h3_srv_get_stream(srv, stream_id);
+  if(!st)
+    return 0;
+  if(nvec.len == 7 && memcmp(nvec.base, ":method", 7) == 0) {
+    size_t clen = vvec.len < sizeof(st->method) - 1 ?
+                  vvec.len : sizeof(st->method) - 1;
+    memcpy(st->method, vvec.base, clen);
+    st->method[clen] = '\0';
+  }
+  else if(nvec.len == 5 && memcmp(nvec.base, ":path", 5) == 0) {
+    size_t clen = vvec.len < sizeof(st->path) - 1 ?
+                  vvec.len : sizeof(st->path) - 1;
+    memcpy(st->path, vvec.base, clen);
+    st->path[clen] = '\0';
+  }
+  return 0;
+}
+
+static int h3_srv_h3_end_headers(nghttp3_conn *conn, int64_t stream_id,
+                                 int fin, void *conn_user_data,
+                                 void *stream_user_data)
+{
+  struct h3_ngtcp2_srv *srv = (struct h3_ngtcp2_srv *)conn_user_data;
+  struct h3_test_stream *st = (struct h3_test_stream *)stream_user_data;
+  (void)conn;
+  if(!st)
+    st = h3_srv_get_stream(srv, stream_id);
+  if(fin && st)
+    h3_srv_submit_response(srv, st);
+  return 0;
+}
+
+static int h3_srv_h3_recv_data(nghttp3_conn *conn, int64_t stream_id,
+                               const uint8_t *data, size_t datalen,
+                               void *conn_user_data, void *stream_user_data)
+{
+  struct h3_ngtcp2_srv *srv = (struct h3_ngtcp2_srv *)conn_user_data;
+  struct h3_test_stream *st = (struct h3_test_stream *)stream_user_data;
+  (void)conn;
+  if(!st)
+    st = h3_srv_get_stream(srv, stream_id);
+  if(st && datalen > 0) {
+    size_t avail = sizeof(st->req_body) - st->req_body_len;
+    size_t clen = datalen < avail ? datalen : avail;
+    if(clen > 0) {
+      memcpy(st->req_body + st->req_body_len, data, clen);
+      st->req_body_len += clen;
+    }
+  }
+  ngtcp2_conn_extend_max_stream_offset(srv->qconn, stream_id, datalen);
+  ngtcp2_conn_extend_max_offset(srv->qconn, datalen);
+  return 0;
+}
+
+static int h3_srv_h3_deferred_consume(nghttp3_conn *conn, int64_t stream_id,
+                                      size_t consumed, void *conn_user_data,
+                                      void *stream_user_data)
+{
+  struct h3_ngtcp2_srv *srv = (struct h3_ngtcp2_srv *)conn_user_data;
+  (void)conn;
+  (void)stream_user_data;
+  ngtcp2_conn_extend_max_stream_offset(srv->qconn, stream_id, consumed);
+  ngtcp2_conn_extend_max_offset(srv->qconn, consumed);
+  return 0;
+}
+
+static int h3_srv_h3_end_stream(nghttp3_conn *conn, int64_t stream_id,
+                                void *conn_user_data, void *stream_user_data)
+{
+  struct h3_ngtcp2_srv *srv = (struct h3_ngtcp2_srv *)conn_user_data;
+  struct h3_test_stream *st = (struct h3_test_stream *)stream_user_data;
+  (void)conn;
+  if(!st)
+    st = h3_srv_get_stream(srv, stream_id);
+  if(st)
+    h3_srv_submit_response(srv, st);
+  return 0;
+}
+
+static int h3_srv_h3_stop_sending(nghttp3_conn *conn, int64_t stream_id,
+                                  uint64_t app_error_code,
+                                  void *conn_user_data, void *stream_user_data)
+{
+  struct h3_ngtcp2_srv *srv = (struct h3_ngtcp2_srv *)conn_user_data;
+  (void)conn;
+  (void)stream_user_data;
+  (void)ngtcp2_conn_shutdown_stream_read(srv->qconn, 0, stream_id,
+                                         app_error_code);
+  return 0;
+}
+
+static int h3_srv_h3_reset_stream(nghttp3_conn *conn, int64_t stream_id,
+                                  uint64_t app_error_code,
+                                  void *conn_user_data, void *stream_user_data)
+{
+  struct h3_ngtcp2_srv *srv = (struct h3_ngtcp2_srv *)conn_user_data;
+  (void)conn;
+  (void)stream_user_data;
+  (void)ngtcp2_conn_shutdown_stream_write(srv->qconn, 0, stream_id,
+                                          app_error_code);
+  return 0;
+}
+
+static int h3_srv_setup_h3(struct h3_ngtcp2_srv *srv)
+{
+  nghttp3_callbacks callbacks;
+  nghttp3_settings settings;
+  int64_t ctrl_stream_id, qenc_stream_id, qdec_stream_id;
+
+  if(srv->h3conn)
+    return 0;
+  if(ngtcp2_conn_get_streams_uni_left(srv->qconn) < 3)
+    return -1;
+
+  memset(&callbacks, 0, sizeof(callbacks));
+  callbacks.begin_headers = h3_srv_h3_begin_headers;
+  callbacks.recv_header = h3_srv_h3_recv_header;
+  callbacks.end_headers = h3_srv_h3_end_headers;
+  callbacks.recv_data = h3_srv_h3_recv_data;
+  callbacks.deferred_consume = h3_srv_h3_deferred_consume;
+  callbacks.end_stream = h3_srv_h3_end_stream;
+  callbacks.stop_sending = h3_srv_h3_stop_sending;
+  callbacks.reset_stream = h3_srv_h3_reset_stream;
+
+  nghttp3_settings_default(&settings);
+  if(nghttp3_conn_server_new(&srv->h3conn, &callbacks, &settings, NULL, srv) != 0)
+    return -1;
+
+  nghttp3_conn_set_max_client_streams_bidi(srv->h3conn, 100);
+
+  if(ngtcp2_conn_open_uni_stream(srv->qconn, &ctrl_stream_id, NULL) != 0)
+    return -1;
+  if(nghttp3_conn_bind_control_stream(srv->h3conn, ctrl_stream_id) != 0)
+    return -1;
+  if(ngtcp2_conn_open_uni_stream(srv->qconn, &qenc_stream_id, NULL) != 0)
+    return -1;
+  if(ngtcp2_conn_open_uni_stream(srv->qconn, &qdec_stream_id, NULL) != 0)
+    return -1;
+  if(nghttp3_conn_bind_qpack_streams(srv->h3conn, qenc_stream_id,
+                                     qdec_stream_id) != 0)
+    return -1;
+  return 0;
+}
+
+static int h3_srv_handshake_completed(ngtcp2_conn *conn, void *user_data)
+{
+  struct h3_ngtcp2_srv *srv = (struct h3_ngtcp2_srv *)user_data;
+  (void)conn;
+  return h3_srv_setup_h3(srv);
+}
+
+static int h3_srv_stream_open(ngtcp2_conn *conn, int64_t stream_id,
+                              void *user_data)
+{
+  struct h3_ngtcp2_srv *srv = (struct h3_ngtcp2_srv *)user_data;
+  (void)conn;
+  if(!srv->h3conn) {
+    if(h3_srv_setup_h3(srv) != 0)
+      return NGTCP2_ERR_CALLBACK_FAILURE;
+  }
+  if(ngtcp2_is_bidi_stream(stream_id)) {
+    struct h3_test_stream *st = h3_srv_get_stream(srv, stream_id);
+    if(st)
+      (void)nghttp3_conn_set_stream_user_data(srv->h3conn, stream_id, st);
+  }
+  return 0;
+}
+
+static int h3_srv_recv_stream_data(ngtcp2_conn *conn, uint32_t flags,
+                                   int64_t stream_id, uint64_t offset,
+                                   const uint8_t *data, size_t datalen,
+                                   void *user_data, void *stream_user_data)
+{
+  struct h3_ngtcp2_srv *srv = (struct h3_ngtcp2_srv *)user_data;
+  int fin = (flags & NGTCP2_STREAM_DATA_FLAG_FIN) ? 1 : 0;
+  nghttp3_ssize nconsumed;
+  (void)offset;
+  (void)stream_user_data;
+  if(!srv->h3conn) {
+    if(h3_srv_setup_h3(srv) != 0)
+      return NGTCP2_ERR_CALLBACK_FAILURE;
+  }
+  nconsumed = nghttp3_conn_read_stream(srv->h3conn, stream_id, data, datalen,
+                                       fin);
+  if(nconsumed < 0)
+    return NGTCP2_ERR_CALLBACK_FAILURE;
+  ngtcp2_conn_extend_max_stream_offset(conn, stream_id, (uint64_t)nconsumed);
+  ngtcp2_conn_extend_max_offset(conn, (uint64_t)nconsumed);
+  return 0;
+}
+
+static int h3_srv_acked_stream_data_offset(ngtcp2_conn *conn, int64_t stream_id,
+                                           uint64_t offset, uint64_t datalen,
+                                           void *user_data,
+                                           void *stream_user_data)
+{
+  struct h3_ngtcp2_srv *srv = (struct h3_ngtcp2_srv *)user_data;
+  (void)conn;
+  (void)offset;
+  (void)stream_user_data;
+  if(srv->h3conn) {
+    if(nghttp3_conn_add_ack_offset(srv->h3conn, stream_id, datalen) != 0)
+      return NGTCP2_ERR_CALLBACK_FAILURE;
+  }
+  return 0;
+}
+
+static int h3_srv_stream_close(ngtcp2_conn *conn, uint32_t flags,
+                               int64_t stream_id, uint64_t app_error_code,
+                               void *user_data, void *stream_user_data)
+{
+  struct h3_ngtcp2_srv *srv = (struct h3_ngtcp2_srv *)user_data;
+  (void)conn;
+  (void)stream_user_data;
+  if(!(flags & NGTCP2_STREAM_CLOSE_FLAG_APP_ERROR_CODE_SET))
+    app_error_code = NGHTTP3_H3_NO_ERROR;
+  if(srv->h3conn)
+    (void)nghttp3_conn_close_stream(srv->h3conn, stream_id, app_error_code);
+  return 0;
+}
+
+static int h3_srv_stream_reset(ngtcp2_conn *conn, int64_t stream_id,
+                               uint64_t final_size, uint64_t app_error_code,
+                               void *user_data, void *stream_user_data)
+{
+  struct h3_ngtcp2_srv *srv = (struct h3_ngtcp2_srv *)user_data;
+  (void)conn;
+  (void)final_size;
+  (void)app_error_code;
+  (void)stream_user_data;
+  if(srv->h3conn)
+    (void)nghttp3_conn_shutdown_stream_read(srv->h3conn, stream_id);
+  return 0;
+}
+
+static int h3_srv_stream_stop_sending(ngtcp2_conn *conn, int64_t stream_id,
+                                      uint64_t app_error_code,
+                                      void *user_data, void *stream_user_data)
+{
+  struct h3_ngtcp2_srv *srv = (struct h3_ngtcp2_srv *)user_data;
+  (void)conn;
+  (void)app_error_code;
+  (void)stream_user_data;
+  if(srv->h3conn)
+    nghttp3_conn_shutdown_stream_write(srv->h3conn, stream_id);
+  return 0;
+}
+
+#if defined(USE_OPENSSL)
+static int h3_srv_alpn_select_cb(SSL *ssl, const unsigned char **out,
+                                 unsigned char *outlen,
+                                 const unsigned char *in,
+                                 unsigned int inlen, void *arg)
+{
+  static const unsigned char h3_alpn[] = "\x02h3";
+  (void)ssl;
+  (void)arg;
+  if(SSL_select_next_proto((unsigned char **)out, outlen,
+                           h3_alpn, sizeof(h3_alpn) - 1,
+                           in, inlen) == OPENSSL_NPN_NEGOTIATED)
+    return SSL_TLSEXT_ERR_OK;
+  return SSL_TLSEXT_ERR_ALERT_FATAL;
+}
+#endif
+#elif defined(USE_QUICHE)
+struct h3_quiche_srv {
+  struct h3_test_stream streams[16];
+};
+
+static struct h3_test_stream *h3_quiche_get_stream(struct h3_quiche_srv *srv,
+                                                   int64_t stream_id)
+{
+  size_t i;
+  for(i = 0; i < 16; i++) {
+    if(srv->streams[i].in_use && srv->streams[i].stream_id == stream_id)
+      return &srv->streams[i];
+  }
+  for(i = 0; i < 16; i++) {
+    if(!srv->streams[i].in_use) {
+      memset(&srv->streams[i], 0, sizeof(srv->streams[i]));
+      srv->streams[i].in_use = TRUE;
+      srv->streams[i].stream_id = stream_id;
+      return &srv->streams[i];
+    }
+  }
+  return NULL;
+}
+
+static int h3_quiche_header_cb(uint8_t *name, size_t name_len,
+                               uint8_t *value, size_t value_len, void *argp)
+{
+  struct h3_test_stream *st = (struct h3_test_stream *)argp;
+  if(!st)
+    return 0;
+  if(name_len == 7 && memcmp(name, ":method", 7) == 0) {
+    size_t clen = value_len < sizeof(st->method) - 1 ?
+                  value_len : sizeof(st->method) - 1;
+    memcpy(st->method, value, clen);
+    st->method[clen] = '\0';
+  }
+  else if(name_len == 5 && memcmp(name, ":path", 5) == 0) {
+    size_t clen = value_len < sizeof(st->path) - 1 ?
+                  value_len : sizeof(st->path) - 1;
+    memcpy(st->path, value, clen);
+    st->path[clen] = '\0';
+  }
+  return 0;
+}
+#endif
+
+int Curl_test_h3_server_serve(int udp_fd, const char *cert_file,
+                              const char *key_file, volatile int *stop_flag);
+int Curl_test_h3_server_serve(int udp_fd, const char *cert_file,
+                              const char *key_file, volatile int *stop_flag)
+{
+#if defined(USE_NGTCP2) && (defined(USE_OPENSSL) || defined(USE_GNUTLS))
+  struct h3_ngtcp2_srv srv;
+  uint8_t buf[2048];
+  uint8_t outbuf[1452];
+  memset(&srv, 0, sizeof(srv));
+  srv.conn_ref.get_conn = h3_srv_get_conn;
+  srv.conn_ref.user_data = &srv;
+  srv.local_addrlen = sizeof(srv.local_addr);
+  (void)getsockname(udp_fd, (struct sockaddr *)&srv.local_addr,
+                    &srv.local_addrlen);
+
+#if defined(USE_OPENSSL)
+  (void)ngtcp2_crypto_ossl_init();
+  srv.ssl_ctx = SSL_CTX_new(TLS_server_method());
+  if(!srv.ssl_ctx)
+    return -1;
+  SSL_CTX_set_min_proto_version(srv.ssl_ctx, TLS1_3_VERSION);
+  SSL_CTX_set_max_proto_version(srv.ssl_ctx, TLS1_3_VERSION);
+  SSL_CTX_set_alpn_select_cb(srv.ssl_ctx, h3_srv_alpn_select_cb, NULL);
+  if(SSL_CTX_use_certificate_chain_file(srv.ssl_ctx, cert_file) != 1 ||
+     SSL_CTX_use_PrivateKey_file(srv.ssl_ctx, key_file, SSL_FILETYPE_PEM) != 1) {
+    SSL_CTX_free(srv.ssl_ctx);
+    return -1;
+  }
+#elif defined(USE_GNUTLS)
+  if(gnutls_certificate_allocate_credentials(&srv.cred) != 0)
+    return -1;
+  if(gnutls_certificate_set_x509_key_file(srv.cred, cert_file, key_file,
+                                          GNUTLS_X509_FMT_PEM) < 0) {
+    gnutls_certificate_free_credentials(srv.cred);
+    return -1;
+  }
+#endif
+
+  while(!*stop_flag) {
+    struct pollfd pfd;
+    pfd.fd = udp_fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    int prc = poll(&pfd, 1, 20);
+    if(prc > 0 && (pfd.revents & POLLIN)) {
+      for(;;) {
+        struct sockaddr_storage raddr;
+        socklen_t raddrlen = sizeof(raddr);
+        ssize_t nread = recvfrom(udp_fd, buf, sizeof(buf), MSG_DONTWAIT,
+                                 (struct sockaddr *)&raddr, &raddrlen);
+        if(nread <= 0)
+          break;
+        uint64_t ts = h3_test_now_ns();
+        if(!srv.qconn) {
+          ngtcp2_version_cid vc;
+          if(ngtcp2_pkt_decode_version_cid(&vc, buf, (size_t)nread,
+                                           NGTCP2_MAX_CIDLEN) != 0)
+            continue;
+          memcpy(&srv.client_addr, &raddr, raddrlen);
+          srv.client_addrlen = raddrlen;
+          ngtcp2_cid dcid, scid, odcid;
+          uint8_t scid_bytes[16] = {
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+            0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x01
+          };
+          ngtcp2_cid_init(&dcid, vc.scid, vc.scidlen);
+          ngtcp2_cid_init(&scid, scid_bytes, sizeof(scid_bytes));
+          ngtcp2_cid_init(&odcid, vc.dcid, vc.dcidlen);
+
+          ngtcp2_callbacks cb;
+          memset(&cb, 0, sizeof(cb));
+          cb.recv_client_initial = ngtcp2_crypto_recv_client_initial_cb;
+          cb.recv_crypto_data = ngtcp2_crypto_recv_crypto_data_cb;
+          cb.handshake_completed = h3_srv_handshake_completed;
+          cb.encrypt = ngtcp2_crypto_encrypt_cb;
+          cb.decrypt = ngtcp2_crypto_decrypt_cb;
+          cb.hp_mask = ngtcp2_crypto_hp_mask_cb;
+          cb.recv_stream_data = h3_srv_recv_stream_data;
+          cb.acked_stream_data_offset = h3_srv_acked_stream_data_offset;
+          cb.stream_open = h3_srv_stream_open;
+          cb.stream_close = h3_srv_stream_close;
+          cb.rand = h3_srv_rand;
+          cb.get_new_connection_id = h3_srv_get_new_connection_id;
+          cb.update_key = ngtcp2_crypto_update_key_cb;
+          cb.stream_reset = h3_srv_stream_reset;
+          cb.stream_stop_sending = h3_srv_stream_stop_sending;
+          cb.delete_crypto_aead_ctx = ngtcp2_crypto_delete_crypto_aead_ctx_cb;
+          cb.delete_crypto_cipher_ctx =
+            ngtcp2_crypto_delete_crypto_cipher_ctx_cb;
+          cb.get_path_challenge_data = ngtcp2_crypto_get_path_challenge_data_cb;
+          cb.version_negotiation = ngtcp2_crypto_version_negotiation_cb;
+
+          ngtcp2_settings settings;
+          ngtcp2_settings_default(&settings);
+          settings.initial_ts = ts;
+
+          ngtcp2_transport_params params;
+          ngtcp2_transport_params_default(&params);
+          params.original_dcid = odcid;
+          params.original_dcid_present = 1;
+          params.initial_max_stream_data_bidi_local = 256 * 1024;
+          params.initial_max_stream_data_bidi_remote = 256 * 1024;
+          params.initial_max_stream_data_uni = 256 * 1024;
+          params.initial_max_data = 1024 * 1024;
+          params.initial_max_streams_bidi = 100;
+          params.initial_max_streams_uni = 10;
+          params.max_idle_timeout = 30ULL * NGTCP2_SECONDS;
+          params.active_connection_id_limit = 7;
+
+          ngtcp2_path_storage ps;
+          ngtcp2_path_storage_init(&ps,
+                                   (struct sockaddr *)&srv.local_addr,
+                                   srv.local_addrlen,
+                                   (struct sockaddr *)&srv.client_addr,
+                                   srv.client_addrlen, NULL);
+          if(ngtcp2_conn_server_new(&srv.qconn, &dcid, &scid, &ps.path,
+                                    vc.version, &cb, &settings, &params,
+                                    NULL, &srv) != 0)
+            break;
+
+#if defined(USE_OPENSSL)
+          srv.ssl = SSL_new(srv.ssl_ctx);
+          (void)ngtcp2_crypto_ossl_ctx_new(&srv.ossl_ctx, srv.ssl);
+          (void)ngtcp2_crypto_ossl_configure_server_session(srv.ssl);
+          SSL_set_app_data(srv.ssl, &srv.conn_ref);
+          SSL_set_accept_state(srv.ssl);
+          ngtcp2_conn_set_tls_native_handle(srv.qconn, srv.ossl_ctx);
+#elif defined(USE_GNUTLS)
+          {
+            gnutls_datum_t alpn = { (unsigned char *)"h3", 2 };
+            (void)gnutls_init(&srv.session, GNUTLS_SERVER);
+            (void)gnutls_priority_set_direct(
+              srv.session,
+              "NORMAL:-VERS-ALL:+VERS-TLS1.3:-CIPHER-ALL:+AES-128-GCM:"
+              "+AES-256-GCM:+CHACHA20-POLY1305:+AES-128-CCM",
+              NULL);
+            (void)gnutls_credentials_set(srv.session, GNUTLS_CRD_CERTIFICATE,
+                                         srv.cred);
+            (void)gnutls_alpn_set_protocols(srv.session, &alpn, 1,
+                                            GNUTLS_ALPN_MANDATORY);
+            (void)ngtcp2_crypto_gnutls_configure_server_session(srv.session);
+            gnutls_session_set_ptr(srv.session, &srv.conn_ref);
+            ngtcp2_conn_set_tls_native_handle(srv.qconn, srv.session);
+          }
+#endif
+        }
+
+        ngtcp2_path_storage ps;
+        ngtcp2_path_storage_init(&ps,
+                                 (struct sockaddr *)&srv.local_addr,
+                                 srv.local_addrlen,
+                                 (struct sockaddr *)&raddr,
+                                 raddrlen, NULL);
+        ngtcp2_pkt_info pi;
+        memset(&pi, 0, sizeof(pi));
+        int rv = ngtcp2_conn_read_pkt(srv.qconn, &ps.path, &pi, buf,
+                                      (size_t)nread, ts);
+        if(rv != 0) {
+          ngtcp2_ccerr ccerr;
+          ngtcp2_ccerr_default(&ccerr);
+          if(rv == NGTCP2_ERR_CRYPTO)
+            ngtcp2_ccerr_set_tls_alert(
+              &ccerr, ngtcp2_conn_get_tls_alert(srv.qconn), NULL, 0);
+          else
+            ngtcp2_ccerr_set_liberr(&ccerr, rv, NULL, 0);
+          ngtcp2_ssize nclose = ngtcp2_conn_write_connection_close(
+            srv.qconn, NULL, &pi, outbuf, sizeof(outbuf), &ccerr, ts);
+          if(nclose > 0)
+            (void)sendto(udp_fd, outbuf, (size_t)nclose, 0,
+                         (struct sockaddr *)&srv.client_addr,
+                         srv.client_addrlen);
+          break;
+        }
+      }
+    }
+
+    if(srv.qconn) {
+      uint64_t ts = h3_test_now_ns();
+      for(;;) {
+        nghttp3_vec h3vec[16];
+        int64_t stream_id = -1;
+        int fin = 0;
+        nghttp3_ssize veccnt = 0;
+        if(srv.h3conn) {
+          veccnt = nghttp3_conn_writev_stream(srv.h3conn, &stream_id, &fin,
+                                              h3vec, 16);
+          if(veccnt < 0)
+            break;
+        }
+        uint32_t flags = NGTCP2_WRITE_STREAM_FLAG_MORE |
+                         (fin ? NGTCP2_WRITE_STREAM_FLAG_FIN :
+                                NGTCP2_WRITE_STREAM_FLAG_NONE);
+        ngtcp2_ssize ndatalen = -1;
+        ngtcp2_pkt_info pi;
+        memset(&pi, 0, sizeof(pi));
+        ngtcp2_ssize nwrite = ngtcp2_conn_writev_stream(
+          srv.qconn, NULL, &pi, outbuf, sizeof(outbuf), &ndatalen, flags,
+          stream_id, (const ngtcp2_vec *)h3vec, (size_t)veccnt, ts);
+        if(nwrite < 0) {
+          if(nwrite == NGTCP2_ERR_WRITE_MORE) {
+            if(srv.h3conn && ndatalen >= 0)
+              (void)nghttp3_conn_add_write_offset(srv.h3conn, stream_id,
+                                                  (size_t)ndatalen);
+            continue;
+          }
+          if(nwrite == NGTCP2_ERR_STREAM_DATA_BLOCKED) {
+            if(srv.h3conn && stream_id >= 0)
+              nghttp3_conn_block_stream(srv.h3conn, stream_id);
+            continue;
+          }
+          if(nwrite == NGTCP2_ERR_STREAM_SHUT_WR) {
+            if(srv.h3conn && stream_id >= 0 && ndatalen >= 0)
+              (void)nghttp3_conn_add_write_offset(srv.h3conn, stream_id,
+                                                  (size_t)ndatalen);
+            continue;
+          }
+          break;
+        }
+        if(nwrite == 0)
+          break;
+        if(srv.h3conn && stream_id >= 0 && ndatalen >= 0)
+          (void)nghttp3_conn_add_write_offset(srv.h3conn, stream_id,
+                                              (size_t)ndatalen);
+        (void)sendto(udp_fd, outbuf, (size_t)nwrite, 0,
+                     (struct sockaddr *)&srv.client_addr, srv.client_addrlen);
+      }
+    }
+  }
+
+  if(srv.h3conn)
+    nghttp3_conn_del(srv.h3conn);
+  if(srv.qconn)
+    ngtcp2_conn_del(srv.qconn);
+#if defined(USE_OPENSSL)
+  if(srv.ossl_ctx)
+    ngtcp2_crypto_ossl_ctx_del(srv.ossl_ctx);
+  if(srv.ssl) {
+    SSL_set_app_data(srv.ssl, NULL);
+    SSL_free(srv.ssl);
+  }
+  if(srv.ssl_ctx)
+    SSL_CTX_free(srv.ssl_ctx);
+#elif defined(USE_GNUTLS)
+  if(srv.session)
+    gnutls_deinit(srv.session);
+  if(srv.cred)
+    gnutls_certificate_free_credentials(srv.cred);
+#endif
+  return 0;
+#elif defined(USE_QUICHE)
+  struct h3_quiche_srv srv;
+  uint8_t buf[2048];
+  uint8_t outbuf[1452];
+  struct sockaddr_storage local_addr;
+  socklen_t local_addrlen = sizeof(local_addr);
+  struct sockaddr_storage client_addr;
+  socklen_t client_addrlen = 0;
+  quiche_config *cfg = NULL;
+  quiche_h3_config *h3cfg = NULL;
+  quiche_conn *qconn = NULL;
+  quiche_h3_conn *h3conn = NULL;
+
+  memset(&srv, 0, sizeof(srv));
+  (void)getsockname(udp_fd, (struct sockaddr *)&local_addr, &local_addrlen);
+
+  cfg = quiche_config_new(QUICHE_PROTOCOL_VERSION);
+  if(!cfg)
+    return -1;
+  if(quiche_config_load_cert_chain_from_pem_file(cfg, cert_file) < 0 ||
+     quiche_config_load_priv_key_from_pem_file(cfg, key_file) < 0) {
+    quiche_config_free(cfg);
+    return -1;
+  }
+  (void)quiche_config_set_application_protos(
+    cfg, (const uint8_t *)QUICHE_H3_APPLICATION_PROTOCOL,
+    sizeof(QUICHE_H3_APPLICATION_PROTOCOL) - 1);
+  quiche_config_set_max_idle_timeout(cfg, 30000);
+  quiche_config_set_max_recv_udp_payload_size(cfg, 1452);
+  quiche_config_set_max_send_udp_payload_size(cfg, 1452);
+  quiche_config_set_initial_max_data(cfg, 1024 * 1024);
+  quiche_config_set_initial_max_stream_data_bidi_local(cfg, 256 * 1024);
+  quiche_config_set_initial_max_stream_data_bidi_remote(cfg, 256 * 1024);
+  quiche_config_set_initial_max_stream_data_uni(cfg, 256 * 1024);
+  quiche_config_set_initial_max_streams_bidi(cfg, 100);
+  quiche_config_set_initial_max_streams_uni(cfg, 10);
+
+  while(!*stop_flag) {
+    struct pollfd pfd;
+    pfd.fd = udp_fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    int prc = poll(&pfd, 1, 20);
+    if(prc > 0 && (pfd.revents & POLLIN)) {
+      for(;;) {
+        struct sockaddr_storage raddr;
+        socklen_t raddrlen = sizeof(raddr);
+        ssize_t nread = recvfrom(udp_fd, buf, sizeof(buf), MSG_DONTWAIT,
+                                 (struct sockaddr *)&raddr, &raddrlen);
+        if(nread <= 0)
+          break;
+        if(!qconn) {
+          uint32_t version = 0;
+          uint8_t ty = 0;
+          uint8_t scid[20], dcid[20], token[64];
+          size_t scid_len = sizeof(scid), dcid_len = sizeof(dcid),
+                 token_len = sizeof(token);
+          uint8_t srv_scid[16] = {
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+            0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x01
+          };
+          if(quiche_header_info(buf, (size_t)nread, 16, &version, &ty,
+                                scid, &scid_len, dcid, &dcid_len,
+                                token, &token_len) < 0)
+            continue;
+          memcpy(&client_addr, &raddr, raddrlen);
+          client_addrlen = raddrlen;
+          qconn = quiche_accept(srv_scid, sizeof(srv_scid), dcid, dcid_len,
+                                (struct sockaddr *)&local_addr, local_addrlen,
+                                (struct sockaddr *)&client_addr,
+                                client_addrlen, cfg);
+          if(!qconn)
+            break;
+        }
+        quiche_recv_info rinfo;
+        rinfo.from = (struct sockaddr *)&raddr;
+        rinfo.from_len = raddrlen;
+        rinfo.to = (struct sockaddr *)&local_addr;
+        rinfo.to_len = local_addrlen;
+        (void)quiche_conn_recv(qconn, buf, (size_t)nread, &rinfo);
+      }
+    }
+
+    if(qconn) {
+      if(quiche_conn_is_established(qconn) && !h3conn) {
+        h3cfg = quiche_h3_config_new();
+        if(h3cfg)
+          h3conn = quiche_h3_conn_new_with_transport(qconn, h3cfg);
+      }
+      if(h3conn) {
+        for(;;) {
+          quiche_h3_event *ev = NULL;
+          int64_t sid = quiche_h3_conn_poll(h3conn, qconn, &ev);
+          if(sid < 0 || !ev)
+            break;
+          struct h3_test_stream *st = h3_quiche_get_stream(&srv, sid);
+          switch(quiche_h3_event_type(ev)) {
+          case QUICHE_H3_EVENT_HEADERS:
+            if(st)
+              (void)quiche_h3_event_for_each_header(ev, h3_quiche_header_cb,
+                                                    st);
+            break;
+          case QUICHE_H3_EVENT_DATA:
+            if(st) {
+              for(;;) {
+                size_t avail = sizeof(st->req_body) - st->req_body_len;
+                if(avail == 0)
+                  break;
+                ssize_t nb = quiche_h3_recv_body(
+                  h3conn, qconn, (uint64_t)sid,
+                  st->req_body + st->req_body_len, avail);
+                if(nb <= 0)
+                  break;
+                st->req_body_len += (size_t)nb;
+              }
+            }
+            break;
+          case QUICHE_H3_EVENT_FINISHED:
+            if(st && !st->resp_submitted) {
+              st->resp_submitted = TRUE;
+              h3_test_build_response(st);
+              quiche_h3_header hdrs[3];
+              hdrs[0].name = (const uint8_t *)":status";
+              hdrs[0].name_len = 7;
+              hdrs[0].value = (const uint8_t *)"200";
+              hdrs[0].value_len = 3;
+              hdrs[1].name = (const uint8_t *)"content-type";
+              hdrs[1].name_len = 12;
+              hdrs[1].value = (const uint8_t *)"text/plain";
+              hdrs[1].value_len = 10;
+              hdrs[2].name = (const uint8_t *)"content-length";
+              hdrs[2].name_len = 14;
+              hdrs[2].value = (const uint8_t *)st->content_length_str;
+              hdrs[2].value_len = strlen(st->content_length_str);
+              (void)quiche_h3_send_response(h3conn, qconn, (uint64_t)sid,
+                                            hdrs, 3, FALSE);
+              (void)quiche_h3_send_body(h3conn, qconn, (uint64_t)sid,
+                                        st->resp_body, st->resp_body_len,
+                                        TRUE);
+            }
+            break;
+          default:
+            break;
+          }
+          quiche_h3_event_free(ev);
+        }
+      }
+      for(;;) {
+        quiche_send_info sinfo;
+        ssize_t nwrite = quiche_conn_send(qconn, outbuf, sizeof(outbuf),
+                                          &sinfo);
+        if(nwrite <= 0)
+          break;
+        (void)sendto(udp_fd, outbuf, (size_t)nwrite, 0,
+                     (struct sockaddr *)&sinfo.to, sinfo.to_len);
+      }
+    }
+  }
+
+  if(h3conn)
+    quiche_h3_conn_free(h3conn);
+  if(h3cfg)
+    quiche_h3_config_free(h3cfg);
+  if(qconn)
+    quiche_conn_free(qconn);
+  if(cfg)
+    quiche_config_free(cfg);
+  return 0;
+#else
+  (void)udp_fd;
+  (void)cert_file;
+  (void)key_file;
+  (void)stop_flag;
+  return -1;
+#endif
+}
+
+
 

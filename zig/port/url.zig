@@ -91,7 +91,7 @@ pub const CURLE_OUT_OF_MEMORY: CURLcode = 27;
 pub const CURLE_BAD_FUNCTION_ARGUMENT: CURLcode = 43;
 pub const CURLE_LOGIN_DENIED: CURLcode = 67;
 pub const CURLE_AGAIN: CURLcode = 81;
-pub const CURLE_NO_CONNECTION_AVAILABLE: CURLcode = 82;
+pub const CURLE_NO_CONNECTION_AVAILABLE: CURLcode = 89;
 
 // CURLUcode constants
 pub const CURLUE_OK: CURLUcode = 0;

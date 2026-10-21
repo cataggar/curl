@@ -195,17 +195,46 @@ pub const NGTCP2_WRITE_DATAGRAM_FLAG_NONE: u32 = 0x00;
 pub const NGTCP2_WRITE_DATAGRAM_FLAG_MORE: u32 = 0x01;
 
 pub const NGTCP2_ERR_INVALID_ARGUMENT: c_int = -201;
-pub const NGTCP2_ERR_CRYPTO: c_int = -205;
-pub const NGTCP2_ERR_STREAM_DATA_BLOCKED: c_int = -211;
-pub const NGTCP2_ERR_STREAM_ID_BLOCKED: c_int = -213;
-pub const NGTCP2_ERR_STREAM_NOT_FOUND: c_int = -216;
-pub const NGTCP2_ERR_RECV_VERSION_NEGOTIATION: c_int = -229;
-pub const NGTCP2_ERR_CALLBACK_FAILURE: c_int = -231;
+pub const NGTCP2_ERR_NOBUF: c_int = -202;
+pub const NGTCP2_ERR_PROTO: c_int = -203;
+pub const NGTCP2_ERR_INVALID_STATE: c_int = -204;
+pub const NGTCP2_ERR_ACK_FRAME: c_int = -205;
+pub const NGTCP2_ERR_STREAM_ID_BLOCKED: c_int = -206;
+pub const NGTCP2_ERR_STREAM_IN_USE: c_int = -207;
+pub const NGTCP2_ERR_STREAM_DATA_BLOCKED: c_int = -208;
+pub const NGTCP2_ERR_FLOW_CONTROL: c_int = -209;
+pub const NGTCP2_ERR_CONNECTION_ID_LIMIT: c_int = -210;
+pub const NGTCP2_ERR_STREAM_LIMIT: c_int = -211;
+pub const NGTCP2_ERR_FINAL_SIZE: c_int = -212;
+pub const NGTCP2_ERR_CRYPTO: c_int = -213;
+pub const NGTCP2_ERR_PKT_NUM_EXHAUSTED: c_int = -214;
+pub const NGTCP2_ERR_REQUIRED_TRANSPORT_PARAM: c_int = -215;
+pub const NGTCP2_ERR_MALFORMED_TRANSPORT_PARAM: c_int = -216;
+pub const NGTCP2_ERR_FRAME_ENCODING: c_int = -217;
+pub const NGTCP2_ERR_DECRYPT: c_int = -218;
+pub const NGTCP2_ERR_STREAM_SHUT_WR: c_int = -219;
+pub const NGTCP2_ERR_STREAM_NOT_FOUND: c_int = -220;
+pub const NGTCP2_ERR_STREAM_STATE: c_int = -221;
+pub const NGTCP2_ERR_RECV_VERSION_NEGOTIATION: c_int = -222;
+pub const NGTCP2_ERR_CLOSING: c_int = -223;
+pub const NGTCP2_ERR_DRAINING: c_int = -224;
+pub const NGTCP2_ERR_TRANSPORT_PARAM: c_int = -225;
+pub const NGTCP2_ERR_DISCARD_PKT: c_int = -226;
+pub const NGTCP2_ERR_CONN_ID_BLOCKED: c_int = -227;
+pub const NGTCP2_ERR_INTERNAL: c_int = -228;
+pub const NGTCP2_ERR_CRYPTO_BUFFER_EXCEEDED: c_int = -229;
+pub const NGTCP2_ERR_WRITE_MORE: isize = -230;
+pub const NGTCP2_ERR_RETRY: c_int = -231;
+pub const NGTCP2_ERR_DROP_CONN: c_int = -232;
+pub const NGTCP2_ERR_AEAD_LIMIT_REACHED: c_int = -233;
+pub const NGTCP2_ERR_NO_VIABLE_PATH: c_int = -234;
+pub const NGTCP2_ERR_VERSION_NEGOTIATION: c_int = -235;
+pub const NGTCP2_ERR_HANDSHAKE_TIMEOUT: c_int = -236;
+pub const NGTCP2_ERR_VERSION_NEGOTIATION_FAILURE: c_int = -237;
+pub const NGTCP2_ERR_IDLE_CLOSE: c_int = -238;
 pub const NGTCP2_ERR_FATAL: c_int = -500;
 pub const NGTCP2_ERR_NOMEM: c_int = -501;
-pub const NGTCP2_ERR_DROP_CONN: c_int = -505;
-pub const NGTCP2_ERR_IDLE_CLOSE: c_int = -506;
-pub const NGTCP2_ERR_WRITE_MORE: isize = -242;
+pub const NGTCP2_ERR_CALLBACK_FAILURE: c_int = -502;
 
 pub const NGTCP2_NO_ERROR: u64 = 0x00;
 pub const NGTCP2_CONNECTION_REFUSED: u64 = 0x02;
@@ -236,20 +265,30 @@ pub const NGHTTP3_NV_FLAG_NO_COPY_NAME: u8 = 0x02;
 pub const NGHTTP3_NV_FLAG_NO_COPY_VALUE: u8 = 0x04;
 
 pub const NGHTTP3_ERR_INVALID_ARGUMENT: c_int = -101;
-pub const NGHTTP3_ERR_WOULDBLOCK: c_int = -108;
-pub const NGHTTP3_ERR_STREAM_IN_USE: c_int = -109;
-pub const NGHTTP3_ERR_MALFORMED_HTTP_HEADER: c_int = -111;
-pub const NGHTTP3_ERR_MALFORMED_HTTP_MESSAGING: c_int = -114;
-pub const NGHTTP3_ERR_QPACK_FATAL: c_int = -116;
-pub const NGHTTP3_ERR_H3_FRAME_UNEXPECTED: c_int = -661;
-pub const NGHTTP3_ERR_H3_FRAME_ERROR: c_int = -662;
-pub const NGHTTP3_ERR_H3_GENERAL_PROTOCOL_ERROR: c_int = -666;
-pub const NGHTTP3_ERR_H3_INTERNAL_ERROR: c_int = -667;
-pub const NGHTTP3_ERR_H3_CLOSED_CRITICAL_STREAM: c_int = -668;
-pub const NGHTTP3_ERR_H3_ID_ERROR: c_int = -670;
-pub const NGHTTP3_ERR_H3_SETTINGS_ERROR: c_int = -671;
-pub const NGHTTP3_ERR_H3_STREAM_CREATION_ERROR: c_int = -672;
-pub const NGHTTP3_ERR_CONN_CLOSING: c_int = -674;
+pub const NGHTTP3_ERR_INVALID_STATE: c_int = -102;
+pub const NGHTTP3_ERR_WOULDBLOCK: c_int = -103;
+pub const NGHTTP3_ERR_STREAM_IN_USE: c_int = -104;
+pub const NGHTTP3_ERR_MALFORMED_HTTP_HEADER: c_int = -105;
+pub const NGHTTP3_ERR_REMOVE_HTTP_HEADER: c_int = -106;
+pub const NGHTTP3_ERR_MALFORMED_HTTP_MESSAGING: c_int = -107;
+pub const NGHTTP3_ERR_QPACK_FATAL: c_int = -108;
+pub const NGHTTP3_ERR_QPACK_HEADER_TOO_LARGE: c_int = -109;
+pub const NGHTTP3_ERR_STREAM_NOT_FOUND: c_int = -110;
+pub const NGHTTP3_ERR_CONN_CLOSING: c_int = -111;
+pub const NGHTTP3_ERR_STREAM_DATA_OVERFLOW: c_int = -112;
+pub const NGHTTP3_ERR_QPACK_DECOMPRESSION_FAILED: c_int = -401;
+pub const NGHTTP3_ERR_QPACK_ENCODER_STREAM_ERROR: c_int = -402;
+pub const NGHTTP3_ERR_QPACK_DECODER_STREAM_ERROR: c_int = -403;
+pub const NGHTTP3_ERR_H3_FRAME_UNEXPECTED: c_int = -601;
+pub const NGHTTP3_ERR_H3_FRAME_ERROR: c_int = -602;
+pub const NGHTTP3_ERR_H3_MISSING_SETTINGS: c_int = -603;
+pub const NGHTTP3_ERR_H3_INTERNAL_ERROR: c_int = -604;
+pub const NGHTTP3_ERR_H3_CLOSED_CRITICAL_STREAM: c_int = -605;
+pub const NGHTTP3_ERR_H3_GENERAL_PROTOCOL_ERROR: c_int = -606;
+pub const NGHTTP3_ERR_H3_ID_ERROR: c_int = -607;
+pub const NGHTTP3_ERR_H3_SETTINGS_ERROR: c_int = -608;
+pub const NGHTTP3_ERR_H3_STREAM_CREATION_ERROR: c_int = -609;
+pub const NGHTTP3_ERR_H3_EXCESSIVE_LOAD: c_int = -610;
 pub const NGHTTP3_ERR_FATAL: c_int = -900;
 pub const NGHTTP3_ERR_NOMEM: c_int = -901;
 pub const NGHTTP3_ERR_CALLBACK_FAILURE: c_int = -902;
@@ -446,8 +485,8 @@ pub const nghttp3_nv = extern struct {
 pub const nghttp3_read_data_callback = *const fn (
     conn: *nghttp3_conn,
     stream_id: i64,
-    pdata: *[*]nghttp3_vec,
-    pdatacnt: *usize,
+    vec: [*]nghttp3_vec,
+    veccnt: usize,
     pflags: *u32,
     conn_user_data: ?*anyopaque,
     stream_user_data: ?*anyopaque,
@@ -522,8 +561,8 @@ comptime {
 
 const ngtcp2_c = if (use_ngtcp2) struct {
     extern fn ngtcp2_cid_init(cid: *ngtcp2_cid, data: [*]const u8, datalen: usize) callconv(.c) void;
-    extern fn ngtcp2_settings_default_versioned(settings_version: c_int, settings: *ngtcp2_settings) callconv(.c) void;
-    extern fn ngtcp2_transport_params_default_versioned(params_version: c_int, params: *ngtcp2_transport_params) callconv(.c) void;
+    extern fn Curl_ngtcp2_settings_default(settings: *ngtcp2_settings) callconv(.c) void;
+    extern fn Curl_ngtcp2_transport_params_default(params: *ngtcp2_transport_params) callconv(.c) void;
     extern fn ngtcp2_ccerr_default(ccerr: *ngtcp2_ccerr) callconv(.c) void;
     extern fn ngtcp2_ccerr_set_application_error(ccerr: *ngtcp2_ccerr, error_code: u64, reason: ?[*]const u8, reasonlen: usize) callconv(.c) void;
     extern fn ngtcp2_ccerr_set_transport_error(ccerr: *ngtcp2_ccerr, error_code: u64, reason: ?[*]const u8, reasonlen: usize) callconv(.c) void;
@@ -531,17 +570,14 @@ const ngtcp2_c = if (use_ngtcp2) struct {
     extern fn ngtcp2_ccerr_set_liberr(ccerr: *ngtcp2_ccerr, liberr: c_int, reason: ?[*]const u8, reasonlen: usize) callconv(.c) void;
     extern fn ngtcp2_path_storage_init(ps: *ngtcp2_path_storage, local_addr: ?*const anyopaque, local_addrlen: socklen_t, remote_addr: ?*const anyopaque, remote_addrlen: socklen_t, user_data: ?*anyopaque) callconv(.c) void;
     extern fn ngtcp2_path_storage_zero(ps: *ngtcp2_path_storage) callconv(.c) void;
-    extern fn ngtcp2_conn_client_new_versioned(
+    extern fn Curl_ngtcp2_conn_client_new(
         pconn: *?*ngtcp2_conn,
         dcid: *const ngtcp2_cid,
         scid: *const ngtcp2_cid,
         path: *const ngtcp2_path,
         version: u32,
-        callbacks_version: c_int,
         callbacks: *const ngtcp2_callbacks,
-        settings_version: c_int,
         settings: *const ngtcp2_settings,
-        params_version: c_int,
         params: *const ngtcp2_transport_params,
         mem_ptr: ?*const vquic_core.ngtcp2_mem,
         user_data: ?*anyopaque,
@@ -568,19 +604,17 @@ const ngtcp2_c = if (use_ngtcp2) struct {
     extern fn ngtcp2_conn_update_pkt_tx_time(conn: *ngtcp2_conn, ts: ngtcp2_tstamp) callconv(.c) void;
     extern fn ngtcp2_conn_encode_0rtt_transport_params(conn: *ngtcp2_conn, dest: [*]u8, destlen: usize) callconv(.c) ngtcp2_ssize;
     extern fn ngtcp2_conn_decode_and_set_0rtt_transport_params(conn: *ngtcp2_conn, data: [*]const u8, datalen: usize) callconv(.c) c_int;
-    extern fn ngtcp2_conn_read_pkt_versioned(
+    extern fn Curl_ngtcp2_conn_read_pkt(
         conn: *ngtcp2_conn,
         path: *const ngtcp2_path,
-        pkt_info_version: c_int,
         pi: ?*const ngtcp2_pkt_info,
         pkt: [*]const u8,
         pktlen: usize,
         ts: ngtcp2_tstamp,
     ) callconv(.c) c_int;
-    extern fn ngtcp2_conn_writev_stream_versioned(
+    extern fn Curl_ngtcp2_conn_writev_stream(
         conn: *ngtcp2_conn,
         path: ?*ngtcp2_path,
-        pkt_info_version: c_int,
         pi: ?*ngtcp2_pkt_info,
         dest: [*]u8,
         destlen: usize,
@@ -591,10 +625,9 @@ const ngtcp2_c = if (use_ngtcp2) struct {
         datavcnt: usize,
         ts: ngtcp2_tstamp,
     ) callconv(.c) ngtcp2_ssize;
-    extern fn ngtcp2_conn_writev_datagram_versioned(
+    extern fn Curl_ngtcp2_conn_writev_datagram(
         conn: *ngtcp2_conn,
         path: ?*ngtcp2_path,
-        pkt_info_version: c_int,
         pi: ?*ngtcp2_pkt_info,
         dest: [*]u8,
         destlen: usize,
@@ -605,10 +638,9 @@ const ngtcp2_c = if (use_ngtcp2) struct {
         datavcnt: usize,
         ts: ngtcp2_tstamp,
     ) callconv(.c) ngtcp2_ssize;
-    extern fn ngtcp2_conn_write_connection_close_versioned(
+    extern fn Curl_ngtcp2_conn_write_connection_close(
         conn: *ngtcp2_conn,
         path: ?*ngtcp2_path,
-        pkt_info_version: c_int,
         pi: ?*ngtcp2_pkt_info,
         dest: [*]u8,
         destlen: usize,
@@ -630,12 +662,10 @@ const ngtcp2_c = if (use_ngtcp2) struct {
     extern fn ngtcp2_crypto_get_path_challenge_data_cb(conn: *ngtcp2_conn, data: [*]u8, user_data: ?*anyopaque) callconv(.c) c_int;
     extern fn ngtcp2_crypto_version_negotiation_cb(conn: *ngtcp2_conn, version: u32, client_dcid: *const ngtcp2_cid, user_data: ?*anyopaque) callconv(.c) c_int;
 
-    extern fn nghttp3_settings_default_versioned(settings_version: c_int, settings: *nghttp3_settings) callconv(.c) void;
-    extern fn nghttp3_conn_client_new_versioned(
+    extern fn Curl_nghttp3_settings_default(settings: *nghttp3_settings) callconv(.c) void;
+    extern fn Curl_nghttp3_conn_client_new(
         pconn: *?*nghttp3_conn,
-        callbacks_version: c_int,
         callbacks: *const nghttp3_callbacks,
-        settings_version: c_int,
         settings: *const nghttp3_settings,
         mem_ptr: ?*const vquic_core.nghttp3_mem,
         conn_user_data: ?*anyopaque,
@@ -959,11 +989,13 @@ pub const CfNgtcp2Ctx = struct {
     stream_bufcp: BufcPool = undefined,
     max_stream_window: usize = 0,
     max_idle_ms: u64 = 0,
+    last_ts: ngtcp2_tstamp = 0,
     qlogfd: c_int = -1,
     streams: u32_ptrset = undefined,
     active_streams: uint32_bset = undefined,
     cbs: ?*const CfNgtcp2Cbs = null,
     call_data: CfCallData = .{},
+    tls_vrfy_result: CURLcode = CURLE_OK,
     initialized: bool = false,
     tls_vrfy_ok: bool = false,
     tls_hshk_reported: bool = false,
@@ -983,8 +1015,11 @@ pub fn Curl_ngtcp2_ver(p: [*]u8, len: usize) callconv(.c) void {
 
 pub fn Curl_cf_ngtcp2_io_ctx_update_time(pktx: *PktIoCtx) callconv(.c) void {
     vquic_core.Curl_vquic_ctx_update_time(&pktx.ctx.q, pktx.data);
-    pktx.ts = @as(ngtcp2_tstamp, @intCast(pktx.ctx.q.last_op.tv_sec)) * NGTCP2_SECONDS +
+    const raw_ts = @as(ngtcp2_tstamp, @intCast(pktx.ctx.q.last_op.tv_sec)) * NGTCP2_SECONDS +
         @as(ngtcp2_tstamp, @intCast(pktx.ctx.q.last_op.tv_usec)) * NGTCP2_MICROSECONDS;
+    const ts = @max(raw_ts, pktx.ctx.last_ts);
+    pktx.ctx.last_ts = ts;
+    pktx.ts = ts;
 }
 
 pub fn Curl_cf_ngtcp2_io_ctx_init(
@@ -1214,9 +1249,10 @@ pub fn Curl_cf_ngtcp2_cb_handshake_completed(
     ctx.q.last_io = Curl_pgrs_now(data).*;
     trcCf(data, cf, "handshake completed", .{});
     const result = vquic_core.Curl_vquic_tls_verify_peer(&ctx.tls, cf, data, &ctx.ssl_peer);
+    ctx.tls_vrfy_result = result;
     if (result != CURLE_OK) {
         trcCf(data, cf, "verify peer failed -> %d", .{@as(c_int, @intCast(result))});
-        return NGTCP2_ERR_CRYPTO;
+        return NGTCP2_ERR_CALLBACK_FAILURE;
     }
     ctx.tls_vrfy_ok = true;
     return 0;
@@ -1280,8 +1316,6 @@ pub fn Curl_cf_ngtcp2_cb_acked_stream_data_offset(
     }
     return 0;
 }
-
-const NGHTTP3_ERR_STREAM_NOT_FOUND: c_int = -104;
 
 pub fn Curl_cf_ngtcp2_cb_stream_open(
     tconn: *ngtcp2_conn,
@@ -1372,11 +1406,8 @@ pub fn Curl_cf_ngtcp2_cb_extend_max_local_streams_bidi(
     user_data: ?*anyopaque,
 ) callconv(.c) c_int {
     _ = tconn;
-    if (comptime !use_ngtcp2) return 0;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return 0));
-    if (ctx.h3conn) |h3conn| {
-        ngtcp2_c.nghttp3_conn_set_max_client_streams_bidi(h3conn, max_streams);
-    }
+    _ = max_streams;
+    _ = user_data;
     return 0;
 }
 
@@ -1429,17 +1460,15 @@ pub fn Curl_cf_ngtcp2_h3_init_ctrls(
     const qconn = ctx.qconn orelse return CURLE_QUIC_CONNECT_ERROR;
     const cbs = ctx.cbs orelse return CURLE_QUIC_CONNECT_ERROR;
 
-    ngtcp2_c.nghttp3_settings_default_versioned(NGHTTP3_SETTINGS_VERSION, &ctx.h3settings);
+    ngtcp2_c.Curl_nghttp3_settings_default(&ctx.h3settings);
     if (cbs.h3_settings) |h3_settings_fn| {
         const result = h3_settings_fn(cf, data, ctx, &ctx.h3settings);
         if (result != CURLE_OK) return result;
     }
 
-    var rc = ngtcp2_c.nghttp3_conn_client_new_versioned(
+    var rc = ngtcp2_c.Curl_nghttp3_conn_client_new(
         &ctx.h3conn,
-        NGHTTP3_CALLBACKS_VERSION,
         &cbs.h3_cbs,
-        NGHTTP3_SETTINGS_VERSION,
         &ctx.h3settings,
         vquic_core.Curl_nghttp3_mem(),
         ctx,
@@ -1477,8 +1506,10 @@ pub fn Curl_cf_ngtcp2_cb_recv_rx_key(
     const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return NGTCP2_ERR_CALLBACK_FAILURE));
     const cf = ctx.cf orelse return NGTCP2_ERR_CALLBACK_FAILURE;
     if (ctx.h3conn == null) {
-        if (Curl_cf_ngtcp2_h3_init_ctrls(cf, ctx.call_data.data, ctx) != CURLE_OK)
+        const rc = Curl_cf_ngtcp2_h3_init_ctrls(cf, ctx.call_data.data, ctx);
+        if (rc != CURLE_OK) {
             return NGTCP2_ERR_CALLBACK_FAILURE;
+        }
     }
     return 0;
 }
@@ -1489,7 +1520,7 @@ pub fn Curl_cf_ngtcp2_cb_recv_tx_key(
     user_data: ?*anyopaque,
 ) callconv(.c) c_int {
     _ = tconn;
-    if (level != NGTCP2_CRYPTO_LEVEL_EARLY and level != NGTCP2_CRYPTO_LEVEL_APPLICATION)
+    if (level != NGTCP2_CRYPTO_LEVEL_EARLY)
         return 0;
     const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return NGTCP2_ERR_CALLBACK_FAILURE));
     const cf = ctx.cf orelse return NGTCP2_ERR_CALLBACK_FAILURE;
@@ -1664,14 +1695,11 @@ pub fn Curl_cf_ngtcp2_cb_h3_recv_header(
 
     var result: CURLcode = CURLE_OK;
     if (h3name.len == 7 and h3name.base != null and std.mem.eql(u8, h3name.base.?[0..7], ":status")) {
-        var line_buf: [14]u8 = undefined;
+        var line_buf: [16]u8 = @splat(0);
         result = Curl_http_decode_status(&stream.status_code, h3val.base.?, h3val.len);
         if (result == CURLE_OK) {
-            const slice = std.fmt.bufPrint(&line_buf, "HTTP/3 {d} \r\n", .{stream.status_code}) catch return NGHTTP3_ERR_CALLBACK_FAILURE;
-            result = Curl_headers_push(sdata, slice.ptr, slice.len, CURLH_PSEUDO);
-            if (result == CURLE_OK) {
-                result = Curl_xfer_write_resp_hd(sdata, slice.ptr, slice.len, false);
-            }
+            const slice = std.fmt.bufPrint(line_buf[0 .. line_buf.len - 1], "HTTP/3 {d} \r\n", .{stream.status_code}) catch return NGHTTP3_ERR_CALLBACK_FAILURE;
+            result = Curl_xfer_write_resp_hd(sdata, slice.ptr, slice.len, false);
         }
     } else if (h3name.base != null and h3val.base != null) {
         const total_len = h3name.len + 2 + h3val.len + 2;
@@ -1689,11 +1717,7 @@ pub fn Curl_cf_ngtcp2_cb_h3_recv_header(
         hbuf[h3name.len + 2 + h3val.len + 1] = '\n';
         hbuf[total_len] = 0;
 
-        const htype: u8 = if (stream.status_code >= 100 and stream.status_code < 200) CURLH_1XX else CURLH_HEADER;
-        result = Curl_headers_push(sdata, hbuf, total_len, htype);
-        if (result == CURLE_OK) {
-            result = Curl_xfer_write_resp_hd(sdata, hbuf, total_len, false);
-        }
+        result = Curl_xfer_write_resp_hd(sdata, hbuf, total_len, false);
     }
 
     if (result != CURLE_OK) {
@@ -2101,6 +2125,7 @@ fn recv_pkt(
     const ctx = pktx.ctx;
     const qconn = ctx.qconn orelse return CURLE_QUIC_CONNECT_ERROR;
 
+    Curl_cf_ngtcp2_io_ctx_update_time(pktx);
     pktx.pkt_count += 1;
     ngtcp2_c.ngtcp2_path_storage_init(
         &pktx.ps,
@@ -2112,10 +2137,9 @@ fn recv_pkt(
     );
 
     var pi = ngtcp2_pkt_info{ .ecn = ecn };
-    const rv = ngtcp2_c.ngtcp2_conn_read_pkt_versioned(
+    const rv = ngtcp2_c.Curl_ngtcp2_conn_read_pkt(
         qconn,
         &pktx.ps.path,
-        NGTCP2_PKT_INFO_VERSION,
         &pi,
         pkt,
         pktlen,
@@ -2129,6 +2153,9 @@ fn recv_pkt(
             } else {
                 ngtcp2_c.ngtcp2_ccerr_set_liberr(&ctx.last_error, rv, null, 0);
             }
+        }
+        if (ctx.tls_vrfy_result != CURLE_OK) {
+            return ctx.tls_vrfy_result;
         }
         if (rv == NGTCP2_ERR_CRYPTO) {
             return if (ctx.tls_vrfy_ok) CURLE_SSL_CONNECT_ERROR else CURLE_PEER_FAILED_VERIFICATION;
@@ -2173,10 +2200,9 @@ fn progress_ingress_cf(
 
         const path_ptr = ngtcp2_c.ngtcp2_conn_get_path(ctx.qconn.?);
         var pi = ngtcp2_pkt_info{ .ecn = 0 };
-        const rv = ngtcp2_c.ngtcp2_conn_read_pkt_versioned(
+        const rv = ngtcp2_c.Curl_ngtcp2_conn_read_pkt(
             ctx.qconn.?,
             path_ptr,
-            NGTCP2_PKT_INFO_VERSION,
             &pi,
             &buf,
             nread,
@@ -2299,10 +2325,9 @@ fn progress_egress(
         }
 
         var ndatalen: ngtcp2_ssize = 0;
-        const written = ngtcp2_c.ngtcp2_conn_writev_stream_versioned(
+        const written = ngtcp2_c.Curl_ngtcp2_conn_writev_stream(
             qconn,
             &pktx.ps.path,
-            NGTCP2_PKT_INFO_VERSION,
             null,
             &pkt_buf,
             max_pktlen,
@@ -2385,8 +2410,6 @@ fn progress_egress(
     return CURLE_OK;
 }
 
-const NGTCP2_ERR_STREAM_SHUT_WR: c_int = -212;
-
 pub fn Curl_cf_ngtcp2_progress_egress(
     cf: *CurlCfilter,
     data: ?*CurlEasy,
@@ -2434,6 +2457,7 @@ fn check_expiry(
     if (comptime !use_ngtcp2) return CURLE_NOT_BUILT_IN;
     const qconn = ctx.qconn orelse return CURLE_OK;
 
+    Curl_cf_ngtcp2_io_ctx_update_time(pktx);
     const rv = ngtcp2_c.ngtcp2_conn_handle_expiry(qconn, pktx.ts);
     if (rv != 0) {
         switch (rv) {
@@ -2474,7 +2498,7 @@ fn cf_ngtcp2_start(
     ctx.max_stream_window = H3_STREAM_WINDOW_SIZE;
     ctx.max_idle_ms = @intCast(QUIC_IDLE_TIMEOUT / NGTCP2_MILLISECONDS);
 
-    ngtcp2_c.ngtcp2_settings_default_versioned(NGTCP2_SETTINGS_VERSION, &ctx.settings);
+    ngtcp2_c.Curl_ngtcp2_settings_default(&ctx.settings);
     ctx.settings.initial_ts = pktx.ts;
     ctx.settings.initial_rtt = NGTCP2_DEFAULT_INITIAL_RTT;
     ctx.settings.cc_algo = NGTCP2_CC_ALGO_CUBIC;
@@ -2483,7 +2507,7 @@ fn cf_ngtcp2_start(
     ctx.settings.max_stream_window = ctx.max_stream_window;
     ctx.settings.handshake_timeout = HANDSHAKE_TIMEOUT;
 
-    ngtcp2_c.ngtcp2_transport_params_default_versioned(NGTCP2_TRANSPORT_PARAMS_VERSION, &ctx.transport_params);
+    ngtcp2_c.Curl_ngtcp2_transport_params_default(&ctx.transport_params);
     ctx.transport_params.initial_max_stream_data_bidi_local = ctx.max_stream_window;
     ctx.transport_params.initial_max_stream_data_bidi_remote = H3_STREAM_WINDOW_SIZE;
     ctx.transport_params.initial_max_stream_data_uni = H3_STREAM_WINDOW_SIZE;
@@ -2547,17 +2571,14 @@ fn cf_ngtcp2_start(
         );
     }
 
-    const rc = ngtcp2_c.ngtcp2_conn_client_new_versioned(
+    const rc = ngtcp2_c.Curl_ngtcp2_conn_client_new(
         &ctx.qconn,
         &ctx.dcid,
         &ctx.scid,
         &pktx.ps.path,
         NGTCP2_PROTO_VER_V1,
-        NGTCP2_CALLBACKS_VERSION,
         &cbs.q_cbs,
-        NGTCP2_SETTINGS_VERSION,
         &ctx.settings,
-        NGTCP2_TRANSPORT_PARAMS_VERSION,
         &ctx.transport_params,
         vquic_core.Curl_ngtcp2_mem(),
         ctx,
@@ -2658,10 +2679,9 @@ pub fn Curl_cf_ngtcp2_cmn_shutdown(
         ctx.shutdown_started = true;
 
         var pkt_buf: [NGTCP2_MAX_UDP_PAYLOAD_SIZE]u8 = undefined;
-        const rc = ngtcp2_c.ngtcp2_conn_write_connection_close_versioned(
+        const rc = ngtcp2_c.Curl_ngtcp2_conn_write_connection_close(
             ctx.qconn.?,
             &pktx.ps.path,
-            NGTCP2_PKT_INFO_VERSION,
             null,
             &pkt_buf,
             pkt_buf.len,
@@ -2803,6 +2823,12 @@ pub fn Curl_cf_ngtcp2_cmn_query(
             }
             return CURLE_OK;
         },
+        CF_QUERY_HTTP_VERSION => {
+            if (pres1) |p1| {
+                p1.* = 30;
+            }
+            return CURLE_OK;
+        },
         CF_QUERY_SSL_INFO, CF_QUERY_SSL_CTX_INFO => {
             if (pres2) |p2| {
                 const info: *vtls_backends.CurlTlsSessionInfo = @ptrCast(@alignCast(p2));
@@ -2814,8 +2840,8 @@ pub fn Curl_cf_ngtcp2_cmn_query(
         },
         CF_QUERY_ALPN_NEGOTIATED => {
             if (pres2) |p2| {
-                const palpn: *c_int = @ptrCast(@alignCast(p2));
-                palpn.* = if (cf.isConnected()) ALPN_h3 else 0;
+                const palpn: *?[*:0]const u8 = @ptrCast(@alignCast(p2));
+                palpn.* = if (cf.isConnected()) "h3" else null;
             }
             return CURLE_OK;
         },
@@ -3070,8 +3096,8 @@ fn cf_ngtcp2_recv(
 fn cb_h3_readfunction(
     conn: *nghttp3_conn,
     stream_id: i64,
-    pdata: *[*]nghttp3_vec,
-    pdatacnt: *usize,
+    vec: [*]nghttp3_vec,
+    veccnt: usize,
     pflags: *u32,
     user_data: ?*anyopaque,
     stream_user_data: ?*anyopaque,
@@ -3082,46 +3108,43 @@ fn cb_h3_readfunction(
     const sdata = Curl_cf_ngtcp2_get_xfer(ctx, stream_id) orelse return NGHTTP3_ERR_CALLBACK_FAILURE;
     const stream = h3StreamCtx(ctx, sdata) orelse return NGHTTP3_ERR_CALLBACK_FAILURE;
 
-    var v = nghttp3_vec{ .base = null, .len = 0 };
-    const n_in_flight = stream.sendbuf_len_in_flight;
-    if (n_in_flight < io_buffers.Curl_bufq_len(&stream.sendbuf)) {
-        var chunk_ptr: ?[*]const u8 = null;
-        var chunk_len: usize = 0;
-        if (io_buffers.Curl_bufq_peek_at(&stream.sendbuf, n_in_flight, &chunk_ptr, &chunk_len)) {
-            v.base = @constCast(chunk_ptr);
-            v.len = chunk_len;
+    var nwritten: usize = 0;
+    var nvecs: usize = 0;
+    if (stream.sendbuf_len_in_flight < io_buffers.Curl_bufq_len(&stream.sendbuf)) {
+        while (nvecs < veccnt) {
+            var chunk_ptr: ?[*]const u8 = null;
+            var chunk_len: usize = 0;
+            if (!io_buffers.Curl_bufq_peek_at(&stream.sendbuf, stream.sendbuf_len_in_flight, &chunk_ptr, &chunk_len))
+                break;
+            vec[nvecs].base = @constCast(chunk_ptr);
+            vec[nvecs].len = chunk_len;
             stream.sendbuf_len_in_flight += chunk_len;
+            nwritten += chunk_len;
+            nvecs += 1;
         }
     }
 
-    if (v.len > 0) {
-        S_H3_READ_VEC[0] = v;
-        pdata.* = &S_H3_READ_VEC;
-        pdatacnt.* = 1;
-        pflags.* = NGHTTP3_DATA_FLAG_NONE;
-        if (stream.send_closed and stream.sendbuf_len_in_flight == io_buffers.Curl_bufq_len(&stream.sendbuf)) {
-            pflags.* = NGHTTP3_DATA_FLAG_EOF;
-        }
-        return 0;
+    if (nwritten > 0 and stream.upload_left != -1) {
+        stream.upload_left -= @intCast(nwritten);
     }
 
-    if (stream.send_closed and stream.sendbuf_len_in_flight == io_buffers.Curl_bufq_len(&stream.sendbuf)) {
-        pdata.* = &S_H3_READ_VEC;
-        pdatacnt.* = 0;
+    pflags.* = NGHTTP3_DATA_FLAG_NONE;
+    if (stream.upload_left == 0 or (stream.send_closed and stream.sendbuf_len_in_flight == io_buffers.Curl_bufq_len(&stream.sendbuf))) {
         pflags.* = NGHTTP3_DATA_FLAG_EOF;
-        return 0;
+        stream.send_closed = true;
+    } else if (nwritten == 0) {
+        return NGHTTP3_ERR_WOULDBLOCK;
     }
 
-    return NGHTTP3_ERR_WOULDBLOCK;
+    return @intCast(nvecs);
 }
-
-threadlocal var S_H3_READ_VEC: [1]nghttp3_vec = .{.{}};
 
 fn h3_stream_open(
     cf: *CurlCfilter,
     data: ?*CurlEasy,
     buf: [*]const u8,
     len: usize,
+    eos: bool,
     pnwritten: *usize,
 ) CURLcode {
     pnwritten.* = 0;
@@ -3174,19 +3197,15 @@ fn h3_stream_open(
         return CURLE_SEND_ERROR;
     }
 
-    const httpreq_kind: i64 = if (data) |d| Curl_zig_url_data_get_i64(d, 9) else 0;
-    if (httpreq_kind >= 2 and httpreq_kind <= 5) {
-        const infilesize: curl_off_t = if (data) |d| Curl_zig_easy_state_infilesize(d) else -1;
-        s.upload_left = if (infilesize != -1) infilesize else -1;
-    } else {
-        s.upload_left = 0;
-    }
-    s.send_closed = (s.upload_left == 0);
+    const rest_len = len - pnwritten.*;
+    const send_fin = eos and (rest_len == 0);
+    s.upload_left = if (send_fin) 0 else if (eos) @intCast(rest_len) else -1;
+    s.send_closed = send_fin;
 
     var dr = nghttp3_data_reader{ .read_data = cb_h3_readfunction };
     const dr_ptr: ?*const nghttp3_data_reader = if (!s.send_closed) &dr else null;
 
-    rc = ngtcp2_c.nghttp3_conn_submit_request(h3conn, s.id, nva, nheader, dr_ptr, null);
+    rc = ngtcp2_c.nghttp3_conn_submit_request(h3conn, s.id, nva, nheader, dr_ptr, data);
     if (rc != 0) {
         return CURLE_SEND_ERROR;
     }
@@ -3229,7 +3248,7 @@ fn cf_ngtcp2_send(
 
     if (s.h1.done == 0) {
         var hdr_bytes: usize = 0;
-        result = h3_stream_open(cf, data, buf, len, &hdr_bytes);
+        result = h3_stream_open(cf, data, buf, len, eos, &hdr_bytes);
         if (result != CURLE_OK) return result;
         pnwritten.* += hdr_bytes;
         if (s.h1.done == 0) {
@@ -4138,10 +4157,9 @@ fn cf_ngtcp2_proxy_send(
         var accepted: c_int = 0;
         const pathmax = ngtcp2_c.ngtcp2_conn_get_max_tx_udp_payload_size(qconn);
         var pkt_buf: [NGTCP2_MAX_UDP_PAYLOAD_SIZE]u8 = undefined;
-        const written = ngtcp2_c.ngtcp2_conn_writev_datagram_versioned(
+        const written = ngtcp2_c.Curl_ngtcp2_conn_writev_datagram(
             qconn,
             &pktx.ps.path,
-            NGTCP2_PKT_INFO_VERSION,
             null,
             &pkt_buf,
             @min(pkt_buf.len, pathmax),

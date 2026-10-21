@@ -173,8 +173,8 @@ pub const CURLE_TOO_MANY_REDIRECTS: CURLcode = 47;
 pub const CURLE_SEND_ERROR: CURLcode = 55;
 pub const CURLE_RECV_ERROR: CURLcode = 56;
 pub const CURLE_AGAIN: CURLcode = 81;
+pub const CURLE_NO_CONNECTION_AVAILABLE: CURLcode = 89;
 pub const CURLE_HTTP2_STREAM: CURLcode = 92;
-pub const CURLE_NO_CONNECTION_AVAILABLE: CURLcode = 101;
 
 pub const CURLM_CALL_MULTI_PERFORM: CURLMcode = -1;
 pub const CURLM_OK: CURLMcode = 0;
