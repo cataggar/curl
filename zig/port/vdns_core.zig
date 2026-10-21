@@ -34,6 +34,7 @@ const curlx_parse = struct {
 };
 
 fn memdupBytes(src: ?[*]const u8, len: usize) ?[*]u8 {
+    if (src == null) return null;
     const raw = curlx_parse.curlx_memdup(src, len) orelse return null;
     return @ptrCast(raw);
 }
@@ -477,30 +478,30 @@ pub export fn Curl_httpsrr_set(
         HTTPS_RR_CODE_IPV4 => {
             if (vlen == 0 or (vlen & 3) != 0) return CURLE_BAD_FUNCTION_ARGUMENT;
             mem.free(@ptrCast(rr.ipv4hints));
-            const dup = memdupBytes(val, vlen) orelse {
-                rr.ipv4hints = null;
-                return CURLE_OUT_OF_MEMORY;
-            };
+            rr.ipv4hints = null;
+            rr.ipv4hints_len = 0;
+            const dup = memdupBytes(val, vlen) orelse return CURLE_OUT_OF_MEMORY;
             rr.ipv4hints = @ptrCast(dup);
             rr.ipv4hints_len = vlen;
         },
         HTTPS_RR_CODE_ECH => {
             if (vlen == 0) return CURLE_BAD_FUNCTION_ARGUMENT;
-            mem.free(@ptrCast(rr.echconfiglist));
-            const dup = memdupBytes(val, vlen) orelse {
-                rr.echconfiglist = null;
-                return CURLE_OUT_OF_MEMORY;
-            };
+            if (rr.echconfiglist) |ech| {
+                mem.secureZero(@ptrCast(ech), rr.echconfiglist_len);
+                mem.free(@ptrCast(ech));
+            }
+            rr.echconfiglist = null;
+            rr.echconfiglist_len = 0;
+            const dup = memdupBytes(val, vlen) orelse return CURLE_OUT_OF_MEMORY;
             rr.echconfiglist = @ptrCast(dup);
             rr.echconfiglist_len = vlen;
         },
         HTTPS_RR_CODE_IPV6 => {
             if (vlen == 0 or (vlen & 15) != 0) return CURLE_BAD_FUNCTION_ARGUMENT;
             mem.free(@ptrCast(rr.ipv6hints));
-            const dup = memdupBytes(val, vlen) orelse {
-                rr.ipv6hints = null;
-                return CURLE_OUT_OF_MEMORY;
-            };
+            rr.ipv6hints = null;
+            rr.ipv6hints_len = 0;
+            const dup = memdupBytes(val, vlen) orelse return CURLE_OUT_OF_MEMORY;
             rr.ipv6hints = @ptrCast(dup);
             rr.ipv6hints_len = vlen;
         },
@@ -518,10 +519,13 @@ pub export fn Curl_httpsrr_set(
 pub export fn Curl_httpsrr_destroy(rrinfo_opt: ?*Curl_https_rrinfo) callconv(.c) void {
     if (rrinfo_opt) |rrinfo| {
         mem.free(@ptrCast(rrinfo.target));
-        mem.free(@ptrCast(rrinfo.echconfiglist));
+        if (rrinfo.echconfiglist) |ech| {
+            mem.secureZero(@ptrCast(ech), rrinfo.echconfiglist_len);
+            mem.free(@ptrCast(ech));
+        }
         mem.free(@ptrCast(rrinfo.ipv4hints));
         mem.free(@ptrCast(rrinfo.ipv6hints));
-        mem.free(@ptrCast(rrinfo));
+        mem.freeSized(@ptrCast(rrinfo), @sizeOf(Curl_https_rrinfo));
     }
 }
 
@@ -3117,4 +3121,44 @@ test "Curl_httpsrr_from_ares decodes c-ares HTTPS DNS record" {
         try std.testing.expect(hinfo.?.portSet());
         try std.testing.expectEqual(@as(u16, 8443), hinfo.?.port);
     }
+}
+
+test "Curl_httpsrr_set resets lengths before replacement failure and Curl_httpsrr_destroy scrubs ECH" {
+    const raw = mem.calloc(1, @sizeOf(Curl_https_rrinfo)) orelse return error.OutOfMemory;
+    const rr: *Curl_https_rrinfo = @ptrCast(@alignCast(raw));
+    defer Curl_httpsrr_destroy(rr);
+
+    const ipv4_wire = [_]u8{ 192, 0, 2, 1 };
+    const ech_wire = [_]u8{ 0xfe, 0x0d, 0x00, 0x10, 0xaa, 0xbb, 0xcc, 0xdd };
+    var ipv6_wire: [16]u8 = @splat(0x20);
+    ipv6_wire[15] = 1;
+
+    try std.testing.expectEqual(CURLE_OK, Curl_httpsrr_set(rr, HTTPS_RR_CODE_IPV4, &ipv4_wire, ipv4_wire.len));
+    try std.testing.expect(rr.ipv4hints != null);
+    try std.testing.expectEqual(@as(usize, 4), rr.ipv4hints_len);
+
+    try std.testing.expectEqual(CURLE_OK, Curl_httpsrr_set(rr, HTTPS_RR_CODE_ECH, &ech_wire, ech_wire.len));
+    try std.testing.expect(rr.echconfiglist != null);
+    try std.testing.expectEqual(@as(usize, 8), rr.echconfiglist_len);
+
+    try std.testing.expectEqual(CURLE_OK, Curl_httpsrr_set(rr, HTTPS_RR_CODE_IPV6, &ipv6_wire, ipv6_wire.len));
+    try std.testing.expect(rr.ipv6hints != null);
+    try std.testing.expectEqual(@as(usize, 16), rr.ipv6hints_len);
+
+    // Passing null val with valid non-zero length simulates memdupBytes allocation failure
+    // after freeing the old buffer; pointer and length must both be reset to null / 0.
+    try std.testing.expectEqual(CURLE_OUT_OF_MEMORY, Curl_httpsrr_set(rr, HTTPS_RR_CODE_IPV4, null, 4));
+    try std.testing.expect(rr.ipv4hints == null);
+    try std.testing.expectEqual(@as(usize, 0), rr.ipv4hints_len);
+
+    try std.testing.expectEqual(CURLE_OUT_OF_MEMORY, Curl_httpsrr_set(rr, HTTPS_RR_CODE_ECH, null, 8));
+    try std.testing.expect(rr.echconfiglist == null);
+    try std.testing.expectEqual(@as(usize, 0), rr.echconfiglist_len);
+
+    try std.testing.expectEqual(CURLE_OUT_OF_MEMORY, Curl_httpsrr_set(rr, HTTPS_RR_CODE_IPV6, null, 16));
+    try std.testing.expect(rr.ipv6hints == null);
+    try std.testing.expectEqual(@as(usize, 0), rr.ipv6hints_len);
+
+    // Re-populate ECH so Curl_httpsrr_destroy scrubs echconfiglist and poisons rrinfo
+    try std.testing.expectEqual(CURLE_OK, Curl_httpsrr_set(rr, HTTPS_RR_CODE_ECH, &ech_wire, ech_wire.len));
 }

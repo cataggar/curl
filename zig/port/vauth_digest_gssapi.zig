@@ -1694,6 +1694,32 @@ fn socks5SspiRecv(
     return CURLE_OK;
 }
 
+fn socks5EncodeTokenHeader(hdr: *[4]u8, msg_type: u8, token_len: usize) ?u16 {
+    const len_u16 = std.math.cast(u16, token_len) orelse return null;
+    hdr[0] = 1;
+    hdr[1] = msg_type;
+    std.mem.writeInt(u16, hdr[2..4], len_u16, .big);
+    return len_u16;
+}
+
+fn socks5DecodeTokenLength(hdr: []const u8) ?u16 {
+    if (hdr.len < 4) return null;
+    const len_u16 = std.mem.readInt(u16, hdr[2..4], .big);
+    if (len_u16 == 0) return null;
+    return len_u16;
+}
+
+fn scrubAndFreeSecBuffer(buf: *SecBuffer) void {
+    if (buf.pvBuffer) |ptr| {
+        if (buf.cbBuffer > 0) {
+            mem.secureZero(ptr, @intCast(buf.cbBuffer));
+        }
+        mem.free(ptr);
+        buf.pvBuffer = null;
+        buf.cbBuffer = 0;
+    }
+}
+
 fn socks5GssapiNegotiateSspi(
     cf: ?*anyopaque,
     cf_next: ?*anyopaque,
@@ -1794,8 +1820,7 @@ fn socks5GssapiNegotiateSspi(
         );
 
         if (in_sec_buf.pvBuffer != null) {
-            mem.free(in_sec_buf.pvBuffer);
-            in_sec_buf.pvBuffer = null;
+            scrubAndFreeSecBuffer(&in_sec_buf);
         }
 
         if (checkSspiErr(data, status, "InitializeSecurityContext")) {
@@ -1803,15 +1828,25 @@ fn socks5GssapiNegotiateSspi(
             mem.free(@ptrCast(service_Principal));
             _ = sec_fn.DeleteSecurityContext(&sspi_context);
             _ = sec_fn.FreeCredentialsHandle(&cred_handle);
-            _ = sec_fn.FreeContextBuffer(out_sec_buf.pvBuffer);
+            if (out_sec_buf.pvBuffer) |p| {
+                if (out_sec_buf.cbBuffer > 0) mem.secureZero(p, @intCast(out_sec_buf.cbBuffer));
+                _ = sec_fn.FreeContextBuffer(p);
+            }
             return CURLE_COULDNT_CONNECT;
         }
 
         if (out_sec_buf.cbBuffer != 0) {
-            sspi_recv_token[0] = 1;
-            sspi_recv_token[1] = 1;
-            us_length = std.mem.nativeToBig(u16, @as(u16, @truncate(out_sec_buf.cbBuffer)));
-            @memcpy(sspi_recv_token[2..4], std.mem.asBytes(&us_length));
+            us_length = socks5EncodeTokenHeader(&sspi_recv_token, 1, @intCast(out_sec_buf.cbBuffer)) orelse {
+                Curl_failf(data, "Failed to send SSPI authentication token.");
+                mem.free(@ptrCast(service_Principal));
+                if (out_sec_buf.pvBuffer) |p| {
+                    if (out_sec_buf.cbBuffer > 0) mem.secureZero(p, @intCast(out_sec_buf.cbBuffer));
+                    _ = sec_fn.FreeContextBuffer(p);
+                }
+                _ = sec_fn.DeleteSecurityContext(&sspi_context);
+                _ = sec_fn.FreeCredentialsHandle(&cred_handle);
+                return CURLE_COULDNT_CONNECT;
+            };
 
             code = socks5SspiSend(cf_next, data, sock, &sspi_recv_token, 4);
             if (code == CURLE_OK and out_sec_buf.pvBuffer != null) {
@@ -1826,14 +1861,20 @@ fn socks5GssapiNegotiateSspi(
             if (code != CURLE_OK) {
                 Curl_failf(data, "Failed to send SSPI authentication token.");
                 mem.free(@ptrCast(service_Principal));
-                _ = sec_fn.FreeContextBuffer(out_sec_buf.pvBuffer);
+                if (out_sec_buf.pvBuffer) |p| {
+                    if (out_sec_buf.cbBuffer > 0) mem.secureZero(p, @intCast(out_sec_buf.cbBuffer));
+                    _ = sec_fn.FreeContextBuffer(p);
+                }
                 _ = sec_fn.DeleteSecurityContext(&sspi_context);
                 _ = sec_fn.FreeCredentialsHandle(&cred_handle);
                 return CURLE_COULDNT_CONNECT;
             }
         }
 
-        _ = sec_fn.FreeContextBuffer(out_sec_buf.pvBuffer);
+        if (out_sec_buf.pvBuffer) |p| {
+            if (out_sec_buf.cbBuffer > 0) mem.secureZero(p, @intCast(out_sec_buf.cbBuffer));
+            _ = sec_fn.FreeContextBuffer(p);
+        }
         out_sec_buf.pvBuffer = null;
         out_sec_buf.cbBuffer = 0;
 
@@ -1874,16 +1915,13 @@ fn socks5GssapiNegotiateSspi(
             return CURLE_COULDNT_CONNECT;
         }
 
-        @memcpy(std.mem.asBytes(&us_length), sspi_recv_token[2..4]);
-        us_length = std.mem.bigToNative(u16, us_length);
-
-        if (us_length == 0) {
+        us_length = socks5DecodeTokenLength(sspi_recv_token[0..4]) orelse {
             Curl_failf(data, "Invalid zero-length SSPI authentication token.");
             mem.free(@ptrCast(service_Principal));
             _ = sec_fn.DeleteSecurityContext(&sspi_context);
             _ = sec_fn.FreeCredentialsHandle(&cred_handle);
             return CURLE_COULDNT_CONNECT;
-        }
+        };
 
         inbuf_desc.cBuffers = 1;
         inbuf_desc.pBuffers = @ptrCast(&in_sec_buf);
@@ -1902,7 +1940,7 @@ fn socks5GssapiNegotiateSspi(
         if (code != CURLE_OK) {
             Curl_failf(data, "Failed to receive SSPI authentication token.");
             mem.free(@ptrCast(service_Principal));
-            mem.free(in_sec_buf.pvBuffer);
+            scrubAndFreeSecBuffer(&in_sec_buf);
             _ = sec_fn.DeleteSecurityContext(&sspi_context);
             _ = sec_fn.FreeCredentialsHandle(&cred_handle);
             return CURLE_COULDNT_CONNECT;
@@ -1937,8 +1975,7 @@ fn socks5GssapiNegotiateSspi(
     sspi_recv_token[1] = 2;
 
     if (socks5_gssapi_nec) {
-        us_length = std.mem.nativeToBig(u16, 1);
-        @memcpy(sspi_recv_token[2..4], std.mem.asBytes(&us_length));
+        _ = socks5EncodeTokenHeader(&sspi_recv_token, 2, 1);
         const send_buf = [5]u8{ sspi_recv_token[0], sspi_recv_token[1], sspi_recv_token[2], sspi_recv_token[3], gss_enc };
         code = socks5SspiSend(cf_next, data, sock, &send_buf, 5);
         if (code != CURLE_OK) {
@@ -1966,7 +2003,7 @@ fn socks5GssapiNegotiateSspi(
         wrap_sec_buf[1].BufferType = SECBUFFER_DATA;
         wrap_sec_buf[1].pvBuffer = mem.malloc(1);
         if (wrap_sec_buf[1].pvBuffer == null) {
-            mem.free(wrap_sec_buf[0].pvBuffer);
+            scrubAndFreeSecBuffer(&wrap_sec_buf[0]);
             _ = sec_fn.DeleteSecurityContext(&sspi_context);
             return CURLE_OUT_OF_MEMORY;
         }
@@ -1976,8 +2013,8 @@ fn socks5GssapiNegotiateSspi(
         wrap_sec_buf[2].BufferType = SECBUFFER_PADDING;
         wrap_sec_buf[2].pvBuffer = mem.malloc(sizes.cbBlockSize);
         if (wrap_sec_buf[2].pvBuffer == null) {
-            mem.free(wrap_sec_buf[0].pvBuffer);
-            mem.free(wrap_sec_buf[1].pvBuffer);
+            scrubAndFreeSecBuffer(&wrap_sec_buf[0]);
+            scrubAndFreeSecBuffer(&wrap_sec_buf[1]);
             _ = sec_fn.DeleteSecurityContext(&sspi_context);
             return CURLE_OUT_OF_MEMORY;
         }
@@ -1988,17 +2025,23 @@ fn socks5GssapiNegotiateSspi(
 
         status = sec_fn.EncryptMessage(&sspi_context, KERB_WRAP_NO_ENCRYPT, &wrap_desc, 0);
         if (checkSspiErr(data, status, "EncryptMessage")) {
-            mem.free(wrap_sec_buf[0].pvBuffer);
-            mem.free(wrap_sec_buf[1].pvBuffer);
-            mem.free(wrap_sec_buf[2].pvBuffer);
+            scrubAndFreeSecBuffer(&wrap_sec_buf[0]);
+            scrubAndFreeSecBuffer(&wrap_sec_buf[1]);
+            scrubAndFreeSecBuffer(&wrap_sec_buf[2]);
             _ = sec_fn.DeleteSecurityContext(&sspi_context);
             Curl_failf(data, "Failed to encrypt theic data for SOCKS5 SSPI.");
             return CURLE_COULDNT_CONNECT;
         }
 
         const total_len: usize = wrap_sec_buf[0].cbBuffer + wrap_sec_buf[1].cbBuffer + wrap_sec_buf[2].cbBuffer;
-        us_length = std.mem.nativeToBig(u16, @as(u16, @truncate(total_len)));
-        @memcpy(sspi_recv_token[2..4], std.mem.asBytes(&us_length));
+        us_length = socks5EncodeTokenHeader(&sspi_recv_token, 2, total_len) orelse {
+            scrubAndFreeSecBuffer(&wrap_sec_buf[0]);
+            scrubAndFreeSecBuffer(&wrap_sec_buf[1]);
+            scrubAndFreeSecBuffer(&wrap_sec_buf[2]);
+            _ = sec_fn.DeleteSecurityContext(&sspi_context);
+            Curl_failf(data, "Failed to send SSPI encryption request.");
+            return CURLE_COULDNT_CONNECT;
+        };
 
         code = socks5SspiSend(cf_next, data, sock, &sspi_recv_token, 4);
         if (code == CURLE_OK) {
@@ -2010,9 +2053,9 @@ fn socks5GssapiNegotiateSspi(
             }
         }
 
-        mem.free(wrap_sec_buf[0].pvBuffer);
-        mem.free(wrap_sec_buf[1].pvBuffer);
-        mem.free(wrap_sec_buf[2].pvBuffer);
+        scrubAndFreeSecBuffer(&wrap_sec_buf[0]);
+        scrubAndFreeSecBuffer(&wrap_sec_buf[1]);
+        scrubAndFreeSecBuffer(&wrap_sec_buf[2]);
 
         if (code != CURLE_OK) {
             Curl_failf(data, "Failed to send SSPI encryption request.");
@@ -2040,14 +2083,11 @@ fn socks5GssapiNegotiateSspi(
         return CURLE_COULDNT_CONNECT;
     }
 
-    @memcpy(std.mem.asBytes(&us_length), sspi_recv_token[2..4]);
-    us_length = std.mem.bigToNative(u16, us_length);
-
-    if (us_length == 0) {
+    us_length = socks5DecodeTokenLength(sspi_recv_token[0..4]) orelse {
         Curl_failf(data, "Invalid zero-length SSPI encryption token.");
         _ = sec_fn.DeleteSecurityContext(&sspi_context);
         return CURLE_COULDNT_CONNECT;
-    }
+    };
 
     wrap_sec_buf[0].cbBuffer = us_length;
     wrap_sec_buf[0].pvBuffer = mem.malloc(us_length);
@@ -2063,7 +2103,7 @@ fn socks5GssapiNegotiateSspi(
     code = socks5SspiRecv(cf_next, data, sock, @ptrCast(wrap_sec_buf[0].pvBuffer), wrap_sec_buf[0].cbBuffer);
     if (code != CURLE_OK) {
         Curl_failf(data, "Failed to receive SSPI encryption type.");
-        mem.free(wrap_sec_buf[0].pvBuffer);
+        scrubAndFreeSecBuffer(&wrap_sec_buf[0]);
         _ = sec_fn.DeleteSecurityContext(&sspi_context);
         return CURLE_COULDNT_CONNECT;
     }
@@ -2075,34 +2115,37 @@ fn socks5GssapiNegotiateSspi(
         status = sec_fn.DecryptMessage(&sspi_context, &wrap_desc, 0, &qop);
 
         if (checkSspiErr(data, status, "DecryptMessage")) {
-            if (wrap_sec_buf[0].pvBuffer != null) mem.free(wrap_sec_buf[0].pvBuffer);
-            if (wrap_sec_buf[1].pvBuffer != null) mem.free(wrap_sec_buf[1].pvBuffer);
+            scrubAndFreeSecBuffer(&wrap_sec_buf[0]);
+            scrubAndFreeSecBuffer(&wrap_sec_buf[1]);
             _ = sec_fn.DeleteSecurityContext(&sspi_context);
             Curl_failf(data, "Failed to query security context attributes.");
             return CURLE_COULDNT_CONNECT;
         }
 
-        if (wrap_sec_buf[1].cbBuffer != 1) {
+        if (wrap_sec_buf[1].cbBuffer != 1 or wrap_sec_buf[1].pvBuffer == null) {
             Curl_failf(data, "Invalid SSPI encryption response length (%lu).", wrap_sec_buf[1].cbBuffer);
-            if (wrap_sec_buf[0].pvBuffer != null) mem.free(wrap_sec_buf[0].pvBuffer);
-            if (wrap_sec_buf[1].pvBuffer != null) mem.free(wrap_sec_buf[1].pvBuffer);
+            scrubAndFreeSecBuffer(&wrap_sec_buf[0]);
+            scrubAndFreeSecBuffer(&wrap_sec_buf[1]);
             _ = sec_fn.DeleteSecurityContext(&sspi_context);
             return CURLE_COULDNT_CONNECT;
         }
 
         const data_bytes: [*]const u8 = @ptrCast(wrap_sec_buf[1].pvBuffer.?);
         sspi_recv_token[1] = data_bytes[0];
-        mem.free(wrap_sec_buf[0].pvBuffer);
+        if (wrap_sec_buf[1].pvBuffer) |p1| {
+            mem.secureZero(p1, @intCast(wrap_sec_buf[1].cbBuffer));
+        }
+        scrubAndFreeSecBuffer(&wrap_sec_buf[0]);
     } else {
         if (wrap_sec_buf[0].cbBuffer != 1) {
             Curl_failf(data, "Invalid SSPI encryption response length (%lu).", wrap_sec_buf[0].cbBuffer);
-            mem.free(wrap_sec_buf[0].pvBuffer);
+            scrubAndFreeSecBuffer(&wrap_sec_buf[0]);
             _ = sec_fn.DeleteSecurityContext(&sspi_context);
             return CURLE_COULDNT_CONNECT;
         }
         const data_bytes: [*]const u8 = @ptrCast(wrap_sec_buf[0].pvBuffer.?);
         sspi_recv_token[1] = data_bytes[0];
-        mem.free(wrap_sec_buf[0].pvBuffer);
+        scrubAndFreeSecBuffer(&wrap_sec_buf[0]);
     }
 
     _ = sec_fn.DeleteSecurityContext(&sspi_context);
@@ -2711,6 +2754,17 @@ pub fn gssLogError(
     Curl_infof(data, "%s%s", prefix, @as([*:0]const u8, @ptrCast(&buf)));
 }
 
+fn gssScrubAndReleaseBuffer(minor_status: *OM_uint32, buf: *gss_buffer_desc) void {
+    if (buf.value) |ptr| {
+        if (buf.length > 0) {
+            mem.secureZero(ptr, buf.length);
+        }
+    }
+    _ = gss_release_buffer(minor_status, buf);
+    buf.value = null;
+    buf.length = 0;
+}
+
 fn checkGssErr(
     data: ?*anyopaque,
     major_status: OM_uint32,
@@ -2805,41 +2859,45 @@ pub fn socks5GssapiNegotiateGss(
         );
 
         if (gss_token != null) {
-            _ = gss_release_buffer(&gss_status, &gss_recv_token);
+            gssScrubAndReleaseBuffer(&gss_status, &gss_recv_token);
             gss_token = GSS_C_NO_BUFFER;
         }
 
         if (checkGssErr(data, gss_major_status, gss_minor_status, "gss_init_sec_context() failed: ")) {
             _ = gss_release_name(&gss_status, &server);
-            _ = gss_release_buffer(&gss_status, &gss_recv_token);
-            _ = gss_release_buffer(&gss_status, &gss_send_token);
+            gssScrubAndReleaseBuffer(&gss_status, &gss_recv_token);
+            gssScrubAndReleaseBuffer(&gss_status, &gss_send_token);
             _ = gssDeleteSecContext(&gss_status, &gss_context, GSS_C_NO_BUFFER);
             Curl_failf(data, "Failed to initial GSS-API token.");
             return CURLE_COULDNT_CONNECT;
         }
 
         if (gss_send_token.length != 0) {
-            rcvbuf[0] = 1;
-            rcvbuf[1] = 1;
-            us_length = std.mem.nativeToBig(u16, @as(u16, @truncate(gss_send_token.length)));
-            @memcpy(rcvbuf[2..4], std.mem.asBytes(&us_length));
+            const send_len = socks5EncodeTokenHeader(&rcvbuf, 1, gss_send_token.length) orelse {
+                Curl_failf(data, "Failed to send GSS-API authentication token.");
+                _ = gss_release_name(&gss_status, &server);
+                gssScrubAndReleaseBuffer(&gss_status, &gss_recv_token);
+                gssScrubAndReleaseBuffer(&gss_status, &gss_send_token);
+                _ = gssDeleteSecContext(&gss_status, &gss_context, GSS_C_NO_BUFFER);
+                return CURLE_COULDNT_CONNECT;
+            };
 
             var code = socks5SspiSend(cf_next, data, sock, &rcvbuf, 4);
             if (code == CURLE_OK and gss_send_token.value != null) {
-                code = socks5SspiSend(cf_next, data, sock, @ptrCast(gss_send_token.value.?), gss_send_token.length);
+                code = socks5SspiSend(cf_next, data, sock, @ptrCast(gss_send_token.value.?), send_len);
             }
             if (code != CURLE_OK) {
                 Curl_failf(data, "Failed to send GSS-API authentication token.");
                 _ = gss_release_name(&gss_status, &server);
-                _ = gss_release_buffer(&gss_status, &gss_recv_token);
-                _ = gss_release_buffer(&gss_status, &gss_send_token);
+                gssScrubAndReleaseBuffer(&gss_status, &gss_recv_token);
+                gssScrubAndReleaseBuffer(&gss_status, &gss_send_token);
                 _ = gssDeleteSecContext(&gss_status, &gss_context, GSS_C_NO_BUFFER);
                 return CURLE_COULDNT_CONNECT;
             }
         }
 
-        _ = gss_release_buffer(&gss_status, &gss_send_token);
-        _ = gss_release_buffer(&gss_status, &gss_recv_token);
+        gssScrubAndReleaseBuffer(&gss_status, &gss_send_token);
+        gssScrubAndReleaseBuffer(&gss_status, &gss_recv_token);
         if (gss_major_status != GSS_S_CONTINUE_NEEDED) break;
 
         var nread: usize = 0;
@@ -2872,15 +2930,12 @@ pub fn socks5GssapiNegotiateGss(
             return CURLE_COULDNT_CONNECT;
         }
 
-        @memcpy(std.mem.asBytes(&us_length), rcvbuf[2..4]);
-        us_length = std.mem.bigToNative(u16, us_length);
-
-        if (us_length == 0) {
+        us_length = socks5DecodeTokenLength(rcvbuf[0..4]) orelse {
             Curl_failf(data, "Invalid zero-length GSS-API authentication token.");
             _ = gss_release_name(&gss_status, &server);
             _ = gssDeleteSecContext(&gss_status, &gss_context, GSS_C_NO_BUFFER);
             return CURLE_COULDNT_CONNECT;
-        }
+        };
 
         gss_recv_token.length = us_length;
         gss_recv_token.value = std.c.malloc(us_length);
@@ -2894,7 +2949,7 @@ pub fn socks5GssapiNegotiateGss(
         if (result != CURLE_OK or nread != us_length) {
             Curl_failf(data, "Failed to receive GSS-API authentication token.");
             _ = gss_release_name(&gss_status, &server);
-            _ = gss_release_buffer(&gss_status, &gss_recv_token);
+            gssScrubAndReleaseBuffer(&gss_status, &gss_recv_token);
             _ = gssDeleteSecContext(&gss_status, &gss_context, GSS_C_NO_BUFFER);
             return CURLE_COULDNT_CONNECT;
         }
@@ -2935,7 +2990,7 @@ pub fn socks5GssapiNegotiateGss(
         if (checkGssErr(data, gss_major_status, gss_minor_status, "gss_display_name() failed: ")) {
             _ = gssDeleteSecContext(&gss_status, &gss_context, GSS_C_NO_BUFFER);
             _ = gss_release_name(&gss_status, &gss_client_name);
-            _ = gss_release_buffer(&gss_status, &gss_send_token);
+            gssScrubAndReleaseBuffer(&gss_status, &gss_send_token);
             Curl_failf(data, "Failed to allocate memory.");
             return CURLE_COULDNT_CONNECT;
         }
@@ -2946,7 +3001,7 @@ pub fn socks5GssapiNegotiateGss(
             if (gss_send_token.value) |v| @as([*]const u8, @ptrCast(v)) else @as([*]const u8, ""),
         );
         _ = gss_release_name(&gss_status, &gss_client_name);
-        _ = gss_release_buffer(&gss_status, &gss_send_token);
+        gssScrubAndReleaseBuffer(&gss_status, &gss_send_token);
     }
 
     var gss_enc: u8 = 0;
@@ -2959,12 +3014,8 @@ pub fn socks5GssapiNegotiateGss(
     const prot_str: [*:0]const u8 = if (gss_enc == 0) "none" else if (gss_enc == 1) "integrity" else "confidentiality";
     Curl_infof(data, "SOCKS5 GSS-API protection: %s", prot_str);
 
-    rcvbuf[0] = 1;
-    rcvbuf[1] = 2;
-
     if (socks5_gssapi_nec) {
-        us_length = std.mem.nativeToBig(u16, 1);
-        @memcpy(rcvbuf[2..4], std.mem.asBytes(&us_length));
+        _ = socks5EncodeTokenHeader(&rcvbuf, 2, 1);
         const send_buf = [5]u8{ rcvbuf[0], rcvbuf[1], rcvbuf[2], rcvbuf[3], gss_enc };
         const code = socks5SspiSend(cf_next, data, sock, &send_buf, 5);
         if (code != CURLE_OK) {
@@ -2977,19 +3028,25 @@ pub fn socks5GssapiNegotiateGss(
         gss_send_token.length = 1;
         gss_send_token.value = &enc_byte;
         gss_major_status = socks5GssWrap(&gss_minor_status, gss_context, 0, GSS_C_QOP_DEFAULT, &gss_send_token, &gss_conf_state, &gss_w_token);
+        gss_send_token.value = null;
+        gss_send_token.length = 0;
         if (checkGssErr(data, gss_major_status, gss_minor_status, "gss_wrap() failed: ")) {
-            _ = gss_release_buffer(&gss_status, &gss_w_token);
+            gssScrubAndReleaseBuffer(&gss_status, &gss_w_token);
             _ = gssDeleteSecContext(&gss_status, &gss_context, GSS_C_NO_BUFFER);
             Curl_failf(data, "Failed to wrap GSS-API encryption value into token.");
             return CURLE_COULDNT_CONNECT;
         }
-        us_length = std.mem.nativeToBig(u16, @as(u16, @truncate(gss_w_token.length)));
-        @memcpy(rcvbuf[2..4], std.mem.asBytes(&us_length));
+        const wrap_len = socks5EncodeTokenHeader(&rcvbuf, 2, gss_w_token.length) orelse {
+            gssScrubAndReleaseBuffer(&gss_status, &gss_w_token);
+            _ = gssDeleteSecContext(&gss_status, &gss_context, GSS_C_NO_BUFFER);
+            Curl_failf(data, "Failed to send GSS-API encryption request.");
+            return CURLE_COULDNT_CONNECT;
+        };
         var code = socks5SspiSend(cf_next, data, sock, &rcvbuf, 4);
         if (code == CURLE_OK and gss_w_token.value != null) {
-            code = socks5SspiSend(cf_next, data, sock, @ptrCast(gss_w_token.value.?), gss_w_token.length);
+            code = socks5SspiSend(cf_next, data, sock, @ptrCast(gss_w_token.value.?), wrap_len);
         }
-        _ = gss_release_buffer(&gss_status, &gss_w_token);
+        gssScrubAndReleaseBuffer(&gss_status, &gss_w_token);
         if (code != CURLE_OK) {
             Curl_failf(data, "Failed to send GSS-API encryption request.");
             _ = gssDeleteSecContext(&gss_status, &gss_context, GSS_C_NO_BUFFER);
@@ -3017,14 +3074,11 @@ pub fn socks5GssapiNegotiateGss(
         return CURLE_COULDNT_CONNECT;
     }
 
-    @memcpy(std.mem.asBytes(&us_length), rcvbuf[2..4]);
-    us_length = std.mem.bigToNative(u16, us_length);
-
-    if (us_length == 0) {
+    us_length = socks5DecodeTokenLength(rcvbuf[0..4]) orelse {
         Curl_failf(data, "Invalid zero-length GSS-API encryption token.");
         _ = gssDeleteSecContext(&gss_status, &gss_context, GSS_C_NO_BUFFER);
         return CURLE_COULDNT_CONNECT;
-    }
+    };
 
     gss_recv_token.length = us_length;
     gss_recv_token.value = std.c.malloc(gss_recv_token.length);
@@ -3036,37 +3090,37 @@ pub fn socks5GssapiNegotiateGss(
     result = Curl_blockread_all(cf, data, @ptrCast(gss_recv_token.value.?), gss_recv_token.length, &nread);
     if (result != CURLE_OK or nread != us_length) {
         Curl_failf(data, "Failed to receive GSS-API encryption type.");
-        _ = gss_release_buffer(&gss_status, &gss_recv_token);
+        gssScrubAndReleaseBuffer(&gss_status, &gss_recv_token);
         _ = gssDeleteSecContext(&gss_status, &gss_context, GSS_C_NO_BUFFER);
         return CURLE_COULDNT_CONNECT;
     }
 
     if (!socks5_gssapi_nec) {
         gss_major_status = socks5GssUnwrap(&gss_minor_status, gss_context, &gss_recv_token, &gss_w_token, &gss_conf_state, &gss_qop_state);
-        _ = gss_release_buffer(&gss_status, &gss_recv_token);
+        gssScrubAndReleaseBuffer(&gss_status, &gss_recv_token);
         if (checkGssErr(data, gss_major_status, gss_minor_status, "gss_unwrap() failed: ")) {
-            _ = gss_release_buffer(&gss_status, &gss_w_token);
+            gssScrubAndReleaseBuffer(&gss_status, &gss_w_token);
             _ = gssDeleteSecContext(&gss_status, &gss_context, GSS_C_NO_BUFFER);
             Curl_failf(data, "Failed to unwrap GSS-API encryption value into token.");
             return CURLE_COULDNT_CONNECT;
         }
         if (gss_w_token.length != 1 or gss_w_token.value == null) {
             Curl_failf(data, "Invalid GSS-API encryption response length (%zu).", gss_w_token.length);
-            _ = gss_release_buffer(&gss_status, &gss_w_token);
+            gssScrubAndReleaseBuffer(&gss_status, &gss_w_token);
             _ = gssDeleteSecContext(&gss_status, &gss_context, GSS_C_NO_BUFFER);
             return CURLE_COULDNT_CONNECT;
         }
         rcvbuf[1] = @as([*]const u8, @ptrCast(gss_w_token.value.?))[0];
-        _ = gss_release_buffer(&gss_status, &gss_w_token);
+        gssScrubAndReleaseBuffer(&gss_status, &gss_w_token);
     } else {
         if (gss_recv_token.length != 1) {
             Curl_failf(data, "Invalid GSS-API encryption response length (%zu).", gss_recv_token.length);
-            _ = gss_release_buffer(&gss_status, &gss_recv_token);
+            gssScrubAndReleaseBuffer(&gss_status, &gss_recv_token);
             _ = gssDeleteSecContext(&gss_status, &gss_context, GSS_C_NO_BUFFER);
             return CURLE_COULDNT_CONNECT;
         }
         rcvbuf[1] = @as([*]const u8, @ptrCast(gss_recv_token.value.?))[0];
-        _ = gss_release_buffer(&gss_status, &gss_recv_token);
+        gssScrubAndReleaseBuffer(&gss_status, &gss_recv_token);
     }
 
     _ = gssDeleteSecContext(&gss_status, &gss_context, GSS_C_NO_BUFFER);
@@ -3316,4 +3370,25 @@ test "Digest HTTP message algorithms: MD5-sess, SHA-256, SHA-512-256, qop=auth-i
         try std.testing.expectEqual(@as(gss_OID, null), gssMechanismToOid("UNKNOWN"));
         try std.testing.expectEqual(@as(gss_OID, null), gssMechanismToOid(null));
     }
+
+    var hdr: [4]u8 = undefined;
+    try std.testing.expectEqual(@as(?u16, 0x1234), socks5EncodeTokenHeader(&hdr, 1, 0x1234));
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 1, 1, 0x12, 0x34 }, &hdr);
+    try std.testing.expectEqual(@as(?u16, 0x1234), socks5DecodeTokenLength(&hdr));
+    try std.testing.expectEqual(@as(?u16, 0xffff), socks5EncodeTokenHeader(&hdr, 2, 0xffff));
+    try std.testing.expectEqual(@as(?u16, null), socks5EncodeTokenHeader(&hdr, 2, 0x10000));
+    try std.testing.expectEqual(@as(?u16, null), socks5DecodeTokenLength(hdr[0..3]));
+    const zero_hdr = [_]u8{ 1, 1, 0, 0 };
+    try std.testing.expectEqual(@as(?u16, null), socks5DecodeTokenLength(&zero_hdr));
+
+    var sec_buf = SecBuffer{
+        .cbBuffer = 4,
+        .BufferType = SECBUFFER_DATA,
+        .pvBuffer = mem.malloc(4),
+    };
+    try std.testing.expect(sec_buf.pvBuffer != null);
+    @memcpy(@as([*]u8, @ptrCast(sec_buf.pvBuffer.?))[0..4], "tok!");
+    scrubAndFreeSecBuffer(&sec_buf);
+    try std.testing.expect(sec_buf.pvBuffer == null);
+    try std.testing.expectEqual(@as(c_ulong, 0), sec_buf.cbBuffer);
 }

@@ -69,6 +69,21 @@ pub export fn Curl_is_ASCII_name(hostname_opt: ?[*:0]const u8) callconv(.c) bool
     return true;
 }
 
+pub const MAX_IDN_HOSTNAME_LEN: usize = 255;
+
+fn validateIdnHostname(input: [*:0]const u8) error{UrlMalformat}![:0]const u8 {
+    const slice = std.mem.span(input);
+    if (slice.len == 0 or slice.len > MAX_IDN_HOSTNAME_LEN) {
+        return error.UrlMalformat;
+    }
+    for (slice) |b| {
+        if (b < 0x20 or b == 0x7f) {
+            return error.UrlMalformat;
+        }
+    }
+    return slice;
+}
+
 const libidn2 = struct {
     const IDN2_VERSION: [*:0]const u8 = "2.0.0";
     const IDN2_NFC_INPUT: c_int = 1;
@@ -124,28 +139,30 @@ const winidn = struct {
         cchUnicodeChar: c_int,
     ) callconv(.winapi) c_int;
 
-    fn convertWcharToUtf8(str_w: [*]const u16, chars: c_int) ?[*:0]u8 {
+    fn convertWcharToUtf8(str_w: [*]const u16, chars: c_int) error{OutOfMemory}![*:0]u8 {
         const bytes = WideCharToMultiByte(CP_UTF8, 0, str_w, chars, null, 0, null, null);
         if (bytes > 0) {
-            const str_utf8 = mem.malloc(@intCast(bytes)) orelse return null;
+            const alloc_len: usize = @intCast(bytes);
+            const str_utf8 = mem.malloc(alloc_len) orelse return error.OutOfMemory;
+            errdefer mem.freeSized(str_utf8, alloc_len);
             if (WideCharToMultiByte(CP_UTF8, 0, str_w, chars, str_utf8, bytes, null, null) == 0) {
-                mem.free(str_utf8);
-                return null;
+                return error.OutOfMemory;
             }
             return @ptrCast(str_utf8);
         }
-        return null;
+        return error.OutOfMemory;
     }
 
     fn win32_idn_to_ascii(in: [*:0]const u8, out: *?[*:0]u8) CURLcode {
-        var in_w: [IDN_MAX_LENGTH]u16 = undefined;
         out.* = null;
-        const in_w_len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, in, -1, &in_w, IDN_MAX_LENGTH);
+        const in_slice = validateIdnHostname(in) catch return CURLE_URL_MALFORMAT;
+        var in_w: [IDN_MAX_LENGTH]u16 = undefined;
+        const in_w_len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, in_slice.ptr, -1, &in_w, IDN_MAX_LENGTH);
         if (in_w_len != 0) {
             var punycode: [IDN_MAX_LENGTH]u16 = undefined;
             const chars = IdnToAscii(0, &in_w, in_w_len, &punycode, IDN_MAX_LENGTH);
             if (chars > 0) {
-                out.* = convertWcharToUtf8(&punycode, chars) orelse return CURLE_OUT_OF_MEMORY;
+                out.* = convertWcharToUtf8(&punycode, chars) catch return CURLE_OUT_OF_MEMORY;
                 return CURLE_OK;
             }
         }
@@ -153,14 +170,15 @@ const winidn = struct {
     }
 
     fn win32_ascii_to_idn(in: [*:0]const u8, out: *?[*:0]u8) CURLcode {
-        var in_w: [IDN_MAX_LENGTH]u16 = undefined;
         out.* = null;
-        const in_w_len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, in, -1, &in_w, IDN_MAX_LENGTH);
+        const in_slice = validateIdnHostname(in) catch return CURLE_URL_MALFORMAT;
+        var in_w: [IDN_MAX_LENGTH]u16 = undefined;
+        const in_w_len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, in_slice.ptr, -1, &in_w, IDN_MAX_LENGTH);
         if (in_w_len != 0) {
             var idn: [IDN_MAX_LENGTH]u16 = undefined;
             const chars = IdnToUnicode(0, &in_w, in_w_len, &idn, IDN_MAX_LENGTH);
             if (chars > 0) {
-                out.* = convertWcharToUtf8(&idn, chars) orelse return CURLE_OUT_OF_MEMORY;
+                out.* = convertWcharToUtf8(&idn, chars) catch return CURLE_OUT_OF_MEMORY;
                 return CURLE_OK;
             }
         }
@@ -237,16 +255,18 @@ const appleidn = struct {
     }
 
     fn mac_idn_to_ascii(in: [*:0]const u8, out: *?[*:0]u8) CURLcode {
-        const inlen = std.mem.len(in);
+        const in_slice = validateIdnHostname(in) catch return CURLE_URL_MALFORMAT;
+        const inlen = in_slice.len;
         if (inlen < MAX_HOST_LENGTH) {
             var iconv_buffer: [MAX_HOST_LENGTH]u8 = @splat(0);
             var iconv_outptr: ?[*]u8 = &iconv_buffer;
             var iconv_outlen: usize = iconv_buffer.len;
-            const iconv_result = iconvToUtf8(in, inlen, &iconv_outptr, &iconv_outlen);
+            const iconv_result = iconvToUtf8(in_slice.ptr, inlen, &iconv_outptr, &iconv_outlen);
             if (iconv_result == CURLE_OK) {
                 var err: c_int = U_ZERO_ERROR;
                 const idna = uidna_openUTS46(UIDNA_CHECK_BIDI | UIDNA_NONTRANSITIONAL_TO_ASCII, &err);
                 if (err <= U_ZERO_ERROR) {
+                    defer uidna_close(idna);
                     var info: UIDNAInfo = .{};
                     var buffer: [MAX_HOST_LENGTH]u8 = @splat(0);
                     _ = uidna_nameToASCII_UTF8(
@@ -258,7 +278,6 @@ const appleidn = struct {
                         &info,
                         &err,
                     );
-                    uidna_close(idna);
                     if (err <= U_ZERO_ERROR and info.errors == 0) {
                         out.* = mem.strdup(@ptrCast(&buffer)) orelse return CURLE_OUT_OF_MEMORY;
                         return CURLE_OK;
@@ -272,23 +291,24 @@ const appleidn = struct {
     }
 
     fn mac_ascii_to_idn(in: [*:0]const u8, out: *?[*:0]u8) CURLcode {
-        const inlen = std.mem.len(in);
+        const in_slice = validateIdnHostname(in) catch return CURLE_URL_MALFORMAT;
+        const inlen = in_slice.len;
         if (inlen < MAX_HOST_LENGTH) {
             var err: c_int = U_ZERO_ERROR;
             const idna = uidna_openUTS46(UIDNA_CHECK_BIDI | UIDNA_NONTRANSITIONAL_TO_UNICODE, &err);
             if (err <= U_ZERO_ERROR) {
+                defer uidna_close(idna);
                 var info: UIDNAInfo = .{};
                 var buffer: [MAX_HOST_LENGTH]u8 = @splat(0);
                 _ = uidna_nameToUnicodeUTF8(
                     idna,
-                    in,
-                    -1,
+                    in_slice.ptr,
+                    @intCast(inlen),
                     &buffer,
                     @intCast(buffer.len - 1),
                     &info,
                     &err,
                 );
-                uidna_close(idna);
                 if (err <= U_ZERO_ERROR) {
                     out.* = mem.strdup(@ptrCast(&buffer)) orelse return CURLE_OUT_OF_MEMORY;
                     return CURLE_OK;
@@ -300,13 +320,14 @@ const appleidn = struct {
 };
 
 fn idn_decode(input: [*:0]const u8, output: *?[*:0]u8) CURLcode {
+    const in_slice = validateIdnHostname(input) catch return CURLE_URL_MALFORMAT;
     if (comptime (backend_options.idn == .libidn2)) {
         if (libidn2.idn2_check_version(null) != null) {
             var decoded: ?[*:0]u8 = null;
             const flags: c_int = libidn2.IDN2_NFC_INPUT | libidn2.IDN2_NONTRANSITIONAL;
-            var rc = libidn2.idn2_lookup_ul(input, &decoded, flags);
+            var rc = libidn2.idn2_lookup_ul(in_slice.ptr, &decoded, flags);
             if (rc != libidn2.IDN2_OK) {
-                rc = libidn2.idn2_lookup_ul(input, &decoded, libidn2.IDN2_TRANSITIONAL);
+                rc = libidn2.idn2_lookup_ul(in_slice.ptr, &decoded, libidn2.IDN2_TRANSITIONAL);
             }
             if (rc == libidn2.IDN2_OK) {
                 output.* = decoded;
@@ -319,18 +340,19 @@ fn idn_decode(input: [*:0]const u8, output: *?[*:0]u8) CURLcode {
         }
         return CURLE_NOT_BUILT_IN;
     } else if (comptime (backend_options.idn == .winidn and builtin.os.tag == .windows)) {
-        return winidn.win32_idn_to_ascii(input, output);
+        return winidn.win32_idn_to_ascii(in_slice.ptr, output);
     } else if (comptime (backend_options.idn == .appleidn and builtin.os.tag.isDarwin())) {
-        return appleidn.mac_idn_to_ascii(input, output);
+        return appleidn.mac_idn_to_ascii(in_slice.ptr, output);
     } else {
         return CURLE_NOT_BUILT_IN;
     }
 }
 
 fn idn_encode(puny: [*:0]const u8, output: *?[*:0]u8) CURLcode {
+    const puny_slice = validateIdnHostname(puny) catch return CURLE_URL_MALFORMAT;
     if (comptime (backend_options.idn == .libidn2)) {
         var enc: ?[*:0]u8 = null;
-        const rc = libidn2.idn2_to_unicode_8z8z(puny, &enc, 0);
+        const rc = libidn2.idn2_to_unicode_8z8z(puny_slice.ptr, &enc, 0);
         if (rc == libidn2.IDN2_OK) {
             output.* = enc;
             return CURLE_OK;
@@ -340,59 +362,61 @@ fn idn_encode(puny: [*:0]const u8, output: *?[*:0]u8) CURLcode {
             return CURLE_URL_MALFORMAT;
         }
     } else if (comptime (backend_options.idn == .winidn and builtin.os.tag == .windows)) {
-        return winidn.win32_ascii_to_idn(puny, output);
+        return winidn.win32_ascii_to_idn(puny_slice.ptr, output);
     } else if (comptime (backend_options.idn == .appleidn and builtin.os.tag.isDarwin())) {
-        return appleidn.mac_ascii_to_idn(puny, output);
+        return appleidn.mac_ascii_to_idn(puny_slice.ptr, output);
     } else {
         return CURLE_NOT_BUILT_IN;
     }
 }
 
+fn dupIdnResult(raw_idn: [*:0]u8) error{ OutOfMemory, UrlMalformat }![*:0]u8 {
+    if (comptime (backend_options.idn == .libidn2)) {
+        defer libidn2.idn2_free(raw_idn);
+        const dup = mem.strdup(raw_idn) orelse return error.OutOfMemory;
+        errdefer mem.free(dup);
+        if (dup[0] == 0) return error.UrlMalformat;
+        return dup;
+    } else {
+        errdefer mem.free(raw_idn);
+        if (raw_idn[0] == 0) return error.UrlMalformat;
+        return raw_idn;
+    }
+}
+
 pub export fn Curl_idn_decode(input: [*:0]const u8, output: *?[*:0]u8) callconv(.c) CURLcode {
+    output.* = null;
+    const in_slice = validateIdnHostname(input) catch return CURLE_URL_MALFORMAT;
     if (comptime (backend_options.idn != .none)) {
         var d: ?[*:0]u8 = null;
-        var result = idn_decode(input, &d);
-        if (result == CURLE_OK) {
-            if (comptime (backend_options.idn == .libidn2)) {
-                const c = mem.strdup(d.?);
-                libidn2.idn2_free(d);
-                if (c != null) {
-                    d = c;
-                } else {
-                    result = CURLE_OUT_OF_MEMORY;
-                }
-            }
-            if (result == CURLE_OK and d.?[0] == 0) {
-                mem.free(d);
-                return CURLE_URL_MALFORMAT;
-            }
-        }
-        if (result == CURLE_OK) {
-            output.* = d;
-        }
-        return result;
+        const result = idn_decode(in_slice.ptr, &d);
+        if (result != CURLE_OK) return result;
+        const dup = dupIdnResult(d.?) catch |err| return switch (err) {
+            error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+            error.UrlMalformat => CURLE_URL_MALFORMAT,
+        };
+        output.* = dup;
+        return CURLE_OK;
     } else {
         return CURLE_NOT_BUILT_IN;
     }
 }
 
 pub export fn Curl_idn_encode(puny: [*:0]const u8, output: *?[*:0]u8) callconv(.c) CURLcode {
+    output.* = null;
+    const puny_slice = validateIdnHostname(puny) catch return CURLE_URL_MALFORMAT;
     if (comptime (backend_options.idn != .none)) {
         var d: ?[*:0]u8 = null;
-        var result = idn_encode(puny, &d);
-        if (result == CURLE_OK and comptime (backend_options.idn == .libidn2)) {
-            const c = mem.strdup(d.?);
-            libidn2.idn2_free(d);
-            if (c != null) {
-                d = c;
-            } else {
-                result = CURLE_OUT_OF_MEMORY;
-            }
-        }
-        if (result == CURLE_OK) {
+        const result = idn_encode(puny_slice.ptr, &d);
+        if (result != CURLE_OK) return result;
+        if (comptime (backend_options.idn == .libidn2)) {
+            defer libidn2.idn2_free(d.?);
+            const c = mem.strdup(d.?) orelse return CURLE_OUT_OF_MEMORY;
+            output.* = c;
+        } else {
             output.* = d;
         }
-        return result;
+        return CURLE_OK;
     } else {
         return CURLE_NOT_BUILT_IN;
     }
@@ -1569,6 +1593,22 @@ test "idn: Curl_is_ASCII_name, Curl_is_ASCII_str, Curl_idnconvert_hostname" {
         try std.testing.expectEqual(CURLE_NOT_BUILT_IN, Curl_idn_decode("m\xc3\xbcnchen.de", &out));
         try std.testing.expectEqual(CURLE_NOT_BUILT_IN, Curl_idn_encode("xn--mnchen-3ya.de", &out));
     }
+
+    // Reject control characters (< 0x20 or 0x7f) and overlong (> 255 byte) hostnames
+    var bad_out: ?[*:0]u8 = null;
+    try std.testing.expectEqual(CURLE_URL_MALFORMAT, Curl_idn_decode("", &bad_out));
+    try std.testing.expectEqual(CURLE_URL_MALFORMAT, Curl_idn_decode("bad\x01host.example", &bad_out));
+    try std.testing.expectEqual(CURLE_URL_MALFORMAT, Curl_idn_decode("bad\x1fhost.example", &bad_out));
+    try std.testing.expectEqual(CURLE_URL_MALFORMAT, Curl_idn_decode("bad\x7fhost.example", &bad_out));
+    try std.testing.expectEqual(CURLE_URL_MALFORMAT, Curl_idn_encode("bad\x0ahost.example", &bad_out));
+    try std.testing.expectEqual(CURLE_URL_MALFORMAT, Curl_idn_encode("bad\x7fhost.example", &bad_out));
+
+    var overlong_buf: [257]u8 = @splat('a');
+    overlong_buf[256] = 0;
+    const overlong_cstr: [*:0]const u8 = @ptrCast(&overlong_buf);
+    try std.testing.expectEqual(CURLE_URL_MALFORMAT, Curl_idn_decode(overlong_cstr, &bad_out));
+    try std.testing.expectEqual(CURLE_URL_MALFORMAT, Curl_idn_encode(overlong_cstr, &bad_out));
+    try std.testing.expect(bad_out == null);
 }
 
 test "curl_addrinfo: Curl_is_ipv4addr, Curl_is_ipaddr, Curl_looks_like_ipv6" {

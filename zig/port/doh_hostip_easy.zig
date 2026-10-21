@@ -1261,51 +1261,58 @@ pub export fn de_cleanup(d: *dohentry) callconv(.c) void {
     }
 }
 
+inline fn dohFail(rc_out: *CURLcode, code: CURLcode) error{DohError} {
+    rc_out.* = code;
+    return error.DohError;
+}
+
 fn doh_decode_rdata_name(
-    buf: *[*]const u8,
-    len: *usize,
+    rem_slice: *[]const u8,
     dnsname: *?[*:0]u8,
 ) CURLcode {
-    if (len.* < 1)
-        return CURLE_OUT_OF_MEMORY;
+    var rc: CURLcode = CURLE_OK;
+    doh_decode_rdata_name_inner(rem_slice, dnsname, &rc) catch return rc;
+    return CURLE_OK;
+}
+
+fn doh_decode_rdata_name_inner(
+    rem_slice: *[]const u8,
+    dnsname: *?[*:0]u8,
+    rc_out: *CURLcode,
+) error{DohError}!void {
+    if (rem_slice.*.len < 1)
+        return dohFail(rc_out, CURLE_OUT_OF_MEMORY);
 
     var thename: Dynbuf = undefined;
     containers.curlx_dyn_init(&thename, vdns_core.CURL_MAXLEN_HOST_NAME);
-    var rem = len.*;
-    var cp = buf.*;
-    var clen = cp[0];
-    cp += 1;
+    errdefer containers.curlx_dyn_free(&thename);
+
+    var slice = rem_slice.*;
+    var clen: usize = slice[0];
+    slice = slice[1..];
     if (clen > 63)
-        return CURLE_WEIRD_SERVER_REPLY;
+        return dohFail(rc_out, CURLE_WEIRD_SERVER_REPLY);
     if (clen == 0) {
         if (containers.curlx_dyn_addn(&thename, ".", 1) != CURLE_OK)
-            return CURLE_OUT_OF_MEMORY;
+            return dohFail(rc_out, CURLE_OUT_OF_MEMORY);
     }
     while (clen != 0) {
-        if (clen >= rem) {
-            containers.curlx_dyn_free(&thename);
-            return CURLE_OUT_OF_MEMORY;
-        }
-        if (containers.curlx_dyn_addn(&thename, cp, clen) != CURLE_OK or
+        if (clen >= slice.len)
+            return dohFail(rc_out, CURLE_OUT_OF_MEMORY);
+        const label = slice[0..clen];
+        if (containers.curlx_dyn_addn(&thename, label.ptr, label.len) != CURLE_OK or
             containers.curlx_dyn_addn(&thename, ".", 1) != CURLE_OK)
-            return CURLE_TOO_LARGE;
-        cp += clen;
-        rem -= (@as(usize, clen) + 1);
-        if (rem == 0) {
-            containers.curlx_dyn_free(&thename);
-            return CURLE_OUT_OF_MEMORY;
-        }
-        clen = cp[0];
-        cp += 1;
-        if (clen > 63) {
-            containers.curlx_dyn_free(&thename);
-            return CURLE_WEIRD_SERVER_REPLY;
-        }
+            return dohFail(rc_out, CURLE_TOO_LARGE);
+        slice = slice[clen..];
+        if (slice.len == 0)
+            return dohFail(rc_out, CURLE_OUT_OF_MEMORY);
+        clen = slice[0];
+        slice = slice[1..];
+        if (clen > 63)
+            return dohFail(rc_out, CURLE_WEIRD_SERVER_REPLY);
     }
-    buf.* = cp;
-    len.* = rem - 1;
+    rem_slice.* = slice;
     dnsname.* = containers.curlx_dyn_ptr(&thename);
-    return CURLE_OK;
 }
 
 inline fn goodchar(x: u8) bool {
@@ -1327,55 +1334,56 @@ pub fn doh_resp_decode_httpsrr(
     len_in: usize,
     hrr: *?*vdns_core.Curl_https_rrinfo,
 ) callconv(.c) CURLcode {
+    var rc: CURLcode = CURLE_OK;
+    doh_resp_decode_httpsrr_inner(data, cp_opt, len_in, hrr, &rc) catch return rc;
+    return CURLE_OK;
+}
+
+fn doh_resp_decode_httpsrr_inner(
+    data: ?*Curl_easy,
+    cp_opt: ?[*]const u8,
+    len_in: usize,
+    hrr: *?*vdns_core.Curl_https_rrinfo,
+    rc_out: *CURLcode,
+) error{DohError}!void {
     hrr.* = null;
     if (len_in <= 2)
-        return CURLE_BAD_FUNCTION_ARGUMENT;
-    const cp_start = cp_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
+        return dohFail(rc_out, CURLE_BAD_FUNCTION_ARGUMENT);
+    const cp_start = cp_opt orelse return dohFail(rc_out, CURLE_BAD_FUNCTION_ARGUMENT);
+    var rem_slice: []const u8 = cp_start[0..len_in];
 
-    const raw = mem.calloc(1, @sizeOf(vdns_core.Curl_https_rrinfo)) orelse return CURLE_OUT_OF_MEMORY;
+    const raw = mem.calloc(1, @sizeOf(vdns_core.Curl_https_rrinfo)) orelse return dohFail(rc_out, CURLE_OUT_OF_MEMORY);
     const lhrr: *vdns_core.Curl_https_rrinfo = @ptrCast(@alignCast(raw));
-    var dnsname: ?[*:0]u8 = null;
-    var result: CURLcode = CURLE_OUT_OF_MEMORY;
+    errdefer vdns_core.Curl_httpsrr_destroy(lhrr);
 
-    var cp = cp_start;
-    var len = len_in;
-    lhrr.priority = doh_get16bit(cp, 0);
-    cp += 2;
-    len -= 2;
-    if (doh_decode_rdata_name(&cp, &len, &dnsname) != CURLE_OK) {
-        vdns_core.Curl_httpsrr_destroy(lhrr);
-        return result;
-    }
+    var dnsname: ?[*:0]u8 = null;
+    lhrr.priority = std.mem.readInt(u16, rem_slice[0..2], .big);
+    rem_slice = rem_slice[2..];
+    if (doh_decode_rdata_name(&rem_slice, &dnsname) != CURLE_OK)
+        return dohFail(rc_out, CURLE_OUT_OF_MEMORY);
     lhrr.target = dnsname;
-    result = junkscan(dnsname);
-    if (result != CURLE_OK) {
-        vdns_core.Curl_httpsrr_destroy(lhrr);
-        return result;
-    }
+    const jrc = junkscan(dnsname);
+    if (jrc != CURLE_OK)
+        return dohFail(rc_out, jrc);
 
     var expected_min_pcode: u32 = 0;
-    while (len >= 4) {
-        const pcode = doh_get16bit(cp, 0);
-        const plen = doh_get16bit(cp, 2);
-        cp += 4;
-        len -= 4;
-        if (pcode < expected_min_pcode or plen > len) {
-            result = CURLE_WEIRD_SERVER_REPLY;
-            vdns_core.Curl_httpsrr_destroy(lhrr);
-            return result;
-        }
-        result = vdns_core.Curl_httpsrr_set(lhrr, pcode, cp, plen);
-        if (result != CURLE_OK) {
-            vdns_core.Curl_httpsrr_destroy(lhrr);
-            return result;
-        }
+    while (rem_slice.len >= 4) {
+        const pcode = std.mem.readInt(u16, rem_slice[0..2], .big);
+        const plen = std.mem.readInt(u16, rem_slice[2..4], .big);
+        rem_slice = rem_slice[4..];
+        if (pcode < expected_min_pcode or plen > rem_slice.len)
+            return dohFail(rc_out, CURLE_WEIRD_SERVER_REPLY);
+        const param_slice = rem_slice[0..plen];
+        const set_rc = vdns_core.Curl_httpsrr_set(lhrr, pcode, param_slice.ptr, param_slice.len);
+        if (set_rc != CURLE_OK)
+            return dohFail(rc_out, set_rc);
         vdns_core.Curl_httpsrr_trace(data, lhrr);
-        cp += plen;
-        len -= plen;
+        rem_slice = rem_slice[plen..];
         expected_min_pcode = @as(u32, pcode) + 1;
     }
+    if (rem_slice.len != 0)
+        return dohFail(rc_out, CURLE_WEIRD_SERVER_REPLY);
     hrr.* = lhrr;
-    return CURLE_OK;
 }
 
 comptime {
@@ -3470,4 +3478,44 @@ test "EAPI and CBAPI enum parity blocks recursive curl_easy_cleanup in callback"
 
     Curl_cbapi_leave(&cb_guard);
     try std.testing.expect(!Curl_api_multi_is_in_callback(multi));
+}
+
+test "doh_decode_rdata_name rejects oversized label chain without leaking Dynbuf" {
+    // Build a wire name with 20 labels of 63 bytes each (> CURL_MAXLEN_HOST_NAME = 1024),
+    // terminated with a zero-length root label.
+    var wire: [20 * 64 + 1]u8 = undefined;
+    var pos: usize = 0;
+    for (0..20) |_| {
+        wire[pos] = 63;
+        pos += 1;
+        @memset(wire[pos .. pos + 63], 'a');
+        pos += 63;
+    }
+    wire[pos] = 0;
+    pos += 1;
+
+    var rem: []const u8 = wire[0..pos];
+    var dnsname: ?[*:0]u8 = null;
+    try std.testing.expectEqual(CURLE_TOO_LARGE, doh_decode_rdata_name(&rem, &dnsname));
+    try std.testing.expect(dnsname == null);
+}
+
+test "doh_resp_decode_httpsrr rejects 1-3 trailing truncated SvcParam bytes" {
+    // Valid prefix: priority = 1 (0x00, 0x01), target = "." (0x00),
+    // followed by 1, 2, or 3 trailing bytes of a truncated SvcParam header.
+    const wire = [_]u8{
+        0x00, 0x01, // priority = 1
+        0x00, // target "."
+        0x00, 0x03, 0x00, // 3 trailing SvcParam header bytes
+    };
+
+    for (1..4) |trailing_len| {
+        var hrr: ?*vdns_core.Curl_https_rrinfo = null;
+        const total_len = 3 + trailing_len;
+        try std.testing.expectEqual(
+            CURLE_WEIRD_SERVER_REPLY,
+            doh_resp_decode_httpsrr(null, &wire, total_len, &hrr),
+        );
+        try std.testing.expect(hrr == null);
+    }
 }
