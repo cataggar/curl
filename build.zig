@@ -80,9 +80,9 @@ pub fn build(b: *std.Build) void {
 
     const backend_options_step = backends.createOptionsStep(b, backend_opts);
     lib.root_module.addOptions("backend_options", backend_options_step);
-    if (shared) {
-        exe.root_module.addOptions("backend_options", backend_options_step);
-    }
+    exe.root_module.addOptions("backend_options", backend_options_step);
+    curl_mod.addOptions("backend_options", backend_options_step);
+    cli_test_mod.addOptions("backend_options", backend_options_step);
 
     const backend_test_mod = b.createModule(.{
         .root_source_file = b.path("zig/backends_test.zig"),
@@ -119,10 +119,34 @@ pub fn build(b: *std.Build) void {
     const test_port_step = b.step("test-port", "Run Zig port unit tests");
     test_port_step.dependOn(&run_port_tests.step);
 
+    const release_mod = b.createModule(.{
+        .root_source_file = b.path("zig/release.zig"),
+        .target = b.graph.host,
+        .optimize = optimize,
+    });
+    const release_exe = b.addExecutable(.{
+        .name = "curl_release",
+        .root_module = release_mod,
+    });
+    const install_release = b.addInstallArtifact(release_exe, .{});
+    const install_release_step = b.step(
+        "install-curl-release",
+        "Install the curl Zig-port release contract and publication tool",
+    );
+    install_release_step.dependOn(&install_release.step);
+
+    const release_tests = b.addTest(.{
+        .root_module = release_mod,
+    });
+    const run_release_tests = b.addRunArtifact(release_tests);
+    const test_release_step = b.step("test-release", "Run release tooling tests");
+    test_release_step.dependOn(&run_release_tests.step);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(b.getInstallStep());
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_backend_tests.step);
     test_step.dependOn(&run_port_tests.step);
+    test_step.dependOn(&run_release_tests.step);
 }

@@ -57,6 +57,20 @@ pub const Options = struct {
     ldap: LdapBackend = .none,
     gssapi: bool = false,
     sspi: ?bool = null,
+    version: []const u8 = "8.23.1-DEV",
+
+    pub fn versionNum(self: Options) u32 {
+        const semver_part = if (std.mem.indexOfScalar(u8, self.version, '-')) |idx|
+            self.version[0..idx]
+        else
+            self.version;
+        var it = std.mem.splitScalar(u8, semver_part, '.');
+        const major = std.fmt.parseInt(u32, it.next() orelse return 0x081701, 10) catch return 0x081701;
+        const minor = std.fmt.parseInt(u32, it.next() orelse return 0x081701, 10) catch return 0x081701;
+        const patch = std.fmt.parseInt(u32, it.next() orelse return 0x081701, 10) catch return 0x081701;
+        if (it.next() != null or major > 0xff or minor > 0xff or patch > 0xff) return 0x081701;
+        return (major << 16) | (minor << 8) | patch;
+    }
 
     pub fn useThreadedResolver(self: Options) bool {
         return self.threaded_resolver orelse !self.ares;
@@ -164,6 +178,7 @@ pub fn fromBuild(b: *std.Build) Options {
         .ldap = b.option(LdapBackend, "ldap", "LDAP/LDAPS backend (none, openldap, ldap, winldap; default: none)") orelse .none,
         .gssapi = b.option(bool, "gssapi", "Enable GSS-API / Kerberos5 / SPNEGO via system libgssapi_krb5 or Apple GSS (default: false)") orelse false,
         .sspi = b.option(bool, "sspi", "Enable Windows SSPI authentication (default: true with -Dssl=schannel on Windows)"),
+        .version = b.option([]const u8, "version", "Override embedded curl/libcurl version string (default: 8.23.1-DEV)") orelse "8.23.1-DEV",
     };
 }
 
@@ -476,5 +491,7 @@ pub fn createOptionsStep(b: *std.Build, opts: Options) *std.Build.Step.Options {
     step.addOption(bool, "has_ldaps", opts.hasLdaps());
     step.addOption(bool, "gssapi", opts.gssapi);
     step.addOption(?bool, "sspi", opts.sspi);
+    step.addOption([]const u8, "version", opts.version);
+    step.addOption(u32, "version_num", opts.versionNum());
     return step;
 }

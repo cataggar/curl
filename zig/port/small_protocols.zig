@@ -51,8 +51,10 @@ pub const CURL_POLL_OUT: c_int = 2;
 pub const CURL_SOCKET_BAD: curl_socket_t = if (is_windows) std.math.maxInt(usize) else -1;
 pub const SEEK_SET: c_int = 0;
 
+const backend_options = @import("backend_options");
+
 pub const LIBCURL_NAME = "libcurl";
-pub const LIBCURL_VERSION = "8.23.1-DEV";
+pub const LIBCURL_VERSION: [:0]const u8 = backend_options.version ++ "";
 
 pub const Curl_meta_dtor = *const fn (?*const anyopaque, usize, ?*anyopaque) callconv(.c) void;
 
