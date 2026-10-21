@@ -32,7 +32,7 @@ jobs:
       - name: Install TLS system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libssl-dev libmbedtls-dev libgnutls28-dev nettle-dev libwolfssl-dev zlib1g-dev libzstd-dev libnghttp2-dev libbrotli-dev libpsl-dev libidn2-dev libc-ares-dev libssh2-1-dev libssh-dev openssh-server openssh-client cmake ninja-build pkg-config
+          sudo apt-get install -y --no-install-recommends libssl-dev libmbedtls-dev libgnutls28-dev nettle-dev libwolfssl-dev zlib1g-dev libzstd-dev libnghttp2-dev libbrotli-dev libpsl-dev libidn2-dev libc-ares-dev libssh2-1-dev libssh-dev openssh-server openssh-client libldap-dev cmake ninja-build pkg-config
           git clone --depth 1 --branch v0.15.5 https://github.com/rustls/rustls-ffi.git /tmp/rustls-ffi
           cargo build --release --manifest-path /tmp/rustls-ffi/Cargo.toml
           sudo cp /tmp/rustls-ffi/target/release/librustls_ffi.a /usr/lib/x86_64-linux-gnu/librustls.a
@@ -106,6 +106,18 @@ jobs:
       - name: Run backend tests (SSH libssh)
         run: zig build test-backends -Dssh=libssh --summary all
 
+      - name: Build and test (LDAP openldap + OpenSSL)
+        run: zig build test -Dldap=openldap -Dssl=openssl --summary all
+
+      - name: Run backend tests (LDAP openldap + OpenSSL)
+        run: zig build test-backends -Dldap=openldap -Dssl=openssl --summary all
+
+      - name: Build and test (LDAP legacy + OpenSSL)
+        run: zig build test -Dldap=ldap -Dssl=openssl --summary all
+
+      - name: Run backend tests (LDAP legacy + OpenSSL)
+        run: zig build test-backends -Dldap=ldap -Dssl=openssl --summary all
+
       - name: Verify CLI --version
         run: |
           zig build run -- --version
@@ -123,9 +135,9 @@ jobs:
           - target: aarch64-linux-musl
             extra_args: ""
           - target: x86_64-windows-gnu
-            extra_args: "-Dssl=schannel -Didn=winidn"
+            extra_args: "-Dssl=schannel -Didn=winidn -Dldap=winldap"
           - target: aarch64-windows-gnu
-            extra_args: "-Dssl=schannel -Didn=winidn"
+            extra_args: "-Dssl=schannel -Didn=winidn -Dldap=winldap"
           - target: aarch64-macos
             extra_args: ""
     steps:

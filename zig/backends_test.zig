@@ -68,9 +68,12 @@ const c = struct {
     pub const CURLE_OK: CURLcode = 0;
     pub const CURLE_NOT_BUILT_IN: CURLcode = 4;
     pub const CURLE_WRITE_ERROR: CURLcode = 23;
+    pub const CURLE_LDAP_CANNOT_BIND: CURLcode = 38;
+    pub const CURLE_LDAP_SEARCH_FAILED: CURLcode = 39;
     pub const CURLE_UNKNOWN_OPTION: CURLcode = 48;
     pub const CURLE_PEER_FAILED_VERIFICATION: CURLcode = 60;
     pub const CURLE_BAD_CONTENT_ENCODING: CURLcode = 61;
+    pub const CURLE_LOGIN_DENIED: CURLcode = 67;
     pub const CURLE_SSL_PINNEDPUBKEYNOTMATCH: CURLcode = 90;
 
     pub const CURLsslset = c_uint;
@@ -136,7 +139,10 @@ const c = struct {
     pub const CURLOPT_PROXYTYPE: CURLoption = CURLOPTTYPE_LONG + 101;
     pub const CURLOPT_ACCEPT_ENCODING: CURLoption = CURLOPTTYPE_OBJECTPOINT + 102;
     pub const CURLOPT_INFILESIZE_LARGE: CURLoption = CURLOPTTYPE_OFF_T + 115;
+    pub const CURLOPT_USE_SSL: CURLoption = CURLOPTTYPE_LONG + 119;
     pub const CURLOPT_SSH_AUTH_TYPES: CURLoption = CURLOPTTYPE_LONG + 151;
+
+    pub const CURLUSESSL_ALL: c_long = 3;
     pub const CURLOPT_SSH_PUBLIC_KEYFILE: CURLoption = CURLOPTTYPE_OBJECTPOINT + 152;
     pub const CURLOPT_SSH_PRIVATE_KEYFILE: CURLoption = CURLOPTTYPE_OBJECTPOINT + 153;
     pub const CURLOPT_SSH_HOST_PUBLIC_KEY_MD5: CURLoption = CURLOPTTYPE_OBJECTPOINT + 162;
@@ -676,7 +682,7 @@ test "SslBackend and Apple SecTrust target validation" {
 
 const loopback_tls = struct {
     // Root CA (CN=curl-zig-test-ca, valid 2020..2049)
-    const test_ca_cert_pem: [:0]const u8 =
+    pub const test_ca_cert_pem: [:0]const u8 =
         \\-----BEGIN CERTIFICATE-----
         \\MIIBmjCCAUGgAwIBAgIUfQZTbIpX8IFrj+WYZ+0OmKXNqk4wCgYIKoZIzj0EAwIw
         \\GzEZMBcGA1UEAwwQY3VybC16aWctdGVzdC1jYTAeFw0yMDAxMDEwMDAwMDBaFw00
@@ -692,7 +698,7 @@ const loopback_tls = struct {
     ;
 
     // Leaf server cert signed by test_ca_cert_pem (CN=localhost, SAN=DNS:localhost, valid 2020..2049)
-    const test_server_cert_pem: [:0]const u8 =
+    pub const test_server_cert_pem: [:0]const u8 =
         \\-----BEGIN CERTIFICATE-----
         \\MIIBvjCCAWSgAwIBAgIUDGM3QqxgD+aktmk/PZC3V+UmcRMwCgYIKoZIzj0EAwIw
         \\GzEZMBcGA1UEAwwQY3VybC16aWctdGVzdC1jYTAeFw0yMDAxMDEwMDAwMDBaFw00
@@ -708,7 +714,7 @@ const loopback_tls = struct {
         \\
     ;
 
-    const test_server_key_pem: [:0]const u8 =
+    pub const test_server_key_pem: [:0]const u8 =
         \\-----BEGIN EC PRIVATE KEY-----
         \\MHcCAQEEIOax4UqvKuoDsEOgbNodLAuWNZExlnybWGMLt9HPI72eoAoGCCqGSM49
         \\AwEHoUQDQgAEfb+VQUmx+rMEm6NmWcJSFJPexnqmARhavbFS0d+C58z2Y/mL3N/Q
@@ -718,7 +724,7 @@ const loopback_tls = struct {
     ;
 
     // Separate untrusted Root CA (CN=curl-zig-untrusted-ca, valid 2020..2049)
-    const test_untrusted_ca_cert_pem: [:0]const u8 =
+    pub const test_untrusted_ca_cert_pem: [:0]const u8 =
         \\-----BEGIN CERTIFICATE-----
         \\MIIBpDCCAUugAwIBAgIUK1tdYusyCHZyruJw0TlYuTB+jWQwCgYIKoZIzj0EAwIw
         \\IDEeMBwGA1UEAwwVY3VybC16aWctdW50cnVzdGVkLWNhMB4XDTIwMDEwMTAwMDAw
@@ -736,25 +742,25 @@ const loopback_tls = struct {
     const test_server_pubkey_pin: [*:0]const u8 = "sha256//J5gIj+3IzbJ3r9lrFIvGtH1RgZOmPQNTuxxtsDkCOpc=";
     const test_wrong_pubkey_pin: [*:0]const u8 = "sha256//AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
-    const ossl = struct {
-        extern fn TLS_server_method() callconv(.c) ?*const anyopaque;
-        extern fn SSL_CTX_new(method: ?*const anyopaque) callconv(.c) ?*anyopaque;
-        extern fn SSL_CTX_free(ctx: ?*anyopaque) callconv(.c) void;
-        extern fn BIO_new_mem_buf(buf: ?*const anyopaque, len: c_int) callconv(.c) ?*anyopaque;
-        extern fn BIO_free(bio: ?*anyopaque) callconv(.c) c_int;
-        extern fn PEM_read_bio_X509(bio: ?*anyopaque, x: ?*?*anyopaque, cb: ?*const anyopaque, u: ?*anyopaque) callconv(.c) ?*anyopaque;
-        extern fn PEM_read_bio_PrivateKey(bio: ?*anyopaque, x: ?*?*anyopaque, cb: ?*const anyopaque, u: ?*anyopaque) callconv(.c) ?*anyopaque;
-        extern fn X509_free(x: ?*anyopaque) callconv(.c) void;
-        extern fn EVP_PKEY_free(pkey: ?*anyopaque) callconv(.c) void;
-        extern fn SSL_CTX_use_certificate(ctx: ?*anyopaque, x: ?*anyopaque) callconv(.c) c_int;
-        extern fn SSL_CTX_use_PrivateKey(ctx: ?*anyopaque, pkey: ?*anyopaque) callconv(.c) c_int;
-        extern fn SSL_new(ctx: ?*anyopaque) callconv(.c) ?*anyopaque;
-        extern fn SSL_free(ssl: ?*anyopaque) callconv(.c) void;
-        extern fn SSL_set_fd(ssl: ?*anyopaque, fd: c_int) callconv(.c) c_int;
-        extern fn SSL_accept(ssl: ?*anyopaque) callconv(.c) c_int;
-        extern fn SSL_read(ssl: ?*anyopaque, buf: [*]u8, num: c_int) callconv(.c) c_int;
-        extern fn SSL_write(ssl: ?*anyopaque, buf: [*]const u8, num: c_int) callconv(.c) c_int;
-        extern fn SSL_shutdown(ssl: ?*anyopaque) callconv(.c) c_int;
+    pub const ossl = struct {
+        pub extern fn TLS_server_method() callconv(.c) ?*const anyopaque;
+        pub extern fn SSL_CTX_new(method: ?*const anyopaque) callconv(.c) ?*anyopaque;
+        pub extern fn SSL_CTX_free(ctx: ?*anyopaque) callconv(.c) void;
+        pub extern fn BIO_new_mem_buf(buf: ?*const anyopaque, len: c_int) callconv(.c) ?*anyopaque;
+        pub extern fn BIO_free(bio: ?*anyopaque) callconv(.c) c_int;
+        pub extern fn PEM_read_bio_X509(bio: ?*anyopaque, x: ?*?*anyopaque, cb: ?*const anyopaque, u: ?*anyopaque) callconv(.c) ?*anyopaque;
+        pub extern fn PEM_read_bio_PrivateKey(bio: ?*anyopaque, x: ?*?*anyopaque, cb: ?*const anyopaque, u: ?*anyopaque) callconv(.c) ?*anyopaque;
+        pub extern fn X509_free(x: ?*anyopaque) callconv(.c) void;
+        pub extern fn EVP_PKEY_free(pkey: ?*anyopaque) callconv(.c) void;
+        pub extern fn SSL_CTX_use_certificate(ctx: ?*anyopaque, x: ?*anyopaque) callconv(.c) c_int;
+        pub extern fn SSL_CTX_use_PrivateKey(ctx: ?*anyopaque, pkey: ?*anyopaque) callconv(.c) c_int;
+        pub extern fn SSL_new(ctx: ?*anyopaque) callconv(.c) ?*anyopaque;
+        pub extern fn SSL_free(ssl: ?*anyopaque) callconv(.c) void;
+        pub extern fn SSL_set_fd(ssl: ?*anyopaque, fd: c_int) callconv(.c) c_int;
+        pub extern fn SSL_accept(ssl: ?*anyopaque) callconv(.c) c_int;
+        pub extern fn SSL_read(ssl: ?*anyopaque, buf: [*]u8, num: c_int) callconv(.c) c_int;
+        pub extern fn SSL_write(ssl: ?*anyopaque, buf: [*]const u8, num: c_int) callconv(.c) c_int;
+        pub extern fn SSL_shutdown(ssl: ?*anyopaque) callconv(.c) c_int;
     };
 
     const mbed = struct {
@@ -983,40 +989,40 @@ const loopback_tls = struct {
         extern fn wolfSSL_shutdown(ssl: ?*anyopaque) callconv(.c) c_int;
     };
 
-    const sock_c = struct {
-        const AF_INET: c_int = 2;
-        const SOCK_STREAM: c_int = 1;
-        const SOL_SOCKET: c_int = 1;
-        const SO_REUSEADDR: c_int = 2;
-        const SO_RCVTIMEO: c_int = 20;
-        const SO_SNDTIMEO: c_int = 21;
+    pub const sock_c = struct {
+        pub const AF_INET: c_int = 2;
+        pub const SOCK_STREAM: c_int = 1;
+        pub const SOL_SOCKET: c_int = 1;
+        pub const SO_REUSEADDR: c_int = 2;
+        pub const SO_RCVTIMEO: c_int = 20;
+        pub const SO_SNDTIMEO: c_int = 21;
 
-        const sockaddr_in = extern struct {
+        pub const sockaddr_in = extern struct {
             sin_family: u16 = AF_INET,
             sin_port: u16 = 0,
             sin_addr: u32 = 0,
             sin_zero: [8]u8 = @splat(0),
         };
 
-        const timeval = extern struct {
+        pub const timeval = extern struct {
             tv_sec: c_long,
             tv_usec: c_long,
         };
 
-        extern "c" fn socket(domain: c_int, sock_type: c_int, protocol: c_int) c_int;
-        extern "c" fn setsockopt(sockfd: c_int, level: c_int, optname: c_int, optval: *const anyopaque, optlen: u32) c_int;
-        extern "c" fn bind(sockfd: c_int, addr: *const sockaddr_in, addrlen: u32) c_int;
-        extern "c" fn listen(sockfd: c_int, backlog: c_int) c_int;
-        extern "c" fn getsockname(sockfd: c_int, addr: *sockaddr_in, addrlen: *u32) c_int;
-        extern "c" fn accept(sockfd: c_int, addr: ?*anyopaque, addrlen: ?*u32) c_int;
-        extern "c" fn recv(sockfd: c_int, buf: [*]u8, len: usize, flags: c_int) isize;
-        extern "c" fn send(sockfd: c_int, buf: [*]const u8, len: usize, flags: c_int) isize;
-        extern "c" fn close(fd: c_int) c_int;
+        pub extern "c" fn socket(domain: c_int, sock_type: c_int, protocol: c_int) c_int;
+        pub extern "c" fn setsockopt(sockfd: c_int, level: c_int, optname: c_int, optval: *const anyopaque, optlen: u32) c_int;
+        pub extern "c" fn bind(sockfd: c_int, addr: *const sockaddr_in, addrlen: u32) c_int;
+        pub extern "c" fn listen(sockfd: c_int, backlog: c_int) c_int;
+        pub extern "c" fn getsockname(sockfd: c_int, addr: *sockaddr_in, addrlen: *u32) c_int;
+        pub extern "c" fn accept(sockfd: c_int, addr: ?*anyopaque, addrlen: ?*u32) c_int;
+        pub extern "c" fn recv(sockfd: c_int, buf: [*]u8, len: usize, flags: c_int) isize;
+        pub extern "c" fn send(sockfd: c_int, buf: [*]const u8, len: usize, flags: c_int) isize;
+        pub extern "c" fn close(fd: c_int) c_int;
     };
 
     const http_response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
 
-    fn setSocketTimeouts(fd: c_int) void {
+    pub fn setSocketTimeouts(fd: c_int) void {
         if (builtin.os.tag == .linux) {
             const tv = sock_c.timeval{ .tv_sec = 5, .tv_usec = 0 };
             _ = sock_c.setsockopt(fd, sock_c.SOL_SOCKET, sock_c.SO_RCVTIMEO, &tv, @sizeOf(sock_c.timeval));
@@ -1024,7 +1030,7 @@ const loopback_tls = struct {
         }
     }
 
-    fn openLoopbackListener(port_out: *u16) !c_int {
+    pub fn openLoopbackListener(port_out: *u16) !c_int {
         const fd = sock_c.socket(sock_c.AF_INET, sock_c.SOCK_STREAM, 0);
         if (fd < 0) return error.SocketFailed;
         errdefer _ = sock_c.close(fd);
@@ -3585,4 +3591,583 @@ test "SFTP and SCP end-to-end local sshd server: download, upload, quote, range,
         defer gpa.free(scp_written);
         try testing.expectEqualStrings(scp_upload_data, scp_written);
     }
+}
+
+// ============================================================================
+// Local Loopback LDAPv3 / LDAPS / StartTLS Tests (#71)
+// ============================================================================
+
+const loopback_ldap = struct {
+    const Mode = enum {
+        plain,
+        ldaps,
+        starttls,
+    };
+
+    const ServerConfig = struct {
+        listen_fd: c_int,
+        mode: Mode = .plain,
+        expected_dn: ?[]const u8 = null,
+        expected_pw: ?[]const u8 = null,
+    };
+
+    const Tlv = struct {
+        tag: u8,
+        val: []const u8,
+        total_len: usize,
+    };
+
+    fn berWrap(tag: u8, payload: []const u8, out: []u8) []const u8 {
+        if (payload.len < 128) {
+            out[0] = tag;
+            out[1] = @intCast(payload.len);
+            @memcpy(out[2 .. 2 + payload.len], payload);
+            return out[0 .. 2 + payload.len];
+        } else if (payload.len < 256) {
+            out[0] = tag;
+            out[1] = 0x81;
+            out[2] = @intCast(payload.len);
+            @memcpy(out[3 .. 3 + payload.len], payload);
+            return out[0 .. 3 + payload.len];
+        } else {
+            out[0] = tag;
+            out[1] = 0x82;
+            out[2] = @intCast((payload.len >> 8) & 0xff);
+            out[3] = @intCast(payload.len & 0xff);
+            @memcpy(out[4 .. 4 + payload.len], payload);
+            return out[0 .. 4 + payload.len];
+        }
+    }
+
+    fn berWrap2(tag: u8, a: []const u8, b: []const u8, out: []u8) []const u8 {
+        var tmp: [1024]u8 = undefined;
+        @memcpy(tmp[0..a.len], a);
+        @memcpy(tmp[a.len .. a.len + b.len], b);
+        return berWrap(tag, tmp[0 .. a.len + b.len], out);
+    }
+
+    fn berParseTlv(buf: []const u8) ?Tlv {
+        if (buf.len < 2) return null;
+        const tag = buf[0];
+        const len0 = buf[1];
+        if ((len0 & 0x80) == 0) {
+            const vlen: usize = len0;
+            if (buf.len < 2 + vlen) return null;
+            return .{ .tag = tag, .val = buf[2 .. 2 + vlen], .total_len = 2 + vlen };
+        }
+        const nlen: usize = len0 & 0x7f;
+        if (nlen == 0 or nlen > 4 or buf.len < 2 + nlen) return null;
+        var vlen: usize = 0;
+        for (buf[2 .. 2 + nlen]) |b| {
+            vlen = (vlen << 8) | b;
+        }
+        if (buf.len < 2 + nlen + vlen) return null;
+        return .{ .tag = tag, .val = buf[2 + nlen .. 2 + nlen + vlen], .total_len = 2 + nlen + vlen };
+    }
+
+    const IoStream = struct {
+        fd: c_int,
+        ssl: ?*anyopaque = null,
+
+        fn readExact(self: *IoStream, buf: []u8) bool {
+            var total: usize = 0;
+            while (total < buf.len) {
+                const n: isize = if (self.ssl) |s|
+                    @intCast(loopback_tls.ossl.SSL_read(s, buf[total..].ptr, @intCast(buf.len - total)))
+                else
+                    loopback_tls.sock_c.recv(self.fd, buf[total..].ptr, buf.len - total, 0);
+                if (n <= 0) return false;
+                total += @intCast(n);
+            }
+            return true;
+        }
+
+        fn writeAll(self: *IoStream, data: []const u8) bool {
+            var total: usize = 0;
+            while (total < data.len) {
+                const n: isize = if (self.ssl) |s|
+                    @intCast(loopback_tls.ossl.SSL_write(s, data[total..].ptr, @intCast(data.len - total)))
+                else
+                    loopback_tls.sock_c.send(self.fd, data[total..].ptr, data.len - total, 0);
+                if (n <= 0) return false;
+                total += @intCast(n);
+            }
+            return true;
+        }
+    };
+
+    fn readLdapMessage(stream: *IoStream, buf: []u8) ?[]const u8 {
+        var hdr: [2]u8 = undefined;
+        if (!stream.readExact(&hdr)) return null;
+        if (hdr[0] != 0x30) return null;
+
+        var vlen: usize = 0;
+        if ((hdr[1] & 0x80) == 0) {
+            vlen = hdr[1];
+        } else {
+            const nlen: usize = hdr[1] & 0x7f;
+            if (nlen == 0 or nlen > 4) return null;
+            var len_bytes: [4]u8 = undefined;
+            if (!stream.readExact(len_bytes[0..nlen])) return null;
+            for (len_bytes[0..nlen]) |b| {
+                vlen = (vlen << 8) | b;
+            }
+        }
+        if (vlen > buf.len) return null;
+        if (!stream.readExact(buf[0..vlen])) return null;
+        return buf[0..vlen];
+    }
+
+    fn buildAttr(attr_type: []const u8, attr_val: []const u8, out: []u8) []const u8 {
+        var t_buf: [128]u8 = undefined;
+        var v_buf: [256]u8 = undefined;
+        var set_buf: [256]u8 = undefined;
+        const t_tlv = berWrap(0x04, attr_type, &t_buf);
+        const v_tlv = berWrap(0x04, attr_val, &v_buf);
+        const set_tlv = berWrap(0x31, v_tlv, &set_buf);
+        return berWrap2(0x30, t_tlv, set_tlv, out);
+    }
+
+    fn buildSearchResultEntry(msg_id_raw: []const u8, out: []u8) []const u8 {
+        var dn_buf: [128]u8 = undefined;
+        const dn_tlv = berWrap(0x04, "cn=Alice,dc=example,dc=com", &dn_buf);
+
+        var a1_buf: [128]u8 = undefined;
+        var a2_buf: [128]u8 = undefined;
+        var a3_buf: [128]u8 = undefined;
+        var a4_buf: [128]u8 = undefined;
+        const a1 = buildAttr("cn", "Alice", &a1_buf);
+        const a2 = buildAttr("mail", "alice@example.com", &a2_buf);
+        const a3 = buildAttr("description", ":secret-note", &a3_buf);
+        const a4 = buildAttr("userCertificate;binary", "CERT", &a4_buf);
+
+        var attrs_cat: [512]u8 = undefined;
+        var pos: usize = 0;
+        for ([_][]const u8{ a1, a2, a3, a4 }) |a| {
+            @memcpy(attrs_cat[pos .. pos + a.len], a);
+            pos += a.len;
+        }
+
+        var attrs_seq_buf: [512]u8 = undefined;
+        const attrs_seq = berWrap(0x30, attrs_cat[0..pos], &attrs_seq_buf);
+
+        var entry_op_buf: [768]u8 = undefined;
+        const entry_op = berWrap2(0x64, dn_tlv, attrs_seq, &entry_op_buf);
+
+        return berWrap2(0x30, msg_id_raw, entry_op, out);
+    }
+
+    fn buildLdapResultMsg(msg_id_raw: []const u8, op_tag: u8, result_code: u8, out: []u8) []const u8 {
+        const res_body = [_]u8{ 0x0a, 0x01, result_code, 0x04, 0x00, 0x04, 0x00 };
+        var op_buf: [32]u8 = undefined;
+        const op_tlv = berWrap(op_tag, &res_body, &op_buf);
+        return berWrap2(0x30, msg_id_raw, op_tlv, out);
+    }
+
+    fn createOpenSslServerCtx() ?*anyopaque {
+        if (comptime backend_options.ssl != .openssl) return null;
+        const method = loopback_tls.ossl.TLS_server_method() orelse return null;
+        const ctx = loopback_tls.ossl.SSL_CTX_new(method) orelse return null;
+
+        const cert_bio = loopback_tls.ossl.BIO_new_mem_buf(
+            loopback_tls.test_server_cert_pem.ptr,
+            @intCast(loopback_tls.test_server_cert_pem.len),
+        ) orelse {
+            loopback_tls.ossl.SSL_CTX_free(ctx);
+            return null;
+        };
+        defer _ = loopback_tls.ossl.BIO_free(cert_bio);
+        const x509 = loopback_tls.ossl.PEM_read_bio_X509(cert_bio, null, null, null) orelse {
+            loopback_tls.ossl.SSL_CTX_free(ctx);
+            return null;
+        };
+        defer loopback_tls.ossl.X509_free(x509);
+        if (loopback_tls.ossl.SSL_CTX_use_certificate(ctx, x509) != 1) {
+            loopback_tls.ossl.SSL_CTX_free(ctx);
+            return null;
+        }
+
+        const key_bio = loopback_tls.ossl.BIO_new_mem_buf(
+            loopback_tls.test_server_key_pem.ptr,
+            @intCast(loopback_tls.test_server_key_pem.len),
+        ) orelse {
+            loopback_tls.ossl.SSL_CTX_free(ctx);
+            return null;
+        };
+        defer _ = loopback_tls.ossl.BIO_free(key_bio);
+        const pkey = loopback_tls.ossl.PEM_read_bio_PrivateKey(key_bio, null, null, null) orelse {
+            loopback_tls.ossl.SSL_CTX_free(ctx);
+            return null;
+        };
+        defer loopback_tls.ossl.EVP_PKEY_free(pkey);
+        if (loopback_tls.ossl.SSL_CTX_use_PrivateKey(ctx, pkey) != 1) {
+            loopback_tls.ossl.SSL_CTX_free(ctx);
+            return null;
+        }
+        return ctx;
+    }
+
+    fn serveOnce(cfg: ServerConfig) void {
+        var dummy_fd: c_int = -1;
+        defer if (dummy_fd >= 0) {
+            _ = loopback_tls.sock_c.close(dummy_fd);
+        };
+        var dummy_ssl: ?*anyopaque = null;
+        defer if (dummy_ssl) |s| {
+            if (comptime backend_options.ssl == .openssl) {
+                loopback_tls.ossl.SSL_free(s);
+            }
+        };
+
+        var ssl_ctx: ?*anyopaque = null;
+        defer if (ssl_ctx) |ctx| {
+            if (comptime backend_options.ssl == .openssl) loopback_tls.ossl.SSL_CTX_free(ctx);
+        };
+
+        if (comptime backend_options.ldap == .ldap) {
+            // Legacy lib/ldap.c connects conn->sock[FIRSTSOCKET] during Curl_connect
+            // and then opens a second socket inside ldap_init() during legacyLdapDo.
+            dummy_fd = loopback_tls.sock_c.accept(cfg.listen_fd, null, null);
+            if (dummy_fd < 0) return;
+            loopback_tls.setSocketTimeouts(dummy_fd);
+            if (cfg.mode == .ldaps) {
+                if (comptime backend_options.ssl != .openssl) return;
+                ssl_ctx = createOpenSslServerCtx() orelse return;
+                dummy_ssl = loopback_tls.ossl.SSL_new(ssl_ctx.?) orelse return;
+                if (loopback_tls.ossl.SSL_set_fd(dummy_ssl.?, dummy_fd) != 1) return;
+                if (loopback_tls.ossl.SSL_accept(dummy_ssl.?) != 1) return;
+            }
+        }
+
+        const client_fd = loopback_tls.sock_c.accept(cfg.listen_fd, null, null);
+        if (client_fd < 0) return;
+        defer _ = loopback_tls.sock_c.close(client_fd);
+        loopback_tls.setSocketTimeouts(client_fd);
+
+        var ssl_handle: ?*anyopaque = null;
+        defer if (ssl_handle) |s| {
+            if (comptime backend_options.ssl == .openssl) {
+                _ = loopback_tls.ossl.SSL_shutdown(s);
+                loopback_tls.ossl.SSL_free(s);
+            }
+        };
+
+        var stream = IoStream{ .fd = client_fd };
+
+        if (cfg.mode == .ldaps) {
+            if (comptime backend_options.ssl != .openssl) return;
+            if (ssl_ctx == null) {
+                ssl_ctx = createOpenSslServerCtx() orelse return;
+            }
+            ssl_handle = loopback_tls.ossl.SSL_new(ssl_ctx.?) orelse return;
+            if (loopback_tls.ossl.SSL_set_fd(ssl_handle.?, client_fd) != 1) return;
+            if (loopback_tls.ossl.SSL_accept(ssl_handle.?) != 1) return;
+            stream.ssl = ssl_handle;
+        }
+
+        var msg_buf: [2048]u8 = undefined;
+        while (readLdapMessage(&stream, &msg_buf)) |body| {
+            const id_tlv = berParseTlv(body) orelse break;
+            if (id_tlv.tag != 0x02) break;
+            const msg_id_raw = body[0..id_tlv.total_len];
+            const op_tlv = berParseTlv(body[id_tlv.total_len..]) orelse break;
+
+            switch (op_tlv.tag) {
+                0x77 => {
+                    // ExtendedRequest (StartTLS)
+                    var out_buf: [128]u8 = undefined;
+                    const resp = buildLdapResultMsg(msg_id_raw, 0x78, 0x00, &out_buf);
+                    if (!stream.writeAll(resp)) break;
+                    if (cfg.mode == .starttls and stream.ssl == null) {
+                        if (comptime backend_options.ssl != .openssl) break;
+                        ssl_ctx = createOpenSslServerCtx() orelse break;
+                        ssl_handle = loopback_tls.ossl.SSL_new(ssl_ctx.?) orelse break;
+                        if (loopback_tls.ossl.SSL_set_fd(ssl_handle.?, client_fd) != 1) break;
+                        if (loopback_tls.ossl.SSL_accept(ssl_handle.?) != 1) break;
+                        stream.ssl = ssl_handle;
+                    }
+                },
+                0x60 => {
+                    // BindRequest
+                    const ver_tlv = berParseTlv(op_tlv.val) orelse break;
+                    const dn_tlv = berParseTlv(op_tlv.val[ver_tlv.total_len..]) orelse break;
+                    const auth_tlv = berParseTlv(op_tlv.val[ver_tlv.total_len + dn_tlv.total_len ..]) orelse break;
+
+                    var creds_ok = true;
+                    if (cfg.expected_dn) |exp_dn| {
+                        if (!std.mem.eql(u8, dn_tlv.val, exp_dn)) creds_ok = false;
+                    }
+                    if (cfg.expected_pw) |exp_pw| {
+                        if (auth_tlv.tag != 0x80 or !std.mem.eql(u8, auth_tlv.val, exp_pw)) creds_ok = false;
+                    }
+
+                    const result_code: u8 = if (creds_ok) 0x00 else 0x31; // 49 = invalidCredentials
+                    var out_buf: [128]u8 = undefined;
+                    const resp = buildLdapResultMsg(msg_id_raw, 0x61, result_code, &out_buf);
+                    if (!stream.writeAll(resp)) break;
+                },
+                0x63 => {
+                    // SearchRequest -> send SearchResultEntry + SearchResultDone
+                    var entry_buf: [1024]u8 = undefined;
+                    const entry_msg = buildSearchResultEntry(msg_id_raw, &entry_buf);
+                    if (!stream.writeAll(entry_msg)) break;
+
+                    var done_buf: [128]u8 = undefined;
+                    const done_msg = buildLdapResultMsg(msg_id_raw, 0x65, 0x00, &done_buf);
+                    if (!stream.writeAll(done_msg)) break;
+                },
+                0x42 => break, // UnbindRequest
+                else => break,
+            }
+        }
+    }
+};
+
+test "LDAP loopback: anonymous search with plain, unsafe, and ;binary attributes" {
+    if (!backend_options.has_ldap) return;
+    if (builtin.os.tag == .windows) return;
+
+    var port: u16 = 0;
+    const listen_fd = try loopback_tls.openLoopbackListener(&port);
+    defer _ = loopback_tls.sock_c.close(listen_fd);
+
+    const server_thread = try std.Thread.spawn(.{}, loopback_ldap.serveOnce, .{loopback_ldap.ServerConfig{
+        .listen_fd = listen_fd,
+        .mode = .plain,
+    }});
+    defer server_thread.join();
+
+    const easy = curl_easy_init() orelse return error.EasyInitFailed;
+    defer curl_easy_cleanup(easy);
+
+    const gpa = testing.allocator;
+    const url_z = try std.fmt.allocPrintSentinel(
+        gpa,
+        "ldap://127.0.0.1:{d}/dc=example,dc=com?cn,mail,description,userCertificate;binary?sub?(objectClass=*)",
+        .{port},
+        0,
+    );
+    defer gpa.free(url_z);
+
+    var cap = loopback_http.BodySink{};
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, &cap));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url_z.ptr));
+
+    try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+
+    const expected_ldif =
+        "DN: cn=Alice,dc=example,dc=com\n" ++
+        "\tcn: Alice\n\n" ++
+        "\tmail: alice@example.com\n\n" ++
+        "\tdescription:: OnNlY3JldC1ub3Rl\n\n" ++
+        "\tuserCertificate;binary:: Q0VSVA==\n\n" ++
+        if (backend_options.ldap == .openldap) "\n" else "";
+    try testing.expectEqualStrings(expected_ldif, cap.slice());
+}
+
+test "LDAP loopback: authenticated simple bind and invalid credentials rejection" {
+    if (!backend_options.has_ldap) return;
+    if (builtin.os.tag == .windows) return;
+
+    const gpa = testing.allocator;
+
+    // 1. Valid credentials succeed
+    {
+        var port: u16 = 0;
+        const listen_fd = try loopback_tls.openLoopbackListener(&port);
+        defer _ = loopback_tls.sock_c.close(listen_fd);
+
+        const server_thread = try std.Thread.spawn(.{}, loopback_ldap.serveOnce, .{loopback_ldap.ServerConfig{
+            .listen_fd = listen_fd,
+            .mode = .plain,
+            .expected_dn = "cn=admin,dc=example,dc=com",
+            .expected_pw = "secret",
+        }});
+        defer server_thread.join();
+
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        const url_z = try std.fmt.allocPrintSentinel(gpa, "ldap://127.0.0.1:{d}/dc=example,dc=com?cn?sub?(cn=Alice)", .{port}, 0);
+        defer gpa.free(url_z);
+
+        var cap = loopback_http.BodySink{};
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_USERPWD, "cn=admin,dc=example,dc=com:secret"));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, &cap));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url_z.ptr));
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+        try testing.expect(std.mem.indexOf(u8, cap.slice(), "DN: cn=Alice,dc=example,dc=com\n") != null);
+    }
+
+    // 2. Invalid password fails with CURLE_LOGIN_DENIED (or CURLE_LDAP_CANNOT_BIND)
+    {
+        var port: u16 = 0;
+        const listen_fd = try loopback_tls.openLoopbackListener(&port);
+        defer _ = loopback_tls.sock_c.close(listen_fd);
+
+        const server_thread = try std.Thread.spawn(.{}, loopback_ldap.serveOnce, .{loopback_ldap.ServerConfig{
+            .listen_fd = listen_fd,
+            .mode = .plain,
+            .expected_dn = "cn=admin,dc=example,dc=com",
+            .expected_pw = "secret",
+        }});
+        defer server_thread.join();
+
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        const url_z = try std.fmt.allocPrintSentinel(gpa, "ldap://127.0.0.1:{d}/dc=example,dc=com?cn?sub?(cn=Alice)", .{port}, 0);
+        defer gpa.free(url_z);
+
+        var cap = loopback_http.BodySink{};
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_USERPWD, "cn=admin,dc=example,dc=com:wrong"));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, &cap));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url_z.ptr));
+
+        const rc = curl_easy_perform(easy);
+        try testing.expect(rc == c.CURLE_LOGIN_DENIED or rc == c.CURLE_LDAP_CANNOT_BIND);
+    }
+}
+
+test "LDAPS loopback: TLS search with trusted CA and untrusted CA rejection" {
+    if (backend_options.ldap != .openldap) return;
+    if (!backend_options.has_ldaps) return;
+    if (comptime backend_options.ssl != .openssl) return;
+    if (builtin.os.tag == .windows) return;
+
+    const gpa = testing.allocator;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_abs = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir_abs);
+
+    try tmp.dir.writeFile(io, .{ .sub_path = "ca.pem", .data = loopback_tls.test_ca_cert_pem });
+    try tmp.dir.writeFile(io, .{ .sub_path = "untrusted_ca.pem", .data = loopback_tls.test_untrusted_ca_cert_pem });
+
+    const ca_path_z = try std.fmt.allocPrintSentinel(gpa, "{s}/ca.pem", .{dir_abs}, 0);
+    defer gpa.free(ca_path_z);
+    const untrusted_ca_path_z = try std.fmt.allocPrintSentinel(gpa, "{s}/untrusted_ca.pem", .{dir_abs}, 0);
+    defer gpa.free(untrusted_ca_path_z);
+
+    // 1. Trusted CA succeeds over LDAPS
+    {
+        var port: u16 = 0;
+        const listen_fd = try loopback_tls.openLoopbackListener(&port);
+        defer _ = loopback_tls.sock_c.close(listen_fd);
+
+        const server_thread = try std.Thread.spawn(.{}, loopback_ldap.serveOnce, .{loopback_ldap.ServerConfig{
+            .listen_fd = listen_fd,
+            .mode = .ldaps,
+        }});
+        defer server_thread.join();
+
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        const url_z = try std.fmt.allocPrintSentinel(gpa, "ldaps://localhost:{d}/dc=example,dc=com?cn?sub?(cn=Alice)", .{port}, 0);
+        defer gpa.free(url_z);
+
+        var cap = loopback_http.BodySink{};
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_CAINFO, ca_path_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, &cap));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url_z.ptr));
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+        try testing.expect(std.mem.indexOf(u8, cap.slice(), "DN: cn=Alice,dc=example,dc=com\n") != null);
+    }
+
+    // 2. Untrusted CA is rejected
+    {
+        var port: u16 = 0;
+        const listen_fd = try loopback_tls.openLoopbackListener(&port);
+        defer _ = loopback_tls.sock_c.close(listen_fd);
+
+        const server_thread = try std.Thread.spawn(.{}, loopback_ldap.serveOnce, .{loopback_ldap.ServerConfig{
+            .listen_fd = listen_fd,
+            .mode = .ldaps,
+        }});
+        defer server_thread.join();
+
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        const url_z = try std.fmt.allocPrintSentinel(gpa, "ldaps://localhost:{d}/dc=example,dc=com?cn?sub?(cn=Alice)", .{port}, 0);
+        defer gpa.free(url_z);
+
+        var cap = loopback_http.BodySink{};
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_CAINFO, untrusted_ca_path_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, &cap));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url_z.ptr));
+
+        const rc = curl_easy_perform(easy);
+        try testing.expect(rc == c.CURLE_PEER_FAILED_VERIFICATION or rc == c.CURLE_LDAP_CANNOT_BIND);
+    }
+}
+
+test "LDAP StartTLS loopback: upgrade cleartext ldap:// to TLS before search" {
+    if (backend_options.ldap != .openldap) return;
+    if (!backend_options.has_ldaps) return;
+    if (comptime backend_options.ssl != .openssl) return;
+    if (builtin.os.tag == .windows) return;
+
+    const gpa = testing.allocator;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_abs = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir_abs);
+
+    try tmp.dir.writeFile(io, .{ .sub_path = "ca.pem", .data = loopback_tls.test_ca_cert_pem });
+    const ca_path_z = try std.fmt.allocPrintSentinel(gpa, "{s}/ca.pem", .{dir_abs}, 0);
+    defer gpa.free(ca_path_z);
+
+    var port: u16 = 0;
+    const listen_fd = try loopback_tls.openLoopbackListener(&port);
+    defer _ = loopback_tls.sock_c.close(listen_fd);
+
+    const server_thread = try std.Thread.spawn(.{}, loopback_ldap.serveOnce, .{loopback_ldap.ServerConfig{
+        .listen_fd = listen_fd,
+        .mode = .starttls,
+        .expected_dn = "cn=admin,dc=example,dc=com",
+        .expected_pw = "secret",
+    }});
+    defer server_thread.join();
+
+    const easy = curl_easy_init() orelse return error.EasyInitFailed;
+    defer curl_easy_cleanup(easy);
+
+    const url_z = try std.fmt.allocPrintSentinel(gpa, "ldap://localhost:{d}/dc=example,dc=com?cn?sub?(cn=Alice)", .{port}, 0);
+    defer gpa.free(url_z);
+
+    var cap = loopback_http.BodySink{};
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_USE_SSL, c.CURLUSESSL_ALL));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_CAINFO, ca_path_z.ptr));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_USERPWD, "cn=admin,dc=example,dc=com:secret"));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, &cap));
+    try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url_z.ptr));
+
+    try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+    try testing.expect(std.mem.indexOf(u8, cap.slice(), "DN: cn=Alice,dc=example,dc=com\n") != null);
 }

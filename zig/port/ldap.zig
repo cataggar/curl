@@ -368,9 +368,9 @@ pub const LDAP_RES_ANY: c_int = -1;
 pub const LDAP_MSG_ONE: c_int = 0x00;
 pub const LDAP_NO_LIMIT: c_int = 0;
 
-pub const LBER_SBIOD_LEVEL_TRANSPORT: c_int = 10;
-pub const LBER_SB_OPT_DATA_READY: c_int = 4;
-pub const LBER_SB_OPT_SET_MAX_INCOMING: c_int = 7;
+pub const LBER_SBIOD_LEVEL_TRANSPORT: c_int = 20;
+pub const LBER_SB_OPT_DATA_READY: c_int = 8;
+pub const LBER_SB_OPT_SET_MAX_INCOMING: c_int = 14;
 
 pub const LDAP_EXOP_START_TLS: [*:0]const u8 = "1.3.6.1.4.1.1466.20037";
 pub const LDAP_SASL_SIMPLE: ?[*:0]const u8 = null;
