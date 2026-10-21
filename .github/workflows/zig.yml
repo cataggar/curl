@@ -32,11 +32,22 @@ jobs:
       - name: Install TLS system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libssl-dev libmbedtls-dev libgnutls28-dev nettle-dev libwolfssl-dev zlib1g-dev libzstd-dev libnghttp2-dev libbrotli-dev libpsl-dev libidn2-dev libc-ares-dev libngtcp2-dev libngtcp2-crypto-gnutls-dev libnghttp3-dev
+          sudo apt-get install -y --no-install-recommends libssl-dev libmbedtls-dev libgnutls28-dev nettle-dev libwolfssl-dev zlib1g-dev libzstd-dev libnghttp2-dev libbrotli-dev libpsl-dev libidn2-dev libc-ares-dev cmake ninja-build pkg-config
           git clone --depth 1 --branch v0.15.5 https://github.com/rustls/rustls-ffi.git /tmp/rustls-ffi
           cargo build --release --manifest-path /tmp/rustls-ffi/Cargo.toml
           sudo cp /tmp/rustls-ffi/target/release/librustls_ffi.a /usr/lib/x86_64-linux-gnu/librustls.a
           rm -rf /tmp/rustls-ffi
+          git clone --depth 1 --branch v1.12.0 --recurse-submodules --shallow-submodules https://github.com/ngtcp2/nghttp3.git /tmp/nghttp3
+          cmake -S /tmp/nghttp3 -B /tmp/nghttp3/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib/x86_64-linux-gnu -DENABLE_LIB_ONLY=ON
+          cmake --build /tmp/nghttp3/build
+          sudo cmake --install /tmp/nghttp3/build
+          rm -rf /tmp/nghttp3
+          git clone --depth 1 --branch v1.16.0 --recurse-submodules --shallow-submodules https://github.com/ngtcp2/ngtcp2.git /tmp/ngtcp2
+          cmake -S /tmp/ngtcp2 -B /tmp/ngtcp2/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib/x86_64-linux-gnu -DENABLE_LIB_ONLY=ON -DENABLE_GNUTLS=ON -DENABLE_OPENSSL=OFF
+          cmake --build /tmp/ngtcp2/build
+          sudo cmake --install /tmp/ngtcp2/build
+          sudo ldconfig
+          rm -rf /tmp/ngtcp2
 
       - name: Format check
         run: zig fmt --check build.zig build.zig.zon zig/

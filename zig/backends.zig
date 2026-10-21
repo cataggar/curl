@@ -213,7 +213,6 @@ pub fn applyCMacros(mod: *std.Build.Module, target: std.Build.ResolvedTarget, op
             if (opts.ssl != .openssl and opts.ssl != .gnutls and opts.ssl != .wolfssl) {
                 @panic("ngtcp2 requires -Dssl=openssl, -Dssl=gnutls, or -Dssl=wolfssl");
             }
-            mod.addCMacro("USE_HTTP3", "1");
             mod.addCMacro("USE_NGTCP2", "1");
             mod.addCMacro("USE_NGHTTP3", "1");
             if (opts.hasProxyHttp3()) {
@@ -226,7 +225,6 @@ pub fn applyCMacros(mod: *std.Build.Module, target: std.Build.ResolvedTarget, op
             }
         },
         .quiche => {
-            mod.addCMacro("USE_HTTP3", "1");
             mod.addCMacro("USE_QUICHE", "1");
             mod.addCMacro("HAVE_QUICHE_CONN_SET_QLOG_FD", "1");
         },
