@@ -747,7 +747,7 @@ pub fn packageArchive(
     {
         var exe_file = Dir.cwd().createFile(io, staged_exe_path, .{
             .truncate = true,
-            .permissions = .fromMode(0o755),
+            .permissions = .executable_file,
         }) catch |err| return diagnostic.fail(
             error.Failed,
             "cannot create staged executable {s}: {t}",
