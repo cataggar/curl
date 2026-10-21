@@ -597,11 +597,13 @@ inline fn cwriterFlush(data: ?*Curl_easy, writer: ?*Curl_cwriter) CURLcode {
 // ============================================================================
 
 const EASY_WRITER_PAUSED_OFFSET: usize = 240;
-const EASY_STRINGS_OFFSET_NO_HSTS: usize = 872;
-const EASY_STRINGS_OFFSET_WITH_HSTS: usize = 904;
+const use_ssh = if (@hasDecl(backend_options, "ssh")) backend_options.ssh != .none else false;
+const enable_hsts = if (@hasDecl(backend_options, "ssl")) backend_options.ssl != .none else false;
+const ssh_off: u8 = if (use_ssh) 5 else 0;
+const hsts_off: u8 = if (enable_hsts) 1 else 0;
 const ares_off: u8 = if (use_ares) 4 else 0;
-const STRING_HAPROXY_CLIENT_IP_NO_HSTS: u8 = 65 + ares_off;
-const STRING_HAPROXY_CLIENT_IP_WITH_HSTS: u8 = 66 + ares_off;
+const STRING_HAPROXY_CLIENT_IP: u8 = 65 + ssh_off + hsts_off + ares_off;
+extern fn Curl_easy_strset_ptr(data: *Curl_easy) callconv(.c) *collections.u8_strset;
 
 inline fn cwriterIsPaused(data: ?*const Curl_easy) bool {
     const d = data orelse return false;
@@ -633,14 +635,9 @@ inline fn isValidU8Strset(set: *const collections.u8_strset) bool {
 
 inline fn getHaproxyClientIp(data: ?*Curl_easy) ?[*:0]const u8 {
     const d = data orelse return null;
-    const base: [*]u8 = @ptrCast(@alignCast(d));
-    const set_no_hsts: *collections.u8_strset = @ptrCast(@alignCast(base + EASY_STRINGS_OFFSET_NO_HSTS));
-    if (isValidU8Strset(set_no_hsts)) {
-        return Curl_u8_strset_get(set_no_hsts, STRING_HAPROXY_CLIENT_IP_NO_HSTS);
-    }
-    const set_with_hsts: *collections.u8_strset = @ptrCast(@alignCast(base + EASY_STRINGS_OFFSET_WITH_HSTS));
-    if (isValidU8Strset(set_with_hsts)) {
-        return Curl_u8_strset_get(set_with_hsts, STRING_HAPROXY_CLIENT_IP_WITH_HSTS);
+    const set = Curl_easy_strset_ptr(d);
+    if (isValidU8Strset(set)) {
+        return Curl_u8_strset_get(set, STRING_HAPROXY_CLIENT_IP);
     }
     return null;
 }

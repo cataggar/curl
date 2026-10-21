@@ -50,7 +50,8 @@ const use_ntlm = false;
 const use_http2 = backend_options.nghttp2;
 const use_http3 = if (@hasDecl(backend_options, "http3")) backend_options.http3 else false;
 const use_proxy_http3 = if (@hasDecl(backend_options, "proxy_http3")) backend_options.proxy_http3 else false;
-const use_ssh = false;
+const use_ssh = if (@hasDecl(backend_options, "ssh")) backend_options.ssh != .none else false;
+const use_libssh2 = if (@hasDecl(backend_options, "ssh")) backend_options.ssh == .libssh2 else false;
 const use_ech = false;
 const use_ares = if (@hasDecl(backend_options, "ares")) backend_options.ares else false;
 const use_resolv_ares = if (@hasDecl(backend_options, "use_resolv_ares")) backend_options.use_resolv_ares else false;
@@ -193,6 +194,7 @@ const CURL_LOCK_DATA_COOKIE: c_uint = 2;
 const CURL_LOCK_ACCESS_SINGLE: c_uint = 2;
 
 // enum dupstring indices
+const ssh_off: c_uint = if (use_ssh) 5 else 0;
 const hsts_off: c_uint = if (enable_hsts) 1 else 0;
 const ares_off: c_uint = if (use_ares) 4 else 0;
 pub const STRING_CERT: c_uint = 0;
@@ -247,28 +249,33 @@ pub const STRING_NOPROXY: c_uint = 48;
 pub const STRING_RTSP_SESSION_ID: c_uint = 49;
 pub const STRING_RTSP_STREAM_URI: c_uint = 50;
 pub const STRING_RTSP_TRANSPORT: c_uint = 51;
-pub const STRING_MAIL_FROM: c_uint = 52;
-pub const STRING_MAIL_AUTH: c_uint = 53;
-pub const STRING_BEARER: c_uint = 54;
-pub const STRING_UNIX_SOCKET_PATH: c_uint = 55;
-pub const STRING_TARGET: c_uint = 56;
-pub const STRING_DOH: c_uint = 57;
-pub const STRING_ALTSVC: c_uint = 58;
-pub const STRING_HSTS: c_uint = 59;
-pub const STRING_SASL_AUTHZID: c_uint = 59 + hsts_off;
-pub const STRING_DNS_SERVERS: c_uint = 60 + hsts_off;
-pub const STRING_DNS_INTERFACE: c_uint = 61 + hsts_off;
-pub const STRING_DNS_LOCAL_IP4: c_uint = 62 + hsts_off;
-pub const STRING_DNS_LOCAL_IP6: c_uint = 63 + hsts_off;
-pub const STRING_SSL_EC_CURVES: c_uint = 60 + hsts_off + ares_off;
-pub const STRING_AWS_SIGV4: c_uint = 61 + hsts_off + ares_off;
-pub const STRING_HTTPSIG_KEY: c_uint = 62 + hsts_off + ares_off;
-pub const STRING_HTTPSIG_KEYID: c_uint = 63 + hsts_off + ares_off;
-pub const STRING_HTTPSIG_HEADERS: c_uint = 64 + hsts_off + ares_off;
-pub const STRING_HAPROXY_CLIENT_IP: c_uint = 65 + hsts_off + ares_off;
-pub const STRING_ECH_CONFIG: c_uint = 66 + hsts_off + ares_off;
-pub const STRING_ECH_PUBLIC: c_uint = 67 + hsts_off + ares_off;
-pub const STRING_SSL_SIGNATURE_ALGORITHMS: c_uint = 68 + hsts_off + ares_off;
+pub const STRING_SSH_PRIVATE_KEY: c_uint = 52;
+pub const STRING_SSH_PUBLIC_KEY: c_uint = 53;
+pub const STRING_SSH_HOST_PUBLIC_KEY_MD5: c_uint = 54;
+pub const STRING_SSH_HOST_PUBLIC_KEY_SHA256: c_uint = 55;
+pub const STRING_SSH_KNOWNHOSTS: c_uint = 56;
+pub const STRING_MAIL_FROM: c_uint = 52 + ssh_off;
+pub const STRING_MAIL_AUTH: c_uint = 53 + ssh_off;
+pub const STRING_BEARER: c_uint = 54 + ssh_off;
+pub const STRING_UNIX_SOCKET_PATH: c_uint = 55 + ssh_off;
+pub const STRING_TARGET: c_uint = 56 + ssh_off;
+pub const STRING_DOH: c_uint = 57 + ssh_off;
+pub const STRING_ALTSVC: c_uint = 58 + ssh_off;
+pub const STRING_HSTS: c_uint = 59 + ssh_off;
+pub const STRING_SASL_AUTHZID: c_uint = 59 + ssh_off + hsts_off;
+pub const STRING_DNS_SERVERS: c_uint = 60 + ssh_off + hsts_off;
+pub const STRING_DNS_INTERFACE: c_uint = 61 + ssh_off + hsts_off;
+pub const STRING_DNS_LOCAL_IP4: c_uint = 62 + ssh_off + hsts_off;
+pub const STRING_DNS_LOCAL_IP6: c_uint = 63 + ssh_off + hsts_off;
+pub const STRING_SSL_EC_CURVES: c_uint = 60 + ssh_off + hsts_off + ares_off;
+pub const STRING_AWS_SIGV4: c_uint = 61 + ssh_off + hsts_off + ares_off;
+pub const STRING_HTTPSIG_KEY: c_uint = 62 + ssh_off + hsts_off + ares_off;
+pub const STRING_HTTPSIG_KEYID: c_uint = 63 + ssh_off + hsts_off + ares_off;
+pub const STRING_HTTPSIG_HEADERS: c_uint = 64 + ssh_off + hsts_off + ares_off;
+pub const STRING_HAPROXY_CLIENT_IP: c_uint = 65 + ssh_off + hsts_off + ares_off;
+pub const STRING_ECH_CONFIG: c_uint = 66 + ssh_off + hsts_off + ares_off;
+pub const STRING_ECH_PUBLIC: c_uint = 67 + ssh_off + hsts_off + ares_off;
+pub const STRING_SSL_SIGNATURE_ALGORITHMS: c_uint = 68 + ssh_off + hsts_off + ares_off;
 
 // enum dupblob indices
 pub const BLOB_CERT: c_uint = 0;
@@ -643,6 +650,7 @@ const BIT_TCP_NODELAY: c_int = 41;
 const BIT_IGNORECL: c_int = 42;
 const BIT_SSL_CACHE_SESSION: c_int = 43;
 const BIT_PROXY_SSL_CACHE_SESSION: c_int = 44;
+const BIT_SSH_COMPRESSION: c_int = 45;
 const BIT_MAIL_RCPT_ALLOWFAILS: c_int = 46;
 const BIT_SASL_IR: c_int = 47;
 const BIT_TCP_KEEPALIVE: c_int = 48;
@@ -732,6 +740,8 @@ const FIELD_FTP_CREATE_MISSING_DIRS: c_int = 50;
 const FIELD_NEW_FILE_PERMS: c_int = 51;
 const FIELD_STATE_RTSP_NEXT_CLIENT_CSEQ: c_int = 52;
 const FIELD_STATE_RTSP_NEXT_SERVER_CSEQ: c_int = 53;
+const FIELD_SSH_AUTH_TYPES: c_int = 54;
+const FIELD_NEW_DIRECTORY_PERMS: c_int = 55;
 const FIELD_ALLOWED_PROTOCOLS: c_int = 56;
 const FIELD_REDIR_PROTOCOLS: c_int = 57;
 const FIELD_TIMECONDITION: c_int = 58;
@@ -815,6 +825,10 @@ const PTR_SET_TRAILER_CALLBACK: c_int = 67;
 const PTR_SET_HSTS_READ: c_int = 68;
 const PTR_SET_HSTS_WRITE: c_int = 69;
 const PTR_SET_FPREREQ: c_int = 70;
+const PTR_SET_SSH_KEYFUNC_USERP: c_int = 71;
+const PTR_SET_SSH_HOSTKEYFUNC_USERP: c_int = 72;
+const PTR_SET_SSH_KEYFUNC: c_int = 73;
+const PTR_SET_SSH_HOSTKEYFUNC: c_int = 74;
 
 // Ref IDs in lib/multi.c
 const PTR_REF_STATE_PROXYDIGEST: c_int = 1;
@@ -1310,6 +1324,10 @@ fn setoptLongBool(data: *Curl_easy, option: CURLoption, arg: c_long) CURLcode {
             Curl_setopt_set_bit(data, BIT_SSL_CACHE_SESSION, enabled);
             Curl_setopt_set_bit(data, BIT_PROXY_SSL_CACHE_SESSION, enabled);
         },
+        CURLOPT_SSH_COMPRESSION => {
+            if (!use_ssh) return CURLE_UNKNOWN_OPTION;
+            Curl_setopt_set_bit(data, BIT_SSH_COMPRESSION, enabled);
+        },
         CURLOPT_MAIL_RCPT_ALLOWFAILS => Curl_setopt_set_bit(data, BIT_MAIL_RCPT_ALLOWFAILS, enabled),
         CURLOPT_SASL_IR => Curl_setopt_set_bit(data, BIT_SASL_IR, enabled),
         CURLOPT_TCP_KEEPALIVE => Curl_setopt_set_bit(data, BIT_TCP_KEEPALIVE, enabled),
@@ -1654,6 +1672,19 @@ fn setoptLongProto(data: *Curl_easy, option: CURLoption, arg_in: c_long) CURLcod
             } else {
                 Curl_setopt_set_i64(data, FIELD_NEW_FILE_PERMS, arg);
             }
+        },
+        CURLOPT_NEW_DIRECTORY_PERMS => {
+            if (!use_ssh) return CURLE_UNKNOWN_OPTION;
+            if (arg < 0 or arg > 0o777) {
+                result = CURLE_BAD_FUNCTION_ARGUMENT;
+            } else {
+                Curl_setopt_set_i64(data, FIELD_NEW_DIRECTORY_PERMS, arg);
+            }
+        },
+        CURLOPT_SSH_AUTH_TYPES => {
+            if (!use_ssh) return CURLE_UNKNOWN_OPTION;
+            const uval: u32 = @truncate(@as(c_ulong, @bitCast(arg)));
+            Curl_setopt_set_i64(data, FIELD_SSH_AUTH_TYPES, @intCast(uval));
         },
         CURLOPT_RTSP_REQUEST => return setoptRtspRequest(data, arg),
         CURLOPT_RTSP_CLIENT_CSEQ => {
@@ -2295,6 +2326,37 @@ fn setoptCptrFtp(data: *Curl_easy, option: CURLoption, ptr: ?[*:0]const u8) CURL
         CURLOPT_KRBLEVEL => return CURLE_NOT_BUILT_IN,
         CURLOPT_CHUNK_DATA => Curl_setopt_set_ptr(data, PTR_SET_WILDCARDPTR, @ptrCast(@constCast(ptr))),
         CURLOPT_FNMATCH_DATA => Curl_setopt_set_ptr(data, PTR_SET_FNMATCH_DATA, @ptrCast(@constCast(ptr))),
+        CURLOPT_SSH_PUBLIC_KEYFILE => {
+            if (!use_ssh) return CURLE_UNKNOWN_OPTION;
+            return Curl_setstropt(data, STRING_SSH_PUBLIC_KEY, ptr);
+        },
+        CURLOPT_SSH_PRIVATE_KEYFILE => {
+            if (!use_ssh) return CURLE_UNKNOWN_OPTION;
+            return Curl_setstropt(data, STRING_SSH_PRIVATE_KEY, ptr);
+        },
+        CURLOPT_SSH_HOST_PUBLIC_KEY_MD5 => {
+            if (!use_ssh) return CURLE_UNKNOWN_OPTION;
+            if (ptr) |p| {
+                if (std.mem.len(p) != 32) return CURLE_BAD_FUNCTION_ARGUMENT;
+            }
+            return Curl_setstropt(data, STRING_SSH_HOST_PUBLIC_KEY_MD5, ptr);
+        },
+        CURLOPT_SSH_KNOWNHOSTS => {
+            if (!use_ssh) return CURLE_UNKNOWN_OPTION;
+            return Curl_setstropt(data, STRING_SSH_KNOWNHOSTS, ptr);
+        },
+        CURLOPT_SSH_KEYDATA => {
+            if (!use_ssh) return CURLE_UNKNOWN_OPTION;
+            Curl_setopt_set_ptr(data, PTR_SET_SSH_KEYFUNC_USERP, @ptrCast(@constCast(ptr)));
+        },
+        CURLOPT_SSH_HOST_PUBLIC_KEY_SHA256 => {
+            if (!use_ssh) return CURLE_UNKNOWN_OPTION;
+            return Curl_setstropt(data, STRING_SSH_HOST_PUBLIC_KEY_SHA256, ptr);
+        },
+        CURLOPT_SSH_HOSTKEYDATA => {
+            if (!use_libssh2) return CURLE_UNKNOWN_OPTION;
+            Curl_setopt_set_ptr(data, PTR_SET_SSH_HOSTKEYFUNC_USERP, @ptrCast(@constCast(ptr)));
+        },
         else => return CURLE_UNKNOWN_OPTION,
     }
     return result;
@@ -2547,6 +2609,14 @@ fn setoptFunc(data: *Curl_easy, option: CURLoption, fptr: ?*anyopaque) CURLcode 
             Curl_setopt_set_ptr(data, PTR_SET_HSTS_WRITE, fptr);
         },
         CURLOPT_PREREQFUNCTION => Curl_setopt_set_ptr(data, PTR_SET_FPREREQ, fptr),
+        CURLOPT_SSH_KEYFUNCTION => {
+            if (!use_ssh) return CURLE_UNKNOWN_OPTION;
+            Curl_setopt_set_ptr(data, PTR_SET_SSH_KEYFUNC, fptr);
+        },
+        CURLOPT_SSH_HOSTKEYFUNCTION => {
+            if (!use_libssh2) return CURLE_UNKNOWN_OPTION;
+            Curl_setopt_set_ptr(data, PTR_SET_SSH_HOSTKEYFUNC, fptr);
+        },
         else => return CURLE_UNKNOWN_OPTION,
     }
     return CURLE_OK;

@@ -1174,6 +1174,18 @@ void *Curl_setopt_get_ptr(struct Curl_easy *data, int ptr_id)
   case 69: return (void *)(uintptr_t)s->hsts_write;
 #endif
   case 70: return (void *)(uintptr_t)s->fprereq;
+#ifdef USE_SSH
+  case 71: return s->ssh_keyfunc_userp;
+#endif
+#ifdef USE_LIBSSH2
+  case 72: return s->ssh_hostkeyfunc_userp;
+#endif
+#ifdef USE_SSH
+  case 73: return (void *)(uintptr_t)s->ssh_keyfunc;
+#endif
+#ifdef USE_LIBSSH2
+  case 74: return (void *)(uintptr_t)s->ssh_hostkeyfunc;
+#endif
   default: return NULL;
   }
 }
@@ -1293,6 +1305,18 @@ void Curl_setopt_set_ptr(struct Curl_easy *data, int ptr_id, void *val)
   case 69: s->hsts_write = (curl_hstswrite_callback)(uintptr_t)val; break;
 #endif
   case 70: s->fprereq = (curl_prereq_callback)(uintptr_t)val; break;
+#ifdef USE_SSH
+  case 71: s->ssh_keyfunc_userp = val; break;
+#endif
+#ifdef USE_LIBSSH2
+  case 72: s->ssh_hostkeyfunc_userp = val; break;
+#endif
+#ifdef USE_SSH
+  case 73: s->ssh_keyfunc = (curl_sshkeycallback)(uintptr_t)val; break;
+#endif
+#ifdef USE_LIBSSH2
+  case 74: s->ssh_hostkeyfunc = (curl_sshhostkeycallback)(uintptr_t)val; break;
+#endif
   default: break;
   }
 }
@@ -7343,18 +7367,6 @@ size_t Curl_zig_url_conn_sizeof(void);
 size_t Curl_zig_url_conn_sizeof(void)
 {
   return sizeof(struct connectdata);
-}
-
-void Curl_zig_url_ssh_conn_keys(const void *sshc,
-                                const char **ppriv_key,
-                                const char **ppub_key);
-void Curl_zig_url_ssh_conn_keys(const void *sshc,
-                                const char **ppriv_key,
-                                const char **ppub_key)
-{
-  (void)sshc;
-  *ppriv_key = NULL;
-  *ppub_key = NULL;
 }
 
 struct Curl_easy *Curl_zig_url_multi_admin(const struct Curl_multi *multi);
@@ -15046,5 +15058,166 @@ int Curl_test_h3_server_serve(int udp_fd, const char *cert_file,
 #endif
 }
 
+const char *Curl_vssh_get_url_path(const struct Curl_easy *data);
+const char *Curl_vssh_get_url_path(const struct Curl_easy *data)
+{
+  return data->state.up.path;
+}
 
+const char *Curl_vssh_get_conn_user(const struct connectdata *conn);
+const char *Curl_vssh_get_conn_user(const struct connectdata *conn)
+{
+  return (conn && conn->creds) ? conn->creds->user : NULL;
+}
 
+const char *Curl_vssh_get_conn_passwd(const struct connectdata *conn);
+const char *Curl_vssh_get_conn_passwd(const struct connectdata *conn)
+{
+  return (conn && conn->creds) ? conn->creds->passwd : NULL;
+}
+
+const char *Curl_vssh_get_conn_host_name(const struct connectdata *conn);
+const char *Curl_vssh_get_conn_host_name(const struct connectdata *conn)
+{
+  return (conn && conn->origin && conn->origin->hostname) ?
+    conn->origin->hostname : "";
+}
+
+int Curl_vssh_get_conn_remote_port(const struct connectdata *conn);
+int Curl_vssh_get_conn_remote_port(const struct connectdata *conn)
+{
+  return (conn && conn->origin) ? conn->origin->port : 0;
+}
+
+curl_socket_t Curl_vssh_get_conn_firstsocket(const struct connectdata *conn);
+curl_socket_t Curl_vssh_get_conn_firstsocket(const struct connectdata *conn)
+{
+  return conn->sock[FIRSTSOCKET];
+}
+
+curl_prot_t Curl_vssh_get_conn_protocol(const struct connectdata *conn);
+curl_prot_t Curl_vssh_get_conn_protocol(const struct connectdata *conn)
+{
+  return conn->scheme ? conn->scheme->protocol : 0;
+}
+
+void Curl_vssh_set_conn_send_recv(struct connectdata *conn,
+                                  Curl_send *send_fn,
+                                  Curl_recv *recv_fn);
+void Curl_vssh_set_conn_send_recv(struct connectdata *conn,
+                                  Curl_send *send_fn,
+                                  Curl_recv *recv_fn)
+{
+  conn->send[FIRSTSOCKET] = send_fn;
+  conn->recv[FIRSTSOCKET] = recv_fn;
+}
+
+bool Curl_vssh_get_state_wildcardmatch(const struct Curl_easy *data);
+bool Curl_vssh_get_state_wildcardmatch(const struct Curl_easy *data)
+{
+  return (bool)data->state.wildcardmatch;
+}
+
+void Curl_vssh_set_state_wildcardmatch(struct Curl_easy *data, bool val);
+void Curl_vssh_set_state_wildcardmatch(struct Curl_easy *data, bool val)
+{
+  data->state.wildcardmatch = val;
+}
+
+void Curl_vssh_set_info_filetime(struct Curl_easy *data, curl_off_t ft);
+void Curl_vssh_set_info_filetime(struct Curl_easy *data, curl_off_t ft)
+{
+  data->info.filetime = ft;
+}
+
+bool Curl_vssh_has_ssh_keyfunc(const struct Curl_easy *data);
+bool Curl_vssh_has_ssh_keyfunc(const struct Curl_easy *data)
+{
+#ifdef USE_SSH
+  return data->set.ssh_keyfunc != NULL;
+#else
+  (void)data;
+  return FALSE;
+#endif
+}
+
+int Curl_vssh_call_ssh_keyfunc(struct Curl_easy *data,
+                               const struct curl_khkey *knownkey,
+                               const struct curl_khkey *foundkey,
+                               enum curl_khmatch match);
+int Curl_vssh_call_ssh_keyfunc(struct Curl_easy *data,
+                               const struct curl_khkey *knownkey,
+                               const struct curl_khkey *foundkey,
+                               enum curl_khmatch match)
+{
+#ifdef USE_SSH
+  struct Curl_mapi_guard guard;
+  int rc;
+  CURL_CBAPI_START(&guard, data, easy_ssh_keyfunc);
+  rc = data->set.ssh_keyfunc(data, knownkey, foundkey, match,
+                             data->set.ssh_keyfunc_userp);
+  CURL_CBAPI_END(&guard);
+  return rc;
+#else
+  (void)data;
+  (void)knownkey;
+  (void)foundkey;
+  (void)match;
+  return CURLKHSTAT_REJECT;
+#endif
+}
+
+bool Curl_vssh_has_ssh_hostkeyfunc(const struct Curl_easy *data);
+bool Curl_vssh_has_ssh_hostkeyfunc(const struct Curl_easy *data)
+{
+#ifdef USE_LIBSSH2
+  return data->set.ssh_hostkeyfunc != NULL;
+#else
+  (void)data;
+  return FALSE;
+#endif
+}
+
+int Curl_vssh_call_ssh_hostkeyfunc(struct Curl_easy *data,
+                                   int keytype,
+                                   const char *key,
+                                   size_t keylen);
+int Curl_vssh_call_ssh_hostkeyfunc(struct Curl_easy *data,
+                                   int keytype,
+                                   const char *key,
+                                   size_t keylen)
+{
+#ifdef USE_LIBSSH2
+  struct Curl_mapi_guard guard;
+  int rc;
+  CURL_CBAPI_START(&guard, data, easy_ssh_hostkeyfunc);
+  rc = data->set.ssh_hostkeyfunc(data->set.ssh_hostkeyfunc_userp,
+                                 keytype, key, keylen);
+  CURL_CBAPI_END(&guard);
+  return rc;
+#else
+  (void)data;
+  (void)keytype;
+  (void)key;
+  (void)keylen;
+  return CURLKHMATCH_MISMATCH;
+#endif
+}
+
+#ifdef USE_LIBSSH2
+LIBSSH2_CHANNEL *Curl_libssh2_scp_recv2_size(LIBSSH2_SESSION *session,
+                                             const char *path,
+                                             curl_off_t *pbytecount);
+LIBSSH2_CHANNEL *Curl_libssh2_scp_recv2_size(LIBSSH2_SESSION *session,
+                                             const char *path,
+                                             curl_off_t *pbytecount)
+{
+  libssh2_struct_stat sb;
+  LIBSSH2_CHANNEL *ch;
+  memset(&sb, 0, sizeof(sb));
+  ch = libssh2_scp_recv2(session, path, &sb);
+  if(pbytecount)
+    *pbytecount = (curl_off_t)sb.st_size;
+  return ch;
+}
+#endif

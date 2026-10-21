@@ -11,6 +11,7 @@ const pop3_smtp = @import("pop3_smtp.zig");
 const ftp = @import("ftp.zig");
 const http_mod = @import("http.zig");
 const vquic_core = @import("vquic_core.zig");
+const vssh = @import("vssh.zig");
 
 pub const CURLcode = c_uint;
 pub const CURLE_OK: CURLcode = 0;
@@ -45,6 +46,7 @@ const use_httpsrr = if (@hasDecl(backend_options, "httpsrr")) backend_options.ht
 const use_resolv_ares = if (@hasDecl(backend_options, "use_resolv_ares")) backend_options.use_resolv_ares else false;
 const use_resolv_threaded = if (@hasDecl(backend_options, "use_resolv_threaded")) backend_options.use_resolv_threaded else true;
 const use_apple_sectrust = backend_options.apple_sectrust orelse (backend_options.ssl == .openssl and builtin.os.tag.isDarwin());
+const use_ssh = if (@hasDecl(backend_options, "ssh")) backend_options.ssh != .none else false;
 
 // ============================================================================
 // 1. lib/protocol.c + lib/protocol.h
@@ -312,7 +314,7 @@ pub export const Curl_scheme_rtsp: Curl_scheme = .{
 
 pub export const Curl_scheme_sftp: Curl_scheme = .{
     .name = "sftp",
-    .run = null,
+    .run = if (use_ssh) @ptrCast(&vssh.Curl_protocol_sftp) else null,
     .protocol = CURLPROTO_SFTP,
     .family = CURLPROTO_SFTP,
     .flags = PROTOPT_DIRLOCK | PROTOPT_CLOSEACTION |
@@ -322,7 +324,7 @@ pub export const Curl_scheme_sftp: Curl_scheme = .{
 
 pub export const Curl_scheme_scp: Curl_scheme = .{
     .name = "scp",
-    .run = null,
+    .run = if (use_ssh) @ptrCast(&vssh.Curl_protocol_scp) else null,
     .protocol = CURLPROTO_SCP,
     .family = CURLPROTO_SCP,
     .flags = PROTOPT_DIRLOCK | PROTOPT_CLOSEACTION |
@@ -711,6 +713,7 @@ var version_zstd_buf: [30]u8 = undefined;
 var version_cares_buf: [30]u8 = undefined;
 var version_idn_buf: [30]u8 = undefined;
 var version_psl_buf: [30]u8 = undefined;
+var version_ssh_buf: [30]u8 = undefined;
 var version_h2_buf: [30]u8 = undefined;
 var version_h3_buf: [30]u8 = undefined;
 
@@ -796,6 +799,12 @@ pub export fn curl_version() callconv(.c) [*:0]u8 {
         i += 1;
     }
 
+    if (comptime use_ssh) {
+        vssh.Curl_ssh_version(&version_ssh_buf, version_ssh_buf.len);
+        src[i] = @ptrCast(&version_ssh_buf);
+        i += 1;
+    }
+
     if (comptime backend_options.nghttp2) {
         Curl_http2_ver(&version_h2_buf, version_h2_buf.len);
         src[i] = @ptrCast(&version_h2_buf);
@@ -825,48 +834,81 @@ pub export fn curl_version() callconv(.c) [*:0]u8 {
     return @ptrCast(&version_out_buf);
 }
 
-const supported_protocols = if (use_ssl)
-    [_]?[*:0]const u8{
-        "dict",
-        "file",
-        "ftp",
-        "ftps",
-        "gopher",
-        "gophers",
-        "http",
-        "https",
-        "imap",
-        "imaps",
-        "mqtt",
-        "mqtts",
-        "pop3",
-        "pop3s",
-        "rtsp",
-        "smtp",
-        "smtps",
-        "telnet",
-        "tftp",
-        "ws",
-        "wss",
-        null,
+const supported_protocols = blk: {
+    var list: [32]?[*:0]const u8 = undefined;
+    var n: usize = 0;
+    list[n] = "dict";
+    n += 1;
+    list[n] = "file";
+    n += 1;
+    list[n] = "ftp";
+    n += 1;
+    if (use_ssl) {
+        list[n] = "ftps";
+        n += 1;
     }
-else
-    [_]?[*:0]const u8{
-        "dict",
-        "file",
-        "ftp",
-        "gopher",
-        "http",
-        "imap",
-        "mqtt",
-        "pop3",
-        "rtsp",
-        "smtp",
-        "telnet",
-        "tftp",
-        "ws",
-        null,
-    };
+    list[n] = "gopher";
+    n += 1;
+    if (use_ssl) {
+        list[n] = "gophers";
+        n += 1;
+    }
+    list[n] = "http";
+    n += 1;
+    if (use_ssl) {
+        list[n] = "https";
+        n += 1;
+    }
+    list[n] = "imap";
+    n += 1;
+    if (use_ssl) {
+        list[n] = "imaps";
+        n += 1;
+    }
+    list[n] = "mqtt";
+    n += 1;
+    if (use_ssl) {
+        list[n] = "mqtts";
+        n += 1;
+    }
+    list[n] = "pop3";
+    n += 1;
+    if (use_ssl) {
+        list[n] = "pop3s";
+        n += 1;
+    }
+    list[n] = "rtsp";
+    n += 1;
+    if (use_ssh) {
+        list[n] = "scp";
+        n += 1;
+        list[n] = "sftp";
+        n += 1;
+    }
+    list[n] = "smtp";
+    n += 1;
+    if (use_ssl) {
+        list[n] = "smtps";
+        n += 1;
+    }
+    list[n] = "telnet";
+    n += 1;
+    list[n] = "tftp";
+    n += 1;
+    list[n] = "ws";
+    n += 1;
+    if (use_ssl) {
+        list[n] = "wss";
+        n += 1;
+    }
+    list[n] = null;
+    n += 1;
+    var final: [n]?[*:0]const u8 = undefined;
+    for (0..n) |idx| {
+        final[idx] = list[idx];
+    }
+    break :blk final;
+};
 
 const FeatEntry = struct {
     name: [*:0]const u8,
@@ -991,6 +1033,7 @@ const features_table = blk: {
 
 var feature_names_buf: [features_table.len + 1]?[*:0]const u8 = @splat(null);
 var info_ssl_buffer: [80]u8 = undefined;
+var info_ssh_buffer: [80]u8 = undefined;
 var info_brotli_buffer: [30]u8 = undefined;
 var info_zstd_buffer: [30]u8 = undefined;
 var info_quic_buffer: [80]u8 = undefined;
@@ -1058,6 +1101,11 @@ pub export fn curl_version_info(stamp: c_uint) callconv(.c) *curl_version_info_d
 
     if (comptime (backend_options.idn == .libidn2)) {
         version_info.libidn = idn2_check_version(null);
+    }
+
+    if (comptime use_ssh) {
+        vssh.Curl_ssh_version(&info_ssh_buffer, info_ssh_buffer.len);
+        version_info.libssh_version = @ptrCast(&info_ssh_buffer);
     }
 
     if (comptime backend_options.brotli) {
