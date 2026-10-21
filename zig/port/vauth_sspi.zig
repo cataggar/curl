@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const mem = @import("mem.zig");
 const containers = @import("containers.zig");
 const primitives = @import("primitives.zig");
+const backend_options = @import("backend_options");
 
 pub const CURLcode = c_uint;
 pub const CURLE_OK: CURLcode = 0;
@@ -725,7 +726,7 @@ pub fn authCleanupNtlmSspi(ntlm: *ntlmdata) callconv(.c) void {
 // 3 & 4. lib/vauth/krb5_gssapi.c & lib/vauth/krb5_sspi.c
 // ============================================================================
 
-const use_gssapi = false; // HAVE_GSSAPI is disabled in Zig build
+const use_gssapi = if (@hasDecl(backend_options, "gssapi")) backend_options.gssapi else false;
 
 pub const OM_uint32 = u32;
 pub const gss_qop_t = u32;

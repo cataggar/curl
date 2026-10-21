@@ -4,6 +4,7 @@ const mem = @import("mem.zig");
 const primitives_mod = @import("primitives.zig");
 const os_leaf_mod = @import("os_leaf.zig");
 const containers_mod = @import("containers.zig");
+const backend_options = @import("backend_options");
 
 pub const CURLcode = c_uint;
 pub const CURLE_OK: CURLcode = 0;
@@ -177,7 +178,7 @@ extern fn Curl_auth_create_digest_md5_message_host(
 ) callconv(.c) CURLcode;
 extern fn Curl_auth_user_contains_domain(creds: ?*Curl_creds) callconv(.c) bool;
 
-const use_kerberos5 = builtin.os.tag == .windows;
+const use_kerberos5 = (builtin.os.tag == .windows and (if (@hasDecl(backend_options, "sspi")) (backend_options.sspi orelse (backend_options.ssl == .schannel)) else (backend_options.ssl == .schannel))) or (if (@hasDecl(backend_options, "gssapi")) backend_options.gssapi else false);
 
 const krb5_ext = struct {
     extern fn Curl_auth_is_gssapi_supported() callconv(.c) bool;
