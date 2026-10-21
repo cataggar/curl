@@ -480,6 +480,14 @@ pub const RustlsSslBackendData = extern struct {
     sent_shutdown: bool = false,
 };
 
+pub fn freeRustlsBackendData(ptr: ?*RustlsSslBackendData) void {
+    mem.freeSized(ptr, @sizeOf(RustlsSslBackendData));
+}
+
+pub fn rustlsVerifyHostSlice(san_bytes_opt: ?[*]const u8, len: usize, hostname: []const u8) bool {
+    return vtls_scache_asn1.verifyX509SanOrCnSlice(san_bytes_opt, len, hostname);
+}
+
 pub fn map_error(r: rustls_result) CURLcode {
     if (comptime use_rustls) {
         if (rustls_ext.rustls_result_is_cert_error(r)) {
@@ -1131,8 +1139,9 @@ fn cr_verify_none(
 
 fn read_file_into(filename: [*:0]const u8, out: *DynBuf) bool {
     const f = c_ext.fopen(filename, "r") orelse return false;
+    var buf: [256]u8 = undefined;
+    defer mem.secureZero(&buf, buf.len);
     while (true) {
-        var buf: [256]u8 = undefined;
         const rr = c_ext.fread(&buf, 1, buf.len, f);
         if ((rr == 0 and libc_ext.feof(f) == 0) or
             containers.curlx_dyn_addn(out, &buf, rr) != CURLE_OK)
@@ -1155,6 +1164,7 @@ fn cr_keylog_log_cb(
 ) callconv(.c) void {
     if (client_random_len != CLIENT_RANDOM_SIZE) return;
     var clabel: [KEYLOG_LABEL_MAXLEN]u8 = undefined;
+    defer mem.secureZero(&clabel, clabel.len);
     const label_ptr = label.data orelse "";
     _ = c_ext.curl_msnprintf(
         &clabel,
@@ -1551,7 +1561,12 @@ fn init_config_builder_client_auth(
     containers.curlx_dyn_init(&cert_contents, DYN_CERTFILE_SIZE);
     defer containers.curlx_dyn_free(&cert_contents);
     containers.curlx_dyn_init(&key_contents, DYN_KEYFILE_SIZE);
-    defer containers.curlx_dyn_free(&key_contents);
+    defer {
+        if (containers.curlx_dyn_uptr(&key_contents)) |kp| {
+            mem.secureZero(@constCast(kp), containers.curlx_dyn_len(&key_contents));
+        }
+        containers.curlx_dyn_free(&key_contents);
+    }
 
     var certified_key: ?*const rustls_certified_key = null;
     defer if (certified_key) |ck| rustls_ext.rustls_certified_key_free(ck);

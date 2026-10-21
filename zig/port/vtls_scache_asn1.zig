@@ -1333,7 +1333,7 @@ pub export fn Curl_ssl_scache_create(
     const peers: [*]CurlSslScachePeer = @ptrCast(@alignCast(peers_raw));
 
     const scache_raw = mem.calloc(1, @sizeOf(CurlSslScache)) orelse {
-        mem.free(peers_raw);
+        mem.freeSized(peers_raw, max_peers *| @sizeOf(CurlSslScachePeer));
         return CURLE_OUT_OF_MEMORY;
     };
     const scache: *CurlSslScache = @ptrCast(@alignCast(scache_raw));
@@ -2012,7 +2012,13 @@ pub export fn Curl_ssl_session_export_zig(
     containers.curlx_dyn_init(&sbuf, CURL_SSL_TICKET_MAX);
     defer {
         Curl_ssl_scache_unlock_zig(data, scache_opt, has_share_scache);
+        if (containers.curlx_dyn_uptr(&hbuf)) |hp| {
+            mem.secureZero(@constCast(hp), containers.curlx_dyn_len(&hbuf));
+        }
         containers.curlx_dyn_free(&hbuf);
+        if (containers.curlx_dyn_uptr(&sbuf)) |sp| {
+            mem.secureZero(@constCast(sp), containers.curlx_dyn_len(&sbuf));
+        }
         containers.curlx_dyn_free(&sbuf);
     }
 
@@ -2345,6 +2351,13 @@ fn utf8asn1str(to: *dynbuf, asn1_type: c_int, from_in: [*]const u8, end: [*]cons
         return CURLE_BAD_FUNCTION_ARGUMENT;
     }
 
+    if (size == 1 and inlength > 0) {
+        const san_slice = from[0..inlength];
+        if (std.mem.indexOfScalar(u8, san_slice, 0) != null) {
+            return CURLE_BAD_FUNCTION_ARGUMENT;
+        }
+    }
+
     var result: CURLcode = CURLE_OK;
     if (@as(u8, @intCast(asn1_type)) == CURL_ASN1_UTF8_STRING) {
         if (inlength > 0) {
@@ -2377,6 +2390,9 @@ fn utf8asn1str(to: *dynbuf, asn1_type: c_int, from_in: [*]const u8, end: [*]cons
                     wc = (wc << 8) | from[0];
                     from += 1;
                 },
+            }
+            if (wc == 0) {
+                return CURLE_BAD_FUNCTION_ARGUMENT;
             }
             if (wc >= 0x00000080) {
                 if (wc >= 0x00000800) {
@@ -3099,6 +3115,30 @@ pub export fn Curl_extract_certinfo_zig(
     return result;
 }
 
+pub fn verifyX509SanOrCnSlice(
+    san_bytes_opt: ?[*]const u8,
+    len: usize,
+    hostname: []const u8,
+) bool {
+    const san_bytes = san_bytes_opt orelse return false;
+    if (len == 0 or hostname.len == 0) return false;
+    const san_slice = san_bytes[0..len];
+    if (std.mem.indexOfScalar(u8, san_slice, 0) != null) return false;
+    if (std.mem.indexOfScalar(u8, hostname, 0) != null) return false;
+    return vtls_core.Curl_cert_hostcheck(san_slice.ptr, san_slice.len, hostname.ptr, hostname.len);
+}
+
+pub fn verifyX509Asn1ElementHost(
+    elem: *const CurlAsn1Element,
+    hostname: []const u8,
+) bool {
+    const beg = elem.beg orelse return false;
+    const end = elem.end orelse return false;
+    if (@intFromPtr(end) <= @intFromPtr(beg)) return false;
+    const len = @intFromPtr(end) - @intFromPtr(beg);
+    return verifyX509SanOrCnSlice(beg, len, hostname);
+}
+
 // ============================================================================
 // Unit Tests
 // ============================================================================
@@ -3416,4 +3456,40 @@ test "Curl_ssl_filter_config_tmp_init_zig gates client certs and pinned key on o
     try std.testing.expect(ssl_diff.key_blob == null);
     try std.testing.expect(!ssl_diff.getFlag(SslFilterConfig.BIT_AUTO_CLIENT_CERT));
     try std.testing.expect(ssl_diff.getFlag(SslFilterConfig.BIT_EARLYDATA));
+}
+
+test "X.509 SAN and CN slice verification rejects embedded NUL bytes" {
+    const valid_san = "example.com";
+    const wildcard_san = "*.example.com";
+    const spoofed_san = "evil.com\x00.example.com";
+    const spoofed_wildcard = "*.evil.com\x00.example.com";
+
+    try std.testing.expect(verifyX509SanOrCnSlice(valid_san.ptr, valid_san.len, "example.com"));
+    try std.testing.expect(verifyX509SanOrCnSlice(wildcard_san.ptr, wildcard_san.len, "sub.example.com"));
+    try std.testing.expect(!verifyX509SanOrCnSlice(spoofed_san.ptr, spoofed_san.len, "evil.com"));
+    try std.testing.expect(!verifyX509SanOrCnSlice(spoofed_san.ptr, spoofed_san.len, "evil.com\x00.example.com"));
+    try std.testing.expect(!verifyX509SanOrCnSlice(spoofed_wildcard.ptr, spoofed_wildcard.len, "a.evil.com"));
+
+    const elem_spoof = CurlAsn1Element{
+        .header = spoofed_san.ptr,
+        .beg = spoofed_san.ptr,
+        .end = spoofed_san.ptr + spoofed_san.len,
+        .eclass = 2,
+        .tag = 2,
+        .flags = 0,
+    };
+    try std.testing.expect(!verifyX509Asn1ElementHost(&elem_spoof, "evil.com"));
+
+    var dbuf: dynbuf = undefined;
+    containers.curlx_dyn_init(&dbuf, 1024);
+    defer containers.curlx_dyn_free(&dbuf);
+
+    try std.testing.expectEqual(
+        CURLE_BAD_FUNCTION_ARGUMENT,
+        utf8asn1str(&dbuf, CURL_ASN1_IA5_STRING, spoofed_san.ptr, spoofed_san.ptr + spoofed_san.len),
+    );
+    try std.testing.expectEqual(
+        CURLE_BAD_FUNCTION_ARGUMENT,
+        utf8asn1str(&dbuf, CURL_ASN1_UTF8_STRING, spoofed_san.ptr, spoofed_san.ptr + spoofed_san.len),
+    );
 }

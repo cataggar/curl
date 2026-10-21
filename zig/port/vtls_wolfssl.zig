@@ -342,6 +342,15 @@ pub const WsslSslBackendData = extern struct {
 };
 
 pub const WsslCtx = WsslSslBackendData;
+pub const WolfsslBackendData = WsslSslBackendData;
+
+pub fn freeWolfsslBackendData(ptr: ?*WolfsslBackendData) void {
+    mem.freeSized(ptr, @sizeOf(WolfsslBackendData));
+}
+
+pub fn wsslVerifyHostSlice(san_bytes_opt: ?[*]const u8, len: usize, hostname: []const u8) bool {
+    return vtls_scache_asn1.verifyX509SanOrCnSlice(san_bytes_opt, len, hostname);
+}
 
 const WsslX509Share = extern struct {
     CAfile: ?[*:0]u8,
@@ -611,7 +620,7 @@ fn wssl_x509_share_free(obj: ?*anyopaque) callconv(.c) void {
     if (share.CAfile) |ca| {
         mem.free(ca);
     }
-    mem.free(share);
+    mem.freeSized(share, @sizeOf(WsslX509Share));
 }
 
 fn wssl_cached_x509_store_expired(data: ?*CurlEasy, mb: *const WsslX509Share) bool {
@@ -674,7 +683,7 @@ fn set_cached_x509_store(cf: *CurlCfilter, data: ?*CurlEasy, store: *WOLFSSL_X50
     const share: *WsslX509Share = @ptrCast(@alignCast(share_raw));
 
     if (wssl_ext.wolfSSL_X509_STORE_up_ref(store) == 0) {
-        mem.free(share_raw);
+        mem.freeSized(share_raw, @sizeOf(WsslX509Share));
         return;
     }
     share.time = c_ext.Curl_pgrs_now(d).*;
@@ -690,7 +699,7 @@ fn set_cached_x509_store(cf: *CurlCfilter, data: ?*CurlEasy, store: *WOLFSSL_X50
     if (cafile) |ca| {
         const dup = mem.strdup(ca) orelse {
             wssl_ext.wolfSSL_X509_STORE_free(store);
-            mem.free(share_raw);
+            mem.freeSized(share_raw, @sizeOf(WsslX509Share));
             return;
         };
         share.CAfile = dup;
@@ -1021,7 +1030,8 @@ fn wssl_new_session_cb(ssl: ?*WOLFSSL, session: ?*WOLFSSL_SESSION) callconv(.c) 
     var sdata_ptr: ?[*]u8 = @ptrCast(sdata_raw);
     const enc_len = wssl_ext.wolfSSL_i2d_SSL_SESSION(sess, &sdata_ptr);
     if (enc_len <= 0) {
-        mem.free(sdata_raw);
+        mem.secureZero(sdata_raw, sdata_len);
+        mem.freeSized(sdata_raw, sdata_len);
         return 0;
     }
 
@@ -1047,7 +1057,13 @@ fn wssl_new_session_cb(ssl: ?*WOLFSSL, session: ?*WOLFSSL_SESSION) callconv(.c) 
             var trc_feat: ?*vtls_impl.CurlTrcFeat = null;
             c_ext.Curl_vtls_acc_scache_params(data, &scache, &has_share_scache, &trc_feat);
             _ = vtls_scache_asn1.Curl_ssl_scache_put_zig(cf, data, scache, has_share_scache, conn_config, trc_feat, scache_key, scs);
+        } else {
+            mem.secureZero(sdata_raw, sdata_len);
+            mem.freeSized(sdata_raw, sdata_len);
         }
+    } else {
+        mem.secureZero(sdata_raw, sdata_len);
+        mem.freeSized(sdata_raw, sdata_len);
     }
     return 0;
 }

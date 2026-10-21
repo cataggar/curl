@@ -1126,7 +1126,7 @@ pub export fn Curl_zig_url_ssh_conn_keys(
     ppub_key.* = null;
 }
 
-fn ssh_easy_dtor(key: [*:0]const u8, klen: usize, entry: ?*anyopaque) callconv(.c) void {
+pub fn ssh_easy_dtor(key: [*:0]const u8, klen: usize, entry: ?*anyopaque) callconv(.c) void {
     _ = key;
     _ = klen;
     const sshp: *SSHPROTO = @ptrCast(@alignCast(entry orelse return));
@@ -1134,16 +1134,89 @@ fn ssh_easy_dtor(key: [*:0]const u8, klen: usize, entry: ?*anyopaque) callconv(.
         mem.free(p);
         sshp.path = null;
     }
+    if (sshp.readdir_filename) |f| {
+        mem.free(f);
+        sshp.readdir_filename = null;
+    }
+    if (sshp.readdir_longentry) |le| {
+        mem.free(le);
+        sshp.readdir_longentry = null;
+    }
+    if (sshp.readdir_linkPath) |lp| {
+        mem.free(lp);
+        sshp.readdir_linkPath = null;
+    }
     containers.curlx_dyn_free(&sshp.readdir);
-    mem.free(sshp);
+    mem.freeSized(sshp, @sizeOf(SSHPROTO));
 }
 
-fn ssh_conn_dtor(key: [*:0]const u8, klen: usize, entry: ?*anyopaque) callconv(.c) void {
+pub fn ssh_conn_dtor(key: [*:0]const u8, klen: usize, entry: ?*anyopaque) callconv(.c) void {
     _ = key;
     _ = klen;
-    if (entry) |e| {
-        mem.free(e);
+    const sshc: *ssh_conn = @ptrCast(@alignCast(entry orelse return));
+    if (sshc.rsa) |r| {
+        mem.freeSecretZ(r);
+        sshc.rsa = null;
     }
+    if (sshc.rsa_pub) |rp| {
+        mem.freeSecretZ(rp);
+        sshc.rsa_pub = null;
+    }
+    if (sshc.quote_path1) |p1| {
+        mem.free(p1);
+        sshc.quote_path1 = null;
+    }
+    if (sshc.quote_path2) |p2| {
+        mem.free(p2);
+        sshc.quote_path2 = null;
+    }
+    if (sshc.homedir) |hd| {
+        mem.free(hd);
+        sshc.homedir = null;
+    }
+    mem.freeSized(sshc, @sizeOf(ssh_conn));
+}
+
+/// Multi-step SFTP quote path allocation with `errdefer` so a failed second
+/// path allocation frees and nulls `quote_path1` automatically.
+pub fn allocSftpQuotePaths(
+    arg_ptr: *?[*:0]const u8,
+    homedir: [*:0]const u8,
+    need_second: bool,
+    out_path1: *?[*:0]u8,
+    out_path2: *?[*:0]u8,
+) error{ OutOfMemory, QuoteError }!void {
+    out_path1.* = null;
+    out_path2.* = null;
+    const r1 = Curl_get_pathname(arg_ptr, out_path1, homedir);
+    if (r1 != CURLE_OK) {
+        return if (r1 == CURLE_OUT_OF_MEMORY) error.OutOfMemory else error.QuoteError;
+    }
+    errdefer {
+        if (out_path1.*) |p1| {
+            mem.free(p1);
+            out_path1.* = null;
+        }
+    }
+    if (need_second) {
+        const r2 = Curl_get_pathname(arg_ptr, out_path2, homedir);
+        if (r2 != CURLE_OK) {
+            return if (r2 == CURLE_OUT_OF_MEMORY) error.OutOfMemory else error.QuoteError;
+        }
+    }
+}
+
+/// Multi-step SFTP readdir buffer allocation with `errdefer` so failure on the
+/// second buffer frees and nulls the first buffer.
+pub fn allocSftpReaddirBuffers(sshp: *SSHPROTO) error{OutOfMemory}!void {
+    const f_raw = mem.malloc(DYN_PATH_MAX + 1) orelse return error.OutOfMemory;
+    sshp.readdir_filename = @ptrCast(f_raw);
+    errdefer {
+        mem.freeSized(sshp.readdir_filename, DYN_PATH_MAX + 1);
+        sshp.readdir_filename = null;
+    }
+    const le_raw = mem.malloc(DYN_PATH_MAX + 1) orelse return error.OutOfMemory;
+    sshp.readdir_longentry = @ptrCast(le_raw);
 }
 
 pub export fn Curl_ssh_setup_connection(
@@ -1623,18 +1696,18 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                         if (sshc.rsa == null) out_of_memory = true;
                     } else {
                         const home = os_leaf.curl_getenv("HOME");
-                        defer if (home) |h| mem.free(h);
+                        defer if (home) |h| mem.freeSecretZ(h);
                         if (home) |h| {
                             sshc.rsa = curl_maprintf("%s/.ssh/id_rsa", h);
                             if (sshc.rsa == null) {
                                 out_of_memory = true;
                             } else if (std.c.access(sshc.rsa.?, 0) != 0) {
-                                mem.free(sshc.rsa);
+                                mem.freeSecretZ(sshc.rsa);
                                 sshc.rsa = curl_maprintf("%s/.ssh/id_dsa", h);
                                 if (sshc.rsa == null) {
                                     out_of_memory = true;
                                 } else if (std.c.access(sshc.rsa.?, 0) != 0) {
-                                    mem.free(sshc.rsa);
+                                    mem.freeSecretZ(sshc.rsa);
                                     sshc.rsa = null;
                                 }
                             }
@@ -1642,10 +1715,10 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                         if (!out_of_memory and sshc.rsa == null) {
                             sshc.rsa = mem.strdup("id_rsa");
                             if (sshc.rsa != null and std.c.access(sshc.rsa.?, 0) != 0) {
-                                mem.free(sshc.rsa);
+                                mem.freeSecretZ(sshc.rsa);
                                 sshc.rsa = mem.strdup("id_dsa");
                                 if (sshc.rsa != null and std.c.access(sshc.rsa.?, 0) != 0) {
-                                    mem.free(sshc.rsa);
+                                    mem.freeSecretZ(sshc.rsa);
                                     sshc.rsa = mem.strdup("");
                                 }
                             }
@@ -1660,8 +1733,8 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                     }
 
                     if (out_of_memory or sshc.rsa == null) {
-                        if (sshc.rsa) |r| mem.free(r);
-                        if (sshc.rsa_pub) |rp| mem.free(rp);
+                        if (sshc.rsa) |r| mem.freeSecretZ(r);
+                        if (sshc.rsa_pub) |rp| mem.freeSecretZ(rp);
                         sshc.rsa = null;
                         sshc.rsa_pub = null;
                         ssh_state(data, sshc, .SSH_SESSION_FREE);
@@ -1690,8 +1763,8 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                 if (rc == LIBSSH2_ERROR_EAGAIN) {
                     break;
                 }
-                if (sshc.rsa) |r| mem.free(r);
-                if (sshc.rsa_pub) |rp| mem.free(rp);
+                if (sshc.rsa) |r| mem.freeSecretZ(r);
+                if (sshc.rsa_pub) |rp| mem.freeSecretZ(rp);
                 sshc.rsa = null;
                 sshc.rsa_pub = null;
 
@@ -1997,62 +2070,47 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                 }
 
                 const homedir = sshc.homedir orelse ".";
-                result = Curl_get_pathname(&arg_ptr, &sshc.quote_path1, homedir);
-                if (result != CURLE_OK) {
+                const is_stat_cmd = std.ascii.eqlIgnoreCase(cmd, "chgrp") or
+                    std.ascii.eqlIgnoreCase(cmd, "chmod") or
+                    std.ascii.eqlIgnoreCase(cmd, "chown") or
+                    std.ascii.eqlIgnoreCase(cmd, "atime") or
+                    std.ascii.eqlIgnoreCase(cmd, "mtime");
+                const is_symlink_cmd = std.ascii.eqlIgnoreCase(cmd, "ln") or std.ascii.eqlIgnoreCase(cmd, "symlink");
+                const is_rename_cmd = std.ascii.eqlIgnoreCase(cmd, "rename");
+                const is_mkdir_cmd = std.ascii.eqlIgnoreCase(cmd, "mkdir");
+                const is_rmdir_cmd = std.ascii.eqlIgnoreCase(cmd, "rmdir");
+                const is_rm_cmd = std.ascii.eqlIgnoreCase(cmd, "rm");
+                const is_statvfs_cmd = std.ascii.eqlIgnoreCase(cmd, "statvfs");
+                const need_second = is_stat_cmd or is_symlink_cmd or is_rename_cmd;
+
+                allocSftpQuotePaths(&arg_ptr, homedir, need_second, &sshc.quote_path1, &sshc.quote_path2) catch |err| {
+                    result = if (err == error.OutOfMemory) CURLE_OUT_OF_MEMORY else CURLE_QUOTE_ERROR;
                     if (result != CURLE_OUT_OF_MEMORY) {
-                        Curl_failf(data, "Syntax error: Bad first parameter to '%.*s'", @as(c_int, @intCast(cmd.len)), cmd.ptr);
+                        if (is_stat_cmd) {
+                            Curl_failf(data, "Syntax error in %.*s: Bad parameter", @as(c_int, @intCast(cmd.len)), cmd.ptr);
+                        } else if (!need_second) {
+                            Curl_failf(data, "Syntax error: Bad first parameter to '%.*s'", @as(c_int, @intCast(cmd.len)), cmd.ptr);
+                        }
                     }
                     sshc.actualcode = result;
                     ssh_state(data, sshc, .SSH_SFTP_SHUTDOWN);
                     break;
-                }
+                };
 
-                if (std.ascii.eqlIgnoreCase(cmd, "chgrp") or
-                    std.ascii.eqlIgnoreCase(cmd, "chmod") or
-                    std.ascii.eqlIgnoreCase(cmd, "chown") or
-                    std.ascii.eqlIgnoreCase(cmd, "atime") or
-                    std.ascii.eqlIgnoreCase(cmd, "mtime"))
-                {
-                    result = Curl_get_pathname(&arg_ptr, &sshc.quote_path2, homedir);
-                    if (result != CURLE_OK) {
-                        if (result != CURLE_OUT_OF_MEMORY) {
-                            Curl_failf(data, "Syntax error in %.*s: Bad second parameter", @as(c_int, @intCast(cmd.len)), cmd.ptr);
-                        }
-                        if (sshc.quote_path1) |p1| mem.free(p1);
-                        sshc.quote_path1 = null;
-                        sshc.actualcode = result;
-                        ssh_state(data, sshc, .SSH_SFTP_SHUTDOWN);
-                        break;
-                    }
+                if (is_stat_cmd) {
                     sshc.quote_attrs = std.mem.zeroes(LIBSSH2_SFTP_ATTRIBUTES);
                     ssh_state(data, sshc, .SSH_SFTP_QUOTE_STAT);
-                } else if (std.ascii.eqlIgnoreCase(cmd, "ln") or std.ascii.eqlIgnoreCase(cmd, "symlink")) {
-                    result = Curl_get_pathname(&arg_ptr, &sshc.quote_path2, homedir);
-                    if (result != CURLE_OK) {
-                        if (sshc.quote_path1) |p1| mem.free(p1);
-                        sshc.quote_path1 = null;
-                        sshc.actualcode = result;
-                        ssh_state(data, sshc, .SSH_SFTP_SHUTDOWN);
-                        break;
-                    }
+                } else if (is_symlink_cmd) {
                     ssh_state(data, sshc, .SSH_SFTP_QUOTE_SYMLINK);
-                } else if (std.ascii.eqlIgnoreCase(cmd, "mkdir")) {
+                } else if (is_mkdir_cmd) {
                     ssh_state(data, sshc, .SSH_SFTP_QUOTE_MKDIR);
-                } else if (std.ascii.eqlIgnoreCase(cmd, "rename")) {
-                    result = Curl_get_pathname(&arg_ptr, &sshc.quote_path2, homedir);
-                    if (result != CURLE_OK) {
-                        if (sshc.quote_path1) |p1| mem.free(p1);
-                        sshc.quote_path1 = null;
-                        sshc.actualcode = result;
-                        ssh_state(data, sshc, .SSH_SFTP_SHUTDOWN);
-                        break;
-                    }
+                } else if (is_rename_cmd) {
                     ssh_state(data, sshc, .SSH_SFTP_QUOTE_RENAME);
-                } else if (std.ascii.eqlIgnoreCase(cmd, "rmdir")) {
+                } else if (is_rmdir_cmd) {
                     ssh_state(data, sshc, .SSH_SFTP_QUOTE_RMDIR);
-                } else if (std.ascii.eqlIgnoreCase(cmd, "rm")) {
+                } else if (is_rm_cmd) {
                     ssh_state(data, sshc, .SSH_SFTP_QUOTE_UNLINK);
-                } else if (std.ascii.eqlIgnoreCase(cmd, "statvfs")) {
+                } else if (is_statvfs_cmd) {
                     ssh_state(data, sshc, .SSH_SFTP_QUOTE_STATVFS);
                 } else {
                     Curl_failf(data, "Unknown SFTP command");
@@ -2479,6 +2537,7 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                         var passed: curl_off_t = 0;
                         while (passed != rf) {
                             var scratch: [16384]u8 = undefined;
+                            defer mem.secureZero(&scratch, scratch.len);
                             const readthisamountnow: usize = @intCast(@min(rf - passed, @as(curl_off_t, scratch.len)));
                             const actuallyread = Curl_ftp_acc_call_fread_func(data, &scratch, 1, readthisamountnow);
                             passed += @intCast(actuallyread);
@@ -2587,20 +2646,11 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                     ssh_state(data, sshc, .SSH_SFTP_SHUTDOWN);
                     break;
                 }
-                sshp.readdir_filename = @ptrCast(mem.malloc(DYN_PATH_MAX + 1));
-                if (sshp.readdir_filename == null) {
+                allocSftpReaddirBuffers(sshp) catch {
                     sshc.actualcode = CURLE_OUT_OF_MEMORY;
                     ssh_state(data, sshc, .SSH_SFTP_SHUTDOWN);
                     break;
-                }
-                sshp.readdir_longentry = @ptrCast(mem.malloc(DYN_PATH_MAX + 1));
-                if (sshp.readdir_longentry == null) {
-                    mem.free(sshp.readdir_filename);
-                    sshp.readdir_filename = null;
-                    sshc.actualcode = CURLE_OUT_OF_MEMORY;
-                    ssh_state(data, sshc, .SSH_SFTP_SHUTDOWN);
-                    break;
-                }
+                };
                 containers.curlx_dyn_reset(&sshp.readdir);
                 ssh_state(data, sshc, .SSH_SFTP_READDIR);
             },
@@ -3081,11 +3131,11 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                     sshc.ssh_session = null;
                 }
                 if (sshc.rsa) |r| {
-                    mem.free(r);
+                    mem.freeSecretZ(r);
                     sshc.rsa = null;
                 }
                 if (sshc.rsa_pub) |rp| {
-                    mem.free(rp);
+                    mem.freeSecretZ(rp);
                     sshc.rsa_pub = null;
                 }
                 if (sshc.quote_path1) |p1| {
@@ -3103,6 +3153,7 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                 ssh_state(data, sshc, .SSH_STOP);
                 result = sshc.actualcode;
                 const nextstate = sshc.nextstate;
+                mem.secureZero(sshc, @sizeOf(ssh_conn));
                 sshc.* = .{};
                 if (nextstate != .SSH_NO_STATE) {
                     ssh_state(data, sshc, nextstate);
@@ -3788,4 +3839,78 @@ test "CURLOPT_SSH_* options and version info with libssh2" {
     } else {
         try std.testing.expectEqual(setopt.CURLE_UNKNOWN_OPTION, curl_easy_setopt(easy, @intCast(setopt.CURLOPT_SSH_AUTH_TYPES), @as(c_long, 3)));
     }
+}
+
+test "ssh_conn and SSHPROTO teardown poisoning, key scrubbing, and errdefer quote path cleanup" {
+    // 1. Verify errdefer in allocSftpQuotePaths frees first path if second path fails
+    var p1: ?[*:0]u8 = null;
+    var p2: ?[*:0]u8 = null;
+    var bad_second: ?[*:0]const u8 = "/remote/src \"unterminated_dest";
+    try std.testing.expectError(
+        error.QuoteError,
+        allocSftpQuotePaths(&bad_second, "/home/user", true, &p1, &p2),
+    );
+    try std.testing.expect(p1 == null);
+    try std.testing.expect(p2 == null);
+
+    // Valid two-path allocation succeeds
+    var ok_two: ?[*:0]const u8 = "~/src_file /remote/dst_file";
+    try allocSftpQuotePaths(&ok_two, "/home/user", true, &p1, &p2);
+    try std.testing.expect(p1 != null);
+    try std.testing.expect(p2 != null);
+    try std.testing.expectEqualStrings("/home/user/src_file", std.mem.span(p1.?));
+    try std.testing.expectEqualStrings("/remote/dst_file", std.mem.span(p2.?));
+    mem.free(p1);
+    mem.free(p2);
+
+    // 2. Verify ssh_conn_dtor scrubs rsa / rsa_pub and poisons freed ssh_conn
+    const cb = struct {
+        extern var Curl_cfree: mem.FreeCallback;
+    };
+    const expected_poison: u8 = switch (builtin.mode) {
+        .Debug, .ReleaseSafe => 0xaa,
+        .ReleaseFast, .ReleaseSmall => 0x00,
+    };
+    var poisoned_frees: usize = 0;
+    var scrubbed_secrets: usize = 0;
+    const TestHooks = struct {
+        var poison_count: *usize = undefined;
+        var scrub_count: *usize = undefined;
+        var expected: u8 = 0xaa;
+        var orig_free: mem.FreeCallback = undefined;
+        fn freeFn(p: ?*anyopaque) callconv(.c) void {
+            if (p) |non_null| {
+                const bytes: [*]const u8 = @ptrCast(non_null);
+                if (bytes[0] == expected and bytes[1] == expected) {
+                    poison_count.* += 1;
+                } else if (bytes[0] == 0 and bytes[1] == 0) {
+                    scrub_count.* += 1;
+                }
+            }
+            orig_free(p);
+        }
+    };
+    TestHooks.poison_count = &poisoned_frees;
+    TestHooks.scrub_count = &scrubbed_secrets;
+    TestHooks.expected = expected_poison;
+    TestHooks.orig_free = cb.Curl_cfree;
+    cb.Curl_cfree = &TestHooks.freeFn;
+    defer cb.Curl_cfree = TestHooks.orig_free;
+
+    const conn_ptr: *ssh_conn = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(ssh_conn)).?));
+    conn_ptr.rsa = mem.strdup("/secret/path/id_ed25519");
+    conn_ptr.rsa_pub = mem.strdup("/secret/path/id_ed25519.pub");
+    conn_ptr.quote_path1 = mem.strdup("/remote/q1");
+    ssh_conn_dtor("ssh", 3, conn_ptr);
+    try std.testing.expect(poisoned_frees >= 1);
+    try std.testing.expect(scrubbed_secrets >= 2);
+
+    // 3. Verify ssh_easy_dtor cleans up buffers and poisons freed SSHPROTO
+    const before_proto = poisoned_frees;
+    const proto_ptr: *SSHPROTO = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(SSHPROTO)).?));
+    containers.curlx_dyn_init(&proto_ptr.readdir, DYN_PATH_MAX * 2);
+    proto_ptr.path = mem.strdup("/remote/file");
+    try allocSftpReaddirBuffers(proto_ptr);
+    ssh_easy_dtor("ssh_easy", 8, proto_ptr);
+    try std.testing.expect(poisoned_frees > before_proto);
 }

@@ -1256,6 +1256,7 @@ fn myssh_in_UPLOAD_INIT(data: *Curl_easy, sshc: *ssh_conn_libssh, sshp: *SSHPROT
             }
             var passed: curl_off_t = 0;
             var scratch: [4 * 1024]u8 = undefined;
+            defer mem.secureZero(&scratch, scratch.len);
             while (passed < rf) {
                 const rem: usize = @intCast(rf - passed);
                 const readthisamountnow = @min(rem, scratch.len);
@@ -1578,10 +1579,30 @@ fn myssh_in_SFTP_QUOTE(data: *Curl_easy, sshc: *ssh_conn_libssh, sshp: *SSHPROTO
     var cp: ?[*:0]const u8 = cmd + space_idx;
     const hdir = sshc.homedir orelse "";
 
-    var result = vssh.Curl_get_pathname(&cp, &sshc.quote_path1, hdir);
-    if (result != CURLE_OK) {
+    const is_stat_cmd = std.mem.startsWith(u8, cmd_slice, "chgrp ") or
+        std.mem.startsWith(u8, cmd_slice, "chmod ") or
+        std.mem.startsWith(u8, cmd_slice, "chown ") or
+        std.mem.startsWith(u8, cmd_slice, "atime ") or
+        std.mem.startsWith(u8, cmd_slice, "mtime ");
+    const is_symlink_cmd = std.mem.startsWith(u8, cmd_slice, "ln ") or
+        std.mem.startsWith(u8, cmd_slice, "symlink ");
+    const is_rename_cmd = std.mem.startsWith(u8, cmd_slice, "rename ");
+    const is_mkdir_cmd = std.mem.startsWith(u8, cmd_slice, "mkdir ");
+    const is_rmdir_cmd = std.mem.startsWith(u8, cmd_slice, "rmdir ");
+    const is_rm_cmd = std.mem.startsWith(u8, cmd_slice, "rm ");
+    const is_statvfs_cmd = std.mem.startsWith(u8, cmd_slice, "statvfs ");
+    const need_second = is_stat_cmd or is_symlink_cmd or is_rename_cmd;
+
+    vssh.allocSftpQuotePaths(&cp, hdir, need_second, &sshc.quote_path1, &sshc.quote_path2) catch |err| {
+        const result = if (err == error.OutOfMemory) CURLE_OUT_OF_MEMORY else CURLE_QUOTE_ERROR;
         if (result == CURLE_OUT_OF_MEMORY) {
             Curl_failf(data, "Out of memory");
+        } else if (is_stat_cmd) {
+            Curl_failf(data, "Syntax error in chgrp/chmod/chown/atime/mtime: Bad parameter");
+        } else if (is_symlink_cmd) {
+            Curl_failf(data, "Syntax error in ln/symlink: Bad parameter");
+        } else if (is_rename_cmd) {
+            Curl_failf(data, "Syntax error in rename: Bad parameter");
         } else {
             Curl_failf(data, "Syntax error: Bad first parameter");
         }
@@ -1589,30 +1610,9 @@ fn myssh_in_SFTP_QUOTE(data: *Curl_easy, sshc: *ssh_conn_libssh, sshp: *SSHPROTO
         sshc.nextstate = .SSH_NO_STATE;
         sshc.actualcode = result;
         return SSH_NO_ERROR;
-    }
+    };
 
-    if (std.mem.startsWith(u8, cmd_slice, "chgrp ") or
-        std.mem.startsWith(u8, cmd_slice, "chmod ") or
-        std.mem.startsWith(u8, cmd_slice, "chown ") or
-        std.mem.startsWith(u8, cmd_slice, "atime ") or
-        std.mem.startsWith(u8, cmd_slice, "mtime "))
-    {
-        result = vssh.Curl_get_pathname(&cp, &sshc.quote_path2, hdir);
-        if (result != CURLE_OK) {
-            if (result == CURLE_OUT_OF_MEMORY) {
-                Curl_failf(data, "Out of memory");
-            } else {
-                Curl_failf(data, "Syntax error in chgrp/chmod/chown/atime/mtime: Bad second parameter");
-            }
-            if (sshc.quote_path1) |p| {
-                mem.free(p);
-                sshc.quote_path1 = null;
-            }
-            myssh_to(data, sshc, .SSH_SFTP_CLOSE);
-            sshc.nextstate = .SSH_NO_STATE;
-            sshc.actualcode = result;
-            return SSH_NO_ERROR;
-        }
+    if (is_stat_cmd) {
         if (cp != null and cp.?[0] != 0) return quote_error(data, sshc);
         if (sshc.quote_attrs) |a| {
             sftp_attributes_free(a);
@@ -1621,66 +1621,32 @@ fn myssh_in_SFTP_QUOTE(data: *Curl_easy, sshc: *ssh_conn_libssh, sshp: *SSHPROTO
         myssh_to(data, sshc, .SSH_SFTP_QUOTE_STAT);
         return SSH_NO_ERROR;
     }
-    if (std.mem.startsWith(u8, cmd_slice, "ln ") or
-        std.mem.startsWith(u8, cmd_slice, "symlink "))
-    {
-        result = vssh.Curl_get_pathname(&cp, &sshc.quote_path2, hdir);
-        if (result != CURLE_OK) {
-            if (result == CURLE_OUT_OF_MEMORY) {
-                Curl_failf(data, "Out of memory");
-            } else {
-                Curl_failf(data, "Syntax error in ln/symlink: Bad second parameter");
-            }
-            if (sshc.quote_path1) |p| {
-                mem.free(p);
-                sshc.quote_path1 = null;
-            }
-            myssh_to(data, sshc, .SSH_SFTP_CLOSE);
-            sshc.nextstate = .SSH_NO_STATE;
-            sshc.actualcode = result;
-            return SSH_NO_ERROR;
-        }
+    if (is_symlink_cmd) {
         if (cp != null and cp.?[0] != 0) return quote_error(data, sshc);
         myssh_to(data, sshc, .SSH_SFTP_QUOTE_SYMLINK);
         return SSH_NO_ERROR;
     }
-    if (std.mem.startsWith(u8, cmd_slice, "mkdir ")) {
+    if (is_mkdir_cmd) {
         if (cp != null and cp.?[0] != 0) return quote_error(data, sshc);
         myssh_to(data, sshc, .SSH_SFTP_QUOTE_MKDIR);
         return SSH_NO_ERROR;
     }
-    if (std.mem.startsWith(u8, cmd_slice, "rename ")) {
-        result = vssh.Curl_get_pathname(&cp, &sshc.quote_path2, hdir);
-        if (result != CURLE_OK) {
-            if (result == CURLE_OUT_OF_MEMORY) {
-                Curl_failf(data, "Out of memory");
-            } else {
-                Curl_failf(data, "Syntax error in rename: Bad second parameter");
-            }
-            if (sshc.quote_path1) |p| {
-                mem.free(p);
-                sshc.quote_path1 = null;
-            }
-            myssh_to(data, sshc, .SSH_SFTP_CLOSE);
-            sshc.nextstate = .SSH_NO_STATE;
-            sshc.actualcode = result;
-            return SSH_NO_ERROR;
-        }
+    if (is_rename_cmd) {
         if (cp != null and cp.?[0] != 0) return quote_error(data, sshc);
         myssh_to(data, sshc, .SSH_SFTP_QUOTE_RENAME);
         return SSH_NO_ERROR;
     }
-    if (std.mem.startsWith(u8, cmd_slice, "rmdir ")) {
+    if (is_rmdir_cmd) {
         if (cp != null and cp.?[0] != 0) return quote_error(data, sshc);
         myssh_to(data, sshc, .SSH_SFTP_QUOTE_RMDIR);
         return SSH_NO_ERROR;
     }
-    if (std.mem.startsWith(u8, cmd_slice, "rm ")) {
+    if (is_rm_cmd) {
         if (cp != null and cp.?[0] != 0) return quote_error(data, sshc);
         myssh_to(data, sshc, .SSH_SFTP_QUOTE_UNLINK);
         return SSH_NO_ERROR;
     }
-    if (std.mem.startsWith(u8, cmd_slice, "statvfs ")) {
+    if (is_statvfs_cmd) {
         if (cp != null and cp.?[0] != 0) return quote_error(data, sshc);
         myssh_to(data, sshc, .SSH_SFTP_QUOTE_STATVFS);
         return SSH_NO_ERROR;
@@ -2135,15 +2101,15 @@ fn sshc_cleanup(sshc: *ssh_conn_libssh) void {
             sshc.pubkey = null;
         }
         if (sshc.passphrase) |p| {
-            mem.free(p);
+            mem.freeSecretZ(p);
             sshc.passphrase = null;
         }
         if (sshc.pub_key) |p| {
-            mem.free(p);
+            mem.freeSecretZ(p);
             sshc.pub_key = null;
         }
         if (sshc.priv_key) |p| {
-            mem.free(p);
+            mem.freeSecretZ(p);
             sshc.priv_key = null;
         }
         if (sshc.quote_path1) |p| {
@@ -2170,6 +2136,7 @@ fn sshc_cleanup(sshc: *ssh_conn_libssh) void {
 fn myssh_in_SESSION_FREE(data: *Curl_easy, sshc: *ssh_conn_libssh) CURLcode {
     sshc_cleanup(sshc);
     const result = sshc.actualcode;
+    mem.secureZero(sshc, @sizeOf(ssh_conn_libssh));
     sshc.* = .{};
     if (Curl_ftp_acc_get_conn(data)) |conn| {
         Curl_ftp_acc_connclose(conn);
@@ -2374,7 +2341,7 @@ fn myssh_easy_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) call
         mem.free(p);
         sshp.path = null;
     }
-    mem.free(sshp);
+    mem.freeSized(sshp, @sizeOf(SSHPROTO_libssh));
 }
 
 fn myssh_conn_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callconv(.c) void {
@@ -2382,30 +2349,29 @@ fn myssh_conn_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) call
     _ = klen;
     const sshc: *ssh_conn_libssh = @ptrCast(@alignCast(entry orelse return));
     sshc_cleanup(sshc);
-    mem.free(sshc);
+    mem.freeSized(sshc, @sizeOf(ssh_conn_libssh));
 }
 
-fn setupPkeyLibssh(data: *Curl_easy, sshc: *ssh_conn_libssh) CURLcode {
+fn setupPkeyLibsshInner(data: *Curl_easy, sshc: *ssh_conn_libssh) error{OutOfMemory}!void {
     const auth_types: c_long = @intCast(Curl_setopt_get_i64(data, 54));
-    if ((auth_types & CURLSSH_AUTH_PUBLICKEY) == 0) return CURLE_OK;
+    if ((auth_types & CURLSSH_AUTH_PUBLICKEY) == 0) return;
 
     sshc.pub_key = null;
     sshc.priv_key = null;
+    sshc.passphrase = null;
 
     if (Curl_setopt_get_str(data, STRING_SSH_PRIVATE_KEY)) |pk| {
-        sshc.priv_key = mem.strdup(pk) orelse return CURLE_OUT_OF_MEMORY;
+        sshc.priv_key = mem.strdup(pk) orelse return error.OutOfMemory;
     } else {
         const home = curl_getenv("HOME");
-        defer if (home) |h| mem.free(h);
+        defer if (home) |h| mem.freeSecretZ(h);
         if (home) |h| {
-            sshc.priv_key = curl_maprintf("%s/.ssh/id_rsa", h);
-            if (sshc.priv_key == null) return CURLE_OUT_OF_MEMORY;
+            sshc.priv_key = curl_maprintf("%s/.ssh/id_rsa", h) orelse return error.OutOfMemory;
             if (std.c.access(sshc.priv_key.?, 0) != 0) {
-                mem.free(sshc.priv_key);
-                sshc.priv_key = curl_maprintf("%s/.ssh/id_dsa", h);
-                if (sshc.priv_key == null) return CURLE_OUT_OF_MEMORY;
+                mem.freeSecretZ(sshc.priv_key);
+                sshc.priv_key = curl_maprintf("%s/.ssh/id_dsa", h) orelse return error.OutOfMemory;
                 if (std.c.access(sshc.priv_key.?, 0) != 0) {
-                    mem.free(sshc.priv_key);
+                    mem.freeSecretZ(sshc.priv_key);
                     sshc.priv_key = null;
                 }
             }
@@ -2413,34 +2379,32 @@ fn setupPkeyLibssh(data: *Curl_easy, sshc: *ssh_conn_libssh) CURLcode {
         if (sshc.priv_key == null) {
             sshc.priv_key = mem.strdup("id_rsa");
             if (sshc.priv_key != null and std.c.access(sshc.priv_key.?, 0) != 0) {
-                mem.free(sshc.priv_key);
+                mem.freeSecretZ(sshc.priv_key);
                 sshc.priv_key = mem.strdup("id_dsa");
                 if (sshc.priv_key != null and std.c.access(sshc.priv_key.?, 0) != 0) {
-                    mem.free(sshc.priv_key);
+                    mem.freeSecretZ(sshc.priv_key);
                     sshc.priv_key = mem.strdup("");
                 }
             }
         }
     }
+    errdefer {
+        mem.freeSecretZ(sshc.priv_key);
+        sshc.priv_key = null;
+    }
 
     if (Curl_setopt_get_str(data, STRING_SSH_PUBLIC_KEY)) |pubk| {
         if (pubk[0] != 0) {
-            sshc.pub_key = mem.strdup(pubk) orelse {
-                mem.free(sshc.priv_key);
-                sshc.priv_key = null;
-                return CURLE_OUT_OF_MEMORY;
-            };
+            sshc.pub_key = mem.strdup(pubk) orelse return error.OutOfMemory;
         }
+    }
+    errdefer {
+        mem.freeSecretZ(sshc.pub_key);
+        sshc.pub_key = null;
     }
 
     if (Curl_setopt_get_str(data, STRING_KEY_PASSWD)) |kp| {
-        sshc.passphrase = mem.strdup(kp) orelse {
-            mem.free(sshc.priv_key);
-            sshc.priv_key = null;
-            mem.free(sshc.pub_key);
-            sshc.pub_key = null;
-            return CURLE_OUT_OF_MEMORY;
-        };
+        sshc.passphrase = mem.strdup(kp) orelse return error.OutOfMemory;
     }
 
     if (sshc.pub_key) |pk| Curl_infof(data, "SSH: public key file '%s'", pk);
@@ -2449,6 +2413,10 @@ fn setupPkeyLibssh(data: *Curl_easy, sshc: *ssh_conn_libssh) CURLcode {
     } else {
         Curl_infof(data, "SSH: public key auth without private key set!");
     }
+}
+
+fn setupPkeyLibssh(data: *Curl_easy, sshc: *ssh_conn_libssh) CURLcode {
+    setupPkeyLibsshInner(data, sshc) catch return CURLE_OUT_OF_MEMORY;
     return CURLE_OK;
 }
 

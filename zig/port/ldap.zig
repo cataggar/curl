@@ -667,7 +667,7 @@ fn writeEncodedOrRaw(data: *Curl_easy, prefix: []const u8, raw: []const u8, forc
 // OpenLDAP Backend Implementation (lib/openldap.c)
 // ============================================================================
 
-const ldapconninfo = struct {
+pub const ldapconninfo = struct {
     sasl: SASL = .{},
     ld: ?*LDAP = null,
     recv: ?Curl_recv = null,
@@ -682,7 +682,7 @@ const ldapconninfo = struct {
     didbind: bool = false,
 };
 
-const ldapreqinfo = struct {
+pub const ldapreqinfo = struct {
     msgid: c_int = 0,
     num_entries: c_int = 0,
 };
@@ -806,6 +806,7 @@ fn oldapPerformAuth(data_opt: ?*anyopaque, mech: [*:0]const u8, initresp: *const
         .bv_val = @constCast(Curl_bufref_ptr(initresp)),
         .bv_len = @intCast(Curl_bufref_len(initresp)),
     };
+    defer mem.secureZero(&cred, @sizeOf(BerValue));
     const pcred: ?*BerValue = if (cred.bv_val != null) &cred else null;
     const rc = ldap_sasl_bind(ld, null, mech, pcred, null, null, &li.msgid);
     if (rc != LDAP_SUCCESS) {
@@ -825,6 +826,7 @@ fn oldapContinueAuth(data_opt: ?*anyopaque, mech: [*:0]const u8, resp: *const bu
         .bv_val = @constCast(Curl_bufref_ptr(resp)),
         .bv_len = @intCast(Curl_bufref_len(resp)),
     };
+    defer mem.secureZero(&cred, @sizeOf(BerValue));
     const pcred: ?*BerValue = if (cred.bv_val != null) &cred else null;
     const rc = ldap_sasl_bind(ld, null, mech, pcred, null, null, &li.msgid);
     if (rc != LDAP_SUCCESS) {
@@ -855,6 +857,7 @@ fn oldapPerformBind(data: *Curl_easy, newstate: ldapstate) CURLcode {
 
     var binddn: ?[*:0]const u8 = null;
     var passwd = BerValue{};
+    defer mem.secureZero(&passwd, @sizeOf(BerValue));
     if (Curl_vssh_get_conn_user(conn)) |u| {
         binddn = u;
         if (Curl_vssh_get_conn_passwd(conn)) |pw| {
@@ -916,19 +919,32 @@ fn oldapPerformSasl(data: *Curl_easy) CURLcode {
     return result;
 }
 
-fn ldapsbTlsSetup(sbiod: *Sockbuf_IO_Desc, arg: ?*anyopaque) callconv(.c) c_int {
+pub const CURLEASY_MAGIC_NUMBER: u32 = 0xc0dedbad;
+
+pub fn ldapsbValidEasy(ptr_opt: ?*anyopaque) ?*Curl_easy {
+    const ptr = ptr_opt orelse return null;
+    if (@intFromPtr(ptr) % @alignOf(u32) != 0) return null;
+    const magic_ptr: *const u32 = @ptrCast(@alignCast(ptr));
+    if (magic_ptr.* != CURLEASY_MAGIC_NUMBER) return null;
+    return @ptrCast(ptr);
+}
+
+pub fn ldapsbTlsSetup(sbiod: *Sockbuf_IO_Desc, arg: ?*anyopaque) callconv(.c) c_int {
+    if (ldapsbValidEasy(arg) == null) {
+        sbiod.sbiod_pvt = null;
+        return -1;
+    }
     sbiod.sbiod_pvt = arg;
     return 0;
 }
 
-fn ldapsbTlsRemove(sbiod: *Sockbuf_IO_Desc) callconv(.c) c_int {
+pub fn ldapsbTlsRemove(sbiod: *Sockbuf_IO_Desc) callconv(.c) c_int {
     sbiod.sbiod_pvt = null;
     return 0;
 }
 
-fn ldapsbTlsClose(sbiod: *Sockbuf_IO_Desc) callconv(.c) c_int {
-    const data_ptr = sbiod.sbiod_pvt orelse return 0;
-    const data: *Curl_easy = @ptrCast(data_ptr);
+pub fn ldapsbTlsClose(sbiod: *Sockbuf_IO_Desc) callconv(.c) c_int {
+    const data = ldapsbValidEasy(sbiod.sbiod_pvt) orelse return -1;
     if (Curl_ftp_acc_get_conn(data)) |conn| {
         if (Curl_conn_meta_get(conn, CURL_META_LDAP_CONN)) |li_raw| {
             const li: *ldapconninfo = @ptrCast(@alignCast(li_raw));
@@ -941,19 +957,20 @@ fn ldapsbTlsClose(sbiod: *Sockbuf_IO_Desc) callconv(.c) c_int {
     return 0;
 }
 
-fn ldapsbTlsCtrl(sbiod: *Sockbuf_IO_Desc, opt: c_int, arg: ?*anyopaque) callconv(.c) c_int {
+pub fn ldapsbTlsCtrl(sbiod: *Sockbuf_IO_Desc, opt: c_int, arg: ?*anyopaque) callconv(.c) c_int {
     _ = arg;
     if (opt == LBER_SB_OPT_DATA_READY) {
-        const data_ptr = sbiod.sbiod_pvt orelse return 0;
-        const data: *Curl_easy = @ptrCast(data_ptr);
+        const data = ldapsbValidEasy(sbiod.sbiod_pvt) orelse return -1;
         return if (Curl_conn_data_pending(data, FIRSTSOCKET)) 1 else 0;
     }
     return 0;
 }
 
-fn ldapsbTlsRead(sbiod: *Sockbuf_IO_Desc, buf: *anyopaque, len: ber_len_t) callconv(.c) ber_slen_t {
-    const data_ptr = sbiod.sbiod_pvt orelse return 0;
-    const data: *Curl_easy = @ptrCast(data_ptr);
+pub fn ldapsbTlsRead(sbiod: *Sockbuf_IO_Desc, buf: *anyopaque, len: ber_len_t) callconv(.c) ber_slen_t {
+    const data = ldapsbValidEasy(sbiod.sbiod_pvt) orelse {
+        Curl_ldap_set_sockerrno_einval();
+        return -1;
+    };
     const conn = Curl_ftp_acc_get_conn(data) orelse return 0;
     const li_raw = Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse {
         Curl_ldap_set_sockerrno_einval();
@@ -972,9 +989,11 @@ fn ldapsbTlsRead(sbiod: *Sockbuf_IO_Desc, buf: *anyopaque, len: ber_len_t) callc
     return if (result != CURLE_OK) -1 else @intCast(nread);
 }
 
-fn ldapsbTlsWrite(sbiod: *Sockbuf_IO_Desc, buf: *anyopaque, len: ber_len_t) callconv(.c) ber_slen_t {
-    const data_ptr = sbiod.sbiod_pvt orelse return 0;
-    const data: *Curl_easy = @ptrCast(data_ptr);
+pub fn ldapsbTlsWrite(sbiod: *Sockbuf_IO_Desc, buf: *anyopaque, len: ber_len_t) callconv(.c) ber_slen_t {
+    const data = ldapsbValidEasy(sbiod.sbiod_pvt) orelse {
+        Curl_ldap_set_sockerrno_einval();
+        return -1;
+    };
     const conn = Curl_ftp_acc_get_conn(data) orelse return 0;
     const li_raw = Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse {
         Curl_ldap_set_sockerrno_einval();
@@ -992,6 +1011,9 @@ fn ldapsbTlsWrite(sbiod: *Sockbuf_IO_Desc, buf: *anyopaque, len: ber_len_t) call
     }
     return if (result != CURLE_OK) -1 else @intCast(nwritten);
 }
+
+pub const oldapSbRead = ldapsbTlsRead;
+pub const oldapSbWrite = ldapsbTlsWrite;
 
 var ldapsb_tls = Sockbuf_IO{
     .sbi_setup = ldapsbTlsSetup,
@@ -1046,12 +1068,21 @@ const saslldap = SASLproto{
     .flags = 0,
 };
 
-fn oldapConnDtor(key: ?*const anyopaque, key_len: usize, entry: ?*anyopaque) callconv(.c) void {
+pub fn oldapConnDtor(key: ?*const anyopaque, key_len: usize, entry: ?*anyopaque) callconv(.c) void {
     _ = key;
     _ = key_len;
     const li_raw = entry orelse return;
     const li: *ldapconninfo = @ptrCast(@alignCast(li_raw));
     if (comptime use_openldap) {
+        if (li.servercred) |sc| {
+            if (sc.bv_val) |p| {
+                if (sc.bv_len > 0) {
+                    mem.secureZero(p, @intCast(sc.bv_len));
+                }
+            }
+            ber_bvfree_x(sc, null);
+            li.servercred = null;
+        }
         if (li.ld) |ld| {
             _ = ldap_unbind_ext(ld, null, null);
             li.ld = null;
@@ -1061,14 +1092,16 @@ fn oldapConnDtor(key: ?*const anyopaque, key_len: usize, entry: ?*anyopaque) cal
             li.dupfd = CURL_SOCKET_BAD;
         }
     }
-    alloc.Curl_free(li_raw);
+    mem.secureZero(&li.sasl, @sizeOf(SASL));
+    mem.freeSized(li, @sizeOf(ldapconninfo));
 }
 
-fn oldapReqDtor(key: ?*const anyopaque, key_len: usize, entry: ?*anyopaque) callconv(.c) void {
+pub fn oldapReqDtor(key: ?*const anyopaque, key_len: usize, entry: ?*anyopaque) callconv(.c) void {
     _ = key;
     _ = key_len;
     const req_raw = entry orelse return;
-    alloc.Curl_free(req_raw);
+    const req: *ldapreqinfo = @ptrCast(@alignCast(req_raw));
+    mem.freeSized(req, @sizeOf(ldapreqinfo));
 }
 
 fn oldapPerformStarttls(data: *Curl_easy) CURLcode {
@@ -1250,6 +1283,11 @@ fn oldapStateSaslResp(data: *Curl_easy, msg: *LDAPMessage, code: c_int) CURLcode
         }
     }
     if (li.servercred) |sc| {
+        if (sc.bv_val) |p| {
+            if (sc.bv_len > 0) {
+                mem.secureZero(p, @intCast(sc.bv_len));
+            }
+        }
         ber_bvfree_x(sc, null);
         li.servercred = null;
     }
@@ -1276,7 +1314,14 @@ fn oldapStateBindResp(data: *Curl_easy, msg: *LDAPMessage, code: c_int) CURLcode
     } else {
         oldapState(data, li, .OLDAP_STOP);
     }
-    if (bv) |p| ber_bvfree_x(p, null);
+    if (bv) |p| {
+        if (p.bv_val) |v| {
+            if (p.bv_len > 0) {
+                mem.secureZero(v, @intCast(p.bv_len));
+            }
+        }
+        ber_bvfree_x(p, null);
+    }
     return result;
 }
 
@@ -1769,33 +1814,63 @@ fn strchrMut(s: [*:0]u8, ch: u8) ?[*:0]u8 {
     return null;
 }
 
-pub fn ldapUrlParse2Low(
+pub fn ldapCleanupUrldescLowFields(ludp: *LdapUrlDescLow) void {
+    if (ludp.lud_dn) |p| {
+        alloc.Curl_free(p);
+        ludp.lud_dn = null;
+    }
+    if (ludp.lud_filter) |p| {
+        alloc.Curl_free(p);
+        ludp.lud_filter = null;
+    }
+    if (ludp.lud_attrs) |attrs| {
+        var i: usize = 0;
+        while (i < ludp.lud_attrs_dups) : (i += 1) {
+            if (attrs[i]) |a| {
+                alloc.Curl_free(a);
+                attrs[i] = null;
+            }
+        }
+        alloc.Curl_free(@ptrCast(attrs));
+        ludp.lud_attrs = null;
+    }
+    ludp.lud_attrs_dups = 0;
+}
+
+const LdapUrlParseLowError = error{
+    OutOfMemory,
+    InvalidSyntax,
+};
+
+fn ldapUrlParse2LowInner(
     up_path_opt: ?[*:0]const u8,
     up_query_opt: ?[*:0]const u8,
     scheme_name: [*:0]const u8,
     host: [*:0]const u8,
     port: c_int,
     ludp: *LdapUrlDescLow,
-) c_int {
-    const up_path = up_path_opt orelse return LDAP_INVALID_SYNTAX;
+) LdapUrlParseLowError!void {
+    const up_path = up_path_opt orelse return error.InvalidSyntax;
     if (up_path[0] != '/' or
         (primitives.curl_strequal(scheme_name, "ldap") == 0 and
             primitives.curl_strequal(scheme_name, "ldaps") == 0))
     {
-        return LDAP_INVALID_SYNTAX;
+        return error.InvalidSyntax;
     }
 
     ludp.lud_scope = LDAP_SCOPE_BASE;
     ludp.lud_port = port;
     ludp.lud_host = host;
 
-    const path = alloc.Curl_strdup(up_path + 1) orelse return LDAP_NO_MEMORY;
+    errdefer ldapCleanupUrldescLowFields(ludp);
+
+    const path = alloc.Curl_strdup(up_path + 1) orelse return error.OutOfMemory;
     defer alloc.Curl_free(path);
     var p: ?[*:0]u8 = path;
 
     var query: ?[*:0]u8 = null;
     if (up_query_opt) |uq| {
-        query = alloc.Curl_strdup(uq) orelse return LDAP_NO_MEMORY;
+        query = alloc.Curl_strdup(uq) orelse return error.OutOfMemory;
     }
     defer if (query) |q_alloc| alloc.Curl_free(q_alloc);
     var q: ?[*:0]u8 = query;
@@ -1803,13 +1878,13 @@ pub fn ldapUrlParse2Low(
     if (p.?[0] != 0) {
         var unescaped: ?[*:0]u8 = null;
         if (Curl_urldecode(p.?, 0, &unescaped, null, format_parse.REJECT_ZERO) != CURLE_OK) {
-            return LDAP_NO_MEMORY;
+            return error.OutOfMemory;
         }
         ludp.lud_dn = unescaped;
     }
 
     p = q;
-    if (p == null) return LDAP_SUCCESS;
+    if (p == null) return;
 
     q = strchrMut(p.?, '?');
     if (q) |qptr| {
@@ -1819,7 +1894,7 @@ pub fn ldapUrlParse2Low(
 
     if (p.?[0] != 0) {
         const count = numEntries(p.?);
-        const attrs_raw = alloc.Curl_calloc(count + 1, @sizeOf(?[*:0]u8)) orelse return LDAP_NO_MEMORY;
+        const attrs_raw = alloc.Curl_calloc(count + 1, @sizeOf(?[*:0]u8)) orelse return error.OutOfMemory;
         const attrs: [*]?[*:0]u8 = @ptrCast(@alignCast(attrs_raw));
         ludp.lud_attrs = attrs;
 
@@ -1830,7 +1905,7 @@ pub fn ldapUrlParse2Low(
             if (curlx_str_until(&atp, &out, 1024, ',') != 0) break;
             var unescaped: ?[*:0]u8 = null;
             if (Curl_urldecode(out.str.?, out.len, &unescaped, null, format_parse.REJECT_ZERO) != CURLE_OK) {
-                return LDAP_NO_MEMORY;
+                return error.OutOfMemory;
             }
             attrs[i] = unescaped;
             ludp.lud_attrs_dups += 1;
@@ -1839,7 +1914,7 @@ pub fn ldapUrlParse2Low(
     }
 
     p = q;
-    if (p == null) return LDAP_SUCCESS;
+    if (p == null) return;
 
     q = strchrMut(p.?, '?');
     if (q) |qptr| {
@@ -1850,12 +1925,12 @@ pub fn ldapUrlParse2Low(
     if (p.?[0] != 0) {
         ludp.lud_scope = str2scope(p.?);
         if (ludp.lud_scope == -1) {
-            return LDAP_INVALID_SYNTAX;
+            return error.InvalidSyntax;
         }
     }
 
     p = q;
-    if (p == null) return LDAP_SUCCESS;
+    if (p == null) return;
 
     q = strchrMut(p.?, '?');
     if (q) |qptr| {
@@ -1866,31 +1941,43 @@ pub fn ldapUrlParse2Low(
     if (p.?[0] != 0) {
         var unescaped: ?[*:0]u8 = null;
         if (Curl_urldecode(p.?, 0, &unescaped, null, format_parse.REJECT_CTRL) != CURLE_OK) {
-            return LDAP_NO_MEMORY;
+            return error.OutOfMemory;
         }
         ludp.lud_filter = unescaped;
     }
 
     p = q;
     if (p != null and p.?[0] == 0) {
-        return LDAP_INVALID_SYNTAX;
+        return error.InvalidSyntax;
     }
+}
 
+pub fn ldapUrlParse2Low(
+    up_path_opt: ?[*:0]const u8,
+    up_query_opt: ?[*:0]const u8,
+    scheme_name: [*:0]const u8,
+    host: [*:0]const u8,
+    port: c_int,
+    ludp: *LdapUrlDescLow,
+) c_int {
+    ldapUrlParse2LowInner(
+        up_path_opt,
+        up_query_opt,
+        scheme_name,
+        host,
+        port,
+        ludp,
+    ) catch |err| return switch (err) {
+        error.OutOfMemory => LDAP_NO_MEMORY,
+        error.InvalidSyntax => LDAP_INVALID_SYNTAX,
+    };
     return LDAP_SUCCESS;
 }
 
 pub fn ldapFreeUrldescLow(ludp: ?*LdapUrlDescLow) void {
     const d = ludp orelse return;
-    if (d.lud_dn) |p| alloc.Curl_free(p);
-    if (d.lud_filter) |p| alloc.Curl_free(p);
-    if (d.lud_attrs) |attrs| {
-        var i: usize = 0;
-        while (i < d.lud_attrs_dups) : (i += 1) {
-            if (attrs[i]) |a| alloc.Curl_free(a);
-        }
-        alloc.Curl_free(@ptrCast(attrs));
-    }
-    alloc.Curl_free(d);
+    ldapCleanupUrldescLowFields(d);
+    mem.freeSized(d, @sizeOf(LdapUrlDescLow));
 }
 
 fn ldapValueNeedsBase64(attr_slice: []const u8, val: *const BerValue) bool {
@@ -2370,4 +2457,143 @@ test "LDAP error mapping and low-level URL parser" {
     Curl_ldap_version(&vbuf, vbuf.len);
     const vstr = std.mem.sliceTo(&vbuf, 0);
     try std.testing.expect(vstr.len > 0);
+}
+
+test "ldapUrlParse2Low errdefer cleanup on scope, filter, attribute, and extension failures" {
+    const desc_raw = alloc.Curl_calloc(1, @sizeOf(LdapUrlDescLow)) orelse unreachable;
+    const desc: *LdapUrlDescLow = @ptrCast(@alignCast(desc_raw));
+    desc.* = .{};
+    defer ldapFreeUrldescLow(desc);
+
+    // 1. Invalid scope after lud_dn and lud_attrs are allocated
+    const rc_scope = ldapUrlParse2Low(
+        "/dc=example,dc=com",
+        "cn,mail?badscope?(objectClass=person)",
+        "ldap",
+        "localhost",
+        389,
+        desc,
+    );
+    try std.testing.expectEqual(LDAP_INVALID_SYNTAX, rc_scope);
+    try std.testing.expect(desc.lud_dn == null);
+    try std.testing.expect(desc.lud_attrs == null);
+    try std.testing.expectEqual(@as(usize, 0), desc.lud_attrs_dups);
+    try std.testing.expect(desc.lud_filter == null);
+
+    // 2. Invalid filter (%01 rejected by REJECT_CTRL) after lud_dn and lud_attrs are allocated
+    const rc_filter = ldapUrlParse2Low(
+        "/dc=example,dc=com",
+        "cn,mail?sub?(cn=%01)",
+        "ldap",
+        "localhost",
+        389,
+        desc,
+    );
+    try std.testing.expectEqual(LDAP_NO_MEMORY, rc_filter);
+    try std.testing.expect(desc.lud_dn == null);
+    try std.testing.expect(desc.lud_attrs == null);
+    try std.testing.expectEqual(@as(usize, 0), desc.lud_attrs_dups);
+    try std.testing.expect(desc.lud_filter == null);
+
+    // 3. Second attribute fails Curl_urldecode (%00 rejected by REJECT_ZERO) after first attribute is allocated
+    const rc_attr = ldapUrlParse2Low(
+        "/dc=example,dc=com",
+        "cn,bad%00attr?sub?(objectClass=*)",
+        "ldap",
+        "localhost",
+        389,
+        desc,
+    );
+    try std.testing.expectEqual(LDAP_NO_MEMORY, rc_attr);
+    try std.testing.expect(desc.lud_dn == null);
+    try std.testing.expect(desc.lud_attrs == null);
+    try std.testing.expectEqual(@as(usize, 0), desc.lud_attrs_dups);
+    try std.testing.expect(desc.lud_filter == null);
+
+    // 4. Trailing empty extension ('?') after lud_dn, lud_attrs, and lud_filter are allocated
+    const rc_ext = ldapUrlParse2Low(
+        "/dc=example,dc=com",
+        "cn,mail?sub?(objectClass=person)?",
+        "ldap",
+        "localhost",
+        389,
+        desc,
+    );
+    try std.testing.expectEqual(LDAP_INVALID_SYNTAX, rc_ext);
+    try std.testing.expect(desc.lud_dn == null);
+    try std.testing.expect(desc.lud_attrs == null);
+    try std.testing.expectEqual(@as(usize, 0), desc.lud_attrs_dups);
+    try std.testing.expect(desc.lud_filter == null);
+}
+
+test "ldapconninfo and ldapreqinfo poisoning and ldapsb_tls invalid-magic rejection" {
+    const cb = struct {
+        extern var Curl_cfree: mem.FreeCallback;
+    };
+    const expected_poison: u8 = switch (builtin.mode) {
+        .Debug, .ReleaseSafe => 0xaa,
+        .ReleaseFast, .ReleaseSmall => 0x00,
+    };
+    var poisoned_frees: usize = 0;
+    const TestHooks = struct {
+        var count: *usize = undefined;
+        var expected: u8 = 0xaa;
+        var orig_free: mem.FreeCallback = undefined;
+        fn freeFn(p: ?*anyopaque) callconv(.c) void {
+            if (p) |non_null| {
+                const bytes: [*]const u8 = @ptrCast(non_null);
+                if (bytes[0] == expected and bytes[1] == expected) {
+                    count.* += 1;
+                }
+            }
+            orig_free(p);
+        }
+    };
+    TestHooks.count = &poisoned_frees;
+    TestHooks.expected = expected_poison;
+    TestHooks.orig_free = cb.Curl_cfree;
+    cb.Curl_cfree = &TestHooks.freeFn;
+    defer cb.Curl_cfree = TestHooks.orig_free;
+
+    const li_raw = alloc.Curl_calloc(1, @sizeOf(ldapconninfo)) orelse unreachable;
+    const li: *ldapconninfo = @ptrCast(@alignCast(li_raw));
+    li.* = .{};
+    oldapConnDtor(null, 0, li);
+    try std.testing.expectEqual(@as(usize, 1), poisoned_frees);
+
+    const lr_raw = alloc.Curl_calloc(1, @sizeOf(ldapreqinfo)) orelse unreachable;
+    const lr: *ldapreqinfo = @ptrCast(@alignCast(lr_raw));
+    lr.* = .{ .msgid = 42, .num_entries = 3 };
+    oldapReqDtor(null, 0, lr);
+    try std.testing.expectEqual(@as(usize, 2), poisoned_frees);
+
+    // Validate ldapsb_tls magic guard rejects null or corrupted magic numbers
+    var fake_easy_bad: u32 align(8) = 0xdeadbeef;
+    var fake_easy_good: u32 align(8) = CURLEASY_MAGIC_NUMBER;
+    var sbiod = Sockbuf_IO_Desc{
+        .sbiod_level = LBER_SBIOD_LEVEL_TRANSPORT,
+        .sbiod_sb = null,
+        .sbiod_io = &ldapsb_tls,
+        .sbiod_pvt = null,
+        .sbiod_next = null,
+    };
+
+    try std.testing.expect(ldapsbValidEasy(null) == null);
+    try std.testing.expect(ldapsbValidEasy(@ptrCast(&fake_easy_bad)) == null);
+    try std.testing.expect(ldapsbValidEasy(@ptrCast(&fake_easy_good)) != null);
+
+    try std.testing.expectEqual(@as(c_int, -1), ldapsbTlsSetup(&sbiod, null));
+    try std.testing.expectEqual(@as(c_int, -1), ldapsbTlsSetup(&sbiod, @ptrCast(&fake_easy_bad)));
+    try std.testing.expect(sbiod.sbiod_pvt == null);
+
+    try std.testing.expectEqual(@as(c_int, 0), ldapsbTlsSetup(&sbiod, @ptrCast(&fake_easy_good)));
+    try std.testing.expect(sbiod.sbiod_pvt != null);
+
+    // Corrupt magic in-place (simulating use-after-free / 0xaaaaaaaa poison)
+    fake_easy_good = 0xaaaaaaaa;
+    var dummy_buf: [8]u8 = undefined;
+    try std.testing.expectEqual(@as(ber_slen_t, -1), oldapSbRead(&sbiod, &dummy_buf, dummy_buf.len));
+    try std.testing.expectEqual(@as(ber_slen_t, -1), oldapSbWrite(&sbiod, &dummy_buf, dummy_buf.len));
+    try std.testing.expectEqual(@as(c_int, -1), ldapsbTlsCtrl(&sbiod, LBER_SB_OPT_DATA_READY, null));
+    try std.testing.expectEqual(@as(c_int, -1), ldapsbTlsClose(&sbiod));
 }
