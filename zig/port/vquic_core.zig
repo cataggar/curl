@@ -655,9 +655,9 @@ fn do_sendmsg(
             const err = headers_sock.sockerrno();
             if (err == headers_sock.SOCKEAGAIN or err == headers_sock.SOCKEWOULDBLOCK) {
                 return CURLE_AGAIN;
-            } else if (err == @intFromEnum(std.c.E.MSGSIZE)) {
+            } else if (err == @backingInt(std.c.E.MSGSIZE)) {
                 return CURLE_SEND_ERROR;
-            } else if (is_linux and (err == @intFromEnum(std.c.E.IO) or err == headers_sock.SOCKEINVAL)) {
+            } else if (is_linux and (err == @backingInt(std.c.E.IO) or err == headers_sock.SOCKEINVAL)) {
                 qctx.no_gso = true;
                 return send_packet_no_gso(cf, data, qctx, pkt, pktlen, gsolen, psent);
             } else {
@@ -713,7 +713,7 @@ fn send_packet_no_gso(
                 const err = headers_sock.sockerrno();
                 if (err == headers_sock.SOCKEAGAIN or err == headers_sock.SOCKEWOULDBLOCK) {
                     return CURLE_AGAIN;
-                } else if (err == @intFromEnum(std.c.E.MSGSIZE)) {
+                } else if (err == @backingInt(std.c.E.MSGSIZE)) {
                     return CURLE_SEND_ERROR;
                 } else {
                     var errbuf: [STRERROR_LEN]u8 = undefined;
