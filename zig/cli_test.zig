@@ -571,3 +571,75 @@ test "cli_main_operate: parallel transfers (-Z), --parallel-max, and config2seto
     defer gpa.free(d3);
     try std.testing.expectEqualStrings("parallel-three\n", d3);
 }
+
+test "cli_main_operate: HTTP 302 redirect following (-L) with header dump (-D)" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir_path);
+
+    const headers_path = try std.fmt.allocPrint(gpa, "{s}/headers.txt", .{dir_path});
+    defer gpa.free(headers_path);
+
+    const bind_addr = try std.Io.net.IpAddress.parseIp4("127.0.0.1", 0);
+    var server = try bind_addr.listen(io, .{ .reuse_address = true });
+    defer server.deinit(io);
+    const port = server.socket.address.getPort();
+
+    const ServerWorker = struct {
+        fn run(srv: *std.Io.net.Server, worker_io: std.Io) void {
+            var idx: usize = 0;
+            while (idx < 2) : (idx += 1) {
+                var stream = srv.accept(worker_io) catch return;
+                defer stream.close(worker_io);
+
+                var rbuf: [1024]u8 = undefined;
+                var reader = stream.reader(worker_io, &rbuf);
+                var req_buf: [2048]u8 = undefined;
+                var req_len: usize = 0;
+                while (req_len < req_buf.len) {
+                    var slice = [_][]u8{req_buf[req_len..]};
+                    const n = reader.interface.readVec(&slice) catch break;
+                    if (n == 0) break;
+                    req_len += n;
+                    if (std.mem.indexOf(u8, req_buf[0..req_len], "\r\n\r\n") != null) break;
+                }
+
+                const resp: []const u8 = if (idx == 0)
+                    "HTTP/1.1 302 Found\r\nLocation: /target\r\nX-Hop: first\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                else
+                    "HTTP/1.1 200 OK\r\nX-Hop: second\r\nContent-Length: 15\r\nConnection: close\r\n\r\nredirected-body";
+
+                var wbuf: [1024]u8 = undefined;
+                var writer = stream.writer(worker_io, &wbuf);
+                writer.interface.writeAll(resp) catch return;
+                writer.interface.flush() catch return;
+            }
+        }
+    };
+
+    const thread = try std.Thread.spawn(.{}, ServerWorker.run, .{ &server, io });
+    defer thread.join();
+
+    const url = try std.fmt.allocPrint(gpa, "http://127.0.0.1:{d}/start", .{port});
+    defer gpa.free(url);
+
+    const result = try std.process.run(gpa, io, .{
+        .argv = &.{ build_options.curl_exe_path, "-fsSL", "-D", headers_path, url },
+    });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, result.term);
+    try std.testing.expectEqualStrings("redirected-body", result.stdout);
+
+    const headers_dump = try tmp.dir.readFileAlloc(io, "headers.txt", gpa, .limited(4096));
+    defer gpa.free(headers_dump);
+    try std.testing.expect(std.mem.indexOf(u8, headers_dump, "302 Found") != null);
+    try std.testing.expect(std.mem.indexOf(u8, headers_dump, "200 OK") != null);
+    try std.testing.expect(std.mem.indexOf(u8, headers_dump, "X-Hop: second") != null);
+}
