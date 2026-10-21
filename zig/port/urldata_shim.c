@@ -4860,7 +4860,7 @@ struct curl_thrdq **Curl_zig_multi_get_resolv_thrdq_ptr(
   struct Curl_multi *multi)
 {
 #ifdef USE_RESOLV_THREADED
-  return &multi->resolv_thrdq;
+  return multi ? &multi->resolv_thrdq : NULL;
 #else
   (void)multi;
   return NULL;
@@ -4882,7 +4882,8 @@ void Curl_zig_multi_set_resolv_thrdq(struct Curl_multi *multi,
                                      struct curl_thrdq *thrdq)
 {
 #ifdef USE_RESOLV_THREADED
-  multi->resolv_thrdq = thrdq;
+  if(multi)
+    multi->resolv_thrdq = thrdq;
 #else
   (void)multi;
   (void)thrdq;
@@ -4896,6 +4897,9 @@ int Curl_zig_ares_init_channel(struct Curl_easy *data,
 {
   struct ares_options options;
   int optmask = ARES_OPT_SOCK_STATE_CB;
+
+  if(!channel_out)
+    return ARES_EBADQUERY;
 
   memset(&options, 0, sizeof(options));
   options.sock_state_cb = NULL;
@@ -8483,10 +8487,14 @@ struct Curl_share *Curl_zig_easy_share(const struct Curl_easy *data)
 void Curl_zig_easy_setup_psl(struct Curl_multi *multi, struct Curl_easy *data)
 {
 #ifdef USE_LIBPSL
+  if(!data)
+    return;
   if(data->share && (data->share->specifier & (1 << CURL_LOCK_DATA_PSL)))
     data->psl = &data->share->psl;
-  else
+  else if(multi)
     data->psl = &multi->psl;
+  else
+    data->psl = NULL;
 #else
   (void)multi;
   (void)data;
@@ -8506,7 +8514,8 @@ struct PslCache *Curl_zig_easy_psl(const struct Curl_easy *data)
 void Curl_zig_easy_clear_psl(struct Curl_easy *data)
 {
 #ifdef USE_LIBPSL
-  data->psl = NULL;
+  if(data)
+    data->psl = NULL;
 #else
   (void)data;
 #endif
@@ -13351,7 +13360,13 @@ curl_off_t Curl_http_acc_current_time(void)
 #include "api.h"
 #include "multi_ev.h"
 #include "protocol.h"
+#include "proxy.h"
+#include "psl.h"
+#include "curl_sasl.h"
 #include "vdns/asyn.h"
+#include "vdns/dnscache.h"
+#include "vdns/doh.h"
+#include "vdns/httpsrr.h"
 
 /* 1. API recursion stack & guard layouts (lib/api.h) */
 _Static_assert(CURL_EAPI_MAX_RECURSION == 7, "CURL_EAPI_MAX_RECURSION");
@@ -13623,12 +13638,53 @@ _Static_assert(sizeof(struct Curl_peer) == 40, "sizeof(Curl_peer)");
 _Static_assert(offsetof(struct Curl_peer, user_hostname) == 35, "Curl_peer.user_hostname");
 #endif
 
-#ifdef USE_CURL_ASYNC
 #ifdef USE_HTTPSRR
 #define CURL_ABI_HTTPSRR_OFF 8
+_Static_assert(MAX_HTTPSRR_ALPNS == 4, "MAX_HTTPSRR_ALPNS");
+_Static_assert(sizeof(struct Curl_https_rrinfo) == 72, "sizeof(Curl_https_rrinfo)");
+_Static_assert(_Alignof(struct Curl_https_rrinfo) == 8, "alignof(Curl_https_rrinfo)");
+_Static_assert(offsetof(struct Curl_https_rrinfo, target) == 0, "Curl_https_rrinfo.target");
+_Static_assert(offsetof(struct Curl_https_rrinfo, ipv4hints) == 8, "Curl_https_rrinfo.ipv4hints");
+_Static_assert(offsetof(struct Curl_https_rrinfo, ipv4hints_len) == 16, "Curl_https_rrinfo.ipv4hints_len");
+_Static_assert(offsetof(struct Curl_https_rrinfo, echconfiglist) == 24, "Curl_https_rrinfo.echconfiglist");
+_Static_assert(offsetof(struct Curl_https_rrinfo, echconfiglist_len) == 32, "Curl_https_rrinfo.echconfiglist_len");
+_Static_assert(offsetof(struct Curl_https_rrinfo, ipv6hints) == 40, "Curl_https_rrinfo.ipv6hints");
+_Static_assert(offsetof(struct Curl_https_rrinfo, ipv6hints_len) == 48, "Curl_https_rrinfo.ipv6hints_len");
+_Static_assert(offsetof(struct Curl_https_rrinfo, alpns) == 56, "Curl_https_rrinfo.alpns");
+_Static_assert(offsetof(struct Curl_https_rrinfo, port) == 60, "Curl_https_rrinfo.port");
+_Static_assert(offsetof(struct Curl_https_rrinfo, priority) == 62, "Curl_https_rrinfo.priority");
+_Static_assert(offsetof(struct Curl_https_rrinfo, priority) +
+               sizeof(((struct Curl_https_rrinfo *)0)->priority) == 64,
+               "Curl_https_rrinfo.bitfields_offset");
 #else
 #define CURL_ABI_HTTPSRR_OFF 0
 #endif
+
+_Static_assert(_Alignof(struct Curl_dns_entry) == 8, "alignof(Curl_dns_entry)");
+_Static_assert(offsetof(struct Curl_dns_entry, addr) == 0, "Curl_dns_entry.addr");
+#ifdef USE_HTTPSRR
+_Static_assert(offsetof(struct Curl_dns_entry, hinfo) == 8, "Curl_dns_entry.hinfo");
+#endif
+_Static_assert(offsetof(struct Curl_dns_entry, added) == (8 + CURL_ABI_HTTPSRR_OFF), "Curl_dns_entry.added");
+_Static_assert(offsetof(struct Curl_dns_entry, refcount) == (24 + CURL_ABI_HTTPSRR_OFF), "Curl_dns_entry.refcount");
+_Static_assert(offsetof(struct Curl_dns_entry, hostlen) == (28 + CURL_ABI_HTTPSRR_OFF), "Curl_dns_entry.hostlen");
+_Static_assert(offsetof(struct Curl_dns_entry, port) == (30 + CURL_ABI_HTTPSRR_OFF), "Curl_dns_entry.port");
+_Static_assert(offsetof(struct Curl_dns_entry, type) == (32 + CURL_ABI_HTTPSRR_OFF), "Curl_dns_entry.type");
+_Static_assert(offsetof(struct Curl_dns_entry, dns_queries) == (33 + CURL_ABI_HTTPSRR_OFF), "Curl_dns_entry.dns_queries");
+_Static_assert(offsetof(struct Curl_dns_entry, dns_responses) == (34 + CURL_ABI_HTTPSRR_OFF), "Curl_dns_entry.dns_responses");
+#ifdef _WIN32
+_Static_assert(offsetof(struct Curl_dns_entry, hostname) == (40 + CURL_ABI_HTTPSRR_OFF), "Curl_dns_entry.hostname");
+_Static_assert(sizeof(struct Curl_dns_entry) == (48 + CURL_ABI_HTTPSRR_OFF), "sizeof(Curl_dns_entry)");
+#else
+_Static_assert(offsetof(struct Curl_dns_entry, hostname) == (36 + CURL_ABI_HTTPSRR_OFF), "Curl_dns_entry.hostname");
+_Static_assert(sizeof(struct Curl_dns_entry) == (40 + CURL_ABI_HTTPSRR_OFF), "sizeof(Curl_dns_entry)");
+#endif
+
+_Static_assert(sizeof(struct Curl_dnscache) == 40, "sizeof(Curl_dnscache)");
+_Static_assert(_Alignof(struct Curl_dnscache) == 8, "alignof(Curl_dnscache)");
+_Static_assert(offsetof(struct Curl_dnscache, entries) == 0, "Curl_dnscache.entries");
+
+#ifdef USE_CURL_ASYNC
 #if defined(USE_RESOLV_THREADED) && defined(USE_HTTPSRR) && defined(USE_ARES)
 #define CURL_ABI_RESOLV_CTX_SIZE 32
 #elif defined(USE_RESOLV_THREADED) || defined(USE_RESOLV_ARES)
@@ -13647,10 +13703,20 @@ _Static_assert(offsetof(struct Curl_resolv_async, httpsrr) == 32, "Curl_resolv_a
 #endif
 #ifdef USE_RESOLV_ARES
 _Static_assert(sizeof(struct async_ares_ctx) == 24, "sizeof(async_ares_ctx)");
+_Static_assert(_Alignof(struct async_ares_ctx) == 8, "alignof(async_ares_ctx)");
+_Static_assert(offsetof(struct async_ares_ctx, channel) == 0, "async_ares_ctx.channel");
+_Static_assert(offsetof(struct async_ares_ctx, ares_status) == 8, "async_ares_ctx.ares_status");
+_Static_assert(offsetof(struct async_ares_ctx, result) == 12, "async_ares_ctx.result");
 _Static_assert(offsetof(struct Curl_resolv_async, ares) == (32 + CURL_ABI_HTTPSRR_OFF), "Curl_resolv_async.ares");
 #endif
 #ifdef USE_RESOLV_THREADED
 _Static_assert(sizeof(struct async_thrdd_ctx) == CURL_ABI_RESOLV_CTX_SIZE, "sizeof(async_thrdd_ctx)");
+_Static_assert(_Alignof(struct async_thrdd_ctx) == 8, "alignof(async_thrdd_ctx)");
+_Static_assert(offsetof(struct async_thrdd_ctx, res_A) == 0, "async_thrdd_ctx.res_A");
+_Static_assert(offsetof(struct async_thrdd_ctx, res_AAAA) == 8, "async_thrdd_ctx.res_AAAA");
+#if defined(USE_HTTPSRR) && defined(USE_ARES)
+_Static_assert(offsetof(struct async_thrdd_ctx, rr.channel) == 16, "async_thrdd_ctx.rr.channel");
+#endif
 _Static_assert(offsetof(struct Curl_resolv_async, thrdd) == (32 + CURL_ABI_HTTPSRR_OFF), "Curl_resolv_async.thrdd");
 #endif
 _Static_assert(offsetof(struct Curl_resolv_async, doh) == (32 + CURL_ABI_HTTPSRR_OFF + CURL_ABI_RESOLV_CTX_SIZE), "Curl_resolv_async.doh");
@@ -13665,6 +13731,79 @@ _Static_assert(offsetof(struct Curl_resolv_async, dns_responses) == (85 + CURL_A
 _Static_assert(offsetof(struct Curl_resolv_async, transport) == (86 + CURL_ABI_HTTPSRR_OFF + CURL_ABI_RESOLV_CTX_SIZE), "Curl_resolv_async.transport");
 _Static_assert(offsetof(struct Curl_resolv_async, queries_ongoing) == (87 + CURL_ABI_HTTPSRR_OFF + CURL_ABI_RESOLV_CTX_SIZE), "Curl_resolv_async.queries_ongoing");
 #endif
+
+#ifndef CURL_DISABLE_DOH
+_Static_assert(sizeof(struct dohaddr) == 20, "sizeof(dohaddr)");
+_Static_assert(_Alignof(struct dohaddr) == 4, "alignof(dohaddr)");
+_Static_assert(offsetof(struct dohaddr, type) == 0, "dohaddr.type");
+_Static_assert(offsetof(struct dohaddr, ip) == 4, "dohaddr.ip");
+#ifdef USE_HTTPSRR
+_Static_assert(sizeof(struct dohhttps_rr) == 16, "sizeof(dohhttps_rr)");
+_Static_assert(_Alignof(struct dohhttps_rr) == 8, "alignof(dohhttps_rr)");
+_Static_assert(offsetof(struct dohhttps_rr, len) == 0, "dohhttps_rr.len");
+_Static_assert(offsetof(struct dohhttps_rr, val) == 8, "dohhttps_rr.val");
+#endif
+_Static_assert(offsetof(struct dohentry, addr) == 0, "dohentry.addr");
+_Static_assert(offsetof(struct dohentry, numaddr) == 480, "dohentry.numaddr");
+_Static_assert(offsetof(struct dohentry, ttl) == 484, "dohentry.ttl");
+#ifdef USE_HTTPSRR
+_Static_assert(offsetof(struct dohentry, https_rrs) == 488, "dohentry.https_rrs");
+_Static_assert(offsetof(struct dohentry, numhttps_rrs) == 552, "dohentry.numhttps_rrs");
+_Static_assert(sizeof(struct dohentry) == 560, "sizeof(dohentry)");
+#else
+_Static_assert(sizeof(struct dohentry) == 488, "sizeof(dohentry)");
+#endif
+_Static_assert(sizeof(struct doh_probes) == (DOH_SLOT_COUNT * 8), "sizeof(doh_probes)");
+_Static_assert(offsetof(struct doh_probes, probe_mid) == 0, "doh_probes.probe_mid");
+_Static_assert(offsetof(struct doh_probes, probe_rc) == (DOH_SLOT_COUNT * 4), "doh_probes.probe_rc");
+#endif
+
+#ifdef USE_LIBPSL
+_Static_assert(sizeof(struct PslCache) == 24, "sizeof(PslCache)");
+_Static_assert(_Alignof(struct PslCache) == 8, "alignof(PslCache)");
+_Static_assert(offsetof(struct PslCache, psl) == 0, "PslCache.psl");
+_Static_assert(offsetof(struct PslCache, expires) == 8, "PslCache.expires");
+#endif
+
+#ifndef CURL_DISABLE_PROXY
+_Static_assert(sizeof(struct proxy_info) == 24, "sizeof(proxy_info)");
+_Static_assert(_Alignof(struct proxy_info) == 8, "alignof(proxy_info)");
+_Static_assert(offsetof(struct proxy_info, peer) == 0, "proxy_info.peer");
+_Static_assert(offsetof(struct proxy_info, creds) == 8, "proxy_info.creds");
+_Static_assert(offsetof(struct proxy_info, proxytype) == 16, "proxy_info.proxytype");
+#endif
+
+_Static_assert(sizeof(struct curl_khkey) == 24, "sizeof(curl_khkey)");
+_Static_assert(_Alignof(struct curl_khkey) == 8, "alignof(curl_khkey)");
+_Static_assert(offsetof(struct curl_khkey, key) == 0, "curl_khkey.key");
+_Static_assert(offsetof(struct curl_khkey, len) == 8, "curl_khkey.len");
+_Static_assert(offsetof(struct curl_khkey, keytype) == 16, "curl_khkey.keytype");
+
+_Static_assert(sizeof(struct SASLproto) == 64, "sizeof(SASLproto)");
+_Static_assert(_Alignof(struct SASLproto) == 8, "alignof(SASLproto)");
+_Static_assert(offsetof(struct SASLproto, service) == 0, "SASLproto.service");
+_Static_assert(offsetof(struct SASLproto, sendauth) == 8, "SASLproto.sendauth");
+_Static_assert(offsetof(struct SASLproto, contauth) == 16, "SASLproto.contauth");
+_Static_assert(offsetof(struct SASLproto, cancelauth) == 24, "SASLproto.cancelauth");
+_Static_assert(offsetof(struct SASLproto, getmessage) == 32, "SASLproto.getmessage");
+_Static_assert(offsetof(struct SASLproto, maxirlen) == 40, "SASLproto.maxirlen");
+_Static_assert(offsetof(struct SASLproto, contcode) == 48, "SASLproto.contcode");
+_Static_assert(offsetof(struct SASLproto, finalcode) == 52, "SASLproto.finalcode");
+_Static_assert(offsetof(struct SASLproto, defmechs) == 56, "SASLproto.defmechs");
+_Static_assert(offsetof(struct SASLproto, flags) == 58, "SASLproto.flags");
+
+#ifdef _WIN32
+_Static_assert(sizeof(struct SASL) == 40, "sizeof(SASL)");
+#else
+_Static_assert(sizeof(struct SASL) == 32, "sizeof(SASL)");
+#endif
+_Static_assert(_Alignof(struct SASL) == 8, "alignof(SASL)");
+_Static_assert(offsetof(struct SASL, params) == 0, "SASL.params");
+_Static_assert(offsetof(struct SASL, state) == 8, "SASL.state");
+_Static_assert(offsetof(struct SASL, curmech) == 16, "SASL.curmech");
+_Static_assert(offsetof(struct SASL, authmechs) == 24, "SASL.authmechs");
+_Static_assert(offsetof(struct SASL, prefmech) == 26, "SASL.prefmech");
+_Static_assert(offsetof(struct SASL, authused) == 28, "SASL.authused");
 
 _Static_assert(sizeof(struct ip_quadruple) == 98, "sizeof(ip_quadruple)");
 _Static_assert(_Alignof(struct ip_quadruple) == 2, "alignof(ip_quadruple)");
@@ -13944,6 +14083,39 @@ size_t Curl_zig_abi_sizeof_resolv_async(void)
   return sizeof(struct Curl_resolv_async);
 }
 
+size_t Curl_zig_abi_sizeof_https_rrinfo(void);
+size_t Curl_zig_abi_sizeof_https_rrinfo(void)
+{
+#ifdef USE_HTTPSRR
+  return sizeof(struct Curl_https_rrinfo);
+#else
+  return 72;
+#endif
+}
+
+uint32_t Curl_zig_abi_https_rrinfo_bitfield_mask(bool no_def_alpn,
+                                                 bool mandatory,
+                                                 bool port_set);
+uint32_t Curl_zig_abi_https_rrinfo_bitfield_mask(bool no_def_alpn,
+                                                 bool mandatory,
+                                                 bool port_set)
+{
+#ifdef USE_HTTPSRR
+  struct Curl_https_rrinfo rr;
+  uint32_t flags = 0;
+  memset(&rr, 0, sizeof(rr));
+  rr.no_def_alpn = no_def_alpn;
+  rr.mandatory = mandatory;
+  rr.port_set = port_set;
+  memcpy(&flags, (const unsigned char *)&rr + 64, sizeof(flags));
+  return flags;
+#else
+  return (no_def_alpn ? 1u : 0u) |
+         (mandatory ? (1u << 1) : 0u) |
+         (port_set ? (1u << 2) : 0u);
+#endif
+}
+
 size_t Curl_zig_abi_sizeof_ip_quadruple(void);
 size_t Curl_zig_abi_sizeof_ip_quadruple(void)
 {
@@ -13987,16 +14159,46 @@ size_t Curl_zig_abi_sizeof_mimepart(void)
 #include <ngtcp2/ngtcp2_crypto_gnutls.h>
 #endif
 
+_Static_assert(sizeof(ngtcp2_info) == 16, "sizeof(ngtcp2_info)");
+_Static_assert(_Alignof(ngtcp2_info) == 8, "alignof(ngtcp2_info)");
+_Static_assert(offsetof(ngtcp2_info, age) == 0, "ngtcp2_info.age");
+_Static_assert(offsetof(ngtcp2_info, version_num) == 4, "ngtcp2_info.version_num");
+_Static_assert(offsetof(ngtcp2_info, version_str) == 8, "ngtcp2_info.version_str");
+
+_Static_assert(sizeof(nghttp3_info) == 16, "sizeof(nghttp3_info)");
+_Static_assert(_Alignof(nghttp3_info) == 8, "alignof(nghttp3_info)");
+_Static_assert(offsetof(nghttp3_info, age) == 0, "nghttp3_info.age");
+_Static_assert(offsetof(nghttp3_info, version_num) == 4, "nghttp3_info.version_num");
+_Static_assert(offsetof(nghttp3_info, version_str) == 8, "nghttp3_info.version_str");
+
+_Static_assert(sizeof(ngtcp2_mem) == 40, "sizeof(ngtcp2_mem)");
+_Static_assert(_Alignof(ngtcp2_mem) == 8, "alignof(ngtcp2_mem)");
+_Static_assert(offsetof(ngtcp2_mem, user_data) == 0, "ngtcp2_mem.user_data");
+_Static_assert(offsetof(ngtcp2_mem, malloc) == 8, "ngtcp2_mem.malloc");
+_Static_assert(offsetof(ngtcp2_mem, free) == 16, "ngtcp2_mem.free");
+_Static_assert(offsetof(ngtcp2_mem, calloc) == 24, "ngtcp2_mem.calloc");
+_Static_assert(offsetof(ngtcp2_mem, realloc) == 32, "ngtcp2_mem.realloc");
+
+_Static_assert(sizeof(nghttp3_mem) == 40, "sizeof(nghttp3_mem)");
+_Static_assert(_Alignof(nghttp3_mem) == 8, "alignof(nghttp3_mem)");
+_Static_assert(offsetof(nghttp3_mem, user_data) == 0, "nghttp3_mem.user_data");
+_Static_assert(offsetof(nghttp3_mem, malloc) == 8, "nghttp3_mem.malloc");
+_Static_assert(offsetof(nghttp3_mem, free) == 16, "nghttp3_mem.free");
+_Static_assert(offsetof(nghttp3_mem, calloc) == 24, "nghttp3_mem.calloc");
+_Static_assert(offsetof(nghttp3_mem, realloc) == 32, "nghttp3_mem.realloc");
+
 void Curl_ngtcp2_settings_default(ngtcp2_settings *settings);
 void Curl_ngtcp2_settings_default(ngtcp2_settings *settings)
 {
-  ngtcp2_settings_default(settings);
+  if(settings)
+    ngtcp2_settings_default(settings);
 }
 
 void Curl_ngtcp2_transport_params_default(ngtcp2_transport_params *params);
 void Curl_ngtcp2_transport_params_default(ngtcp2_transport_params *params)
 {
-  ngtcp2_transport_params_default(params);
+  if(params)
+    ngtcp2_transport_params_default(params);
 }
 
 int Curl_ngtcp2_conn_client_new(ngtcp2_conn **pconn, const ngtcp2_cid *dcid,
@@ -14094,7 +14296,8 @@ ngtcp2_ssize Curl_ngtcp2_conn_write_connection_close(ngtcp2_conn *conn,
 void Curl_nghttp3_settings_default(nghttp3_settings *settings);
 void Curl_nghttp3_settings_default(nghttp3_settings *settings)
 {
-  nghttp3_settings_default(settings);
+  if(settings)
+    nghttp3_settings_default(settings);
 }
 
 int Curl_nghttp3_conn_client_new(nghttp3_conn **pconn,
@@ -15061,7 +15264,7 @@ int Curl_test_h3_server_serve(int udp_fd, const char *cert_file,
 const char *Curl_vssh_get_url_path(const struct Curl_easy *data);
 const char *Curl_vssh_get_url_path(const struct Curl_easy *data)
 {
-  return data->state.up.path;
+  return data ? data->state.up.path : NULL;
 }
 
 const char *Curl_vssh_get_conn_user(const struct connectdata *conn);
@@ -15089,13 +15292,14 @@ const char *Curl_vssh_get_conn_host_name(const struct connectdata *conn)
 uint8_t Curl_vssh_get_req_io_flags(const struct Curl_easy *data);
 uint8_t Curl_vssh_get_req_io_flags(const struct Curl_easy *data)
 {
-  return data->req.io_flags;
+  return data ? data->req.io_flags : 0;
 }
 
 void Curl_vssh_clear_req_io(struct Curl_easy *data);
 void Curl_vssh_clear_req_io(struct Curl_easy *data)
 {
-  CURL_REQ_CLEAR_IO(data);
+  if(data)
+    CURL_REQ_CLEAR_IO(data);
 }
 
 void Curl_vssh_set_conn_idx(struct connectdata *conn,
@@ -15105,8 +15309,10 @@ void Curl_vssh_set_conn_idx(struct connectdata *conn,
                             int8_t recv_idx,
                             int8_t send_idx)
 {
-  conn->recv_idx = recv_idx;
-  conn->send_idx = send_idx;
+  if(conn) {
+    conn->recv_idx = recv_idx;
+    conn->send_idx = send_idx;
+  }
 }
 
 bool Curl_vssh_get_conn_retry(const struct connectdata *conn);
@@ -15118,19 +15324,19 @@ bool Curl_vssh_get_conn_retry(const struct connectdata *conn)
 bool Curl_vssh_get_state_use_range(const struct Curl_easy *data);
 bool Curl_vssh_get_state_use_range(const struct Curl_easy *data)
 {
-  return (bool)data->state.use_range;
+  return data ? (bool)data->state.use_range : FALSE;
 }
 
 const char *Curl_vssh_get_state_range(const struct Curl_easy *data);
 const char *Curl_vssh_get_state_range(const struct Curl_easy *data)
 {
-  return data->state.range;
+  return data ? data->state.range : NULL;
 }
 
 void Curl_vssh_conn_forget_socket(struct Curl_easy *data, int8_t sockindex);
 void Curl_vssh_conn_forget_socket(struct Curl_easy *data, int8_t sockindex)
 {
-  struct connectdata *conn = data->conn;
+  struct connectdata *conn = data ? data->conn : NULL;
   if(conn && CONN_SOCK_IDX_VALID(sockindex)) {
     struct Curl_cfilter *cf = conn->cfilter[sockindex];
     if(cf)
@@ -15149,13 +15355,13 @@ int Curl_vssh_get_conn_remote_port(const struct connectdata *conn)
 curl_socket_t Curl_vssh_get_conn_firstsocket(const struct connectdata *conn);
 curl_socket_t Curl_vssh_get_conn_firstsocket(const struct connectdata *conn)
 {
-  return conn->sock[FIRSTSOCKET];
+  return conn ? conn->sock[FIRSTSOCKET] : CURL_SOCKET_BAD;
 }
 
 curl_prot_t Curl_vssh_get_conn_protocol(const struct connectdata *conn);
 curl_prot_t Curl_vssh_get_conn_protocol(const struct connectdata *conn)
 {
-  return conn->scheme ? conn->scheme->protocol : 0;
+  return (conn && conn->scheme) ? conn->scheme->protocol : 0;
 }
 
 void Curl_vssh_set_conn_send_recv(struct connectdata *conn,
@@ -15165,33 +15371,37 @@ void Curl_vssh_set_conn_send_recv(struct connectdata *conn,
                                   Curl_send *send_fn,
                                   Curl_recv *recv_fn)
 {
-  conn->send[FIRSTSOCKET] = send_fn;
-  conn->recv[FIRSTSOCKET] = recv_fn;
+  if(conn) {
+    conn->send[FIRSTSOCKET] = send_fn;
+    conn->recv[FIRSTSOCKET] = recv_fn;
+  }
 }
 
 bool Curl_vssh_get_state_wildcardmatch(const struct Curl_easy *data);
 bool Curl_vssh_get_state_wildcardmatch(const struct Curl_easy *data)
 {
-  return (bool)data->state.wildcardmatch;
+  return data ? (bool)data->state.wildcardmatch : FALSE;
 }
 
 void Curl_vssh_set_state_wildcardmatch(struct Curl_easy *data, bool val);
 void Curl_vssh_set_state_wildcardmatch(struct Curl_easy *data, bool val)
 {
-  data->state.wildcardmatch = val;
+  if(data)
+    data->state.wildcardmatch = val;
 }
 
 void Curl_vssh_set_info_filetime(struct Curl_easy *data, curl_off_t ft);
 void Curl_vssh_set_info_filetime(struct Curl_easy *data, curl_off_t ft)
 {
-  data->info.filetime = ft;
+  if(data)
+    data->info.filetime = ft;
 }
 
 bool Curl_vssh_has_ssh_keyfunc(const struct Curl_easy *data);
 bool Curl_vssh_has_ssh_keyfunc(const struct Curl_easy *data)
 {
 #ifdef USE_SSH
-  return data->set.ssh_keyfunc != NULL;
+  return (data && data->set.ssh_keyfunc != NULL) ? TRUE : FALSE;
 #else
   (void)data;
   return FALSE;
@@ -15210,6 +15420,8 @@ int Curl_vssh_call_ssh_keyfunc(struct Curl_easy *data,
 #ifdef USE_SSH
   struct Curl_mapi_guard guard;
   int rc;
+  if(!data || !data->set.ssh_keyfunc)
+    return CURLKHSTAT_REJECT;
   CURL_CBAPI_START(&guard, data, easy_ssh_keyfunc);
   rc = data->set.ssh_keyfunc(data, knownkey, foundkey, match,
                              data->set.ssh_keyfunc_userp);
@@ -15228,7 +15440,7 @@ bool Curl_vssh_has_ssh_hostkeyfunc(const struct Curl_easy *data);
 bool Curl_vssh_has_ssh_hostkeyfunc(const struct Curl_easy *data)
 {
 #ifdef USE_LIBSSH2
-  return data->set.ssh_hostkeyfunc != NULL;
+  return (data && data->set.ssh_hostkeyfunc != NULL) ? TRUE : FALSE;
 #else
   (void)data;
   return FALSE;
@@ -15247,6 +15459,8 @@ int Curl_vssh_call_ssh_hostkeyfunc(struct Curl_easy *data,
 #ifdef USE_LIBSSH2
   struct Curl_mapi_guard guard;
   int rc;
+  if(!data || !data->set.ssh_hostkeyfunc)
+    return CURLKHMATCH_MISMATCH;
   CURL_CBAPI_START(&guard, data, easy_ssh_hostkeyfunc);
   rc = data->set.ssh_hostkeyfunc(data->set.ssh_hostkeyfunc_userp,
                                  keytype, key, keylen);
@@ -15406,6 +15620,8 @@ ssize_t Curl_libssh_sftp_write(sftp_file file, const void *buf, size_t count)
 bool Curl_ldap_url_has_creds_or_options(const struct Curl_easy *data);
 bool Curl_ldap_url_has_creds_or_options(const struct Curl_easy *data)
 {
+  if(!data)
+    return FALSE;
   return (data->state.creds && (data->state.creds->source == CREDS_URL)) ||
          (data->state.up.options != NULL);
 }
@@ -15413,25 +15629,25 @@ bool Curl_ldap_url_has_creds_or_options(const struct Curl_easy *data)
 const char *Curl_ldap_get_state_url(const struct Curl_easy *data);
 const char *Curl_ldap_get_state_url(const struct Curl_easy *data)
 {
-  return Curl_bufref_ptr(&data->state.url);
+  return data ? Curl_bufref_ptr(&data->state.url) : NULL;
 }
 
 bool Curl_ldap_has_state_creds(const struct Curl_easy *data);
 bool Curl_ldap_has_state_creds(const struct Curl_easy *data)
 {
-  return data->state.creds != NULL;
+  return (data && data->state.creds != NULL) ? TRUE : FALSE;
 }
 
 const char *Curl_ldap_get_state_creds_user(const struct Curl_easy *data);
 const char *Curl_ldap_get_state_creds_user(const struct Curl_easy *data)
 {
-  return data->state.creds ? data->state.creds->user : NULL;
+  return (data && data->state.creds) ? data->state.creds->user : NULL;
 }
 
 const char *Curl_ldap_get_state_creds_passwd(const struct Curl_easy *data);
 const char *Curl_ldap_get_state_creds_passwd(const struct Curl_easy *data)
 {
-  return data->state.creds ? data->state.creds->passwd : NULL;
+  return (data && data->state.creds) ? data->state.creds->passwd : NULL;
 }
 
 const char *Curl_ldap_get_conn_options(const struct connectdata *conn);
@@ -15443,26 +15659,30 @@ const char *Curl_ldap_get_conn_options(const struct connectdata *conn)
 const char *Curl_ldap_get_conn_scheme_name(const struct connectdata *conn);
 const char *Curl_ldap_get_conn_scheme_name(const struct connectdata *conn)
 {
-  return (conn && conn->scheme) ? conn->scheme->name : "";
+  return (conn && conn->scheme && conn->scheme->name) ? conn->scheme->name : "";
 }
 
 const char *Curl_ldap_get_origin_scheme_name(const struct Curl_easy *data);
 const char *Curl_ldap_get_origin_scheme_name(const struct Curl_easy *data)
 {
-  return (data->state.origin && data->state.origin->scheme) ?
+  return (data && data->state.origin && data->state.origin->scheme &&
+          data->state.origin->scheme->name) ?
          data->state.origin->scheme->name : "";
 }
 
 char *Curl_ldap_format_hosturl(const struct connectdata *conn);
 char *Curl_ldap_format_hosturl(const struct connectdata *conn)
 {
-  if(!conn || !conn->scheme || !conn->origin)
+  const char *host;
+  if(!conn || !conn->scheme || !conn->scheme->name || !conn->origin)
+    return NULL;
+  host = conn->origin->ipv6 ? conn->origin->user_hostname :
+                              conn->origin->hostname;
+  if(!host)
     return NULL;
   return curl_maprintf("%s://%s:%u",
                        conn->scheme->name,
-                       conn->origin->ipv6 ?
-                       conn->origin->user_hostname :
-                       conn->origin->hostname,
+                       host,
                        conn->origin->port);
 }
 
@@ -15568,6 +15788,8 @@ CURLcode Curl_ldap_add_ssl_cfilter(struct Curl_easy *data,
                                    struct connectdata *conn)
 {
 #ifdef USE_SSL
+  if(!data || !conn)
+    return CURLE_BAD_FUNCTION_ARGUMENT;
   return Curl_ssl_cfilter_add(data, Curl_conn_get_origin(conn, FIRSTSOCKET),
                               conn, FIRSTSOCKET);
 #else
@@ -15580,13 +15802,15 @@ CURLcode Curl_ldap_add_ssl_cfilter(struct Curl_easy *data,
 void Curl_ldap_set_info_httpcode(struct Curl_easy *data, int code);
 void Curl_ldap_set_info_httpcode(struct Curl_easy *data, int code)
 {
-  data->info.httpcode = code;
+  if(data)
+    data->info.httpcode = code;
 }
 
 void Curl_ldap_set_req_size_from_bytecount(struct Curl_easy *data);
 void Curl_ldap_set_req_size_from_bytecount(struct Curl_easy *data)
 {
-  data->req.size = data->req.bytecount;
+  if(data)
+    data->req.size = data->req.bytecount;
 }
 
 CURLcode Curl_ldap_get_remote_port(struct Curl_easy *data,
@@ -15598,8 +15822,11 @@ CURLcode Curl_ldap_get_remote_port(struct Curl_easy *data,
 {
   struct ip_quadruple ipquad;
   bool is_ipv6;
-  CURLcode result = Curl_conn_get_ip_info(data, conn, FIRSTSOCKET,
-                                          &is_ipv6, &ipquad);
+  CURLcode result;
+  if(!data || !conn)
+    return CURLE_BAD_FUNCTION_ARGUMENT;
+  result = Curl_conn_get_ip_info(data, conn, FIRSTSOCKET,
+                                 &is_ipv6, &ipquad);
   if(!result && pport)
     *pport = (int)ipquad.remote_port;
   return result;
@@ -15621,13 +15848,13 @@ const char *Curl_ldap_get_conn_user_hostname(const struct connectdata *conn)
 const char *Curl_ldap_get_up_path(const struct Curl_easy *data);
 const char *Curl_ldap_get_up_path(const struct Curl_easy *data)
 {
-  return data->state.up.path;
+  return data ? data->state.up.path : NULL;
 }
 
 const char *Curl_ldap_get_up_query(const struct Curl_easy *data);
 const char *Curl_ldap_get_up_query(const struct Curl_easy *data)
 {
-  return data->state.up.query;
+  return data ? data->state.up.query : NULL;
 }
 
 void Curl_ldap_connclose(struct connectdata *conn);
@@ -15679,15 +15906,17 @@ static BOOLEAN ldap_win_bypass_cert_verify(PLDAP Connection,
                                            PCCERT_CONTEXT *ppServerCert)
 {
   (void)Connection;
-  CertFreeCertificateContext(*ppServerCert);
+  if(ppServerCert && *ppServerCert)
+    CertFreeCertificateContext(*ppServerCert);
   return TRUE;
 }
 
 void Curl_ldap_set_win32_bypass_cert_verify(void *server_ptr);
 void Curl_ldap_set_win32_bypass_cert_verify(void *server_ptr)
 {
-  ldap_set_option((LDAP *)server_ptr, LDAP_OPT_SERVER_CERTIFICATE,
-                  (void *)(uintptr_t)ldap_win_bypass_cert_verify);
+  if(server_ptr)
+    ldap_set_option((LDAP *)server_ptr, LDAP_OPT_SERVER_CERTIFICATE,
+                    (void *)(uintptr_t)ldap_win_bypass_cert_verify);
 }
 
 #ifdef USE_WINDOWS_SSPI
@@ -15744,6 +15973,9 @@ int Curl_ldap_win_bind(struct Curl_easy *data, void *server_ptr,
   int rc = LDAP_INVALID_CREDENTIALS;
   PTCHAR inuser = NULL;
   PTCHAR inpass = NULL;
+
+  if(!data || !server)
+    return LDAP_INVALID_CREDENTIALS;
 
   if(user && passwd && (data->state.authhost.picked & CURLAUTH_BASIC)) {
     inuser = curlx_convert_UTF8_to_tchar(user);
