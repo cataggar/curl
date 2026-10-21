@@ -2622,7 +2622,7 @@ pub fn match_pasv_6nums(p_in: [*:0]const u8, array: *[6]c_uint) bool {
         }
         if (curlx_str_number(&p, &num, 0xff) != 0)
             return false;
-        array[i] = @intCast(num);
+        array[i] = std.math.cast(c_uint, num) orelse return false;
     }
     return true;
 }
@@ -2650,11 +2650,14 @@ fn ftp_state_pasv_resp(
             if (sep != 0 and (ptr[1] == sep) and (ptr[2] == sep) and isDigit(ptr[3])) {
                 var p: ?[*:0]const u8 = @ptrCast(ptr + 3);
                 var num: curl_off_t = 0;
-                if (curlx_str_number(&p, &num, 0xffff) != 0 or (p.?[0] != sep)) {
+                if (curlx_str_number(&p, &num, 0xffff) != 0 or num < 1 or (p.?[0] != sep)) {
                     failf(data, "Illegal port number in EPSV reply", .{});
                     return CURLE_FTP_WEIRD_PASV_REPLY;
                 }
-                newport = @intCast(num);
+                newport = std.math.cast(u16, num) orelse {
+                    failf(data, "Illegal port number in EPSV reply", .{});
+                    return CURLE_FTP_WEIRD_PASV_REPLY;
+                };
                 result = Curl_ftp_acc_control_addr_dup(data, &newhost);
                 if (result != CURLE_OK)
                     return result;
@@ -2693,7 +2696,17 @@ fn ftp_state_pasv_resp(
         if (newhost == null)
             return CURLE_OUT_OF_MEMORY;
 
-        newport = @intCast(((ip[4] << 8) + ip[5]) & 0xffff);
+        const pasv_port: c_uint = (ip[4] << 8) + ip[5];
+        if (pasv_port < 1) {
+            mem.free(newhost.?);
+            failf(data, "Illegal port number in PASV reply", .{});
+            return CURLE_FTP_WEIRD_PASV_REPLY;
+        }
+        newport = std.math.cast(u16, pasv_port) orelse {
+            mem.free(newhost.?);
+            failf(data, "Illegal port number in PASV reply", .{});
+            return CURLE_FTP_WEIRD_PASV_REPLY;
+        };
     } else if (ftpc.count1 == 0) {
         return ftp_epsv_disable(data, ftpc, conn);
     } else {
@@ -3507,7 +3520,7 @@ fn wc_data_dtor(ptr: ?*anyopaque) callconv(.c) void {
     if (ftpwc.parser != null) {
         sasl_rtsp_ftplist.Curl_ftp_parselist_data_free(@ptrCast(&ftpwc.parser));
     }
-    mem.free(ftpwc);
+    mem.freeSized(ftpwc, @sizeOf(ftp_wc));
 }
 
 fn init_wc_data(
@@ -3556,7 +3569,7 @@ fn init_wc_data(
 
     ftpwc.parser = sasl_rtsp_ftplist.Curl_ftp_parselist_data_alloc();
     if (ftpwc.parser == null) {
-        mem.free(ftpwc);
+        mem.freeSized(ftpwc, @sizeOf(ftp_wc));
         if (wildcard.pattern) |pat| {
             mem.free(pat);
             wildcard.pattern = null;
@@ -3575,7 +3588,7 @@ fn init_wc_data(
     result = ftp_parse_url_path(data, ftpc, ftp);
     if (result != CURLE_OK) {
         sasl_rtsp_ftplist.Curl_ftp_parselist_data_free(@ptrCast(&ftpwc.parser));
-        mem.free(ftpwc);
+        mem.freeSized(ftpwc, @sizeOf(ftp_wc));
         if (wildcard.pattern) |pat| {
             mem.free(pat);
             wildcard.pattern = null;
@@ -3588,7 +3601,7 @@ fn init_wc_data(
     wildcard.path = mem.strdup(ftp.path.?);
     if (wildcard.path == null) {
         sasl_rtsp_ftplist.Curl_ftp_parselist_data_free(@ptrCast(&ftpwc.parser));
-        mem.free(ftpwc);
+        mem.freeSized(ftpwc, @sizeOf(ftp_wc));
         if (wildcard.pattern) |pat| {
             mem.free(pat);
             wildcard.pattern = null;
@@ -3818,7 +3831,7 @@ fn ftp_easy_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callco
     const ftp: *FTP = @ptrCast(@alignCast(ftp_raw));
     if (ftp.pathalloc) |pa|
         mem.free(pa);
-    mem.free(ftp);
+    mem.freeSized(ftp, @sizeOf(FTP));
 }
 
 fn ftp_conn_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callconv(.c) void {
@@ -3838,7 +3851,7 @@ fn ftp_conn_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callco
     if (ftpc.server_os) |os|
         mem.free(os);
     _ = Curl_pp_disconnect(&ftpc.pp);
-    mem.free(ftpc);
+    mem.freeSized(ftpc, @sizeOf(ftp_conn));
 }
 
 fn type_url_check(data: *Curl_easy, ftp: *FTP) void {

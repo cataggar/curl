@@ -904,7 +904,7 @@ fn pop3_easy_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callc
     const pop3: *POP3 = @ptrCast(@alignCast(entry orelse return));
     if (pop3.id) |id| mem.free(@ptrCast(id));
     if (pop3.custom) |cust| mem.free(@ptrCast(cust));
-    mem.free(entry);
+    mem.freeSized(pop3, @sizeOf(POP3));
 }
 
 fn pop3_conn_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callconv(.c) void {
@@ -913,7 +913,7 @@ fn pop3_conn_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callc
     const pop3c: *pop3_conn = @ptrCast(@alignCast(entry orelse return));
     _ = Curl_pp_disconnect(&pop3c.pp);
     if (pop3c.apoptimestamp) |ts| mem.free(@ptrCast(ts));
-    mem.free(entry);
+    mem.freeSized(pop3c, @sizeOf(pop3_conn));
 }
 
 fn pop3_init(data: ?*anyopaque) CURLcode {
@@ -2272,7 +2272,7 @@ fn smtp_easy_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callc
     _ = klen;
     const smtp: *SMTP = @ptrCast(@alignCast(entry orelse return));
     if (smtp.custom) |cust| mem.free(@ptrCast(cust));
-    mem.free(entry);
+    mem.freeSized(smtp, @sizeOf(SMTP));
 }
 
 fn smtp_conn_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callconv(.c) void {
@@ -2281,7 +2281,7 @@ fn smtp_conn_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callc
     const smtpc: *smtp_conn = @ptrCast(@alignCast(entry orelse return));
     _ = Curl_pp_disconnect(&smtpc.pp);
     if (smtpc.domain) |dom| mem.free(@ptrCast(dom));
-    mem.free(entry);
+    mem.freeSized(smtpc, @sizeOf(smtp_conn));
 }
 
 fn smtp_init(data: ?*anyopaque) CURLcode {

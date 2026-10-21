@@ -1435,7 +1435,7 @@ pub export fn Curl_wildcard_dtor(wcp: *?*WildcardData) callconv(.c) void {
     mem.free(wc.pattern);
     wc.pattern = null;
     wc.state = CURLWC_CLEAR;
-    mem.free(wc);
+    mem.freeSized(wc, @sizeOf(WildcardData));
     wcp.* = null;
 }
 
@@ -1446,7 +1446,7 @@ pub export fn Curl_ftp_parselist_data_alloc() callconv(.c) ?*ftp_parselist_data 
 pub export fn Curl_ftp_parselist_data_free(parserp: *?*ftp_parselist_data) callconv(.c) void {
     const parser = parserp.* orelse return;
     containers.Curl_fileinfo_cleanup(parser.file_data);
-    mem.free(parser);
+    mem.freeSized(parser, @sizeOf(ftp_parselist_data));
     parserp.* = null;
 }
 
@@ -2293,7 +2293,7 @@ pub const Curl_protocol = extern struct {
     follow: ?*const fn (data: ?*Curl_easy, newurl: ?[*:0]u8, follow: c_uint) callconv(.c) CURLcode = null,
 };
 
-fn rtpPktLength(p: [*]const u8) usize {
+fn rtpPktLength(p: []const u8) usize {
     return (@as(usize, p[2]) << 8) | @as(usize, p[3]);
 }
 
@@ -2307,7 +2307,8 @@ fn rtspDoPollset(data: ?*Curl_easy, ps: ?*easy_pollset) callconv(.c) CURLcode {
 fn rtspEasyDtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callconv(.c) void {
     _ = key;
     _ = klen;
-    mem.free(entry);
+    const p = entry orelse return;
+    mem.freeSized(p, @sizeOf(RTSP));
 }
 
 fn rtspConnDtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callconv(.c) void {
@@ -2315,7 +2316,7 @@ fn rtspConnDtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callcon
     _ = klen;
     const rtspc: *rtsp_conn = @ptrCast(@alignCast(entry orelse return));
     io_buffers.curlx_dyn_free(&rtspc.buf);
-    mem.free(rtspc);
+    mem.freeSized(rtspc, @sizeOf(rtsp_conn));
 }
 
 fn rtspSetupConnection(data: ?*Curl_easy, conn: ?*connectdata) callconv(.c) CURLcode {
@@ -2769,10 +2770,9 @@ fn rtspDo(data: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
 fn rtpWriteBodyJunk(
     data: ?*Curl_easy,
     rtspc: *rtsp_conn,
-    buf: [*]const u8,
-    blen_in: usize,
+    junk_slice: []const u8,
 ) CURLcode {
-    if (builtin.is_test) return CURLE_OK;
+    if (junk_slice.len == 0 or builtin.is_test) return CURLE_OK;
     var headerline: c_int = 0;
     var header: bool = false;
     var req_size: curl_off_t = 0;
@@ -2785,10 +2785,11 @@ fn rtpWriteBodyJunk(
         (bytecount < req_size);
     const body_remain: curl_off_t = if (in_body) (req_size - bytecount) else 0;
     if (body_remain > 0) {
-        var blen = blen_in;
-        if (@as(curl_off_t, @intCast(blen)) > body_remain)
-            blen = @intCast(body_remain);
-        return c_ext.Curl_client_write(data, CLIENTWRITE_BODY, buf, blen);
+        var blen = junk_slice.len;
+        const remain_uz = std.math.cast(usize, body_remain) orelse blen;
+        if (blen > remain_uz)
+            blen = remain_uz;
+        return c_ext.Curl_client_write(data, CLIENTWRITE_BODY, junk_slice.ptr, blen);
     }
     return CURLE_OK;
 }
@@ -2828,13 +2829,25 @@ fn rtspFilterRtp(
     blen_in: usize,
     pconsumed: *usize,
 ) CURLcode {
+    return rtspFilterRtpWithMask(data, rtspc, buf_in, blen_in, pconsumed, null);
+}
+
+fn rtspFilterRtpWithMask(
+    data: ?*Curl_easy,
+    rtspc: *rtsp_conn,
+    buf_in: [*]const u8,
+    blen_in: usize,
+    pconsumed: *usize,
+    test_mask: ?*const [32]u8,
+) CURLcode {
     var result: CURLcode = CURLE_OK;
     var skip_len: usize = 0;
-    var buf = buf_in;
-    var blen = blen_in;
+    const full_slice: []const u8 = buf_in[0..blen_in];
+    var buf_slice: []const u8 = full_slice;
+    var pos: usize = 0;
 
     pconsumed.* = 0;
-    while (blen != 0) {
+    while (buf_slice.len != 0) {
         var headerline: c_int = 0;
         var header: bool = false;
         var req_size: curl_off_t = 0;
@@ -2851,53 +2864,58 @@ fn rtspFilterRtp(
 
         switch (rtspc.state) {
             .SKIP => {
-                while (blen != 0 and buf[0] != '$') {
-                    if (!in_body and buf[0] == 'R' and rtspreq != CURL_RTSPREQ_RECEIVE) {
-                        const cmp_len = @min(blen, 5);
-                        if (std.mem.eql(u8, buf[0..cmp_len], "RTSP/"[0..cmp_len])) {
+                while (buf_slice.len != 0 and buf_slice[0] != '$') {
+                    if (!in_body and buf_slice[0] == 'R' and rtspreq != CURL_RTSPREQ_RECEIVE) {
+                        const cmp_len = @min(buf_slice.len, 5);
+                        if (std.mem.eql(u8, buf_slice[0..cmp_len], "RTSP/"[0..cmp_len])) {
                             rtspc.state = .SKIP;
                             rtspc.in_header = true;
-                            if (result == CURLE_OK and skip_len != 0) {
-                                result = rtpWriteBodyJunk(data, rtspc, buf - skip_len, skip_len);
+                            if (result == CURLE_OK and skip_len != 0 and skip_len <= pos) {
+                                result = rtpWriteBodyJunk(data, rtspc, full_slice[pos - skip_len .. pos]);
                             }
                             return result;
                         }
                     }
                     pconsumed.* += 1;
-                    buf += 1;
-                    blen -= 1;
+                    buf_slice = buf_slice[1..];
+                    pos += 1;
                     skip_len += 1;
                 }
-                if (blen != 0 and buf[0] == '$') {
-                    if (skip_len != 0) {
-                        result = rtpWriteBodyJunk(data, rtspc, buf - skip_len, skip_len);
+                if (buf_slice.len != 0 and buf_slice[0] == '$') {
+                    if (skip_len != 0 and skip_len <= pos) {
+                        result = rtpWriteBodyJunk(data, rtspc, full_slice[pos - skip_len .. pos]);
                         skip_len = 0;
                         if (result != CURLE_OK)
                             break;
                     }
-                    if (io_buffers.curlx_dyn_addn(&rtspc.buf, buf, 1) != CURLE_OK) {
+                    if (io_buffers.curlx_dyn_addn(&rtspc.buf, buf_slice.ptr, 1) != CURLE_OK) {
                         result = CURLE_OUT_OF_MEMORY;
                         break;
                     }
                     pconsumed.* += 1;
-                    buf += 1;
-                    blen -= 1;
+                    buf_slice = buf_slice[1..];
+                    pos += 1;
                     rtspc.state = .CHANNEL;
                 }
             },
             .CHANNEL => {
-                const idx: usize = buf[0] / 8;
-                const off: u3 = @truncate(buf[0] % 8);
+                const ch: u8 = buf_slice[0];
+                const channel_idx: usize = @as(usize, ch) / 8;
+                if (channel_idx >= 32)
+                    return CURLE_WEIRD_SERVER_REPLY;
+                const off: u3 = @truncate(@as(usize, ch) % 8);
                 var mask_bit: u8 = 0;
-                if (!builtin.is_test and data != null) {
-                    const mask = c_ext.Curl_rtsp_get_rtp_channel_mask(data);
-                    mask_bit = mask[idx] & (@as(u8, 1) << off);
+                if (test_mask) |tm| {
+                    mask_bit = tm[channel_idx] & (@as(u8, 1) << off);
+                } else if (!builtin.is_test and data != null) {
+                    const mask = c_ext.Curl_rtsp_get_rtp_channel_mask(data)[0..32];
+                    mask_bit = mask[channel_idx] & (@as(u8, 1) << off);
                 }
                 if (mask_bit == 0) {
                     rtspc.state = .SKIP;
                     if (pconsumed.* == 0) {
                         if (io_buffers.curlx_dyn_ptr(&rtspc.buf)) |dptr| {
-                            result = rtpWriteBodyJunk(data, rtspc, dptr, 1);
+                            result = rtpWriteBodyJunk(data, rtspc, dptr[0..1]);
                             if (result != CURLE_OK)
                                 break;
                         }
@@ -2907,31 +2925,32 @@ fn rtspFilterRtp(
                     io_buffers.curlx_dyn_free(&rtspc.buf);
                     continue;
                 }
-                rtspc.rtp_channel = buf[0];
-                if (io_buffers.curlx_dyn_addn(&rtspc.buf, buf, 1) != CURLE_OK) {
+                rtspc.rtp_channel = @intCast(ch);
+                if (io_buffers.curlx_dyn_addn(&rtspc.buf, buf_slice.ptr, 1) != CURLE_OK) {
                     result = CURLE_OUT_OF_MEMORY;
                     break;
                 }
                 pconsumed.* += 1;
-                buf += 1;
-                blen -= 1;
+                buf_slice = buf_slice[1..];
+                pos += 1;
                 rtspc.state = .LEN;
             },
             .LEN => {
                 const rtp_len = io_buffers.curlx_dyn_len(&rtspc.buf);
-                if (io_buffers.curlx_dyn_addn(&rtspc.buf, buf, 1) != CURLE_OK) {
+                if (io_buffers.curlx_dyn_addn(&rtspc.buf, buf_slice.ptr, 1) != CURLE_OK) {
                     result = CURLE_OUT_OF_MEMORY;
                     break;
                 }
                 pconsumed.* += 1;
-                buf += 1;
-                blen -= 1;
+                buf_slice = buf_slice[1..];
+                pos += 1;
                 if (rtp_len == 2)
                     continue;
-                const rtp_buf = io_buffers.curlx_dyn_ptr(&rtspc.buf).?;
-                rtspc.rtp_len = rtpPktLength(rtp_buf) + 4;
+                const rtp_ptr = io_buffers.curlx_dyn_ptr(&rtspc.buf) orelse return CURLE_WEIRD_SERVER_REPLY;
+                const rtp_hdr = rtp_ptr[0..4];
+                rtspc.rtp_len = rtpPktLength(rtp_hdr) + 4;
                 if (rtspc.rtp_len == 4) {
-                    result = rtpClientWrite(data, rtp_buf, rtspc.rtp_len);
+                    result = rtpClientWrite(data, rtp_hdr.ptr, rtspc.rtp_len);
                     io_buffers.curlx_dyn_free(&rtspc.buf);
                     rtspc.state = .SKIP;
                     if (result != CURLE_OK)
@@ -2943,34 +2962,36 @@ fn rtspFilterRtp(
             .DATA => {
                 const rtp_len = io_buffers.curlx_dyn_len(&rtspc.buf);
                 const needed = rtspc.rtp_len - rtp_len;
-                if (needed <= blen) {
-                    if (io_buffers.curlx_dyn_addn(&rtspc.buf, buf, needed) != CURLE_OK) {
+                if (needed <= buf_slice.len) {
+                    if (io_buffers.curlx_dyn_addn(&rtspc.buf, buf_slice.ptr, needed) != CURLE_OK) {
                         result = CURLE_OUT_OF_MEMORY;
                         break;
                     }
                     pconsumed.* += needed;
-                    buf += needed;
-                    blen -= needed;
-                    result = rtpClientWrite(data, io_buffers.curlx_dyn_ptr(&rtspc.buf).?, rtspc.rtp_len);
+                    buf_slice = buf_slice[needed..];
+                    pos += needed;
+                    const rtp_ptr = io_buffers.curlx_dyn_ptr(&rtspc.buf) orelse return CURLE_WEIRD_SERVER_REPLY;
+                    const rtp_pkt = rtp_ptr[0..rtspc.rtp_len];
+                    result = rtpClientWrite(data, rtp_pkt.ptr, rtp_pkt.len);
                     io_buffers.curlx_dyn_free(&rtspc.buf);
                     rtspc.state = .SKIP;
                     if (result != CURLE_OK)
                         break;
                 } else {
-                    if (io_buffers.curlx_dyn_addn(&rtspc.buf, buf, blen) != CURLE_OK) {
+                    if (io_buffers.curlx_dyn_addn(&rtspc.buf, buf_slice.ptr, buf_slice.len) != CURLE_OK) {
                         result = CURLE_OUT_OF_MEMORY;
                         break;
                     }
-                    pconsumed.* += blen;
-                    buf += blen;
-                    blen = 0;
+                    pconsumed.* += buf_slice.len;
+                    pos += buf_slice.len;
+                    buf_slice = buf_slice[buf_slice.len..];
                 }
             },
         }
     }
 
-    if (result == CURLE_OK and skip_len != 0) {
-        result = rtpWriteBodyJunk(data, rtspc, buf - skip_len, skip_len);
+    if (result == CURLE_OK and skip_len != 0 and skip_len <= pos) {
+        result = rtpWriteBodyJunk(data, rtspc, full_slice[pos - skip_len .. pos]);
     }
     return result;
 }
@@ -2986,8 +3007,7 @@ fn rtspRtpWriteResp(
     const rtspc: *rtsp_conn = @ptrCast(@alignCast(c_ext.Curl_conn_meta_get(conn, CURL_META_RTSP_CONN) orelse return CURLE_FAILED_INIT));
     var result: CURLcode = CURLE_OK;
     var consumed: usize = 0;
-    var buf = buf_in;
-    var blen = blen_in;
+    var buf_slice: []const u8 = buf_in[0..blen_in];
 
     var headerline: c_int = 0;
     var req_header: bool = false;
@@ -2999,24 +3019,22 @@ fn rtspRtpWriteResp(
     if (!req_header)
         rtspc.in_header = false;
 
-    if (blen != 0) {
+    if (buf_slice.len != 0) {
         if (!rtspc.in_header) {
-            result = rtspFilterRtp(data, rtspc, buf, blen, &consumed);
+            result = rtspFilterRtp(data, rtspc, buf_slice.ptr, buf_slice.len, &consumed);
             if (result != CURLE_OK)
                 return finishWriteResp(data, rtspc, result);
-            buf += consumed;
-            blen -= consumed;
+            buf_slice = buf_slice[consumed..];
         }
 
         c_ext.Curl_rtsp_get_req_state(data, &headerline, &req_header, &req_size, &bytecount, &req_done);
-        if (req_header and blen != 0) {
+        if (req_header and buf_slice.len != 0) {
             rtspc.in_header = true;
-            result = c_ext.Curl_http_write_resp_hds(data, buf, blen, &consumed);
+            result = c_ext.Curl_http_write_resp_hds(data, buf_slice.ptr, buf_slice.len, &consumed);
             if (result != CURLE_OK)
                 return finishWriteResp(data, rtspc, result);
 
-            buf += consumed;
-            blen -= consumed;
+            buf_slice = buf_slice[consumed..];
 
             c_ext.Curl_rtsp_get_req_state(data, &headerline, &req_header, &req_size, &bytecount, &req_done);
             if (!req_header)
@@ -3026,23 +3044,22 @@ fn rtspRtpWriteResp(
                 if (req_size <= -1) {
                     c_ext.Curl_rtsp_set_req_size_zero_done(data);
                 }
-                result = rtspFilterRtp(data, rtspc, buf, blen, &consumed);
+                result = rtspFilterRtp(data, rtspc, buf_slice.ptr, buf_slice.len, &consumed);
                 if (result != CURLE_OK)
                     return finishWriteResp(data, rtspc, result);
-                buf += consumed;
-                blen -= consumed;
+                buf_slice = buf_slice[consumed..];
             }
         }
 
         if (rtspc.state != .SKIP)
             c_ext.Curl_rtsp_set_req_done_false(data);
 
-        if (result == CURLE_OK and (is_eos or blen != 0)) {
+        if (result == CURLE_OK and (is_eos or buf_slice.len != 0)) {
             result = c_ext.Curl_client_write(
                 data,
                 CLIENTWRITE_BODY | (if (is_eos) CLIENTWRITE_EOS else 0),
-                buf,
-                blen,
+                buf_slice.ptr,
+                buf_slice.len,
             );
         }
     }
@@ -3106,9 +3123,11 @@ pub fn rtspParseTransportMask(
                 }
                 var chan = chan1;
                 while (chan <= chan2) : (chan += 1) {
-                    const idx: usize = @intCast(@divTrunc(chan, 8));
-                    const off: u3 = @truncate(@as(u64, @intCast(chan)) % 8);
-                    rtp_channel_mask[idx] |= @as(u8, 1) << off;
+                    const ch = std.math.cast(u8, chan) orelse break;
+                    const channel_idx: usize = @as(usize, ch) / 8;
+                    if (channel_idx >= rtp_channel_mask.len) break;
+                    const off: u3 = @truncate(@as(usize, ch) % 8);
+                    rtp_channel_mask[channel_idx] |= @as(u8, 1) << off;
                 }
             } else {
                 if (!builtin.is_test and data != null) {
@@ -3281,4 +3300,62 @@ test "RTSP transport channel mask parser and protocol table" {
     try std.testing.expect(Curl_protocol_rtsp.write_resp != null);
     try std.testing.expect(Curl_protocol_rtsp.write_resp_hd != null);
     try std.testing.expect(Curl_protocol_rtsp.connection_is_dead != null);
+}
+
+test "RTSP interleaved $ RTP packet boundary and malformed channel handling" {
+    var rtspc = rtsp_conn{
+        .buf = undefined,
+        .rtp_channel = 0,
+        .rtp_len = 0,
+        .state = .SKIP,
+        .in_header = false,
+    };
+    io_buffers.curlx_dyn_init(&rtspc.buf, MAX_RTP_BUFFERSIZE);
+    defer io_buffers.curlx_dyn_free(&rtspc.buf);
+
+    var mask: [32]u8 = @splat(0);
+    // Unmasked channel 0xff ('$' followed by 0xff) falls back to SKIP cleanly without OOB
+    const unmasked = "prefix$\xffRTSP/1.0 200 OK\r\n";
+    var consumed: usize = 0;
+    try std.testing.expectEqual(
+        CURLE_OK,
+        rtspFilterRtpWithMask(null, &rtspc, unmasked.ptr, unmasked.len, &consumed, &mask),
+    );
+    try std.testing.expectEqual(@as(usize, 8), consumed);
+    try std.testing.expectEqual(RtpParseState.SKIP, rtspc.state);
+    try std.testing.expect(rtspc.in_header);
+
+    // Enable channel 255 (idx = 31, off = 7) and split RTP packet across boundaries
+    mask[31] = 1 << 7;
+    rtspc.in_header = false;
+    const part1 = [_]u8{ '$', 255, 0x00 };
+    consumed = 0;
+    try std.testing.expectEqual(
+        CURLE_OK,
+        rtspFilterRtpWithMask(null, &rtspc, &part1, part1.len, &consumed, &mask),
+    );
+    try std.testing.expectEqual(@as(usize, 3), consumed);
+    try std.testing.expectEqual(RtpParseState.LEN, rtspc.state);
+    try std.testing.expectEqual(@as(c_int, 255), rtspc.rtp_channel);
+
+    // Complete length (4 bytes payload -> rtp_len = 8) + 2 payload bytes
+    const part2 = [_]u8{ 0x04, 'A', 'B' };
+    consumed = 0;
+    try std.testing.expectEqual(
+        CURLE_OK,
+        rtspFilterRtpWithMask(null, &rtspc, &part2, part2.len, &consumed, &mask),
+    );
+    try std.testing.expectEqual(@as(usize, 3), consumed);
+    try std.testing.expectEqual(RtpParseState.DATA, rtspc.state);
+    try std.testing.expectEqual(@as(usize, 8), rtspc.rtp_len);
+
+    // Final 2 payload bytes complete the RTP packet and return to SKIP
+    const part3 = [_]u8{ 'C', 'D' };
+    consumed = 0;
+    try std.testing.expectEqual(
+        CURLE_OK,
+        rtspFilterRtpWithMask(null, &rtspc, &part3, part3.len, &consumed, &mask),
+    );
+    try std.testing.expectEqual(@as(usize, 2), consumed);
+    try std.testing.expectEqual(RtpParseState.SKIP, rtspc.state);
 }

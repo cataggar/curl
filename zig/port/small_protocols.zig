@@ -815,7 +815,7 @@ fn file_easy_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callc
     _ = klen;
     const file: *FILEPROTO = @ptrCast(@alignCast(entry orelse return));
     file_cleanup(file);
-    mem.free(file);
+    mem.freeSized(file, @sizeOf(FILEPROTO));
 }
 
 fn file_setup_connection(data: ?*anyopaque, conn: ?*anyopaque) callconv(.c) CURLcode {
@@ -1319,13 +1319,14 @@ fn mqtt_easy_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callc
     const mq: *MQTT = @ptrCast(@alignCast(entry orelse return));
     containers.curlx_dyn_free(&mq.sendbuf);
     containers.curlx_dyn_free(&mq.recvbuf);
-    mem.free(mq);
+    mem.freeSized(mq, @sizeOf(MQTT));
 }
 
 fn mqtt_conn_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callconv(.c) void {
     _ = key;
     _ = klen;
-    mem.free(entry);
+    const mqc: *mqtt_conn = @ptrCast(@alignCast(entry orelse return));
+    mem.freeSized(mqc, @sizeOf(mqtt_conn));
 }
 
 fn mqtt_setup_conn(data: ?*anyopaque, conn: ?*anyopaque) callconv(.c) CURLcode {
@@ -1731,16 +1732,22 @@ fn mqtt_publish(data: ?*anyopaque) CURLcode {
 }
 
 pub fn mqtt_decode_len(lenp: *usize, buf: [*]const u8, buflen: usize) bool {
+    const slice = buf[0..buflen];
     var len: usize = 0;
     var mult: usize = 1;
     var i: usize = 0;
     var encoded: u8 = 128;
 
-    while (i < buflen and (encoded & 128) != 0) : (i += 1) {
-        if (i == 4) return true;
-        encoded = buf[i];
-        len += @as(usize, encoded & 127) * mult;
-        mult *= 128;
+    while (i < slice.len and (encoded & 128) != 0) : (i += 1) {
+        if (i >= 4) return true;
+        encoded = slice[i];
+        const low7 = std.math.cast(usize, encoded & 127) orelse return true;
+        const term = std.math.mul(usize, low7, mult) catch return true;
+        len = std.math.add(usize, len, term) catch return true;
+        if ((encoded & 128) != 0) {
+            if (i == 3) return true;
+            mult = std.math.mul(usize, mult, 128) catch return true;
+        }
     }
     if ((encoded & 128) != 0) return true;
 
@@ -1791,13 +1798,16 @@ fn mqtt_read_publish(data: ?*anyopaque, done: *bool) CURLcode {
 
             const remlen = mq.remaining_length;
             Curl_infof(data, "Remaining length: %zu bytes", remlen);
+            const remlen_off = std.math.cast(curl_off_t, remlen) orelse {
+                result = CURLE_WEIRD_SERVER_REPLY;
+                break :sw;
+            };
             const max_filesize = Curl_proto_get_max_filesize(data);
-            if (max_filesize != 0 and @as(curl_off_t, @intCast(remlen)) > max_filesize) {
+            if (max_filesize != 0 and remlen_off > max_filesize) {
                 Curl_failf(data, "Maximum file size exceeded");
                 result = CURLE_FILESIZE_EXCEEDED;
                 break :sw;
             }
-            const remlen_off: curl_off_t = @intCast(remlen);
             Curl_pgrsSetDownloadSize(data, remlen_off);
             Curl_proto_set_req_download(data, remlen_off);
             mq.npacket = remlen;
@@ -2146,6 +2156,9 @@ test "mqtt length encoding and decoding roundtrip" {
     try std.testing.expect(mqtt_decode_len(&bad_decoded, &truncated, truncated.len));
     const too_long = [_]u8{ 0x80, 0x80, 0x80, 0x80, 0x01 };
     try std.testing.expect(mqtt_decode_len(&bad_decoded, &too_long, too_long.len));
+    // 4-byte varint with MSB still set on 4th byte (requires 5th byte) must fail even if buflen == 4
+    const cont4 = [_]u8{ 0xff, 0xff, 0xff, 0xff };
+    try std.testing.expect(mqtt_decode_len(&bad_decoded, &cont4, cont4.len));
 }
 
 test "mqtt CONNECT packet construction helpers" {
