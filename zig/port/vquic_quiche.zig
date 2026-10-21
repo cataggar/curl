@@ -391,19 +391,39 @@ extern fn Curl_u32_ptrset_set(set: *UintHash, id: u32, ptr: ?*anyopaque) callcon
 extern fn Curl_u32_ptrset_unset(set: *UintHash, id: u32) callconv(.c) void;
 extern fn Curl_u32_ptrset_visit(set: *UintHash, cb: collections.Curl_u32_ptrset_visit_cb, user_data: ?*anyopaque) callconv(.c) void;
 
+pub const CURLEASY_MAGIC_NUMBER: c_uint = 0xc0dedbad;
+
+inline fn goodEasyHandle(data: ?*const CurlEasy) bool {
+    const ptr = data orelse return false;
+    const magic_ptr: *const c_uint = @ptrCast(@alignCast(ptr));
+    return magic_ptr.* == CURLEASY_MAGIC_NUMBER;
+}
+
 inline fn easyMid(data: ?*const CurlEasy) u32 {
-    const d = data orelse return 0;
-    return @intCast(Curl_zig_url_data_get_i64(d, 3));
+    const d = data orelse return std.math.maxInt(u32);
+    if (!goodEasyHandle(d)) return std.math.maxInt(u32);
+    return std.math.cast(u32, Curl_zig_url_data_get_i64(d, 3)) orelse std.math.maxInt(u32);
+}
+
+inline fn easyId(data: ?*const CurlEasy) i64 {
+    const d = data orelse return -1;
+    if (!goodEasyHandle(d)) return -1;
+    return Curl_zig_url_data_get_i64(d, 2);
 }
 
 inline fn easyMulti(data: ?*const CurlEasy) ?*anyopaque {
     const d = data orelse return null;
+    if (!goodEasyHandle(d)) return null;
     return Curl_zig_url_data_get_ptr(d, 1);
 }
 
 inline fn multiGetEasy(call_data: ?*CurlEasy, mid: u32) ?*CurlEasy {
+    if (!goodEasyHandle(call_data)) return null;
+    if (mid == std.math.maxInt(u32)) return null;
     const m = easyMulti(call_data) orelse return null;
-    return Curl_multi_get_easy(m, mid);
+    const sdata = Curl_multi_get_easy(m, mid) orelse return null;
+    if (!goodEasyHandle(sdata)) return null;
+    return sdata;
 }
 
 inline fn multiConnChanged(data: ?*CurlEasy) void {
@@ -446,8 +466,10 @@ const ALPN_SPEC_H3 = AlpnSpec{
 /// HTTP/3 per-transfer stream context (`struct h3_stream_ctx` in `lib/vquic/cf-quiche.c`).
 pub const H3StreamCtx = struct {
     id: i64 = 0,
-    sendbuf: Bufq = undefined,
-    h1: H1ReqParser = undefined,
+    mid: u32 = std.math.maxInt(u32),
+    xfer_id: i64 = -1,
+    sendbuf: Bufq = std.mem.zeroes(Bufq),
+    h1: H1ReqParser = std.mem.zeroes(H1ReqParser),
     upload_left: usize = 0,
     closed: bool = false,
     reset: bool = false,
@@ -471,8 +493,8 @@ pub const CfQuicheCtx = struct {
     scid: [QUICHE_MAX_CONN_ID_LEN]u8 = @splat(0),
     dcid: [QUICHE_MAX_CONN_ID_LEN]u8 = @splat(0),
     qlogfd: c_int = -1,
-    streams: UintHash = undefined,
-    stream_bufcp: BufcPool = undefined,
+    streams: UintHash = std.mem.zeroes(UintHash),
+    stream_bufcp: BufcPool = std.mem.zeroes(BufcPool),
     max_stream_window: u64 = 0,
     data_recvd: u64 = 0,
     started_at: Curltime = .{ .tv_sec = 0, .tv_usec = 0 },
@@ -492,8 +514,13 @@ inline fn cfToQuicheCtx(cf: ?*CurlCfilter) ?*CfQuicheCtx {
 
 inline fn H3_STREAM_CTX(ctx: *CfQuicheCtx, data: ?*const CurlEasy) ?*H3StreamCtx {
     const d = data orelse return null;
-    const raw = Curl_u32_ptrset_get(&ctx.streams, easyMid(d)) orelse return null;
-    return @ptrCast(@alignCast(raw));
+    if (!goodEasyHandle(d)) return null;
+    const mid = easyMid(d);
+    if (mid == std.math.maxInt(u32)) return null;
+    const raw = Curl_u32_ptrset_get(&ctx.streams, mid) orelse return null;
+    const stream: *H3StreamCtx = @ptrCast(@alignCast(raw));
+    if (stream.mid != mid or stream.xfer_id != easyId(d)) return null;
+    return stream;
 }
 
 // ============================================================================
@@ -517,7 +544,7 @@ fn h3_stream_ctx_free(stream: ?*H3StreamCtx) void {
     const s = stream orelse return;
     io_buffers.Curl_bufq_free(&s.sendbuf);
     http1_options.Curl_h1_req_parse_free(&s.h1);
-    mem.free(s);
+    mem.freeTyped(s);
 }
 
 fn h3_stream_hash_free(id: u32, stream_ptr: ?*anyopaque) callconv(.c) void {
@@ -549,6 +576,16 @@ fn h3_stream_open(
     pstream: *?*H3StreamCtx,
 ) CURLcode {
     const ctx = cfToQuicheCtx(cf) orelse return CURLE_FAILED_INIT;
+    if (!goodEasyHandle(data)) {
+        pstream.* = null;
+        return CURLE_BAD_FUNCTION_ARGUMENT;
+    }
+    const mid = easyMid(data);
+    const xfer_id = easyId(data);
+    if (mid == std.math.maxInt(u32) or xfer_id < 0) {
+        pstream.* = null;
+        return CURLE_BAD_FUNCTION_ARGUMENT;
+    }
     std.debug.assert(H3_STREAM_CTX(ctx, data) == null);
 
     const raw = mem.calloc(1, @sizeOf(H3StreamCtx)) orelse {
@@ -558,6 +595,8 @@ fn h3_stream_open(
     const stream: *H3StreamCtx = @ptrCast(@alignCast(raw));
     stream.* = .{};
     stream.id = -1;
+    stream.mid = mid;
+    stream.xfer_id = xfer_id;
     io_buffers.Curl_bufq_initp(
         &stream.sendbuf,
         &ctx.stream_bufcp,
@@ -566,7 +605,7 @@ fn h3_stream_open(
     );
     http1_options.Curl_h1_req_parse_init(&stream.h1, H3_SEND_SIZE);
 
-    if (Curl_u32_ptrset_set(&ctx.streams, easyMid(data), stream) != CURLE_OK) {
+    if (Curl_u32_ptrset_set(&ctx.streams, mid, stream) != CURLE_OK) {
         h3_stream_ctx_free(stream);
         pstream.* = null;
         return CURLE_OUT_OF_MEMORY;
@@ -580,6 +619,7 @@ fn h3_stream_close(cf: *CurlCfilter, data: ?*CurlEasy, stream: ?*H3StreamCtx) vo
     const s = stream orelse return;
     const d = data orelse return;
     const ctx = cfToQuicheCtx(cf) orelse return;
+    const mid = if (s.mid != std.math.maxInt(u32)) s.mid else easyMid(d);
     if (comptime use_quiche) {
         if (ctx.qconn != null and !s.closed and s.id >= 0) {
             const qconn = ctx.qconn.?;
@@ -600,7 +640,9 @@ fn h3_stream_close(cf: *CurlCfilter, data: ?*CurlEasy, stream: ?*H3StreamCtx) vo
             }
         }
     }
-    Curl_u32_ptrset_unset(&ctx.streams, easyMid(d));
+    if (mid != std.math.maxInt(u32)) {
+        Curl_u32_ptrset_unset(&ctx.streams, mid);
+    }
 }
 
 // ============================================================================
@@ -812,17 +854,26 @@ const H3EventNode = struct {
 };
 
 fn h3_stream_match_process(mid: u32, value: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) bool {
-    if (comptime !use_quiche) return false;
     const stream: *H3StreamCtx = @ptrCast(@alignCast(value orelse return true));
     const node: *H3EventNode = @ptrCast(@alignCast(user_data orelse return false));
     if (stream.id == node.stream_id) {
-        if (multiGetEasy(node.ctx.call_data.data, mid)) |sdata| {
+        if (mid == std.math.maxInt(u32) or mid != stream.mid or stream.xfer_id < 0) return false;
+        const call_data = node.ctx.call_data.data orelse return false;
+        if (!goodEasyHandle(call_data)) return false;
+        if (multiGetEasy(call_data, mid)) |sdata| {
+            if (!goodEasyHandle(sdata) or easyMid(sdata) != stream.mid or easyMid(sdata) != mid or easyId(sdata) != stream.xfer_id) {
+                return false;
+            }
             var save: CfCallData = undefined;
             cfDataSave(&save, &node.ctx.call_data, sdata);
             defer cfDataRestore(&node.ctx.call_data, save);
-            if (node.ev) |ev| {
-                h3_process_event(node.cf, sdata, stream, ev);
-                quiche_ext.quiche_h3_event_free(ev);
+            if (comptime use_quiche) {
+                if (node.ev) |ev| {
+                    h3_process_event(node.cf, sdata, stream, ev);
+                    quiche_ext.quiche_h3_event_free(ev);
+                    node.ev = null;
+                }
+            } else {
                 node.ev = null;
             }
             return false;
@@ -1061,16 +1112,24 @@ const NotifyCtx = struct {
 };
 
 fn notify_blocked_stream(mid: u32, value: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) bool {
-    if (comptime !use_quiche) return false;
     const stream: *H3StreamCtx = @ptrCast(@alignCast(value orelse return true));
     const nctx: *NotifyCtx = @ptrCast(@alignCast(user_data orelse return false));
+    const call_data = nctx.ctx.call_data.data orelse return false;
+    if (!goodEasyHandle(call_data)) return false;
     const qconn = nctx.ctx.qconn orelse return false;
 
     if (stream.quic_flow_blocked and stream.id >= 0) {
-        if (quiche_ext.quiche_conn_stream_writable(qconn, @intCast(stream.id), 1) > 0) {
-            stream.quic_flow_blocked = false;
-            if (multiGetEasy(nctx.ctx.call_data.data, mid)) |sdata| {
-                Curl_multi_mark_dirty(sdata);
+        if (mid == std.math.maxInt(u32) or mid != stream.mid or stream.xfer_id < 0) return true;
+        const writable = if (comptime use_quiche)
+            quiche_ext.quiche_conn_stream_writable(qconn, @intCast(stream.id), 1) > 0
+        else
+            true;
+        if (writable) {
+            if (multiGetEasy(call_data, mid)) |sdata| {
+                if (goodEasyHandle(sdata) and easyMid(sdata) == stream.mid and easyMid(sdata) == mid and easyId(sdata) == stream.xfer_id) {
+                    stream.quic_flow_blocked = false;
+                    Curl_multi_mark_dirty(sdata);
+                }
             }
         }
     }
@@ -1444,8 +1503,7 @@ fn cf_quiche_ctx_init(ctx: *CfQuicheCtx, cf: *CurlCfilter) CURLcode {
     return CURLE_OK;
 }
 
-fn cf_quiche_ctx_free(ctx: ?*CfQuicheCtx) void {
-    const c = ctx orelse return;
+fn cf_quiche_ctx_cleanup(c: *CfQuicheCtx) void {
     if (c.initialized) {
         if (comptime use_quiche) {
             if (c.h3c) |h3c| {
@@ -1476,7 +1534,12 @@ fn cf_quiche_ctx_free(ctx: ?*CfQuicheCtx) void {
     } else {
         vtls_backends.vtls_impl.Curl_ssl_peer_cleanup(&c.ssl_peer);
     }
-    mem.free(c);
+}
+
+fn cf_quiche_ctx_free(ctx: ?*CfQuicheCtx) void {
+    const c = ctx orelse return;
+    cf_quiche_ctx_cleanup(c);
+    mem.freeTyped(c);
 }
 
 fn cf_quiche_close(cf: *CurlCfilter, data: ?*CurlEasy) void {
@@ -1524,10 +1587,13 @@ fn cf_quiche_close(cf: *CurlCfilter, data: ?*CurlEasy) void {
 
 fn cf_quiche_destroy(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) void {
     const ctx = cfToQuicheCtx(cf) orelse return;
-
-    var save: CfCallData = undefined;
-    cfDataSave(&save, &ctx.call_data, data);
-    cf_quiche_ctx_free(ctx);
+    {
+        var save: CfCallData = undefined;
+        cfDataSave(&save, &ctx.call_data, data);
+        defer cfDataRestore(&ctx.call_data, save);
+        cf_quiche_ctx_cleanup(ctx);
+    }
+    mem.freeTyped(ctx);
     cf.ctx = null;
 }
 
@@ -2009,6 +2075,10 @@ fn cf_quiche_query(
 ) callconv(.c) CURLcode {
     const ctx = cfToQuicheCtx(cf) orelse return Curl_cf_def_query(cf, data, query, pres1, pres2);
 
+    var save: CfCallData = undefined;
+    cfDataSave(&save, &ctx.call_data, data);
+    defer cfDataRestore(&ctx.call_data, save);
+
     switch (query) {
         CF_QUERY_MAX_CONCURRENT => {
             if (comptime use_quiche) {
@@ -2147,7 +2217,7 @@ pub fn Curl_cf_quiche_create(
     result = Curl_cf_udp_create(&cf_udp, data, origin, peer, TRNSPRT_QUIC, conn, addr, null, TRNSPRT_QUIC);
     if (result != CURLE_OK or cf_udp == null) {
         cf_quiche_destroy(cf_quiche.?, data);
-        mem.free(cf_quiche.?);
+        mem.freeTyped(cf_quiche);
         return result;
     }
 
@@ -2224,10 +2294,10 @@ test "Curl_cf_quiche_create and Curl_quiche_ver initialization" {
         defer {
             if (h3_cf.next) |udp_cf| {
                 udp_cf.cft.destroy(udp_cf, null);
-                mem.free(udp_cf);
+                mem.freeTyped(udp_cf);
             }
             h3_cf.cft.destroy(h3_cf, null);
-            mem.free(h3_cf);
+            mem.freeTyped(h3_cf);
         }
         try std.testing.expectEqual(&Curl_cft_http3, h3_cf.cft);
         try std.testing.expect(h3_cf.next != null);
@@ -2239,5 +2309,144 @@ test "Curl_cf_quiche_create and Curl_quiche_ver initialization" {
     } else {
         try std.testing.expectEqual(CURLE_NOT_BUILT_IN, rc);
         try std.testing.expect(cf == null);
+    }
+}
+
+test "vquic_quiche detached easyMid, magic/xfer_id stream validation, and H3StreamCtx freeTyped poisoning" {
+    const test_ext = struct {
+        extern fn Curl_open(curl: *?*CurlEasy) callconv(.c) CURLcode;
+        extern fn Curl_close(datap: *?*CurlEasy) callconv(.c) CURLcode;
+        extern fn Curl_zig_url_data_set_i64(data: *CurlEasy, field_id: c_int, val: i64) callconv(.c) void;
+        extern fn curl_multi_init() callconv(.c) ?*anyopaque;
+        extern fn curl_multi_cleanup(multi: ?*anyopaque) callconv(.c) c_int;
+        extern fn curl_multi_add_handle(multi: ?*anyopaque, data: ?*CurlEasy) callconv(.c) c_int;
+        extern fn curl_multi_remove_handle(multi: ?*anyopaque, data: ?*CurlEasy) callconv(.c) c_int;
+        extern var Curl_cfree: mem.FreeCallback;
+        extern "c" fn free(ptr: ?*anyopaque) void;
+
+        var captured_free_bytes: [@sizeOf(H3StreamCtx)]u8 = @splat(0);
+        var expected_free_ptr: ?*anyopaque = null;
+        var captured_stream_free: bool = false;
+
+        fn mockFree(ptr: ?*anyopaque) callconv(.c) void {
+            if (ptr != null and ptr == expected_free_ptr) {
+                const src: [*]const u8 = @ptrCast(ptr.?);
+                @memcpy(&captured_free_bytes, src[0..@sizeOf(H3StreamCtx)]);
+                captured_stream_free = true;
+            }
+            free(ptr);
+        }
+    };
+
+    var ctx = CfQuicheCtx{};
+    Curl_u32_ptrset_init(&ctx.streams, h3_stream_hash_free);
+    io_buffers.Curl_bufcp_init(&ctx.stream_bufcp, H3_STREAM_CHUNK_SIZE, H3_STREAM_POOL_SPARES);
+    defer {
+        Curl_u32_ptrset_clear(&ctx.streams);
+        io_buffers.Curl_bufcp_free(&ctx.stream_bufcp);
+    }
+
+    var dummy_cf: CurlCfilter = std.mem.zeroes(CurlCfilter);
+    dummy_cf.cft = &Curl_cft_http3;
+    dummy_cf.ctx = &ctx;
+
+    // 1. Detached easy handle (mid = -1 / maxInt(u32)) does not panic and is rejected
+    var easy_opt: ?*CurlEasy = null;
+    try std.testing.expectEqual(CURLE_OK, test_ext.Curl_open(&easy_opt));
+    defer _ = test_ext.Curl_close(&easy_opt);
+    const easy = easy_opt.?;
+
+    try std.testing.expect(goodEasyHandle(easy));
+    try std.testing.expectEqual(std.math.maxInt(u32), easyMid(easy));
+    try std.testing.expectEqual(std.math.maxInt(u32), easyMid(null));
+    try std.testing.expectEqual(@as(?*H3StreamCtx, null), H3_STREAM_CTX(&ctx, easy));
+    try std.testing.expectEqual(@as(?*H3StreamCtx, null), H3_STREAM_CTX(&ctx, null));
+
+    var opened_stream: ?*H3StreamCtx = null;
+    try std.testing.expectEqual(CURLE_BAD_FUNCTION_ARGUMENT, h3_stream_open(&dummy_cf, easy, &opened_stream));
+    try std.testing.expectEqual(@as(?*H3StreamCtx, null), opened_stream);
+
+    // 2. Attach to multi, open stream, and verify lookup works when magic + mid + xfer_id match
+    const multi = test_ext.curl_multi_init() orelse return error.OutOfMemory;
+    defer _ = test_ext.curl_multi_cleanup(multi);
+    try std.testing.expectEqual(@as(c_int, 0), test_ext.curl_multi_add_handle(multi, easy));
+    defer _ = test_ext.curl_multi_remove_handle(multi, easy);
+
+    test_ext.Curl_zig_url_data_set_i64(easy, 2, 303);
+    const orig_mid = easyMid(easy);
+    try std.testing.expect(orig_mid != std.math.maxInt(u32));
+
+    try std.testing.expectEqual(CURLE_OK, h3_stream_open(&dummy_cf, easy, &opened_stream));
+    const stream = opened_stream.?;
+    stream.id = 8;
+    try std.testing.expectEqual(orig_mid, stream.mid);
+    try std.testing.expectEqual(@as(i64, 303), stream.xfer_id);
+    try std.testing.expectEqual(@as(?*H3StreamCtx, stream), H3_STREAM_CTX(&ctx, easy));
+
+    ctx.call_data.data = easy;
+    var dummy_ev: u8 = 1;
+    var node = H3EventNode{
+        .cf = &dummy_cf,
+        .ctx = &ctx,
+        .stream_id = 8,
+        .ev = if (comptime !use_quiche) @ptrCast(&dummy_ev) else null,
+    };
+    try std.testing.expect(!h3_stream_match_process(orig_mid, stream, &node));
+
+    // 3. Reject when xfer_id mismatches (simulating mid slot reuse after transfer teardown)
+    var dummy_qconn: u8 = 0;
+    ctx.qconn = @ptrCast(&dummy_qconn);
+    var nctx = NotifyCtx{ .cf = &dummy_cf, .ctx = &ctx };
+
+    test_ext.Curl_zig_url_data_set_i64(easy, 2, 777);
+    try std.testing.expectEqual(@as(?*H3StreamCtx, null), H3_STREAM_CTX(&ctx, easy));
+    node.ev = @ptrCast(&dummy_ev);
+    _ = h3_stream_match_process(orig_mid, stream, &node);
+    try std.testing.expect(node.ev != null);
+
+    stream.quic_flow_blocked = true;
+    _ = notify_blocked_stream(orig_mid, stream, &nctx);
+    try std.testing.expect(stream.quic_flow_blocked);
+    test_ext.Curl_zig_url_data_set_i64(easy, 2, 303);
+
+    // 4. Reject when magic != CURLEASY_MAGIC_NUMBER
+    test_ext.Curl_zig_url_data_set_i64(easy, 1, 0);
+    try std.testing.expect(!goodEasyHandle(easy));
+    try std.testing.expectEqual(std.math.maxInt(u32), easyMid(easy));
+    try std.testing.expectEqual(@as(?*H3StreamCtx, null), H3_STREAM_CTX(&ctx, easy));
+    node.ev = @ptrCast(&dummy_ev);
+    _ = h3_stream_match_process(orig_mid, stream, &node);
+    try std.testing.expect(node.ev != null);
+
+    stream.quic_flow_blocked = true;
+    _ = notify_blocked_stream(orig_mid, stream, &nctx);
+    try std.testing.expect(stream.quic_flow_blocked);
+    test_ext.Curl_zig_url_data_set_i64(easy, 1, CURLEASY_MAGIC_NUMBER);
+
+    // 5. Verify H3StreamCtx freed-memory poisoning via mem.freeTyped
+    const expected_poison: u8 = switch (@import("builtin").mode) {
+        .Debug, .ReleaseSafe => 0xaa,
+        .ReleaseFast, .ReleaseSmall => 0x00,
+    };
+    const saved_cfree = test_ext.Curl_cfree;
+    test_ext.Curl_cfree = test_ext.mockFree;
+    defer test_ext.Curl_cfree = saved_cfree;
+
+    const raw_s = mem.calloc(1, @sizeOf(H3StreamCtx)) orelse return error.OutOfMemory;
+    const temp_s: *H3StreamCtx = @ptrCast(@alignCast(raw_s));
+    temp_s.* = .{};
+    temp_s.id = 12;
+    temp_s.mid = 5;
+    temp_s.xfer_id = 888;
+    io_buffers.Curl_bufq_initp(&temp_s.sendbuf, &ctx.stream_bufcp, 1, BUFQ_OPT_NONE);
+    http1_options.Curl_h1_req_parse_init(&temp_s.h1, H3_SEND_SIZE);
+
+    @memset(&test_ext.captured_free_bytes, 0);
+    test_ext.expected_free_ptr = @ptrCast(temp_s);
+    test_ext.captured_stream_free = false;
+    h3_stream_ctx_free(temp_s);
+    try std.testing.expect(test_ext.captured_stream_free);
+    for (test_ext.captured_free_bytes) |b| {
+        try std.testing.expectEqual(expected_poison, b);
     }
 }

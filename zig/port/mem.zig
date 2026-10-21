@@ -129,6 +129,23 @@ pub fn freeSized(ptr: ?*anyopaque, len: usize) void {
     }
 }
 
+pub fn freeTyped(ptr: anytype) void {
+    const T = @TypeOf(ptr);
+    switch (@typeInfo(T)) {
+        .optional => {
+            if (ptr) |p| freeTyped(p);
+        },
+        .pointer => |pinfo| {
+            if (pinfo.size != .one) {
+                @compileError("freeTyped requires a single-item pointer (*T or ?*T)");
+            }
+            const Child = pinfo.child;
+            freeSized(@ptrCast(@constCast(ptr)), @sizeOf(Child));
+        },
+        else => @compileError("freeTyped requires a single-item pointer (*T or ?*T)"),
+    }
+}
+
 pub fn freeSecretZ(ptr: ?[*:0]u8) void {
     if (ptr) |s| {
         const len = std.mem.len(s);
@@ -165,7 +182,7 @@ const mock_mem_cb = struct {
     var malloc_calls: usize = 0;
     var realloc_calls: usize = 0;
     var free_calls: usize = 0;
-    var last_freed_bytes: [16]u8 = @splat(0);
+    var last_freed_bytes: [64]u8 = @splat(0);
     var last_freed_capture_len: usize = 0;
 
     fn reset() void {
@@ -349,4 +366,76 @@ test "mem secureZero, poison, freeSized, and freeSecretZ" {
         try std.testing.expectEqual(@as(u8, 0), b);
     }
     freeSecretZ(null);
+}
+
+test "mem freeTyped poisons full struct size and handles null optional pointers" {
+    const TestStruct = extern struct {
+        id: i64,
+        mid: u32,
+        flags: u32,
+        tag: u64,
+        tail: [8]u8,
+    };
+
+    const expected_poison: u8 = switch (builtin.mode) {
+        .Debug, .ReleaseSafe => 0xaa,
+        .ReleaseFast, .ReleaseSmall => 0x00,
+    };
+
+    mock_mem_cb.reset();
+    try std.testing.expectEqual(
+        @as(c_int, 0),
+        curl_global_init_mem(
+            0,
+            mock_mem_cb.mockMalloc,
+            mock_mem_cb.mockFree,
+            mock_mem_cb.mockRealloc,
+            mock_mem_cb.mockStrdup,
+            mock_mem_cb.mockCalloc,
+        ),
+    );
+    defer {
+        curl_global_cleanup();
+        _ = curl_global_init(0);
+        curl_global_cleanup();
+    }
+
+    mock_mem_cb.reset();
+    const raw = calloc(1, @sizeOf(TestStruct)) orelse return error.OutOfMemory;
+    const item: *TestStruct = @ptrCast(@alignCast(raw));
+    item.* = .{
+        .id = 0x1122334455667788,
+        .mid = 0xdeadbeef,
+        .flags = 0xcafebabe,
+        .tag = 0x0102030405060708,
+        .tail = .{ 1, 2, 3, 4, 5, 6, 7, 8 },
+    };
+
+    mock_mem_cb.last_freed_capture_len = @sizeOf(TestStruct);
+    freeTyped(item);
+    try std.testing.expectEqual(@as(usize, 1), mock_mem_cb.free_calls);
+    for (mock_mem_cb.last_freed_bytes[0..@sizeOf(TestStruct)]) |b| {
+        try std.testing.expectEqual(expected_poison, b);
+    }
+
+    const opt_raw = calloc(1, @sizeOf(TestStruct)) orelse return error.OutOfMemory;
+    const opt_item: ?*TestStruct = @ptrCast(@alignCast(opt_raw));
+    opt_item.?.* = .{
+        .id = -1,
+        .mid = 42,
+        .flags = 7,
+        .tag = 99,
+        .tail = @splat(0x55),
+    };
+    @memset(&mock_mem_cb.last_freed_bytes, 0);
+    mock_mem_cb.last_freed_capture_len = @sizeOf(TestStruct);
+    freeTyped(opt_item);
+    try std.testing.expectEqual(@as(usize, 2), mock_mem_cb.free_calls);
+    for (mock_mem_cb.last_freed_bytes[0..@sizeOf(TestStruct)]) |b| {
+        try std.testing.expectEqual(expected_poison, b);
+    }
+
+    const null_ptr: ?*TestStruct = null;
+    freeTyped(null_ptr);
+    try std.testing.expectEqual(@as(usize, 2), mock_mem_cb.free_calls);
 }

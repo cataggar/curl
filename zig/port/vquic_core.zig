@@ -572,6 +572,7 @@ pub const Curl_vquic_ctx_init = vquic_ctx_init;
 /// Free QUIC packet context (`vquic_ctx_free` in `lib/vquic/vquic.c`).
 pub fn vquic_ctx_free(qctx: *CfQuicCtx) callconv(.c) void {
     io_buffers.Curl_bufq_free(&qctx.sendbuf);
+    qctx.blocked_pkt = .{ .{}, .{} };
     qctx.blocked_pkt_count = 0;
 }
 
@@ -1534,6 +1535,12 @@ test "vquic_ctx_init, vquic_push_blocked_pkt, and vquic_ctx_free" {
     try std.testing.expectEqual(@as(u8, 2), qctx.blocked_pkt_count);
     try std.testing.expectEqual(pkt2.len, qctx.blocked_pkt[1].pktlen);
     try std.testing.expectEqual(@as(usize, 600), qctx.blocked_pkt[1].gsolen);
+
+    const raw = mem.calloc(1, @sizeOf(CfQuicCtx)) orelse return error.OutOfMemory;
+    const heap_qctx: *CfQuicCtx = @ptrCast(@alignCast(raw));
+    try std.testing.expectEqual(CURLE_OK, vquic_ctx_init(null, heap_qctx));
+    vquic_ctx_free(heap_qctx);
+    mem.freeTyped(heap_qctx);
 }
 
 test "Curl_qlogdir creates sqlog file when QLOGDIR is set" {

@@ -862,24 +862,39 @@ extern fn Curl_uint32_bset_remove(bset: *uint32_bset, i: u32) callconv(.c) void;
 extern fn Curl_uint32_bset_first(bset: *uint32_bset, pfirst: *u32) callconv(.c) bool;
 extern fn Curl_uint32_bset_next(bset: *uint32_bset, last: u32, pnext: *u32) callconv(.c) bool;
 
+pub const CURLEASY_MAGIC_NUMBER: c_uint = 0xc0dedbad;
+
+inline fn goodEasyHandle(data: ?*const CurlEasy) bool {
+    const ptr = data orelse return false;
+    const magic_ptr: *const c_uint = @ptrCast(@alignCast(ptr));
+    return magic_ptr.* == CURLEASY_MAGIC_NUMBER;
+}
+
 inline fn easyMid(data: ?*const CurlEasy) u32 {
-    const d = data orelse return 0;
-    return @intCast(Curl_zig_url_data_get_i64(d, 3));
+    const d = data orelse return std.math.maxInt(u32);
+    if (!goodEasyHandle(d)) return std.math.maxInt(u32);
+    return std.math.cast(u32, Curl_zig_url_data_get_i64(d, 3)) orelse std.math.maxInt(u32);
 }
 
 inline fn easyId(data: ?*const CurlEasy) i64 {
-    const d = data orelse return 0;
+    const d = data orelse return -1;
+    if (!goodEasyHandle(d)) return -1;
     return Curl_zig_url_data_get_i64(d, 2);
 }
 
 inline fn easyMulti(data: ?*const CurlEasy) ?*anyopaque {
     const d = data orelse return null;
+    if (!goodEasyHandle(d)) return null;
     return Curl_zig_url_data_get_ptr(d, 1);
 }
 
 inline fn multiGetEasy(call_data: ?*CurlEasy, mid: u32) ?*CurlEasy {
+    if (!goodEasyHandle(call_data)) return null;
+    if (mid == std.math.maxInt(u32)) return null;
     const multi = easyMulti(call_data) orelse return null;
-    return Curl_multi_get_easy(multi, mid);
+    const sdata = Curl_multi_get_easy(multi, mid) orelse return null;
+    if (!goodEasyHandle(sdata)) return null;
+    return sdata;
 }
 
 inline fn multiMaxConcurrentStreams(data: ?*CurlEasy) u32 {
@@ -938,8 +953,10 @@ pub const PktIoCtx = struct {
 
 pub const H3StreamCtx = struct {
     id: i64 = -1,
-    sendbuf: Bufq = undefined,
-    h1: h1_req_parser = undefined,
+    mid: u32 = std.math.maxInt(u32),
+    xfer_id: i64 = -1,
+    sendbuf: Bufq = std.mem.zeroes(Bufq),
+    h1: h1_req_parser = std.mem.zeroes(h1_req_parser),
     sendbuf_len_in_flight: usize = 0,
     upload_left: curl_off_t = 0,
     status_code: i32 = -1,
@@ -986,13 +1003,13 @@ pub const CfNgtcp2Ctx = struct {
     ossl_ctx: ?*ngtcp2_crypto_ossl_ctx = null,
     h3conn: ?*nghttp3_conn = null,
     h3settings: nghttp3_settings = .{},
-    stream_bufcp: BufcPool = undefined,
+    stream_bufcp: BufcPool = std.mem.zeroes(BufcPool),
     max_stream_window: usize = 0,
     max_idle_ms: u64 = 0,
     last_ts: ngtcp2_tstamp = 0,
     qlogfd: c_int = -1,
-    streams: u32_ptrset = undefined,
-    active_streams: uint32_bset = undefined,
+    streams: u32_ptrset = std.mem.zeroes(u32_ptrset),
+    active_streams: uint32_bset = std.mem.zeroes(uint32_bset),
     cbs: ?*const CfNgtcp2Cbs = null,
     call_data: CfCallData = .{},
     tls_vrfy_result: CURLcode = CURLE_OK,
@@ -1005,8 +1022,13 @@ pub const CfNgtcp2Ctx = struct {
 
 pub fn h3StreamCtx(ctx: *CfNgtcp2Ctx, data: ?*CurlEasy) ?*H3StreamCtx {
     const d = data orelse return null;
-    const raw = Curl_u32_ptrset_get(&ctx.streams, easyMid(d)) orelse return null;
-    return @ptrCast(@alignCast(raw));
+    if (!goodEasyHandle(d)) return null;
+    const mid = easyMid(d);
+    if (mid == std.math.maxInt(u32)) return null;
+    const raw = Curl_u32_ptrset_get(&ctx.streams, mid) orelse return null;
+    const stream: *H3StreamCtx = @ptrCast(@alignCast(raw));
+    if (stream.mid != mid or stream.xfer_id != easyId(d)) return null;
+    return stream;
 }
 
 pub fn Curl_ngtcp2_ver(p: [*]u8, len: usize) callconv(.c) void {
@@ -1044,7 +1066,7 @@ pub fn Curl_cf_ngtcp2_h3_stream_ctx_free(stream_opt: ?*H3StreamCtx) callconv(.c)
     const stream = stream_opt orelse return;
     io_buffers.Curl_bufq_free(&stream.sendbuf);
     http1_options.Curl_h1_req_parse_free(&stream.h1);
-    mem.free(stream);
+    mem.freeTyped(stream);
 }
 
 fn h3_stream_hash_free(id: u32, stream_ptr: ?*anyopaque) callconv(.c) void {
@@ -1118,9 +1140,18 @@ const StreamVisitSidCtx = struct {
 
 fn visit_by_sid(mid: u32, value: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) bool {
     const stream: *H3StreamCtx = @ptrCast(@alignCast(value orelse return true));
-    const vctx: *StreamVisitSidCtx = @ptrCast(@alignCast(user_data.?));
+    const vctx: *StreamVisitSidCtx = @ptrCast(@alignCast(user_data orelse return false));
     if (stream.id == vctx.stream_id) {
-        vctx.data = multiGetEasy(vctx.ctx.call_data.data, mid);
+        if (mid != std.math.maxInt(u32) and mid == stream.mid and stream.xfer_id >= 0) {
+            const call_data = vctx.ctx.call_data.data;
+            if (goodEasyHandle(call_data)) {
+                if (multiGetEasy(call_data, mid)) |sdata| {
+                    if (goodEasyHandle(sdata) and easyMid(sdata) == stream.mid and easyMid(sdata) == mid and easyId(sdata) == stream.xfer_id) {
+                        vctx.data = sdata;
+                    }
+                }
+            }
+        }
         return false;
     }
     return true;
@@ -1128,8 +1159,9 @@ fn visit_by_sid(mid: u32, value: ?*anyopaque, user_data: ?*anyopaque) callconv(.
 
 pub fn Curl_cf_ngtcp2_get_xfer(ctx: *CfNgtcp2Ctx, stream_id: i64) callconv(.c) ?*CurlEasy {
     if (ctx.call_data.data) |cd| {
+        if (!goodEasyHandle(cd)) return null;
         if (h3StreamCtx(ctx, cd)) |stream| {
-            if (stream.id == stream_id)
+            if (stream.id == stream_id and easyMid(cd) == stream.mid and easyId(cd) == stream.xfer_id)
                 return cd;
         }
         var vctx = StreamVisitSidCtx{
@@ -1150,6 +1182,16 @@ pub fn Curl_cf_ngtcp2_h3_stream_setup(
 ) callconv(.c) CURLcode {
     _ = cf;
     std.debug.assert(data != null);
+    if (!goodEasyHandle(data)) {
+        pstream.* = null;
+        return CURLE_BAD_FUNCTION_ARGUMENT;
+    }
+    const mid = easyMid(data);
+    const xfer_id = easyId(data);
+    if (mid == std.math.maxInt(u32) or xfer_id < 0) {
+        pstream.* = null;
+        return CURLE_BAD_FUNCTION_ARGUMENT;
+    }
     if (h3StreamCtx(ctx, data)) |existing| {
         pstream.* = existing;
         return CURLE_OK;
@@ -1158,6 +1200,8 @@ pub fn Curl_cf_ngtcp2_h3_stream_setup(
     const raw = mem.calloc(1, @sizeOf(H3StreamCtx)) orelse return CURLE_OUT_OF_MEMORY;
     const stream: *H3StreamCtx = @ptrCast(@alignCast(raw));
     stream.id = -1;
+    stream.mid = mid;
+    stream.xfer_id = xfer_id;
     io_buffers.Curl_bufq_initp(
         &stream.sendbuf,
         &ctx.stream_bufcp,
@@ -1176,7 +1220,7 @@ pub fn Curl_cf_ngtcp2_h3_stream_setup(
     stream.rx_eos = false;
     stream.xfer_result = CURLE_OK;
 
-    const result = Curl_u32_ptrset_set(&ctx.streams, easyMid(data), stream);
+    const result = Curl_u32_ptrset_set(&ctx.streams, mid, stream);
     if (result != CURLE_OK) {
         Curl_cf_ngtcp2_h3_stream_ctx_free(stream);
         pstream.* = null;
@@ -1207,8 +1251,19 @@ pub fn Curl_cf_ngtcp2_h3_stream_close(
             _ = progress_egress(cf, data, ctx, &pktx);
         }
     }
-    if (data) |d| {
-        Curl_uint32_bset_remove(&ctx.active_streams, easyMid(d));
+    if ((cf.cft.flags & CF_TYPE_PROXY) != 0 or ctx.cbs == &cf_ngtcp2_proxy_cbs) {
+        const proxy_ctx = qToProxyCtx(ctx);
+        if (proxy_ctx.ts.stream == stream) {
+            proxy_ctx.ts.stream = null;
+        }
+    }
+    if (stream.mid != std.math.maxInt(u32)) {
+        Curl_uint32_bset_remove(&ctx.active_streams, stream.mid);
+    } else if (data) |d| {
+        const mid = easyMid(d);
+        if (mid != std.math.maxInt(u32)) {
+            Curl_uint32_bset_remove(&ctx.active_streams, mid);
+        }
     }
 }
 
@@ -1219,8 +1274,9 @@ pub fn Curl_cf_ngtcp2_h3_stream_done(
 ) callconv(.c) void {
     const d = data orelse return;
     if (h3StreamCtx(ctx, d)) |stream| {
+        const mid = stream.mid;
         Curl_cf_ngtcp2_h3_stream_close(cf, d, ctx, stream);
-        Curl_u32_ptrset_unset(&ctx.streams, easyMid(d));
+        Curl_u32_ptrset_unset(&ctx.streams, mid);
     }
 }
 
@@ -3369,11 +3425,13 @@ fn cf_ngtcp2_destroy(
     data: ?*CurlEasy,
 ) callconv(.c) void {
     const ctx = cfToNgtcp2Ctx(cf) orelse return;
-    var save: CfCallData = undefined;
-    cfDataSave(&save, &ctx.call_data, data);
-    Curl_cf_ngtcp2_ctx_cleanup(ctx);
-    cfDataRestore(&ctx.call_data, save);
-    mem.free(ctx);
+    {
+        var save: CfCallData = undefined;
+        cfDataSave(&save, &ctx.call_data, data);
+        defer cfDataRestore(&ctx.call_data, save);
+        Curl_cf_ngtcp2_ctx_cleanup(ctx);
+    }
+    mem.freeTyped(ctx);
     cf.ctx = null;
 }
 
@@ -3433,7 +3491,7 @@ pub fn Curl_cf_ngtcp2_insert_after(
     const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(raw));
     var result = Curl_cf_ngtcp2_ctx_init(ctx, origin, peer, &cf_ngtcp2_cbs);
     if (result != CURLE_OK) {
-        mem.free(ctx);
+        mem.freeTyped(ctx);
         return result;
     }
 
@@ -3441,7 +3499,7 @@ pub fn Curl_cf_ngtcp2_insert_after(
     result = Curl_cf_create(&cf, &Curl_cft_http3, ctx);
     if (result != CURLE_OK) {
         Curl_cf_ngtcp2_ctx_cleanup(ctx);
-        mem.free(ctx);
+        mem.freeTyped(ctx);
         return result;
     }
 
@@ -3465,7 +3523,7 @@ pub fn Curl_cf_ngtcp2_create(
     const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(raw));
     var result = Curl_cf_ngtcp2_ctx_init(ctx, origin, peer, &cf_ngtcp2_cbs);
     if (result != CURLE_OK) {
-        mem.free(ctx);
+        mem.freeTyped(ctx);
         return result;
     }
 
@@ -3473,7 +3531,7 @@ pub fn Curl_cf_ngtcp2_create(
     result = Curl_cf_create(&cf_ngtcp2, &Curl_cft_http3, ctx);
     if (result != CURLE_OK or cf_ngtcp2 == null) {
         Curl_cf_ngtcp2_ctx_cleanup(ctx);
-        mem.free(ctx);
+        mem.freeTyped(ctx);
         return result;
     }
     cf_ngtcp2.?.conn = conn;
@@ -3482,7 +3540,7 @@ pub fn Curl_cf_ngtcp2_create(
     result = Curl_cf_udp_create(&cf_udp, data, origin, peer, TRNSPRT_QUIC, conn, addr, null, TRNSPRT_QUIC);
     if (result != CURLE_OK or cf_udp == null) {
         cf_ngtcp2_destroy(cf_ngtcp2.?, data);
-        mem.free(cf_ngtcp2);
+        mem.freeTyped(cf_ngtcp2);
         return result;
     }
 
@@ -3511,7 +3569,7 @@ pub const H3TunnelState = enum(c_uint) {
 pub const H3TunnelStream = struct {
     dest: ?*CurlPeer = null,
     resp: ?*http_resp = null,
-    recvbuf: Bufq = undefined,
+    recvbuf: Bufq = std.mem.zeroes(Bufq),
     authority: ?[*:0]u8 = null,
     stream: ?*H3StreamCtx = null,
     state: H3TunnelState = .H3_TUNNEL_INIT,
@@ -3524,7 +3582,7 @@ pub const CfNgtcp2ProxyCtx = struct {
     q: CfNgtcp2Ctx = .{},
     peer: ?*CurlPeer = null,
     ts: H3TunnelStream = .{},
-    bufcp: BufcPool = undefined,
+    bufcp: BufcPool = std.mem.zeroes(BufcPool),
     max_stream_window: usize = 0,
     max_idle_ms: u64 = 0,
     initialized: bool = false,
@@ -3571,6 +3629,7 @@ fn h3_tunnel_stream_cleanup(ts: *H3TunnelStream) void {
     ts.resp = null;
     mem.free(ts.authority);
     ts.authority = null;
+    ts.stream = null;
     ts.state = .H3_TUNNEL_INIT;
 }
 
@@ -4025,10 +4084,12 @@ fn cf_ngtcp2_proxy_connect(
 }
 
 fn cf_ngtcp2_proxy_ctx_cleanup(ctx: *CfNgtcp2ProxyCtx) void {
+    if (ctx.initialized) {
+        h3_tunnel_stream_cleanup(&ctx.ts);
+    }
     Curl_cf_ngtcp2_ctx_cleanup(&ctx.q);
     if (ctx.initialized) {
         io_buffers.Curl_bufcp_free(&ctx.bufcp);
-        h3_tunnel_stream_cleanup(&ctx.ts);
         Curl_peer_unlink(&ctx.peer);
         ctx.initialized = false;
     }
@@ -4039,11 +4100,13 @@ fn cf_ngtcp2_proxy_destroy(
     data: ?*CurlEasy,
 ) callconv(.c) void {
     const ctx = cfToProxyCtx(cf) orelse return;
-    var save: CfCallData = undefined;
-    cfDataSave(&save, &ctx.q.call_data, data);
-    cf_ngtcp2_proxy_ctx_cleanup(ctx);
-    cfDataRestore(&ctx.q.call_data, save);
-    mem.free(ctx);
+    {
+        var save: CfCallData = undefined;
+        cfDataSave(&save, &ctx.q.call_data, data);
+        defer cfDataRestore(&ctx.q.call_data, save);
+        cf_ngtcp2_proxy_ctx_cleanup(ctx);
+    }
+    mem.freeTyped(ctx);
     cf.ctx = null;
 }
 
@@ -4327,7 +4390,7 @@ pub fn Curl_cf_ngtcp2_proxy_insert_after(
     const ctx: *CfNgtcp2ProxyCtx = @ptrCast(@alignCast(raw));
     var result = cf_ngtcp2_proxy_ctx_init(ctx, origin, peer, tunnel_peer, tunnel_transport);
     if (result != CURLE_OK) {
-        mem.free(ctx);
+        mem.freeTyped(ctx);
         return result;
     }
 
@@ -4335,7 +4398,7 @@ pub fn Curl_cf_ngtcp2_proxy_insert_after(
     result = Curl_cf_create(&cf, &Curl_cft_h3_proxy, ctx);
     if (result != CURLE_OK) {
         cf_ngtcp2_proxy_ctx_cleanup(ctx);
-        mem.free(ctx);
+        mem.freeTyped(ctx);
         return result;
     }
 
@@ -4362,7 +4425,7 @@ pub fn Curl_cf_ngtcp2_proxy_create(
     const ctx: *CfNgtcp2ProxyCtx = @ptrCast(@alignCast(raw));
     var result = cf_ngtcp2_proxy_ctx_init(ctx, origin, peer, tunnel_peer, tunnel_transport);
     if (result != CURLE_OK) {
-        mem.free(ctx);
+        mem.freeTyped(ctx);
         return result;
     }
 
@@ -4370,7 +4433,7 @@ pub fn Curl_cf_ngtcp2_proxy_create(
     result = Curl_cf_create(&cf_h3_proxy, &Curl_cft_h3_proxy, ctx);
     if (result != CURLE_OK or cf_h3_proxy == null) {
         cf_ngtcp2_proxy_ctx_cleanup(ctx);
-        mem.free(ctx);
+        mem.freeTyped(ctx);
         return result;
     }
     cf_h3_proxy.?.conn = conn;
@@ -4379,7 +4442,7 @@ pub fn Curl_cf_ngtcp2_proxy_create(
     result = Curl_cf_udp_create(&cf_udp, data, origin, peer, TRNSPRT_QUIC, conn, addr, null, TRNSPRT_QUIC);
     if (result != CURLE_OK or cf_udp == null) {
         cf_ngtcp2_proxy_destroy(cf_h3_proxy.?, data);
-        mem.free(cf_h3_proxy);
+        mem.freeTyped(cf_h3_proxy);
         return result;
     }
 
@@ -4455,10 +4518,10 @@ test "Curl_cf_quic_create and Curl_cf_h3_proxy_create filter initialization" {
         defer {
             if (h3_cf.next) |udp_cf| {
                 udp_cf.cft.destroy(udp_cf, null);
-                mem.free(udp_cf);
+                mem.freeTyped(udp_cf);
             }
             h3_cf.cft.destroy(h3_cf, null);
-            mem.free(h3_cf);
+            mem.freeTyped(h3_cf);
         }
         try std.testing.expectEqual(&Curl_cft_http3, h3_cf.cft);
         try std.testing.expect(h3_cf.next != null);
@@ -4474,10 +4537,10 @@ test "Curl_cf_quic_create and Curl_cf_h3_proxy_create filter initialization" {
         const h3_cf = cf.?;
         if (h3_cf.next) |udp_cf| {
             udp_cf.cft.destroy(udp_cf, null);
-            mem.free(udp_cf);
+            mem.freeTyped(udp_cf);
         }
         h3_cf.cft.destroy(h3_cf, null);
-        mem.free(h3_cf);
+        mem.freeTyped(h3_cf);
     } else {
         try std.testing.expectEqual(CURLE_NOT_BUILT_IN, rc);
         try std.testing.expect(cf == null);
@@ -4510,15 +4573,161 @@ test "Curl_cf_quic_create and Curl_cf_h3_proxy_create filter initialization" {
         defer {
             if (p_cf.next) |udp_cf| {
                 udp_cf.cft.destroy(udp_cf, null);
-                mem.free(udp_cf);
+                mem.freeTyped(udp_cf);
             }
             p_cf.cft.destroy(p_cf, null);
-            mem.free(p_cf);
+            mem.freeTyped(p_cf);
         }
         try std.testing.expectEqual(&Curl_cft_h3_proxy, p_cf.cft);
         try std.testing.expect(p_cf.next != null);
     } else {
         try std.testing.expectEqual(CURLE_NOT_BUILT_IN, rc_proxy);
         try std.testing.expect(cf_proxy == null);
+    }
+}
+
+test "vquic_ngtcp2 detached easyMid, magic/xfer_id stream validation, tunnel stream clearing, and H3StreamCtx freeTyped poisoning" {
+    const test_ext = struct {
+        extern fn Curl_open(curl: *?*CurlEasy) callconv(.c) CURLcode;
+        extern fn Curl_close(datap: *?*CurlEasy) callconv(.c) CURLcode;
+        extern fn Curl_zig_url_data_set_i64(data: *CurlEasy, field_id: c_int, val: i64) callconv(.c) void;
+        extern fn curl_multi_init() callconv(.c) ?*anyopaque;
+        extern fn curl_multi_cleanup(multi: ?*anyopaque) callconv(.c) c_int;
+        extern fn curl_multi_add_handle(multi: ?*anyopaque, data: ?*CurlEasy) callconv(.c) c_int;
+        extern fn curl_multi_remove_handle(multi: ?*anyopaque, data: ?*CurlEasy) callconv(.c) c_int;
+        extern var Curl_cfree: mem.FreeCallback;
+        extern "c" fn free(ptr: ?*anyopaque) void;
+
+        var captured_free_bytes: [@sizeOf(H3StreamCtx)]u8 = @splat(0);
+        var expected_free_ptr: ?*anyopaque = null;
+        var captured_stream_free: bool = false;
+
+        fn mockFree(ptr: ?*anyopaque) callconv(.c) void {
+            if (ptr != null and ptr == expected_free_ptr) {
+                const src: [*]const u8 = @ptrCast(ptr.?);
+                @memcpy(&captured_free_bytes, src[0..@sizeOf(H3StreamCtx)]);
+                captured_stream_free = true;
+            }
+            free(ptr);
+        }
+    };
+
+    var ctx = CfNgtcp2Ctx{};
+    try std.testing.expectEqual(CURLE_OK, Curl_cf_ngtcp2_ctx_init(&ctx, null, null, &cf_ngtcp2_cbs));
+    defer Curl_cf_ngtcp2_ctx_cleanup(&ctx);
+
+    var dummy_cf: CurlCfilter = std.mem.zeroes(CurlCfilter);
+    dummy_cf.cft = &Curl_cft_http3;
+    dummy_cf.ctx = &ctx;
+
+    // 1. Detached easy handle (mid = -1 / maxInt(u32)) does not panic and is rejected
+    var easy_opt: ?*CurlEasy = null;
+    try std.testing.expectEqual(CURLE_OK, test_ext.Curl_open(&easy_opt));
+    defer _ = test_ext.Curl_close(&easy_opt);
+    const easy = easy_opt.?;
+
+    try std.testing.expect(goodEasyHandle(easy));
+    try std.testing.expectEqual(std.math.maxInt(u32), easyMid(easy));
+    try std.testing.expectEqual(std.math.maxInt(u32), easyMid(null));
+    try std.testing.expectEqual(@as(?*H3StreamCtx, null), h3StreamCtx(&ctx, easy));
+    try std.testing.expectEqual(@as(?*H3StreamCtx, null), h3StreamCtx(&ctx, null));
+
+    var setup_stream: ?*H3StreamCtx = null;
+    try std.testing.expectEqual(
+        CURLE_BAD_FUNCTION_ARGUMENT,
+        Curl_cf_ngtcp2_h3_stream_setup(&dummy_cf, easy, &ctx, &setup_stream),
+    );
+    try std.testing.expectEqual(@as(?*H3StreamCtx, null), setup_stream);
+
+    // 2. Attach to multi, setup stream, and verify lookup works when magic + mid + xfer_id match
+    const multi = test_ext.curl_multi_init() orelse return error.OutOfMemory;
+    defer _ = test_ext.curl_multi_cleanup(multi);
+    try std.testing.expectEqual(@as(c_int, 0), test_ext.curl_multi_add_handle(multi, easy));
+    defer _ = test_ext.curl_multi_remove_handle(multi, easy);
+
+    test_ext.Curl_zig_url_data_set_i64(easy, 2, 101);
+    const orig_mid = easyMid(easy);
+    try std.testing.expect(orig_mid != std.math.maxInt(u32));
+
+    try std.testing.expectEqual(
+        CURLE_OK,
+        Curl_cf_ngtcp2_h3_stream_setup(&dummy_cf, easy, &ctx, &setup_stream),
+    );
+    const stream = setup_stream.?;
+    stream.id = 4;
+    try std.testing.expectEqual(orig_mid, stream.mid);
+    try std.testing.expectEqual(@as(i64, 101), stream.xfer_id);
+    try std.testing.expectEqual(@as(?*H3StreamCtx, stream), h3StreamCtx(&ctx, easy));
+
+    ctx.call_data.data = easy;
+    try std.testing.expectEqual(@as(?*CurlEasy, easy), Curl_cf_ngtcp2_get_xfer(&ctx, 4));
+
+    // Also verify visit_by_sid path when call_data is another valid handle on the same multi
+    var other_opt: ?*CurlEasy = null;
+    try std.testing.expectEqual(CURLE_OK, test_ext.Curl_open(&other_opt));
+    defer _ = test_ext.Curl_close(&other_opt);
+    const other = other_opt.?;
+    try std.testing.expectEqual(@as(c_int, 0), test_ext.curl_multi_add_handle(multi, other));
+    defer _ = test_ext.curl_multi_remove_handle(multi, other);
+    test_ext.Curl_zig_url_data_set_i64(other, 2, 202);
+
+    ctx.call_data.data = other;
+    try std.testing.expectEqual(@as(?*CurlEasy, easy), Curl_cf_ngtcp2_get_xfer(&ctx, 4));
+
+    // 3. Reject when xfer_id mismatches (simulating mid slot reuse after transfer teardown)
+    ctx.call_data.data = other;
+    test_ext.Curl_zig_url_data_set_i64(easy, 2, 999);
+    try std.testing.expectEqual(@as(?*H3StreamCtx, null), h3StreamCtx(&ctx, easy));
+    try std.testing.expectEqual(@as(?*CurlEasy, null), Curl_cf_ngtcp2_get_xfer(&ctx, 4));
+    test_ext.Curl_zig_url_data_set_i64(easy, 2, 101);
+    try std.testing.expectEqual(@as(?*CurlEasy, easy), Curl_cf_ngtcp2_get_xfer(&ctx, 4));
+
+    // 4. Reject when magic != CURLEASY_MAGIC_NUMBER
+    test_ext.Curl_zig_url_data_set_i64(easy, 1, 0);
+    try std.testing.expect(!goodEasyHandle(easy));
+    try std.testing.expectEqual(std.math.maxInt(u32), easyMid(easy));
+    try std.testing.expectEqual(@as(?*H3StreamCtx, null), h3StreamCtx(&ctx, easy));
+    try std.testing.expectEqual(@as(?*CurlEasy, null), Curl_cf_ngtcp2_get_xfer(&ctx, 4));
+    ctx.call_data.data = easy;
+    try std.testing.expectEqual(@as(?*CurlEasy, null), Curl_cf_ngtcp2_get_xfer(&ctx, 4));
+    test_ext.Curl_zig_url_data_set_i64(easy, 1, CURLEASY_MAGIC_NUMBER);
+
+    // 5. Verify H3TunnelStream.stream is cleared on stream close and cleanup
+    var proxy_ctx = CfNgtcp2ProxyCtx{};
+    proxy_ctx.ts.stream = stream;
+    var proxy_cf: CurlCfilter = std.mem.zeroes(CurlCfilter);
+    proxy_cf.cft = &Curl_cft_h3_proxy;
+    proxy_cf.ctx = &proxy_ctx;
+    Curl_cf_ngtcp2_h3_stream_close(&proxy_cf, easy, &proxy_ctx.q, stream);
+    try std.testing.expectEqual(@as(?*H3StreamCtx, null), proxy_ctx.ts.stream);
+
+    proxy_ctx.ts.stream = stream;
+    h3_tunnel_stream_cleanup(&proxy_ctx.ts);
+    try std.testing.expectEqual(@as(?*H3StreamCtx, null), proxy_ctx.ts.stream);
+
+    // 6. Verify H3StreamCtx freed-memory poisoning via mem.freeTyped
+    const expected_poison: u8 = switch (@import("builtin").mode) {
+        .Debug, .ReleaseSafe => 0xaa,
+        .ReleaseFast, .ReleaseSmall => 0x00,
+    };
+    const saved_cfree = test_ext.Curl_cfree;
+    test_ext.Curl_cfree = test_ext.mockFree;
+    defer test_ext.Curl_cfree = saved_cfree;
+
+    const raw_s = mem.calloc(1, @sizeOf(H3StreamCtx)) orelse return error.OutOfMemory;
+    const temp_s: *H3StreamCtx = @ptrCast(@alignCast(raw_s));
+    temp_s.id = 77;
+    temp_s.mid = 3;
+    temp_s.xfer_id = 555;
+    io_buffers.Curl_bufq_initp(&temp_s.sendbuf, &ctx.stream_bufcp, H3_STREAM_SEND_CHUNKS, BUFQ_OPT_NONE);
+    http1_options.Curl_h1_req_parse_init(&temp_s.h1, 16 * 1024);
+
+    @memset(&test_ext.captured_free_bytes, 0);
+    test_ext.expected_free_ptr = @ptrCast(temp_s);
+    test_ext.captured_stream_free = false;
+    Curl_cf_ngtcp2_h3_stream_ctx_free(temp_s);
+    try std.testing.expect(test_ext.captured_stream_free);
+    for (test_ext.captured_free_bytes) |b| {
+        try std.testing.expectEqual(expected_poison, b);
     }
 }
