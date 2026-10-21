@@ -2203,7 +2203,7 @@ pub export fn Curl_conn_dns_resolved_https(
             if (Curl_peer_same_destination(ctx.peer, peer) and
                 (ctx.dns_queries & CURL_DNSQ_HTTPS) != 0)
             {
-                if (ctx.dns != null) return true;
+                if (ctx.dns != null or ctx.resolv_result != CURLE_OK) return true;
                 return false;
             }
         }

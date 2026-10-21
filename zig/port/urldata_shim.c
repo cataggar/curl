@@ -4866,20 +4866,24 @@ void Curl_zig_multi_set_resolv_thrdq(struct Curl_multi *multi,
 }
 
 #ifdef USE_ARES
-int Curl_zig_ares_init_channel(void **channel_out,
-                               struct Curl_easy *data,
-                               ares_sock_state_cb sock_state_cb)
+int Curl_zig_ares_init_channel(struct Curl_easy *data,
+                               int ares_ver,
+                               void **channel_out)
 {
   struct ares_options options;
   int optmask = ARES_OPT_SOCK_STATE_CB;
 
   memset(&options, 0, sizeof(options));
-  options.sock_state_cb = sock_state_cb;
+  options.sock_state_cb = NULL;
   options.sock_state_cb_data = data;
-#if ARES_VERSION < 0x011400
-  options.timeout = 2000;
-  optmask |= ARES_OPT_TIMEOUTMS;
+#if ARES_VERSION >= 0x011f00
+  options.qcache_max_ttl = 0;
+  optmask |= ARES_OPT_QUERY_CACHE;
 #endif
+  if(ares_ver < 0x011400) {
+    options.timeout = CURL_TIMEOUT_RESOLVE_MS;
+    optmask |= ARES_OPT_TIMEOUTMS;
+  }
   return ares_init_options((ares_channel *)channel_out, &options, optmask);
 }
 
