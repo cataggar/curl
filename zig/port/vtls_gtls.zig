@@ -17,6 +17,8 @@ pub const use_gnutls = backend_options.ssl == .gnutls;
 var gtls_inited: bool = false;
 
 inline fn cfCtx(cf: *vtls_backends.CurlCfilter) ?*vtls_backends.SslConnectData {
+    if (cf.cft != &vtls_backends.vtls_impl.Curl_cft_ssl and cf.cft != &vtls_backends.vtls_impl.Curl_cft_ssl_proxy)
+        return null;
     const raw = cf.ctx orelse return null;
     return @ptrCast(@alignCast(raw));
 }
@@ -1196,7 +1198,12 @@ pub fn gtls_client_init(
     var prioritylist: ?[*:0]const u8 = null;
     var priority_buf: [256]u8 = undefined;
     if (peer.transport == vtls_backends.TRNSPRT_QUIC) {
-        if (conn_config.version_max < CURL_SSLVERSION_MAX_TLSv1_3) {
+        const eff_max = if (conn_config.version_max == CURL_SSLVERSION_MAX_NONE or
+            conn_config.version_max == CURL_SSLVERSION_MAX_DEFAULT)
+            CURL_SSLVERSION_MAX_TLSv1_3
+        else
+            conn_config.version_max;
+        if (eff_max < CURL_SSLVERSION_MAX_TLSv1_3) {
             c_ext.Curl_failf(data, "QUIC needs at least TLS version 1.3");
             return CURLE_SSL_CONNECT_ERROR;
         }
@@ -1529,7 +1536,7 @@ fn gtls_apply_session(
                 scs.alpn orelse @as([*:0]const u8, "-"),
             );
             if (conn_config.earlydata() and scs.alpn != null and
-                !c_ext.Curl_vtls_acc_conn_connect_only(cf.conn))
+                !c_ext.Curl_conn_is_connect_only(cf.conn))
             {
                 var do_early_data = false;
                 if (sess_reuse_cb) |cb| {
@@ -1537,7 +1544,7 @@ fn gtls_apply_session(
                     if (result != CURLE_OK) return result;
                 }
                 if (do_early_data) {
-                    vtls_impl.Curl_alpn_restrict_to(alpns, scs.alpn);
+                    vtls_impl.Curl_alpn_restrict_to(alpns, scs.alpn.?);
                 }
             }
         }
@@ -1559,7 +1566,7 @@ pub fn Curl_gtls_ctx_init(
     if (comptime !use_gnutls) return CURLE_NOT_BUILT_IN;
     const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
 
-    var alpns: vtls_backends.AlpnSpec = .{};
+    var alpns: vtls_backends.AlpnSpec = std.mem.zeroes(vtls_backends.AlpnSpec);
     vtls_impl.Curl_alpn_copy(&alpns, alpns_requested);
 
     var scs: ?*vtls_core.CurlSslSession = null;

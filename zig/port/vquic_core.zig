@@ -27,6 +27,8 @@ const vtls_scache_asn1 = @import("vtls_scache_asn1.zig");
 const vtls_backends = @import("vtls_backends.zig");
 const vtls_gtls = @import("vtls_gtls.zig");
 const vtls_wolfssl = @import("vtls_wolfssl.zig");
+const http1_options = @import("http1_options.zig");
+const vquic_ngtcp2 = @import("vquic_ngtcp2.zig");
 const ossl_backend = vtls_backends.openssl_backend;
 
 const is_windows = builtin.os.tag == .windows;
@@ -185,8 +187,18 @@ const IP_RECVTOS: c_int = 13;
 const IPV6_PKTINFO: c_int = if (is_linux) 50 else 46;
 const IPV6_TCLASS: c_int = if (is_linux) 67 else 36;
 
+const SOCKEINTR: c_int = if (is_windows) 10004 else @backingInt(std.c.E.INTR);
+const SOCKEAGAIN: c_int = if (is_windows) 10035 else @backingInt(std.c.E.AGAIN);
+const SOCKEWOULDBLOCK: c_int = SOCKEAGAIN;
+const SOCKEINVAL: c_int = if (is_windows) 10022 else @backingInt(std.c.E.INVAL);
+
+inline fn sockerrno() c_int {
+    if (is_windows) return 0;
+    return std.c._errno().*;
+}
+
 fn cmsgAlign(len: usize) usize {
-    const a = @sizeOf(usize);
+    const a: usize = @sizeOf(usize);
     return (len + a - 1) & ~(a - 1);
 }
 
@@ -229,7 +241,7 @@ extern fn Curl_failf(data: ?*anyopaque, fmt: [*:0]const u8, ...) callconv(.c) vo
 extern fn Curl_infof(data: ?*anyopaque, fmt: [*:0]const u8, ...) callconv(.c) void;
 extern fn Curl_trc_cf_infof(data: ?*anyopaque, cf: ?*anyopaque, fmt: [*:0]const u8, ...) callconv(.c) void;
 extern fn Curl_pgrs_now(data: ?*anyopaque) callconv(.c) *const curltime;
-extern fn Curl_rand(data: ?*anyopaque, rnd: [*]u8, num: c_uint) callconv(.c) CURLcode;
+extern fn Curl_rand_bytes(data: ?*anyopaque, rnd: [*]u8, num: usize) callconv(.c) CURLcode;
 extern fn curlx_str_number(linep: *?[*:0]const u8, nump: *i64, max: i64) callconv(.c) c_int;
 extern fn Curl_conn_get_first_peer(conn: ?*anyopaque, sockindex: i8) callconv(.c) ?*CurlPeer;
 extern fn Curl_conn_cf_insert_after(cf_at: *CurlCfilter, cf_new: *CurlCfilter) callconv(.c) void;
@@ -648,16 +660,16 @@ fn do_sendmsg(
         while (true) {
             s = posix_net.sendmsg(qctx.sockfd, &msg, 0);
             if (s >= 0) break;
-            if (headers_sock.sockerrno() != headers_sock.SOCKEINTR) break;
+            if (sockerrno() != SOCKEINTR) break;
         }
 
         if (s == -1) {
-            const err = headers_sock.sockerrno();
-            if (err == headers_sock.SOCKEAGAIN or err == headers_sock.SOCKEWOULDBLOCK) {
+            const err = sockerrno();
+            if (err == SOCKEAGAIN or err == SOCKEWOULDBLOCK) {
                 return CURLE_AGAIN;
             } else if (err == @backingInt(std.c.E.MSGSIZE)) {
                 return CURLE_SEND_ERROR;
-            } else if (is_linux and (err == @backingInt(std.c.E.IO) or err == headers_sock.SOCKEINVAL)) {
+            } else if (is_linux and (err == @backingInt(std.c.E.IO) or err == SOCKEINVAL)) {
                 qctx.no_gso = true;
                 return send_packet_no_gso(cf, data, qctx, pkt, pktlen, gsolen, psent);
             } else {
@@ -707,11 +719,11 @@ fn send_packet_no_gso(
             while (true) {
                 s = posix_net.sendmsg(qctx.sockfd, &msg, 0);
                 if (s >= 0) break;
-                if (headers_sock.sockerrno() != headers_sock.SOCKEINTR) break;
+                if (sockerrno() != SOCKEINTR) break;
             }
             if (s == -1) {
-                const err = headers_sock.sockerrno();
-                if (err == headers_sock.SOCKEAGAIN or err == headers_sock.SOCKEWOULDBLOCK) {
+                const err = sockerrno();
+                if (err == SOCKEAGAIN or err == SOCKEWOULDBLOCK) {
                     return CURLE_AGAIN;
                 } else if (err == @backingInt(std.c.E.MSGSIZE)) {
                     return CURLE_SEND_ERROR;
@@ -750,7 +762,7 @@ pub fn vquic_send_packets(
     vquic_ctx_update_time(qctx, data);
     if (qctx.wblock_percent > 0) {
         var r: u8 = 0;
-        _ = Curl_rand(data, @ptrCast(&r), 1);
+        _ = Curl_rand_bytes(data, @ptrCast(&r), 1);
         if (r >= (@as(u16, 100 - qctx.wblock_percent) * 256) / 100) {
             return CURLE_AGAIN;
         }
@@ -952,11 +964,11 @@ pub fn vquic_recv_packets(
             while (true) {
                 rc = posix_net.recvmsg(qctx.sockfd, &msg, 0);
                 if (rc >= 0) break;
-                if (headers_sock.sockerrno() != headers_sock.SOCKEINTR) break;
+                if (sockerrno() != SOCKEINTR) break;
             }
             if (rc < 0) {
-                const err = headers_sock.sockerrno();
-                if (err == headers_sock.SOCKEAGAIN or err == headers_sock.SOCKEWOULDBLOCK) {
+                const err = sockerrno();
+                if (err == SOCKEAGAIN or err == SOCKEWOULDBLOCK) {
                     break;
                 }
                 var errbuf: [STRERROR_LEN]u8 = undefined;
@@ -1075,45 +1087,10 @@ pub export fn Curl_conn_may_http3(
     return CURLE_OK;
 }
 
-/// Temporary Session 4 stub for `Curl_cf_ngtcp2_create` (to be replaced in Session 5).
-pub fn Curl_cf_ngtcp2_create(
-    pcf: *?*CurlCfilter,
-    data: ?*CurlEasy,
-    origin: ?*CurlPeer,
-    peer: ?*CurlPeer,
-    conn: ?*ConnectData,
-    addr: ?*CurlSockaddrEx,
-) callconv(.c) CURLcode {
-    _ = data;
-    _ = origin;
-    _ = peer;
-    _ = conn;
-    _ = addr;
-    pcf.* = null;
-    return CURLE_NOT_BUILT_IN;
-}
-
-/// Temporary Session 4 stub for `Curl_cf_ngtcp2_proxy_create` (to be replaced in Session 5).
-pub fn Curl_cf_ngtcp2_proxy_create(
-    pcf: *?*CurlCfilter,
-    data: ?*CurlEasy,
-    origin: ?*CurlPeer,
-    peer: ?*CurlPeer,
-    conn: ?*ConnectData,
-    addr: ?*CurlSockaddrEx,
-    tunnel_peer: ?*CurlPeer,
-    tunnel_transport: u8,
-) callconv(.c) CURLcode {
-    _ = data;
-    _ = origin;
-    _ = peer;
-    _ = conn;
-    _ = addr;
-    _ = tunnel_peer;
-    _ = tunnel_transport;
-    pcf.* = null;
-    return CURLE_NOT_BUILT_IN;
-}
+pub const Curl_cf_ngtcp2_create = vquic_ngtcp2.Curl_cf_ngtcp2_create;
+pub const Curl_cf_ngtcp2_insert_after = vquic_ngtcp2.Curl_cf_ngtcp2_insert_after;
+pub const Curl_cf_ngtcp2_proxy_create = vquic_ngtcp2.Curl_cf_ngtcp2_proxy_create;
+pub const Curl_cf_ngtcp2_proxy_insert_after = vquic_ngtcp2.Curl_cf_ngtcp2_proxy_insert_after;
 
 /// Temporary Session 4 stub for `Curl_cf_quiche_create` (to be replaced in Session 6).
 pub fn Curl_cf_quiche_create(
@@ -1148,12 +1125,11 @@ pub export fn Curl_cf_quic_create(
     pcf.* = null;
     if (!use_http3) return CURLE_NOT_BUILT_IN;
 
+    _ = tunnel_peer;
+    _ = tunnel_transport;
     std.debug.assert(transport_peer == TRNSPRT_QUIC);
-    if (tunnel_peer != null or tunnel_transport != 0) {
-        return CURLE_QUIC_CONNECT_ERROR;
-    }
     return switch (comptime backend_options.quic) {
-        .ngtcp2 => Curl_cf_ngtcp2_create(pcf, data, origin, peer, conn, addr),
+        .ngtcp2 => vquic_ngtcp2.Curl_cf_ngtcp2_create(pcf, data, origin, peer, conn, addr),
         .quiche => Curl_cf_quiche_create(pcf, data, origin, peer, conn, addr),
         .none => CURLE_NOT_BUILT_IN,
     };
@@ -1166,12 +1142,12 @@ pub export fn Curl_cf_quic_insert_after(
     origin: ?*CurlPeer,
     peer: ?*CurlPeer,
 ) callconv(.c) CURLcode {
+    _ = data;
     var cf: ?*CurlCfilter = null;
-    const result = Curl_cf_quic_create(&cf, data, origin, peer, TRNSPRT_QUIC, cf_at.conn, null, null, 0);
-    if (result == CURLE_OK and cf != null) {
-        Curl_conn_cf_insert_after(cf_at, cf.?);
-    }
-    return result;
+    return switch (comptime backend_options.quic) {
+        .ngtcp2 => vquic_ngtcp2.Curl_cf_ngtcp2_insert_after(cf_at, origin, peer, &cf),
+        .quiche, .none => CURLE_NOT_BUILT_IN,
+    };
 }
 
 /// Create HTTP/3 proxy tunnel connection filter (`Curl_cf_h3_proxy_create` in `lib/vquic/vquic.c`).
@@ -1191,7 +1167,17 @@ pub export fn Curl_cf_h3_proxy_create(
 
     std.debug.assert(transport_peer == TRNSPRT_QUIC);
     return switch (comptime backend_options.quic) {
-        .ngtcp2 => Curl_cf_ngtcp2_proxy_create(pcf, data, origin, peer, conn, addr, tunnel_peer, tunnel_transport),
+        .ngtcp2 => vquic_ngtcp2.Curl_cf_ngtcp2_proxy_create(
+            pcf,
+            data,
+            origin,
+            peer,
+            transport_peer,
+            conn,
+            addr,
+            tunnel_peer,
+            tunnel_transport,
+        ),
         .quiche, .none => CURLE_NOT_BUILT_IN,
     };
 }
@@ -1205,22 +1191,18 @@ pub export fn Curl_cf_h3_proxy_insert_after(
     tunnel_peer: ?*CurlPeer,
     tunnel_transport: u8,
 ) callconv(.c) CURLcode {
-    var cf: ?*CurlCfilter = null;
-    const result = Curl_cf_h3_proxy_create(
-        &cf,
-        data,
-        origin,
-        peer,
-        TRNSPRT_QUIC,
-        cf_at.conn,
-        null,
-        tunnel_peer,
-        tunnel_transport,
-    );
-    if (result == CURLE_OK and cf != null) {
-        Curl_conn_cf_insert_after(cf_at, cf.?);
-    }
-    return result;
+    if (!use_proxy_http3) return CURLE_NOT_BUILT_IN;
+    return switch (comptime backend_options.quic) {
+        .ngtcp2 => vquic_ngtcp2.Curl_cf_ngtcp2_proxy_insert_after(
+            cf_at,
+            data,
+            origin,
+            peer,
+            tunnel_peer,
+            tunnel_transport,
+        ),
+        .quiche, .none => CURLE_NOT_BUILT_IN,
+    };
 }
 
 // ============================================================================
@@ -1256,14 +1238,16 @@ pub fn Curl_vquic_tls_peer_init(
     var tls_id: [80]u8 = @splat(0);
     _ = vtls_backends.vtls_impl.Curl_ssl_version(&tls_id, tls_id.len);
     if (ssl_peer.origin != null or ssl_peer.peer != null) {
-        vtls_scache_asn1.Curl_ssl_peer_cleanup(ssl_peer);
+        vtls_backends.vtls_impl.Curl_ssl_peer_cleanup(ssl_peer);
     }
-    return vtls_scache_asn1.Curl_ssl_peer_init(
+    if (origin == null and peer == null) return CURLE_OK;
+    var dummy_sslc = std.mem.zeroes(SslFilterConfig);
+    return vtls_backends.vtls_impl.Curl_ssl_peer_init(
         ssl_peer,
-        origin,
-        peer,
-        sslc,
-        &tls_id,
+        @ptrCast(@alignCast(origin)),
+        @ptrCast(@alignCast(peer)),
+        sslc orelse &dummy_sslc,
+        @ptrCast(&tls_id),
         TRNSPRT_QUIC,
     );
 }
@@ -1359,8 +1343,8 @@ pub fn Curl_vquic_tls_before_recv(
     switch (comptime backend_options.ssl) {
         .openssl => {
             if (!ctx.ossl.x509_store_setup()) {
-                const ssl_ctx = ctx.ossl.ssl_ctx orelse return CURLE_FAILED_INIT;
-                const result = ossl_backend.Curl_ossl_setup_x509_store(cf, data, ssl_ctx);
+                if (ctx.ossl.ssl_ctx == null) return CURLE_FAILED_INIT;
+                const result = ossl_backend.Curl_ossl_setup_x509_store(cf, data, &ctx.ossl);
                 if (result != CURLE_OK)
                     return result;
                 ctx.ossl.set_x509_store_setup(true);
@@ -1451,7 +1435,7 @@ pub fn Curl_vquic_tls_verify_peer(
             var has_share_scache = false;
             var trc_feat: ?*vtls_backends.CurlTrcFeat = null;
             vtls_backends.c_ext.Curl_vtls_acc_scache_params(data, &scache, &has_share_scache, &trc_feat);
-            vtls_scache_asn1.Curl_ssl_scache_remove_all_zig(cf, data, scache, has_share_scache, trc_feat, skey);
+            vtls_scache_asn1.Curl_ssl_scache_remove_all_zig(cf, data, scache, has_share_scache, null, trc_feat, skey);
         }
     }
     return result;
