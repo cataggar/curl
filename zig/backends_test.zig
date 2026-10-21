@@ -120,8 +120,14 @@ const c = struct {
     pub const CURLOPT_CAINFO: CURLoption = CURLOPTTYPE_OBJECTPOINT + 65;
     pub const CURLOPT_SSL_VERIFYHOST: CURLoption = CURLOPTTYPE_LONG + 81;
     pub const CURLOPT_SSL_CIPHER_LIST: CURLoption = CURLOPTTYPE_OBJECTPOINT + 83;
+    pub const CURLOPT_HTTP_VERSION: CURLoption = CURLOPTTYPE_LONG + 84;
     pub const CURLOPT_NOSIGNAL: CURLoption = CURLOPTTYPE_LONG + 99;
+    pub const CURLOPT_PROXYTYPE: CURLoption = CURLOPTTYPE_LONG + 101;
     pub const CURLOPT_ACCEPT_ENCODING: CURLoption = CURLOPTTYPE_OBJECTPOINT + 102;
+
+    pub const CURL_HTTP_VERSION_3: c_long = 30;
+    pub const CURL_HTTP_VERSION_3ONLY: c_long = 31;
+    pub const CURLPROXY_HTTPS3: c_long = 8;
     pub const CURLOPT_COOKIELIST: CURLoption = 10135;
     pub const CURLOPT_TIMEOUT_MS: CURLoption = CURLOPTTYPE_LONG + 155;
     pub const CURLOPT_CRLFILE: CURLoption = CURLOPTTYPE_OBJECTPOINT + 169;
@@ -236,6 +242,7 @@ test "curl_version_info feature flags match build options" {
     try testing.expect((info.*.features & c.CURL_VERSION_IDN != 0) == (backend_options.idn != .none));
     try testing.expect((info.*.features & c.CURL_VERSION_SSL != 0) == (backend_options.ssl != .none));
     try testing.expect((info.*.features & c.CURL_VERSION_HTTP2 != 0) == backend_options.nghttp2);
+    try testing.expect((info.*.features & c.CURL_VERSION_HTTP3 != 0) == backend_options.http3);
     try testing.expect((info.*.features & c.CURL_VERSION_HSTS != 0) == (backend_options.ssl != .none));
     try testing.expect((info.*.features & c.CURL_VERSION_HTTPS_PROXY != 0) == (backend_options.ssl != .none));
     try testing.expect((info.*.features & c.CURL_VERSION_SSPI != 0) == (backend_options.ssl == .schannel));
@@ -279,6 +286,16 @@ test "curl_version_info feature flags match build options" {
         try testing.expect(info.*.nghttp2_version != null);
         try testing.expect(info.*.nghttp2_ver_num != 0);
     }
+    if (backend_options.http3) {
+        try testing.expect(info.*.quic_version != null);
+        const qver = std.mem.span(info.*.quic_version.?);
+        if (backend_options.quic == .ngtcp2) {
+            try testing.expect(std.mem.indexOf(u8, qver, "ngtcp2/") != null);
+            try testing.expect(std.mem.indexOf(u8, qver, "nghttp3/") != null);
+        }
+    } else {
+        try testing.expect(info.*.quic_version == null);
+    }
     if (backend_options.ares) {
         try testing.expect(info.*.ares != null);
         try testing.expect(info.*.ares_num > 0);
@@ -305,6 +322,8 @@ test "curl_version_info feature_names list matches build options" {
     try testing.expectEqual(backend_options.psl, hasFeature(names, "PSL"));
     try testing.expectEqual(backend_options.idn != .none, hasFeature(names, "IDN"));
     try testing.expectEqual(backend_options.nghttp2, hasFeature(names, "HTTP2"));
+    try testing.expectEqual(backend_options.http3, hasFeature(names, "HTTP3"));
+    try testing.expectEqual(backend_options.proxy_http3, hasFeature(names, "proxy-HTTP3"));
     try testing.expectEqual(backend_options.httpsrr, hasFeature(names, "HTTPSRR"));
     try testing.expectEqual(
         backend_options.ares and backend_options.httpsrr and backend_options.use_resolv_threaded,
@@ -328,7 +347,21 @@ test "curl_version string reflects enabled backends" {
     try testing.expectEqual(backend_options.zlib, std.mem.indexOf(u8, ver, "zlib/") != null);
     try testing.expectEqual(backend_options.zstd, std.mem.indexOf(u8, ver, "zstd/") != null);
     try testing.expectEqual(backend_options.nghttp2, std.mem.indexOf(u8, ver, "nghttp2/") != null);
+    try testing.expectEqual(backend_options.quic == .ngtcp2, std.mem.indexOf(u8, ver, "ngtcp2/") != null);
+    try testing.expectEqual(backend_options.quic == .ngtcp2, std.mem.indexOf(u8, ver, "nghttp3/") != null);
     try testing.expectEqual(backend_options.ares, std.mem.indexOf(u8, ver, "c-ares/") != null);
+}
+
+test "HTTP/3 CURLOPT_HTTP_VERSION and CURLOPT_PROXYTYPE match build options" {
+    const easy = curl_easy_init() orelse return error.EasyInitFailed;
+    defer curl_easy_cleanup(easy);
+
+    const expected_h3: c.CURLcode = if (backend_options.http3) c.CURLE_OK else c.CURLE_NOT_BUILT_IN;
+    try testing.expectEqual(expected_h3, curl_easy_setopt(easy, c.CURLOPT_HTTP_VERSION, c.CURL_HTTP_VERSION_3));
+    try testing.expectEqual(expected_h3, curl_easy_setopt(easy, c.CURLOPT_HTTP_VERSION, c.CURL_HTTP_VERSION_3ONLY));
+
+    const expected_proxy_h3: c.CURLcode = if (backend_options.proxy_http3) c.CURLE_OK else c.CURLE_NOT_BUILT_IN;
+    try testing.expectEqual(expected_proxy_h3, curl_easy_setopt(easy, c.CURLOPT_PROXYTYPE, c.CURLPROXY_HTTPS3));
 }
 
 test "c-ares CURLOPT_DNS_* options match use_resolv_ares" {

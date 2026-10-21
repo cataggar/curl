@@ -251,6 +251,16 @@ extern fn Curl_cf_h2_proxy_insert_after(
     dest: *Curl_peer,
     udp_tunnel: bool,
 ) callconv(.c) CURLcode;
+extern fn Curl_cf_h3_proxy_insert_after(
+    cf_at: *Curl_cfilter,
+    data: ?*Curl_easy,
+    origin: ?*Curl_peer,
+    peer: ?*Curl_peer,
+    tunnel_peer: ?*Curl_peer,
+    tunnel_transport: u8,
+) callconv(.c) CURLcode;
+
+const use_proxy_http3 = if (@hasDecl(backend_options, "proxy_http3")) backend_options.proxy_http3 else false;
 
 extern fn Curl_cf_def_shutdown(cf: *Curl_cfilter, data: ?*Curl_easy, done: *bool) callconv(.c) CURLcode;
 extern fn Curl_cf_def_adjust_pollset(cf: *Curl_cfilter, data: ?*Curl_easy, ps: *easy_pollset) callconv(.c) CURLcode;
@@ -1491,6 +1501,18 @@ fn http_proxy_cf_connect(cf: *Curl_cfilter, data: ?*Curl_easy, done: *bool) call
                     ctx.peer.?,
                     ctx.tunnel_peer.?,
                     udp_tunnel,
+                );
+                if (result != CURLE_OK)
+                    return result;
+            } else if (use_proxy_http3 and std.mem.orderZ(u8, alpn_str, "h3") == .eq) {
+                Curl_trc_cf_infof(data, cf, "installing subfilter for HTTP/3");
+                result = Curl_cf_h3_proxy_insert_after(
+                    cf,
+                    data,
+                    ctx.peer,
+                    ctx.peer,
+                    ctx.tunnel_peer,
+                    ctx.tunnel_transport,
                 );
                 if (result != CURLE_OK)
                     return result;

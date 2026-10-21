@@ -2115,6 +2115,18 @@ extern fn Curl_cf_ssl_proxy_insert_after(
     data: ?*anyopaque,
     peer: ?*CurlPeer,
 ) callconv(.c) c_uint;
+extern fn Curl_cf_capsule_insert_after(
+    cf_at: *CurlCfilter,
+    data: ?*anyopaque,
+) callconv(.c) c_uint;
+extern fn Curl_cf_quic_insert_after(
+    cf_at: *CurlCfilter,
+    data: ?*anyopaque,
+    origin: ?*CurlPeer,
+    peer: ?*CurlPeer,
+) callconv(.c) c_uint;
+
+const use_http3 = if (@hasDecl(backend_options, "http3")) backend_options.http3 else false;
 
 const CfSetupState = enum(c_int) {
     init = 0,
@@ -2302,7 +2314,30 @@ fn cfSetupAddOriginFilters(cf: *CurlCfilter, data: ?*anyopaque) c_uint {
     var result: c_uint = CURLE_OK;
 
     if (@backingInt(ctx.state) < @backingInt(CfSetupState.cnnct_ssl)) {
-        if ((ctx.setup_flags & 8) != 0) {
+        if (use_http3 and ctx.transport == TRNSPRT_QUIC and
+            ctx.http_peer != null and (ctx.setup_flags & 1) == 0)
+        {
+            const origin = Curl_conn_get_origin(cf.conn, cf.sockindex);
+            const peer = Curl_conn_get_destination(cf.conn, cf.sockindex);
+
+            result = Curl_cf_capsule_insert_after(cf, data);
+            if (result != CURLE_OK) {
+                if (Curl_trc_cf_is_verbose(cf, data)) {
+                    Curl_trc_cf_infof(data, cf, "adding capsule filter failed -> %d", @as(c_int, @intCast(result)));
+                }
+                return result;
+            }
+            result = Curl_cf_quic_insert_after(cf, data, origin, peer);
+            if (result != CURLE_OK) {
+                if (Curl_trc_cf_is_verbose(cf, data)) {
+                    Curl_trc_cf_infof(data, cf, "adding QUIC filter failed -> %d", @as(c_int, @intCast(result)));
+                }
+                return result;
+            }
+            if (Curl_trc_cf_is_verbose(cf, data)) {
+                Curl_trc_cf_infof(data, cf, "added QUIC filter for origin");
+            }
+        } else if ((ctx.setup_flags & 8) != 0) {
             const proto_ssl = (ctx.setup_flags & 2) != 0;
             if ((ctx.ssl_mode == CURL_CF_SSL_ENABLE or
                 (ctx.ssl_mode != CURL_CF_SSL_DISABLE and proto_ssl)) and

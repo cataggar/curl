@@ -137,6 +137,8 @@ pub const CURLPROXY_HTTPS: u8 = 2;
 pub const CURLPROXY_HTTPS2: u8 = 3;
 
 pub const TRNSPRT_TCP: u8 = 3;
+pub const TRNSPRT_UDP: u8 = 4;
+pub const TRNSPRT_QUIC: u8 = 5;
 pub const FIRSTSOCKET: i8 = 0;
 
 pub const TIMER_APPCONNECT: c_int = 5;
@@ -5163,7 +5165,7 @@ const schannel_backend = struct {
 // 3. lib/vtls/openssl.c — OpenSSL Backend
 // ============================================================================
 
-const openssl_backend = struct {
+pub const openssl_backend = struct {
     const SSL_CTX = opaque {};
     const SSL = opaque {};
     const SSL_METHOD = opaque {};
@@ -5255,6 +5257,7 @@ const openssl_backend = struct {
     const SSL_CTRL_SET_SIGALGS_LIST: c_int = 98;
     const SSL_CTRL_SET_MIN_PROTO_VERSION: c_int = 123;
     const SSL_CTRL_SET_MAX_PROTO_VERSION: c_int = 124;
+    const SSL_CTRL_GET_NEGOTIATED_GROUP: c_int = 134;
 
     const TLSEXT_NAMETYPE_host_name: c_long = 0;
     const TLSEXT_STATUSTYPE_ocsp: c_long = 1;
@@ -5270,7 +5273,9 @@ const openssl_backend = struct {
     const SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS: u64 = 0x00000800;
     const SSL_OP_NO_TICKET: u64 = 0x00004000;
     const SSL_OP_NO_COMPRESSION: u64 = 0x00020000;
+    const SSL_OP_NO_SSLv3: u64 = 1 << 25;
     const SSL_OP_ALL: u64 = 0x80000054;
+    const SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER: c_long = 0x00000002;
     const SSL_MODE_RELEASE_BUFFERS: c_long = 0x00000010;
 
     const NID_undef: c_int = 0;
@@ -5385,9 +5390,13 @@ const openssl_backend = struct {
 
     const PemPasswordCb = *const fn ([*]u8, c_int, c_int, ?*anyopaque) callconv(.c) c_int;
     const KeylogCb = *const fn (*const SSL, [*:0]const u8) callconv(.c) void;
-    const NewSessionCb = *const fn (*SSL, *SSL_SESSION) callconv(.c) c_int;
+    pub const NewSessionCb = *const fn (*SSL, *SSL_SESSION) callconv(.c) c_int;
+    pub const OsslCtxSetupCb = *const fn (*CurlCfilter, ?*CurlEasy, ?*anyopaque) callconv(.c) CURLcode;
+    pub const OsslInitSessionReuseCb = *const fn (*CurlCfilter, ?*CurlEasy, *AlpnSpec, *CurlSslSession, *bool) callconv(.c) CURLcode;
+    const SSL_CIPHER = opaque {};
 
-    const ossl_ext = struct {
+    pub const ossl_ext = struct {
+        extern fn TLS_method() callconv(.c) ?*const SSL_METHOD;
         extern fn TLS_client_method() callconv(.c) ?*const SSL_METHOD;
         extern fn SSL_CTX_new(meth: ?*const SSL_METHOD) callconv(.c) ?*SSL_CTX;
         extern fn SSL_CTX_new_ex(libctx: ?*OSSL_LIB_CTX, propq: ?[*:0]const u8, meth: ?*const SSL_METHOD) callconv(.c) ?*SSL_CTX;
@@ -5404,6 +5413,7 @@ const openssl_backend = struct {
         extern fn SSL_CTX_set_ciphersuites(ctx: *SSL_CTX, str: [*:0]const u8) callconv(.c) c_int;
         extern fn SSL_CTX_set_post_handshake_auth(ctx: *SSL_CTX, val: c_int) callconv(.c) void;
         extern fn SSL_CTX_set_alpn_protos(ctx: *SSL_CTX, protos: [*]const u8, protos_len: c_uint) callconv(.c) c_int;
+        extern fn SSL_set_alpn_protos(ssl: *SSL, protos: [*]const u8, protos_len: c_uint) callconv(.c) c_int;
         extern fn SSL_CTX_set_keylog_callback(ctx: *SSL_CTX, cb: ?KeylogCb) callconv(.c) void;
         extern fn SSL_CTX_set_default_passwd_cb(ctx: *SSL_CTX, cb: ?PemPasswordCb) callconv(.c) void;
         extern fn SSL_CTX_set_default_passwd_cb_userdata(ctx: *SSL_CTX, u: ?*anyopaque) callconv(.c) void;
@@ -5429,7 +5439,7 @@ const openssl_backend = struct {
         extern fn SSL_get_shutdown(ssl: *const SSL) callconv(.c) c_int;
         extern fn SSL_pending(ssl: *const SSL) callconv(.c) c_int;
         extern fn SSL_get_error(ssl: *const SSL, ret_code: c_int) callconv(.c) c_int;
-        extern fn SSL_ctrl(ssl: *SSL, cmd: c_int, larg: c_long, parg: ?*anyopaque) callconv(.c) c_long;
+        pub extern fn SSL_ctrl(ssl: *SSL, cmd: c_int, larg: c_long, parg: ?*anyopaque) callconv(.c) c_long;
         extern fn SSL_get0_alpn_selected(ssl: *const SSL, data: *?[*]const u8, len: *c_uint) callconv(.c) void;
         extern fn SSL_get_verify_result(ssl: *const SSL) callconv(.c) c_long;
         extern fn SSL_get1_peer_certificate(ssl: *const SSL) callconv(.c) ?*X509;
@@ -5438,8 +5448,13 @@ const openssl_backend = struct {
         extern fn SSL_session_reused(ssl: *const SSL) callconv(.c) c_int;
         extern fn SSL_set_session(ssl: *SSL, session: ?*SSL_SESSION) callconv(.c) c_int;
         extern fn SSL_version(ssl: *const SSL) callconv(.c) c_int;
+        extern fn SSL_get_version(ssl: *const SSL) callconv(.c) ?[*:0]const u8;
+        extern fn SSL_get_current_cipher(ssl: *const SSL) callconv(.c) ?*const SSL_CIPHER;
+        extern fn SSL_CIPHER_get_name(c: ?*const SSL_CIPHER) callconv(.c) ?[*:0]const u8;
+        extern fn SSL_get_peer_signature_type_nid(ssl: *const SSL, pnid: *c_int) callconv(.c) c_int;
         extern fn SSL_SESSION_free(ses: ?*SSL_SESSION) callconv(.c) void;
         extern fn SSL_SESSION_get_timeout(s: *const SSL_SESSION) callconv(.c) c_long;
+        extern fn SSL_SESSION_get_max_early_data(s: *const SSL_SESSION) callconv(.c) u32;
         extern fn i2d_SSL_SESSION(in: *SSL_SESSION, pp: ?*?[*]u8) callconv(.c) c_int;
         extern fn d2i_SSL_SESSION(a: ?*?*SSL_SESSION, pp: *?[*]const u8, length: c_long) callconv(.c) ?*SSL_SESSION;
 
@@ -6894,6 +6909,365 @@ const openssl_backend = struct {
         return CURLE_OK;
     }
 
+    pub fn Curl_ossl_add_session(
+        cf: *CurlCfilter,
+        data: ?*CurlEasy,
+        octx: *OsslCtx,
+        ssl_peer_key: ?[*:0]const u8,
+        session: *SSL_SESSION,
+        alpn: ?[*:0]const u8,
+        quic_tp: ?[*]u8,
+        quic_tp_len: usize,
+        psession: ?*?*CurlSslSession,
+    ) callconv(.c) CURLcode {
+        if (psession) |ps| ps.* = null;
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_OK;
+        if (!conn_config.primary_cache_session()) return CURLE_OK;
+        const peer_key = ssl_peer_key orelse return CURLE_OK;
+
+        const sess_len = ossl_ext.i2d_SSL_SESSION(session, null);
+        if (sess_len <= 0) return CURLE_OUT_OF_MEMORY;
+        const sess_buf_raw = mem.malloc(@intCast(sess_len)) orelse return CURLE_OUT_OF_MEMORY;
+        var sess_ptr: ?[*]u8 = @ptrCast(sess_buf_raw);
+        const enc_len = ossl_ext.i2d_SSL_SESSION(session, &sess_ptr);
+        if (enc_len <= 0 or enc_len > sess_len) {
+            mem.free(sess_buf_raw);
+            return CURLE_OUT_OF_MEMORY;
+        }
+
+        var qtp_clone: ?[*]u8 = null;
+        if (quic_tp != null and quic_tp_len > 0) {
+            const qtp_raw = mem.malloc(quic_tp_len + 1) orelse {
+                mem.free(sess_buf_raw);
+                return CURLE_OUT_OF_MEMORY;
+            };
+            const qtp_bytes: [*]u8 = @ptrCast(qtp_raw);
+            @memcpy(qtp_bytes[0..quic_tp_len], quic_tp.?[0..quic_tp_len]);
+            qtp_bytes[quic_tp_len] = 0;
+            qtp_clone = qtp_bytes;
+        }
+
+        const timeout = ossl_ext.SSL_SESSION_get_timeout(session);
+        const valid_until = if (timeout > 0) c_ext.Curl_pgrs_now(data).tv_sec + @as(i64, @intCast(timeout)) else 0;
+        const ietf_tls_id = if (octx.ssl) |s| ossl_ext.SSL_version(s) else TLS1_3_VERSION;
+        const earlydata_max: usize = ossl_ext.SSL_SESSION_get_max_early_data(session);
+
+        var sc_session: ?*CurlSslSession = null;
+        const res = vtls_scache_asn1.Curl_ssl_session_create2(
+            @ptrCast(sess_buf_raw),
+            @intCast(enc_len),
+            @intCast(ietf_tls_id),
+            alpn,
+            valid_until,
+            earlydata_max,
+            qtp_clone,
+            quic_tp_len,
+            &sc_session,
+        );
+        if (res != CURLE_OK or sc_session == null) return res;
+        if (builtin.os.tag.isDarwin() and octx.sectrust_verified()) {
+            sc_session.?.setSectrustVerified(true);
+        }
+
+        var scache: ?*CurlSslScache = null;
+        var has_share_scache = false;
+        var trc_feat: ?*CurlTrcFeat = null;
+        c_ext.Curl_vtls_acc_scache_params(data, &scache, &has_share_scache, &trc_feat);
+        return vtls_scache_asn1.Curl_ssl_scache_put_zig(
+            cf,
+            data,
+            scache,
+            has_share_scache,
+            @ptrCast(conn_config),
+            trc_feat,
+            peer_key,
+            sc_session.?,
+        );
+    }
+
+    pub fn Curl_ossl_report_handshake(data: ?*CurlEasy, octx: *OsslCtx) callconv(.c) void {
+        const ssl = octx.ssl orelse return;
+        var psigtype_nid: c_int = NID_undef;
+        _ = ossl_ext.SSL_get_peer_signature_type_nid(ssl, &psigtype_nid);
+        const group_nid: c_int = @intCast(ossl_ext.SSL_ctrl(ssl, SSL_CTRL_GET_NEGOTIATED_GROUP, 0, null) & 0x0000FFFF);
+        const negotiated_group_name = ossl_ext.OBJ_nid2sn(group_nid) orelse "[blank]";
+        const ver_str = ossl_ext.SSL_get_version(ssl) orelse "unknown";
+        const cipher_str = ossl_ext.SSL_CIPHER_get_name(ossl_ext.SSL_get_current_cipher(ssl)) orelse "unknown";
+        const sig_str = ossl_ext.OBJ_nid2sn(psigtype_nid) orelse "unknown";
+        c_ext.Curl_infof(
+            data,
+            "SSL connection using %s / %s / %s / %s",
+            ver_str,
+            cipher_str,
+            negotiated_group_name,
+            sig_str,
+        );
+    }
+
+    pub fn Curl_ossl_ctx_init(
+        octx: *OsslCtx,
+        cf: *CurlCfilter,
+        data: ?*CurlEasy,
+        peer: *SslPeer,
+        alpns_requested: ?*const AlpnSpec,
+        cb_setup: ?OsslCtxSetupCb,
+        cb_user_data: ?*anyopaque,
+        cb_new_session: ?NewSessionCb,
+        ssl_user_data: ?*anyopaque,
+        sess_reuse_cb: ?OsslInitSessionReuseCb,
+    ) callconv(.c) CURLcode {
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+        const ssl_config = vtls_impl.Curl_ssl_cf_get_easy_config(cf, data);
+        const is_proxy = vtls_impl.Curl_ssl_cf_is_proxy(cf);
+
+        if (ossl_ext.RAND_status() == 0) {
+            c_ext.Curl_failf(data, "Insufficient randomness");
+            return CURLE_SSL_CONNECT_ERROR;
+        }
+
+        if (c_ext.Curl_vtls_acc_ssl_engine(data)) |eng_name| {
+            const prov_rc = osslSetProvider(data, octx, eng_name);
+            if (prov_rc != CURLE_OK) return prov_rc;
+        }
+
+        if (ssl_config) |sc| {
+            sc.certverifyresult = 1;
+        }
+
+        var ssl_version_min: u8 = conn_config.version;
+        var req_method: ?*const SSL_METHOD = null;
+        if (peer.transport == TRNSPRT_QUIC) {
+            ssl_version_min = CURL_SSLVERSION_TLSv1_3;
+            if (conn_config.version_max != 0 and
+                conn_config.version_max != CURL_SSLVERSION_MAX_DEFAULT and
+                conn_config.version_max != CURL_SSLVERSION_MAX_TLSv1_3)
+            {
+                c_ext.Curl_failf(data, "QUIC needs at least TLS version 1.3");
+                return CURLE_SSL_CONNECT_ERROR;
+            }
+            req_method = ossl_ext.TLS_method();
+        } else if (peer.transport == TRNSPRT_TCP) {
+            switch (ssl_version_min) {
+                CURL_SSLVERSION_DEFAULT,
+                CURL_SSLVERSION_TLSv1,
+                CURL_SSLVERSION_TLSv1_0,
+                CURL_SSLVERSION_TLSv1_1,
+                CURL_SSLVERSION_TLSv1_2,
+                CURL_SSLVERSION_TLSv1_3,
+                => req_method = ossl_ext.TLS_client_method(),
+                CURL_SSLVERSION_SSLv2 => {
+                    c_ext.Curl_failf(data, "No SSLv2 support");
+                    return CURLE_NOT_BUILT_IN;
+                },
+                CURL_SSLVERSION_SSLv3 => {
+                    c_ext.Curl_failf(data, "No SSLv3 support");
+                    return CURLE_NOT_BUILT_IN;
+                },
+                else => {
+                    c_ext.Curl_failf(data, "Unrecognized parameter passed via CURLOPT_SSLVERSION");
+                    return CURLE_SSL_CONNECT_ERROR;
+                },
+            }
+        } else {
+            c_ext.Curl_failf(data, "unsupported transport %d in SSL init", @as(c_int, peer.transport));
+            return CURLE_SSL_CONNECT_ERROR;
+        }
+        const method = req_method orelse return CURLE_SSL_CONNECT_ERROR;
+
+        if (octx.ssl_ctx) |old| ossl_ext.SSL_CTX_free(old);
+        octx.set_x509_store_setup(false);
+        octx.ssl_ctx = if (octx.p.libctx != null)
+            ossl_ext.SSL_CTX_new_ex(octx.p.libctx, octx.p.propq, method)
+        else
+            ossl_ext.SSL_CTX_new(method);
+        const ssl_ctx = octx.ssl_ctx orelse return CURLE_OUT_OF_MEMORY;
+
+        if (cb_setup) |setup_fn| {
+            const rc = setup_fn(cf, data, cb_user_data);
+            if (rc != CURLE_OK) return rc;
+        }
+
+        const ver_range = mapTlsVersionMinMax(ssl_version_min, conn_config.version_max) orelse {
+            c_ext.Curl_failf(data, "OpenSSL: unsupported SSL version range");
+            return CURLE_NOT_BUILT_IN;
+        };
+
+        var ctx_options: u64 = SSL_OP_ALL | SSL_OP_NO_TICKET | SSL_OP_NO_COMPRESSION | SSL_OP_NO_SSLv3;
+        ctx_options &= ~SSL_OP_NETSCAPE_REUSE_CIPHER_CHANGE_BUG;
+        if (!conn_config.enable_beast()) {
+            ctx_options &= ~SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS;
+        }
+        _ = ossl_ext.SSL_CTX_set_options(ssl_ctx, ctx_options);
+        _ = ossl_ext.SSL_CTX_ctrl(ssl_ctx, SSL_CTRL_SET_READ_AHEAD, 1, null);
+        _ = ossl_ext.SSL_CTX_ctrl(ssl_ctx, SSL_CTRL_MODE, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_RELEASE_BUFFERS, null);
+
+        if (ossl_ext.SSL_CTX_ctrl(ssl_ctx, SSL_CTRL_SET_MIN_PROTO_VERSION, ver_range.min_ver, null) == 0) {
+            return CURLE_SSL_CONNECT_ERROR;
+        }
+        if (ver_range.max_ver != 0) {
+            if (ossl_ext.SSL_CTX_ctrl(ssl_ctx, SSL_CTRL_SET_MAX_PROTO_VERSION, ver_range.max_ver, null) == 0) {
+                return CURLE_SSL_CONNECT_ERROR;
+            }
+        }
+
+        if (ssl_version_min < CURL_SSLVERSION_TLSv1_3) {
+            const ciphers: ?[*:0]const u8 = if (conn_config.cipher_list) |c| c else if (peer.transport != TRNSPRT_QUIC) c_ext.Curl_vtls_acc_ssl_cipher_list(data, is_proxy) else null;
+            if (ciphers) |c_str| {
+                if (ossl_ext.SSL_CTX_set_cipher_list(ssl_ctx, c_str) == 0) {
+                    c_ext.Curl_failf(data, "failed setting cipher list: %s", c_str);
+                    return CURLE_SSL_CIPHER;
+                }
+            }
+        }
+
+        const ciphers13: ?[*:0]const u8 = if (conn_config.cipher_list13) |c| c else c_ext.Curl_vtls_acc_ssl_cipher13_list(data, is_proxy);
+        if (ciphers13) |c13_str| {
+            if (ossl_ext.SSL_CTX_set_ciphersuites(ssl_ctx, c13_str) == 0) {
+                c_ext.Curl_failf(data, "failed setting TLS 1.3 cipher suite: %s", c13_str);
+                return CURLE_SSL_CIPHER;
+            }
+        }
+
+        const cert_rc = configureClientCertAndKey(cf, data, ssl_ctx, conn_config);
+        if (cert_rc != CURLE_OK) return cert_rc;
+
+        ossl_ext.SSL_CTX_set_post_handshake_auth(ssl_ctx, 1);
+
+        const curves: ?[*:0]const u8 = if (conn_config.curves) |c| c else c_ext.Curl_vtls_acc_ssl_ec_curves(data);
+        if (curves) |curves_str| {
+            if (ossl_ext.SSL_CTX_ctrl(ssl_ctx, SSL_CTRL_SET_GROUPS_LIST, 0, @ptrCast(@constCast(curves_str))) == 0) {
+                c_ext.Curl_failf(data, "failed setting curves list: '%s'", curves_str);
+                return CURLE_SSL_CIPHER;
+            }
+        }
+
+        const sigalgs: ?[*:0]const u8 = if (conn_config.signature_algorithms) |s| s else c_ext.Curl_vtls_acc_ssl_signature_algorithms(data);
+        if (sigalgs) |sigalgs_str| {
+            if (ossl_ext.SSL_CTX_ctrl(ssl_ctx, SSL_CTRL_SET_SIGALGS_LIST, 0, @ptrCast(@constCast(sigalgs_str))) == 0) {
+                c_ext.Curl_failf(data, "failed setting signature algorithms list: '%s'", sigalgs_str);
+                return CURLE_SSL_CIPHER;
+            }
+        }
+
+        ossl_ext.SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_NONE, null);
+
+        vtls_core.Curl_tls_keylog_open();
+        if (vtls_core.Curl_tls_keylog_enabled()) {
+            ossl_ext.SSL_CTX_set_keylog_callback(ssl_ctx, &osslKeylogCallback);
+        }
+
+        if (cb_new_session) |new_sess_fn| {
+            _ = ossl_ext.SSL_CTX_ctrl(ssl_ctx, SSL_CTRL_SET_SESS_CACHE_MODE, SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_NO_INTERNAL, null);
+            ossl_ext.SSL_CTX_sess_set_new_cb(ssl_ctx, new_sess_fn);
+        }
+
+        var fsslctx: ?*const anyopaque = null;
+        var fsslctxp: ?*anyopaque = null;
+        if (c_ext.Curl_vtls_acc_ssl_fsslctx(data, &fsslctx, &fsslctxp)) {
+            if (!octx.x509_store_setup()) {
+                const store_rc = Curl_ossl_setup_x509_store(cf, data, octx);
+                if (store_rc != CURLE_OK) return store_rc;
+                octx.set_x509_store_setup(true);
+            }
+            const cb: *const fn (?*CurlEasy, ?*anyopaque, ?*anyopaque) callconv(.c) CURLcode = @ptrCast(@alignCast(fsslctx.?));
+            const rc = cb(data, ssl_ctx, fsslctxp);
+            if (rc != CURLE_OK) {
+                c_ext.Curl_failf(data, "error signaled by ssl ctx callback");
+                return rc;
+            }
+        }
+
+        if (octx.ssl) |old| ossl_ext.SSL_free(old);
+        const ssl = ossl_ext.SSL_new(ssl_ctx) orelse return CURLE_OUT_OF_MEMORY;
+        octx.ssl = ssl;
+        _ = ossl_ext.SSL_set_ex_data(ssl, 0, ssl_user_data);
+        if (conn_config.verifystatus()) {
+            _ = ossl_ext.SSL_ctrl(ssl, SSL_CTRL_SET_TLSEXT_STATUS_REQ_TYPE, TLSEXT_STATUSTYPE_ocsp, null);
+        }
+        ossl_ext.SSL_set_connect_state(ssl);
+
+        if (peer.sni) |sni| {
+            if (ossl_ext.SSL_ctrl(ssl, SSL_CTRL_SET_TLSEXT_HOSTNAME, TLSEXT_NAMETYPE_host_name, @ptrCast(@constCast(sni))) == 0) {
+                c_ext.Curl_failf(data, "Failed set SNI");
+                return CURLE_SSL_CONNECT_ERROR;
+            }
+        }
+
+        var alpns: AlpnSpec = undefined;
+        vtls_impl.Curl_alpn_copy(&alpns, alpns_requested);
+        octx.set_reused_session(false);
+
+        if (conn_config.primary_cache_session() and !conn_config.verifystatus()) {
+            if (peer.scache_key) |peer_key| {
+                var scache: ?*CurlSslScache = null;
+                var has_share_scache = false;
+                var trc_feat: ?*CurlTrcFeat = null;
+                c_ext.Curl_vtls_acc_scache_params(data, &scache, &has_share_scache, &trc_feat);
+                var sc_session: ?*CurlSslSession = null;
+                _ = vtls_scache_asn1.Curl_ssl_scache_take_zig(
+                    cf,
+                    data,
+                    scache,
+                    has_share_scache,
+                    @ptrCast(conn_config),
+                    trc_feat,
+                    peer_key,
+                    &sc_session,
+                );
+                if (sc_session) |scs| {
+                    defer _ = vtls_scache_asn1.Curl_ssl_scache_put_zig(
+                        cf,
+                        data,
+                        scache,
+                        has_share_scache,
+                        @ptrCast(conn_config),
+                        trc_feat,
+                        peer_key,
+                        scs,
+                    );
+                    if (scs.sdata != null and scs.sdata_len > 0) {
+                        var sdata_ptr: ?[*]const u8 = scs.sdata;
+                        if (ossl_ext.d2i_SSL_SESSION(null, &sdata_ptr, @intCast(scs.sdata_len))) |sess| {
+                            defer ossl_ext.SSL_SESSION_free(sess);
+                            if (ossl_ext.SSL_set_session(ssl, sess) == 1) {
+                                octx.set_reused_session(true);
+                                if (builtin.os.tag.isDarwin()) {
+                                    octx.set_sectrust_session(scs.isSectrustVerified());
+                                    octx.set_sectrust_verified(scs.isSectrustVerified());
+                                }
+                                if (conn_config.earlydata() and scs.alpn != null and ossl_ext.SSL_SESSION_get_max_early_data(sess) > 0) {
+                                    var do_early_data = false;
+                                    if (sess_reuse_cb) |reuse_fn| {
+                                        _ = reuse_fn(cf, data, &alpns, scs, &do_early_data);
+                                    }
+                                    if (do_early_data) {
+                                        vtls_impl.Curl_alpn_restrict_to(&alpns, scs.alpn.?);
+                                    }
+                                }
+                            } else {
+                                ossl_ext.ERR_clear_error();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (alpns.count > 0) {
+            var proto: AlpnProtoBuf = undefined;
+            if (alpnToProtoBuf(&proto, &alpns) != CURLE_OK) {
+                c_ext.Curl_failf(data, "Error determining ALPN");
+                return CURLE_SSL_CONNECT_ERROR;
+            }
+            if (ossl_ext.SSL_set_alpn_protos(ssl, &proto.data, @intCast(proto.len)) != 0) {
+                c_ext.Curl_failf(data, "Error setting ALPN");
+                return CURLE_SSL_CONNECT_ERROR;
+            }
+        }
+
+        return CURLE_OK;
+    }
+
     fn osslNewSessionCb(ssl: *SSL, ssl_sessionid: *SSL_SESSION) callconv(.c) c_int {
         const cf_raw = ossl_ext.SSL_get_ex_data(ssl, 0) orelse blk: {
             const rbio = ossl_ext.SSL_get_rbio(ssl) orelse return 0;
@@ -7424,10 +7798,7 @@ const openssl_backend = struct {
         return result;
     }
 
-    fn osslClose(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) void {
-        _ = data;
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return));
-        const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return));
+    pub fn Curl_osslctx_cleanup(octx: *OsslCtx) callconv(.c) void {
         if (octx.ssl) |ssl| {
             ossl_ext.SSL_free(ssl);
             octx.ssl = null;
@@ -7442,6 +7813,13 @@ const openssl_backend = struct {
             octx.bio_method = null;
         }
         osslProviderCleanup(octx);
+    }
+
+    fn osslClose(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) void {
+        _ = data;
+        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return));
+        const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return));
+        Curl_osslctx_cleanup(octx);
     }
 
     fn osslCloseAll(data: ?*CurlEasy) callconv(.c) void {
@@ -9428,6 +9806,10 @@ comptime {
             @export(&openssl_backend.Curl_ossl_certchain, .{ .name = "Curl_ossl_certchain" });
             @export(&openssl_backend.Curl_ossl_check_peer_cert, .{ .name = "Curl_ossl_check_peer_cert" });
             @export(&openssl_backend.Curl_ossl_setup_x509_store, .{ .name = "Curl_ossl_setup_x509_store" });
+            @export(&openssl_backend.Curl_ossl_ctx_init, .{ .name = "Curl_ossl_ctx_init" });
+            @export(&openssl_backend.Curl_osslctx_cleanup, .{ .name = "Curl_osslctx_cleanup" });
+            @export(&openssl_backend.Curl_ossl_report_handshake, .{ .name = "Curl_ossl_report_handshake" });
+            @export(&openssl_backend.Curl_ossl_add_session, .{ .name = "Curl_ossl_add_session" });
         } else if (backend_options.ssl == .mbedtls) {
             @export(&mbedtls_backend.Curl_ssl_mbedtls, .{ .name = "Curl_ssl_mbedtls" });
         }

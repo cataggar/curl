@@ -398,6 +398,8 @@ pub const GtlsSslBackendData = extern struct {
     sent_shutdown: bool = false,
 };
 
+pub const GtlsCtx = GtlsSslBackendData;
+
 pub const gtls_ssl_backend_data = GtlsSslBackendData;
 pub const gtls_ctx = GtlsSslBackendData;
 
@@ -1149,7 +1151,9 @@ pub fn gtls_client_init(
         init_flags |= GNUTLS_NO_STATUS_REQUEST;
     }
 
-    if (earlydata_max > 0 and earlydata_max != std.math.maxInt(usize)) {
+    if (peer.transport == vtls_backends.TRNSPRT_QUIC and earlydata_max > 0) {
+        init_flags |= GNUTLS_ENABLE_EARLY_DATA | GNUTLS_NO_END_OF_EARLY_DATA;
+    } else if (earlydata_max > 0 and earlydata_max != std.math.maxInt(usize)) {
         init_flags |= GNUTLS_ENABLE_EARLY_DATA | GNUTLS_NO_END_OF_EARLY_DATA;
     }
 
@@ -1191,7 +1195,16 @@ pub fn gtls_client_init(
 
     var prioritylist: ?[*:0]const u8 = null;
     var priority_buf: [256]u8 = undefined;
-    if (conn_config.version != CURL_SSLVERSION_DEFAULT or
+    if (peer.transport == vtls_backends.TRNSPRT_QUIC) {
+        if (conn_config.version_max < CURL_SSLVERSION_MAX_TLSv1_3) {
+            c_ext.Curl_failf(data, "QUIC needs at least TLS version 1.3");
+            return CURLE_SSL_CONNECT_ERROR;
+        }
+        prioritylist = "NORMAL:%PROFILE_MEDIUM:-VERS-ALL:+VERS-TLS1.3:-CIPHER-ALL:+AES-128-GCM:" ++
+            "+AES-256-GCM:+CHACHA20-POLY1305:+AES-128-CCM:-GROUP-ALL:" ++
+            "+GROUP-SECP256R1:+GROUP-X25519:+GROUP-SECP384R1:+GROUP-SECP521R1:" ++
+            "%DISABLE_TLS13_COMPAT_MODE";
+    } else if (conn_config.version != CURL_SSLVERSION_DEFAULT or
         conn_config.version_max != CURL_SSLVERSION_MAX_TLSv1_3 or
         username != null)
     {
@@ -1471,7 +1484,183 @@ pub fn gtls_client_init(
     return CURLE_OK;
 }
 
+pub const CurlGtlsCtxSetupCb = *const fn (
+    cf: *vtls_impl.CurlCfilter,
+    data: ?*vtls_impl.CurlEasy,
+    cb_user_data: ?*anyopaque,
+) callconv(.c) CURLcode;
+
+pub const CurlGtlsInitSessionReuseCb = *const fn (
+    cf: *vtls_impl.CurlCfilter,
+    data: ?*vtls_impl.CurlEasy,
+    alpns: ?*const vtls_backends.AlpnSpec,
+    scs: *vtls_core.CurlSslSession,
+    do_early_data: *bool,
+) callconv(.c) CURLcode;
+
+fn gtls_apply_session(
+    gctx: *GtlsSslBackendData,
+    cf: *vtls_impl.CurlCfilter,
+    data: ?*vtls_impl.CurlEasy,
+    peer: *const vtls_backends.SslPeer,
+    alpns: *vtls_backends.AlpnSpec,
+    sess_reuse_cb: ?CurlGtlsInitSessionReuseCb,
+    scs_opt: ?*vtls_core.CurlSslSession,
+    pwas_setup: *bool,
+) CURLcode {
+    if (comptime !use_gnutls) return CURLE_NOT_BUILT_IN;
+    const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+    const scs = scs_opt orelse return CURLE_OK;
+
+    if (scs.sdata != null and scs.sdata_len > 0 and
+        (scs.alpn == null or vtls_impl.Curl_alpn_contains_proto(alpns, scs.alpn)))
+    {
+        var result = gtls_client_init(cf, data, peer, scs.earlydata_max, gctx);
+        if (result != CURLE_OK) return result;
+        pwas_setup.* = true;
+
+        const rc = gtls_ext.gnutls_session_set_data(gctx.session, scs.sdata, scs.sdata_len);
+        if (rc < 0) {
+            c_ext.Curl_infof(data, "SSL session not accepted by GnuTLS, continuing without");
+        } else {
+            c_ext.Curl_infof(
+                data,
+                "SSL reusing session with ALPN '%s'",
+                scs.alpn orelse @as([*:0]const u8, "-"),
+            );
+            if (conn_config.earlydata() and scs.alpn != null and
+                !c_ext.Curl_vtls_acc_conn_connect_only(cf.conn))
+            {
+                var do_early_data = false;
+                if (sess_reuse_cb) |cb| {
+                    result = cb(cf, data, alpns, scs, &do_early_data);
+                    if (result != CURLE_OK) return result;
+                }
+                if (do_early_data) {
+                    vtls_impl.Curl_alpn_restrict_to(alpns, scs.alpn);
+                }
+            }
+        }
+    }
+    return CURLE_OK;
+}
+
 pub fn Curl_gtls_ctx_init(
+    gctx: *GtlsSslBackendData,
+    cf: *vtls_impl.CurlCfilter,
+    data: ?*vtls_impl.CurlEasy,
+    peer: *const vtls_backends.SslPeer,
+    alpns_requested: ?*const vtls_backends.AlpnSpec,
+    cb_setup: ?CurlGtlsCtxSetupCb,
+    cb_user_data: ?*anyopaque,
+    ssl_user_data: ?*anyopaque,
+    sess_reuse_cb: ?CurlGtlsInitSessionReuseCb,
+) callconv(.c) CURLcode {
+    if (comptime !use_gnutls) return CURLE_NOT_BUILT_IN;
+    const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+
+    var alpns: vtls_backends.AlpnSpec = .{};
+    vtls_impl.Curl_alpn_copy(&alpns, alpns_requested);
+
+    var scs: ?*vtls_core.CurlSslSession = null;
+    var gtls_session_setup = false;
+    var result: CURLcode = CURLE_OK;
+
+    var scache: ?*vtls_backends.CurlSslScache = null;
+    var has_share_scache = false;
+    var trc_feat: ?*vtls_backends.CurlTrcFeat = null;
+    c_ext.Curl_vtls_acc_scache_params(data, &scache, &has_share_scache, &trc_feat);
+
+    if (!gtls_session_setup and conn_config.primary_cache_session() and !conn_config.verifystatus()) {
+        if (peer.scache_key) |peer_key| {
+            if (vtls_scache_asn1.Curl_ssl_scache_use_zig(data, scache, conn_config)) {
+                result = vtls_scache_asn1.Curl_ssl_scache_take_zig(
+                    cf,
+                    data,
+                    scache,
+                    has_share_scache,
+                    conn_config,
+                    trc_feat,
+                    peer_key,
+                    &scs,
+                );
+                if (result == CURLE_OK) {
+                    result = gtls_apply_session(
+                        gctx,
+                        cf,
+                        data,
+                        peer,
+                        &alpns,
+                        sess_reuse_cb,
+                        scs,
+                        &gtls_session_setup,
+                    );
+                }
+            }
+        }
+    }
+
+    defer if (scs) |s| {
+        if (peer.scache_key) |peer_key| {
+            _ = vtls_scache_asn1.Curl_ssl_scache_return_zig(
+                cf,
+                data,
+                scache,
+                has_share_scache,
+                conn_config,
+                trc_feat,
+                peer_key,
+                s,
+            );
+        } else {
+            vtls_scache_asn1.Curl_ssl_session_destroy(s);
+        }
+    };
+
+    if (result != CURLE_OK) return result;
+
+    if (!gtls_session_setup) {
+        result = gtls_client_init(cf, data, peer, 0, gctx);
+        if (result != CURLE_OK) return result;
+    }
+
+    gtls_ext.gnutls_session_set_ptr(gctx.session, ssl_user_data);
+
+    if (cb_setup) |cb| {
+        result = cb(cf, data, cb_user_data);
+        if (result != CURLE_OK) return result;
+    }
+
+    vtls_core.Curl_tls_keylog_open();
+    if (vtls_core.Curl_tls_keylog_enabled()) {
+        gtls_ext.gnutls_session_set_keylog_function(gctx.session, keylog_callback);
+    }
+
+    if (alpns.count > 0) {
+        var gtls_alpns: [vtls_backends.ALPN_ENTRIES_MAX]gnutls_datum_t = undefined;
+        var i: usize = 0;
+        while (i < alpns.count) : (i += 1) {
+            const entry_slice = std.mem.sliceTo(&alpns.entries[i], 0);
+            gtls_alpns[i] = .{
+                .data = @constCast(entry_slice.ptr),
+                .size = @intCast(entry_slice.len),
+            };
+        }
+        if (gtls_ext.gnutls_alpn_set_protocols(
+            gctx.session,
+            &gtls_alpns,
+            @intCast(alpns.count),
+            GNUTLS_ALPN_MANDATORY,
+        ) != 0) {
+            c_ext.Curl_failf(data, "failed setting ALPN");
+            return CURLE_SSL_CONNECT_ERROR;
+        }
+    }
+
+    return CURLE_OK;
+}
+
+fn gtls_ctx_init_stream(
     gctx: *GtlsSslBackendData,
     cf: *vtls_impl.CurlCfilter,
     data: ?*vtls_impl.CurlEasy,
@@ -1602,7 +1791,7 @@ fn gtls_connect_step1(
         }
     }
 
-    result = Curl_gtls_ctx_init(
+    result = gtls_ctx_init_stream(
         backend,
         cf,
         data,
