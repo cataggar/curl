@@ -25,7 +25,7 @@ test "curl_version_info metadata and protocols" {
     const info = info_ptr.*;
 
     try std.testing.expect(info.version != null);
-    try std.testing.expectEqualStrings("8.23.1-DEV", std.mem.span(info.version));
+    try std.testing.expectEqualStrings(@import("backend_options").version, std.mem.span(info.version));
 
     try std.testing.expect(info.protocols != null);
     var has_http = false;

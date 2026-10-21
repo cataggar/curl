@@ -604,8 +604,8 @@ pub export fn Curl_get_scheme(scheme: [*:0]const u8) callconv(.c) ?*const Curl_s
 // 2. lib/version.c
 // ============================================================================
 
-const LIBCURL_VERSION = "8.23.1-DEV";
-const LIBCURL_VERSION_NUM: c_uint = 0x081701;
+const LIBCURL_VERSION: [:0]const u8 = backend_options.version ++ "";
+const LIBCURL_VERSION_NUM: c_uint = backend_options.version_num;
 const CURLVERSION_NOW: c_uint = 11; // CURLVERSION_TWELFTH
 
 const CURL_OS: [*:0]const u8 = @tagName(builtin.cpu.arch) ++ "-" ++ @tagName(builtin.os.tag) ++ "-" ++ @tagName(builtin.abi);
@@ -3163,11 +3163,11 @@ test "Curl_get_scheme and Curl_getn_scheme" {
 
 test "curl_version and curl_version_info" {
     const ver_str = std.mem.span(curl_version());
-    try std.testing.expect(std.mem.startsWith(u8, ver_str, "libcurl/8.23.1-DEV"));
+    try std.testing.expect(std.mem.startsWith(u8, ver_str, "libcurl/" ++ LIBCURL_VERSION));
 
     const info = curl_version_info(CURLVERSION_NOW);
     try std.testing.expectEqual(LIBCURL_VERSION_NUM, info.version_num);
-    try std.testing.expectEqualStrings("8.23.1-DEV", std.mem.span(info.version.?));
+    try std.testing.expectEqualStrings(LIBCURL_VERSION, std.mem.span(info.version.?));
     try std.testing.expect((info.features & CURL_VERSION_IPV6) != 0);
     try std.testing.expect((info.features & CURL_VERSION_LARGEFILE) != 0);
 }

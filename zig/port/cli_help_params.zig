@@ -2145,7 +2145,8 @@ fn isDebugFeature() bool {
     return false;
 }
 
-const CURL_VERSION_STR = "8.23.1-DEV";
+const backend_options = @import("backend_options");
+const CURL_VERSION_STR: [:0]const u8 = backend_options.version ++ "";
 const LIBCURL_TIMESTAMP_STR = "[unreleased]";
 const CURL_OS_STR = @tagName(builtin.cpu.arch) ++ "-" ++ @tagName(builtin.os.tag) ++ "-" ++ @tagName(builtin.abi);
 const CURL_ID_STR = "curl " ++ CURL_VERSION_STR ++ " (" ++ CURL_OS_STR ++ ") ";

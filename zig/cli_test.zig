@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
+const backend_options = @import("backend_options");
 
 test "curl --version outputs version and protocols" {
     const gpa = std.testing.allocator;
@@ -13,8 +14,8 @@ test "curl --version outputs version and protocols" {
     defer gpa.free(result.stderr);
 
     try std.testing.expectEqual(std.process.Child.Term{ .exited = 0 }, result.term);
-    try std.testing.expect(std.mem.find(u8, result.stdout, "curl 8.23.1-DEV") != null);
-    try std.testing.expect(std.mem.find(u8, result.stdout, "libcurl/8.23.1-DEV") != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "curl " ++ backend_options.version) != null);
+    try std.testing.expect(std.mem.find(u8, result.stdout, "libcurl/" ++ backend_options.version) != null);
     try std.testing.expect(std.mem.find(u8, result.stdout, "Protocols:") != null);
 }
 
