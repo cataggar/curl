@@ -1201,7 +1201,7 @@ const vtls_core_impl = struct {
         io_buffers.Curl_bufq_init2(&ctx.earlydata, CURL_SSL_EARLY_MAX, 1, BUFQ_OPT_NO_SPARES);
         ctx.backend = mem.calloc(1, ctx.ssl_impl.sizeof_ssl_backend_data);
         if (ctx.backend == null) {
-            mem.free(ctx);
+            mem.freeSized(ctx, @sizeOf(SslConnectData));
             return null;
         }
         return ctx;
@@ -1214,8 +1214,9 @@ const vtls_core_impl = struct {
             ctx.negotiated_alpn = null;
         }
         io_buffers.Curl_bufq_free(&ctx.earlydata);
-        mem.free(ctx.backend);
-        mem.free(ctx);
+        mem.freeSized(ctx.backend, ctx.ssl_impl.sizeof_ssl_backend_data);
+        ctx.backend = null;
+        mem.freeSized(ctx, @sizeOf(SslConnectData));
     }
 
     pub fn Curl_ssl_peer_cleanup(peer: *SslPeer) callconv(.c) void {
@@ -3165,7 +3166,10 @@ const schannel_backend = struct {
                     _ = win_ext.fclose(f);
                     if (!continue_reading) {
                         c_ext.Curl_failf(data, "schannel: Failed to read cert file %s", sslc.clientcert.?);
-                        if (certdata) |cd| mem.free(cd);
+                        if (certdata) |cd| {
+                            mem.secureZero(cd, certsize + 1);
+                            mem.freeSized(cd, certsize + 1);
+                        }
                         return CURLE_SSL_CERTPROBLEM;
                     }
                 }
@@ -3201,11 +3205,14 @@ const schannel_backend = struct {
                         PKCS12_NO_PERSIST_KEY,
                     );
                     mem.secureZero(@ptrCast(pszPassword), @sizeOf(u16) * (pwd_len + 1));
-                    mem.free(raw_pw);
+                    mem.freeSized(raw_pw, @sizeOf(u16) * (pwd_len + 1));
                 }
 
                 if (!blob) {
-                    if (certdata) |cd| mem.free(cd);
+                    if (certdata) |cd| {
+                        mem.secureZero(cd, certsize + 1);
+                        mem.freeSized(cd, certsize + 1);
+                    }
                 }
 
                 if (cert_store == null) {
@@ -3533,7 +3540,7 @@ const schannel_backend = struct {
                     _ = win_ext.CertCloseStore(cs, 0);
                     cred.client_cert_store = null;
                 }
-                mem.free(cred);
+                mem.freeSized(cred, @sizeOf(CurlSchannelCred));
             }
         }
     }
@@ -4897,7 +4904,7 @@ const schannel_backend = struct {
             if (win_ext.Curl_pSecFn) |sec_fn| {
                 _ = sec_fn.DeleteSecurityContext(&ctxt.ctxt_handle);
             }
-            mem.free(ctxt);
+            mem.freeSized(ctxt, @sizeOf(CurlSchannelCtxt));
             backend.ctxt = null;
         }
 
@@ -4913,20 +4920,23 @@ const schannel_backend = struct {
         }
 
         if (backend.send_buffer) |b| {
-            mem.free(b);
+            mem.secureZero(b, backend.send_buffer_len);
+            mem.freeSized(b, backend.send_buffer_len);
             backend.send_buffer = null;
         }
         backend.send_buffer_len = 0;
 
         if (backend.encdata.buffer) |b| {
-            mem.free(b);
+            mem.secureZero(b, backend.encdata.length);
+            mem.freeSized(b, backend.encdata.length);
             backend.encdata.buffer = null;
             backend.encdata.length = 0;
             backend.encdata.offset = 0;
             backend.set_encdata_is_incomplete(false);
         }
         if (backend.decdata.buffer) |b| {
-            mem.free(b);
+            mem.secureZero(b, backend.decdata.length);
+            mem.freeSized(b, backend.decdata.length);
             backend.decdata.buffer = null;
             backend.decdata.length = 0;
             backend.decdata.offset = 0;
@@ -5654,14 +5664,16 @@ pub const openssl_backend = struct {
     pub fn matchDnsNameBytes(cert_name: ?[*]const u8, cert_len: usize, host: []const u8) bool {
         const cn = cert_name orelse return false;
         if (cert_len == 0 or host.len == 0) return false;
-        if (std.mem.indexOfScalar(u8, cn[0..cert_len], 0) != null) return false;
+        const san_slice = cn[0..cert_len];
+        if (std.mem.indexOfScalar(u8, san_slice, 0) != null) return false;
+        if (std.mem.indexOfScalar(u8, host, 0) != null) return false;
         var host_buf: [256]u8 = undefined;
         if (host.len >= host_buf.len) return false;
         @memcpy(host_buf[0..host.len], host);
         host_buf[host.len] = 0;
         var pat_buf: [256]u8 = undefined;
         if (cert_len >= pat_buf.len) return false;
-        @memcpy(pat_buf[0..cert_len], cn[0..cert_len]);
+        @memcpy(pat_buf[0..cert_len], san_slice);
         pat_buf[cert_len] = 0;
         return vtls_core.Curl_cert_hostcheck(@ptrCast(&pat_buf), cert_len, @ptrCast(&host_buf), host.len);
     }
@@ -6933,14 +6945,16 @@ pub const openssl_backend = struct {
         var sess_ptr: ?[*]u8 = @ptrCast(sess_buf_raw);
         const enc_len = ossl_ext.i2d_SSL_SESSION(session, &sess_ptr);
         if (enc_len <= 0 or enc_len > sess_len) {
-            mem.free(sess_buf_raw);
+            mem.secureZero(sess_buf_raw, @intCast(sess_len));
+            mem.freeSized(sess_buf_raw, @intCast(sess_len));
             return CURLE_OUT_OF_MEMORY;
         }
 
         var qtp_clone: ?[*]u8 = null;
         if (quic_tp != null and quic_tp_len > 0) {
             const qtp_raw = mem.malloc(quic_tp_len + 1) orelse {
-                mem.free(sess_buf_raw);
+                mem.secureZero(sess_buf_raw, @intCast(sess_len));
+                mem.freeSized(sess_buf_raw, @intCast(sess_len));
                 return CURLE_OUT_OF_MEMORY;
             };
             const qtp_bytes: [*]u8 = @ptrCast(qtp_raw);
@@ -7289,7 +7303,8 @@ pub const openssl_backend = struct {
         var sess_ptr: ?[*]u8 = @ptrCast(sess_buf_raw);
         const enc_len = ossl_ext.i2d_SSL_SESSION(ssl_sessionid, &sess_ptr);
         if (enc_len <= 0 or enc_len > sess_len) {
-            mem.free(sess_buf_raw);
+            mem.secureZero(sess_buf_raw, @intCast(sess_len));
+            mem.freeSized(sess_buf_raw, @intCast(sess_len));
             return 0;
         }
 
@@ -8763,7 +8778,10 @@ const mbedtls_backend = struct {
                 const pwd_len: usize = if (passwd) |p| std.mem.len(p) else 0;
                 const is_der = conn_config.key_type != null and primitives.curl_strequal(conn_config.key_type, "DER") != 0;
                 const newblob = dupNullTerminatedBlob(blob_ptr, blob.len) orelse return CURLE_OUT_OF_MEMORY;
-                defer mem.free(newblob);
+                defer {
+                    mem.secureZero(newblob, blob.len + 1);
+                    mem.freeSized(newblob, blob.len + 1);
+                }
                 const keylen: usize = if (is_der) blob.len else blob.len + 1;
 
                 var ret = mbed_ext.mbedtls_pk_parse_key(
@@ -8881,7 +8899,8 @@ const mbedtls_backend = struct {
         const sdata = mem.malloc(slen) orelse return CURLE_OUT_OF_MEMORY;
         ret = mbed_ext.mbedtls_ssl_session_save(&session, sdata, slen, &slen);
         if (ret != 0) {
-            mem.free(sdata);
+            mem.secureZero(sdata, slen);
+            mem.freeSized(sdata, slen);
             c_ext.Curl_failf(data, "failed to serialize session: -0x%x", @as(c_uint, @intCast(-ret)));
             return CURLE_OK;
         }
@@ -9818,9 +9837,78 @@ comptime {
     }
 }
 
+pub const MbedsslBackendData = mbedtls_backend.MbedSslBackendData;
+pub const SchannelBackendData = schannel_backend.SchannelSslBackendData;
+pub const GtlsSslBackendData = vtls_gtls.GtlsSslBackendData;
+pub const RustlsSslBackendData = vtls_rustls.RustlsSslBackendData;
+pub const WolfsslBackendData = vtls_wolfssl.WolfsslBackendData;
+
+pub fn freeOsslCtx(ptr: ?*openssl_backend.OsslCtx) void {
+    mem.freeSized(ptr, @sizeOf(openssl_backend.OsslCtx));
+}
+
+pub fn freeMbedsslBackendData(ptr: ?*MbedsslBackendData) void {
+    mem.freeSized(ptr, @sizeOf(MbedsslBackendData));
+}
+
+pub fn freeSchannelBackendData(ptr: ?*SchannelBackendData) void {
+    mem.freeSized(ptr, @sizeOf(SchannelBackendData));
+}
+
 // ============================================================================
 // Unit Tests
 // ============================================================================
+
+test "X.509 SAN and CN embedded-NUL rejection and backend context poisoning" {
+    const evil_san = "evil.com\x00.example.com";
+    try std.testing.expect(!openssl_backend.matchDnsNameBytes(evil_san.ptr, evil_san.len, "evil.com"));
+    try std.testing.expect(!openssl_backend.matchDnsNameBytes("*.example.com", 13, evil_san));
+    try std.testing.expectEqual(
+        openssl_backend.HostVerifyOutcome.cn_embedded_nul,
+        openssl_backend.verifyHostSynthetic(SSL_PEER_DNS, "evil.com", null, evil_san),
+    );
+    try std.testing.expect(!vtls_gtls.gtlsVerifyHostSlice(evil_san.ptr, evil_san.len, "evil.com"));
+    try std.testing.expect(!vtls_wolfssl.wsslVerifyHostSlice(evil_san.ptr, evil_san.len, "evil.com"));
+    try std.testing.expect(!vtls_rustls.rustlsVerifyHostSlice(evil_san.ptr, evil_san.len, "evil.com"));
+
+    // Verify mem.freeSized poisoning (0xaa) on backend context structs in Debug/ReleaseSafe
+    var ossl_ctx = std.mem.zeroes(openssl_backend.OsslCtx);
+    var mbed_ctx = std.mem.zeroes(MbedsslBackendData);
+    var schan_ctx = std.mem.zeroes(SchannelBackendData);
+    var gtls_ctx = std.mem.zeroes(GtlsSslBackendData);
+    var rustls_ctx = std.mem.zeroes(RustlsSslBackendData);
+    var wssl_ctx = std.mem.zeroes(WolfsslBackendData);
+
+    const expected_poison: u8 = switch (builtin.mode) {
+        .Debug, .ReleaseSafe => 0xaa,
+        .ReleaseFast, .ReleaseSmall => 0x00,
+    };
+    mem.poison(&ossl_ctx, @sizeOf(openssl_backend.OsslCtx));
+    mem.poison(&mbed_ctx, @sizeOf(MbedsslBackendData));
+    mem.poison(&schan_ctx, @sizeOf(SchannelBackendData));
+    mem.poison(&gtls_ctx, @sizeOf(GtlsSslBackendData));
+    mem.poison(&rustls_ctx, @sizeOf(RustlsSslBackendData));
+    mem.poison(&wssl_ctx, @sizeOf(WolfsslBackendData));
+    try std.testing.expectEqual(expected_poison, std.mem.asBytes(&ossl_ctx)[0]);
+    try std.testing.expectEqual(expected_poison, std.mem.asBytes(&mbed_ctx)[0]);
+    try std.testing.expectEqual(expected_poison, std.mem.asBytes(&schan_ctx)[0]);
+    try std.testing.expectEqual(expected_poison, std.mem.asBytes(&gtls_ctx)[0]);
+    try std.testing.expectEqual(expected_poison, std.mem.asBytes(&rustls_ctx)[0]);
+    try std.testing.expectEqual(expected_poison, std.mem.asBytes(&wssl_ctx)[0]);
+
+    const heap_ossl: *openssl_backend.OsslCtx = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(openssl_backend.OsslCtx)).?));
+    freeOsslCtx(heap_ossl);
+    const heap_mbed: *MbedsslBackendData = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(MbedsslBackendData)).?));
+    freeMbedsslBackendData(heap_mbed);
+    const heap_schan: *SchannelBackendData = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(SchannelBackendData)).?));
+    freeSchannelBackendData(heap_schan);
+    const heap_gtls: *GtlsSslBackendData = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(GtlsSslBackendData)).?));
+    vtls_gtls.freeGtlsBackendData(heap_gtls);
+    const heap_rustls: *RustlsSslBackendData = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(RustlsSslBackendData)).?));
+    vtls_rustls.freeRustlsBackendData(heap_rustls);
+    const heap_wssl: *WolfsslBackendData = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(WolfsslBackendData)).?));
+    vtls_wolfssl.freeWolfsslBackendData(heap_wssl);
+}
 
 test "ALPN wire buffer and comma string conversion" {
     var proto_buf: AlpnProtoBuf = undefined;

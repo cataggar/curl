@@ -535,7 +535,10 @@ fn load_file(file: [*:0]const u8) gnutls_datum_t {
 }
 
 fn unload_file(file: gnutls_datum_t) void {
-    mem.free(file.data);
+    if (file.data) |d| {
+        if (file.size > 0) mem.secureZero(d, file.size);
+        mem.freeSized(d, file.size);
+    }
 }
 
 fn do_file_type(filetype: ?[*:0]const u8) c_int {
@@ -695,6 +698,9 @@ fn cf_gtls_update_session_id(
                 peer_key,
                 sc_session,
             );
+        } else {
+            mem.secureZero(sdata_copy, connect_id.size);
+            mem.freeSized(sdata_copy, connect_id.size);
         }
     }
     return result;
@@ -732,7 +738,7 @@ pub fn Curl_gtls_shared_creds_create(
     const rc = gtls_ext.gnutls_certificate_allocate_credentials(&shared.creds);
     if (rc != GNUTLS_E_SUCCESS) {
         c_ext.Curl_failf(data, "gnutls_cert_all_cred() failed: %s", gtls_ext.gnutls_strerror(rc));
-        mem.free(shared);
+        mem.freeSized(shared, @sizeOf(gtls_shared_creds));
         return CURLE_SSL_CONNECT_ERROR;
     }
     shared.refcount = 1;
@@ -762,7 +768,7 @@ pub fn Curl_gtls_shared_creds_free(pcreds: *?*gtls_shared_creds) void {
             }
         }
         mem.free(creds.CAfile);
-        mem.free(creds);
+        mem.freeSized(creds, @sizeOf(gtls_shared_creds));
     }
 }
 
@@ -2106,6 +2112,18 @@ fn gtls_verify_EmptyOrHostname(
             &certbuf,
             &size,
         ) == 0) {
+            const cn_len = @min(size, certbuf.len);
+            const san_slice = certbuf[0..cn_len];
+            if (std.mem.indexOfScalar(u8, san_slice, 0) != null) {
+                if (verifyhost) {
+                    c_ext.Curl_failf(
+                        data,
+                        "SSL: certificate subject name contains embedded NUL for target host name '%s'",
+                        peerDispname(peer),
+                    );
+                    return CURLE_PEER_FAILED_VERIFICATION;
+                }
+            }
             if (size < certbuf.len) certbuf[size] = 0 else certbuf[certbuf.len - 1] = 0;
             c_ext.Curl_infof(
                 data,
@@ -2117,6 +2135,14 @@ fn gtls_verify_EmptyOrHostname(
         }
     }
     return CURLE_OK;
+}
+
+pub fn gtlsVerifyHostSlice(san_bytes_opt: ?[*]const u8, len: usize, hostname: []const u8) bool {
+    return vtls_scache_asn1.verifyX509SanOrCnSlice(san_bytes_opt, len, hostname);
+}
+
+pub fn freeGtlsBackendData(ptr: ?*GtlsSslBackendData) void {
+    mem.freeSized(ptr, @sizeOf(GtlsSslBackendData));
 }
 
 fn gtls_infof_cert(

@@ -39,6 +39,13 @@ const AF_INET6: c_int = switch (builtin.os.tag) {
 fn pmatch(hostname: [*]const u8, hostlen: usize, pattern: [*]const u8, patternlen: usize) bool {
     if (hostlen != patternlen)
         return false;
+    const host_slice = hostname[0..hostlen];
+    const pattern_slice = pattern[0..patternlen];
+    if (std.mem.indexOfScalar(u8, host_slice, 0) != null or
+        std.mem.indexOfScalar(u8, pattern_slice, 0) != null)
+    {
+        return false;
+    }
     return primitives.curl_strnequal(@ptrCast(hostname), @ptrCast(pattern), hostlen) != 0;
 }
 
@@ -102,8 +109,16 @@ pub export fn Curl_cert_hostcheck(
 ) callconv(.c) bool {
     const m = match orelse return false;
     const h = hostname orelse return false;
-    if (matchlen > 0 and hostlen > 0)
+    if (matchlen > 0 and hostlen > 0) {
+        const san_slice = m[0..matchlen];
+        const host_slice = h[0..hostlen];
+        if (std.mem.indexOfScalar(u8, san_slice, 0) != null or
+            std.mem.indexOfScalar(u8, host_slice, 0) != null)
+        {
+            return false;
+        }
         return hostmatch(h, hostlen, m, matchlen);
+    }
     return false;
 }
 
@@ -173,6 +188,7 @@ pub export fn Curl_tls_keylog_write_line(line: ?[*:0]const u8) callconv(.c) bool
 
     var linelen = std.mem.len(l);
     var buf: [256]u8 = undefined;
+    defer mem.secureZero(&buf, buf.len);
     if (linelen == 0 or linelen > buf.len - 2) {
         return false;
     }
@@ -208,6 +224,7 @@ pub export fn Curl_tls_keylog_write(
     }
 
     var line: [KEYLOG_LABEL_MAXLEN + 1 + (2 * CLIENT_RANDOM_SIZE) + 1 + (2 * SECRET_MAXLEN) + 1 + 1]u8 = undefined;
+    defer mem.secureZero(&line, line.len);
     @memcpy(line[0..pos], lbl[0..pos]);
     line[pos] = ' ';
     pos += 1;
@@ -459,10 +476,16 @@ pub export fn Curl_ssl_session_pack(
 
 fn destroyUnpackedSession(s: ?*CurlSslSession) void {
     const sess = s orelse return;
-    if (sess.sdata) |p| mem.free(p);
-    if (sess.quic_tp) |p| mem.free(p);
+    if (sess.sdata) |p| {
+        if (sess.sdata_len > 0) mem.secureZero(p, sess.sdata_len);
+        mem.freeSized(p, sess.sdata_len);
+    }
+    if (sess.quic_tp) |p| {
+        if (sess.quic_tp_len > 0) mem.secureZero(p, sess.quic_tp_len);
+        mem.freeSized(p, sess.quic_tp_len);
+    }
     if (sess.alpn) |p| mem.free(@ptrCast(p));
-    mem.free(sess);
+    mem.freeSized(sess, @sizeOf(CurlSslSession));
 }
 
 pub export fn Curl_ssl_session_unpack(
@@ -521,7 +544,10 @@ pub export fn Curl_ssl_session_unpack(
                 result = spack_decdata16(&pval8, &dlen, &buf, end);
                 if (result != CURLE_OK)
                     break;
-                if (s.quic_tp) |p| mem.free(p);
+                if (s.quic_tp) |p| {
+                    if (s.quic_tp_len > 0) mem.secureZero(p, s.quic_tp_len);
+                    mem.freeSized(p, s.quic_tp_len);
+                }
                 s.quic_tp = pval8;
                 s.quic_tp_len = dlen;
             },
@@ -529,7 +555,10 @@ pub export fn Curl_ssl_session_unpack(
                 result = spack_decdata16(&pval8, &dlen, &buf, end);
                 if (result != CURLE_OK)
                     break;
-                if (s.sdata) |p| mem.free(p);
+                if (s.sdata) |p| {
+                    if (s.sdata_len > 0) mem.secureZero(p, s.sdata_len);
+                    mem.freeSized(p, s.sdata_len);
+                }
                 s.sdata = pval8;
                 s.sdata_len = dlen;
             },
@@ -2774,6 +2803,9 @@ test "Curl_cert_hostcheck exact, wildcard, trailing dots, and IP literals" {
         // Embedded NULs in pattern or hostname
         .{ .host = "foo", .pattern = "foo\x00bar", .expected = false },
         .{ .host = "foo.bar", .pattern = "foo\x00bar", .expected = false },
+        .{ .host = "evil.com", .pattern = "evil.com\x00.example.com", .expected = false },
+        .{ .host = "evil.com\x00.example.com", .pattern = "evil.com\x00.example.com", .expected = false },
+        .{ .host = "sub.example.com", .pattern = "*.example.com\x00.evil.com", .expected = false },
     };
 
     for (cases) |tc| {
