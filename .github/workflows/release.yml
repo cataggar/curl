@@ -59,37 +59,37 @@ jobs:
             runner: ubuntu-22.04
             target: x86_64-linux-musl
             executable: zig-out/bin/curl
-            extra_args: ""
+            extra_args: "-Dbundled=true -Dssl=openssl -Dapple-sectrust=false -Dzstd=true -Dzlib=true -Dbrotli=true -Dpsl=true -Didn=libidn2 -Dnghttp2=true -Dares=true -Dhttpsrr=true -Dquic=ngtcp2 -Dssh=libssh2 -Dldap=openldap -Dgssapi=true -Dsspi=false"
             run_smoke: "true"
           - platform: linux-musl-arm64
             runner: ubuntu-22.04-arm
             target: aarch64-linux-musl
             executable: zig-out/bin/curl
-            extra_args: ""
+            extra_args: "-Dbundled=true -Dssl=openssl -Dapple-sectrust=false -Dzstd=true -Dzlib=true -Dbrotli=true -Dpsl=true -Didn=libidn2 -Dnghttp2=true -Dares=true -Dhttpsrr=true -Dquic=ngtcp2 -Dssh=libssh2 -Dldap=openldap -Dgssapi=true -Dsspi=false"
             run_smoke: "true"
           - platform: macos-x64
             runner: macos-15
             target: x86_64-macos
             executable: zig-out/bin/curl
-            extra_args: ""
+            extra_args: "-Dbundled=true -Dssl=openssl -Dapple-sectrust=true -Dzstd=true -Dzlib=true -Dbrotli=true -Dpsl=true -Didn=libidn2 -Dnghttp2=true -Dares=true -Dhttpsrr=true -Dquic=ngtcp2 -Dssh=libssh2 -Dldap=openldap -Dgssapi=true -Dsspi=false"
             run_smoke: "true"
           - platform: macos-arm64
             runner: macos-15
             target: aarch64-macos
             executable: zig-out/bin/curl
-            extra_args: ""
+            extra_args: "-Dbundled=true -Dssl=openssl -Dapple-sectrust=true -Dzstd=true -Dzlib=true -Dbrotli=true -Dpsl=true -Didn=libidn2 -Dnghttp2=true -Dares=true -Dhttpsrr=true -Dquic=ngtcp2 -Dssh=libssh2 -Dldap=openldap -Dgssapi=true -Dsspi=false"
             run_smoke: "true"
           - platform: windows-x64
             runner: windows-latest
             target: x86_64-windows-gnu
             executable: zig-out/bin/curl.exe
-            extra_args: "-Dssl=schannel -Didn=winidn -Dldap=winldap -Dsspi=true"
+            extra_args: "-Dbundled=true -Dssl=schannel -Dapple-sectrust=false -Dzstd=true -Dzlib=true -Dbrotli=true -Dpsl=true -Didn=winidn -Dnghttp2=true -Dares=true -Dhttpsrr=true -Dquic=ngtcp2 -Dssh=libssh2 -Dldap=winldap -Dgssapi=false -Dsspi=true"
             run_smoke: "true"
           - platform: windows-arm64
             runner: windows-latest
             target: aarch64-windows-gnu
             executable: zig-out/bin/curl.exe
-            extra_args: "-Dssl=schannel -Didn=winidn -Dldap=winldap -Dsspi=true"
+            extra_args: "-Dbundled=true -Dssl=schannel -Dapple-sectrust=false -Dzstd=true -Dzlib=true -Dbrotli=true -Dpsl=true -Didn=winidn -Dnghttp2=true -Dares=true -Dhttpsrr=true -Dquic=ngtcp2 -Dssh=libssh2 -Dldap=winldap -Dgssapi=false -Dsspi=true"
             run_smoke: "false"
     steps:
       - name: Checkout repository

@@ -56,6 +56,59 @@ pub const Diagnostic = struct {
 pub const default_release_optimize_mode: std.builtin.OptimizeMode = .ReleaseSafe;
 pub const default_release_optimize_flag = "-Doptimize=ReleaseSafe";
 
+pub const expected_release_protocols = [_][]const u8{
+    "dict",
+    "file",
+    "ftp",
+    "ftps",
+    "gopher",
+    "gophers",
+    "http",
+    "https",
+    "imap",
+    "imaps",
+    "ldap",
+    "ldaps",
+    "mqtt",
+    "mqtts",
+    "pop3",
+    "pop3s",
+    "rtsp",
+    "scp",
+    "sftp",
+    "smtp",
+    "smtps",
+    "telnet",
+    "tftp",
+    "ws",
+    "wss",
+};
+
+pub const expected_common_release_features = [_][]const u8{
+    "alt-svc",
+    "asyn-rr",
+    "AsynchDNS",
+    "brotli",
+    "HSTS",
+    "HTTP2",
+    "HTTP3",
+    "HTTPS-proxy",
+    "HTTPSIG",
+    "HTTPSRR",
+    "IDN",
+    "IPv6",
+    "Kerberos",
+    "Largefile",
+    "libz",
+    "proxy-HTTP3",
+    "PSL",
+    "SPNEGO",
+    "SSL",
+    "threadsafe",
+    "UnixSockets",
+    "zstd",
+};
+
 pub const Platform = struct {
     suffix: []const u8,
     zig_target: []const u8,
@@ -78,7 +131,64 @@ pub const Platform = struct {
         errdefer allocator.free(optimize_arg);
 
         const is_windows = std.mem.startsWith(u8, self.suffix, "windows-");
-        const count: usize = if (is_windows) 8 else 4;
+        const is_macos = std.mem.startsWith(u8, self.suffix, "macos-");
+
+        const backend_flags: []const []const u8 = if (is_windows)
+            &.{
+                "-Dssl=schannel",
+                "-Dapple-sectrust=false",
+                "-Dzstd=true",
+                "-Dzlib=true",
+                "-Dbrotli=true",
+                "-Dpsl=true",
+                "-Didn=winidn",
+                "-Dnghttp2=true",
+                "-Dares=true",
+                "-Dhttpsrr=true",
+                "-Dquic=ngtcp2",
+                "-Dssh=libssh2",
+                "-Dldap=winldap",
+                "-Dgssapi=false",
+                "-Dsspi=true",
+            }
+        else if (is_macos)
+            &.{
+                "-Dssl=openssl",
+                "-Dapple-sectrust=true",
+                "-Dzstd=true",
+                "-Dzlib=true",
+                "-Dbrotli=true",
+                "-Dpsl=true",
+                "-Didn=libidn2",
+                "-Dnghttp2=true",
+                "-Dares=true",
+                "-Dhttpsrr=true",
+                "-Dquic=ngtcp2",
+                "-Dssh=libssh2",
+                "-Dldap=openldap",
+                "-Dgssapi=true",
+                "-Dsspi=false",
+            }
+        else
+            &.{
+                "-Dssl=openssl",
+                "-Dapple-sectrust=false",
+                "-Dzstd=true",
+                "-Dzlib=true",
+                "-Dbrotli=true",
+                "-Dpsl=true",
+                "-Didn=libidn2",
+                "-Dnghttp2=true",
+                "-Dares=true",
+                "-Dhttpsrr=true",
+                "-Dquic=ngtcp2",
+                "-Dssh=libssh2",
+                "-Dldap=openldap",
+                "-Dgssapi=true",
+                "-Dsspi=false",
+            };
+
+        const count: usize = 5 + backend_flags.len;
         var argv = try allocator.alloc([]const u8, count);
         var initialized: usize = 0;
         errdefer {
@@ -94,16 +204,12 @@ pub const Platform = struct {
         initialized = 3;
         argv[3] = optimize_arg;
         initialized = 4;
+        argv[4] = try allocator.dupe(u8, "-Dbundled=true");
+        initialized = 5;
 
-        if (is_windows) {
-            argv[4] = try allocator.dupe(u8, "-Dssl=schannel");
-            initialized = 5;
-            argv[5] = try allocator.dupe(u8, "-Didn=winidn");
-            initialized = 6;
-            argv[6] = try allocator.dupe(u8, "-Dldap=winldap");
-            initialized = 7;
-            argv[7] = try allocator.dupe(u8, "-Dsspi=true");
-            initialized = 8;
+        for (backend_flags) |flag| {
+            argv[initialized] = try allocator.dupe(u8, flag);
+            initialized += 1;
         }
         return argv;
     }
@@ -132,42 +238,42 @@ pub const platforms = [_]Platform{
         .zig_target = "x86_64-linux-musl",
         .executable = "curl",
         .runtime_notes = "Static musl executable; no external shared library dependencies.",
-        .enabled_features = "HTTP/1.1, FTP, FILE, DICT, GOPHER, IMAP, MQTT, POP3, RTSP, SMTP, TELNET, TFTP, WS, IPv6, AsynchDNS, Largefile, alt-svc, NTLM, Digest, Basic, Bearer, OAuth2",
+        .enabled_features = "Protocols: DICT, FILE, FTP, FTPS, GOPHER, GOPHERS, HTTP, HTTPS, IMAP, IMAPS, LDAP, LDAPS, MQTT, MQTTS, POP3, POP3S, RTSP, SCP, SFTP, SMTP, SMTPS, TELNET, TFTP, WS, WSS. Features: SSL, HSTS, HTTP2, HTTP3, HTTPS-proxy, HTTPSIG, HTTPSRR, AsynchDNS, asyn-rr, IDN, IPv6, Kerberos, Largefile, libz, brotli, zstd, PSL, SPNEGO, GSS-API, alt-svc, proxy-HTTP3, threadsafe, UnixSockets",
     },
     .{
         .suffix = "linux-musl-arm64",
         .zig_target = "aarch64-linux-musl",
         .executable = "curl",
         .runtime_notes = "Static musl executable; no external shared library dependencies.",
-        .enabled_features = "HTTP/1.1, FTP, FILE, DICT, GOPHER, IMAP, MQTT, POP3, RTSP, SMTP, TELNET, TFTP, WS, IPv6, AsynchDNS, Largefile, alt-svc, NTLM, Digest, Basic, Bearer, OAuth2",
+        .enabled_features = "Protocols: DICT, FILE, FTP, FTPS, GOPHER, GOPHERS, HTTP, HTTPS, IMAP, IMAPS, LDAP, LDAPS, MQTT, MQTTS, POP3, POP3S, RTSP, SCP, SFTP, SMTP, SMTPS, TELNET, TFTP, WS, WSS. Features: SSL, HSTS, HTTP2, HTTP3, HTTPS-proxy, HTTPSIG, HTTPSRR, AsynchDNS, asyn-rr, IDN, IPv6, Kerberos, Largefile, libz, brotli, zstd, PSL, SPNEGO, GSS-API, alt-svc, proxy-HTTP3, threadsafe, UnixSockets",
     },
     .{
         .suffix = "macos-x64",
         .zig_target = "x86_64-macos",
         .executable = "curl",
-        .runtime_notes = "Links macOS system `libSystem.B.dylib` only; no Homebrew or third-party dylibs required.",
-        .enabled_features = "HTTP/1.1, FTP, FILE, DICT, GOPHER, IMAP, MQTT, POP3, RTSP, SMTP, TELNET, TFTP, WS, IPv6, AsynchDNS, Largefile, alt-svc, NTLM, Digest, Basic, Bearer, OAuth2",
+        .runtime_notes = "Links macOS system `libSystem.B.dylib` and Apple `Security`/`CoreFoundation` frameworks only; no Homebrew or third-party dylibs required.",
+        .enabled_features = "Protocols: DICT, FILE, FTP, FTPS, GOPHER, GOPHERS, HTTP, HTTPS, IMAP, IMAPS, LDAP, LDAPS, MQTT, MQTTS, POP3, POP3S, RTSP, SCP, SFTP, SMTP, SMTPS, TELNET, TFTP, WS, WSS. Features: SSL, AppleSecTrust, HSTS, HTTP2, HTTP3, HTTPS-proxy, HTTPSIG, HTTPSRR, AsynchDNS, asyn-rr, IDN, IPv6, Kerberos, Largefile, libz, brotli, zstd, PSL, SPNEGO, GSS-API, alt-svc, proxy-HTTP3, threadsafe, UnixSockets",
     },
     .{
         .suffix = "macos-arm64",
         .zig_target = "aarch64-macos",
         .executable = "curl",
-        .runtime_notes = "Links macOS system `libSystem.B.dylib` only; no Homebrew or third-party dylibs required.",
-        .enabled_features = "HTTP/1.1, FTP, FILE, DICT, GOPHER, IMAP, MQTT, POP3, RTSP, SMTP, TELNET, TFTP, WS, IPv6, AsynchDNS, Largefile, alt-svc, NTLM, Digest, Basic, Bearer, OAuth2",
+        .runtime_notes = "Links macOS system `libSystem.B.dylib` and Apple `Security`/`CoreFoundation` frameworks only; no Homebrew or third-party dylibs required.",
+        .enabled_features = "Protocols: DICT, FILE, FTP, FTPS, GOPHER, GOPHERS, HTTP, HTTPS, IMAP, IMAPS, LDAP, LDAPS, MQTT, MQTTS, POP3, POP3S, RTSP, SCP, SFTP, SMTP, SMTPS, TELNET, TFTP, WS, WSS. Features: SSL, AppleSecTrust, HSTS, HTTP2, HTTP3, HTTPS-proxy, HTTPSIG, HTTPSRR, AsynchDNS, asyn-rr, IDN, IPv6, Kerberos, Largefile, libz, brotli, zstd, PSL, SPNEGO, GSS-API, alt-svc, proxy-HTTP3, threadsafe, UnixSockets",
     },
     .{
         .suffix = "windows-x64",
         .zig_target = "x86_64-windows-gnu",
         .executable = "curl.exe",
         .runtime_notes = "Links standard Windows OS DLLs only (`ws2_32.dll`, `secur32.dll`, `crypt32.dll`, `advapi32.dll`, `bcrypt.dll`, `normaliz.dll`, `wldap32.dll`).",
-        .enabled_features = "HTTPS/TLS (Schannel), WinIDN, WinLDAP (LDAP/LDAPS), Windows SSPI (Kerberos/SPNEGO/NTLM), HTTP/1.1, FTP/FTPS, FILE, DICT, GOPHER/GOPHERS, IMAP/IMAPS, MQTT, POP3/POP3S, RTSP, SMTP/SMTPS, TELNET, TFTP, WS/WSS, IPv6, AsynchDNS, HSTS, HTTPS-proxy",
+        .enabled_features = "Protocols: DICT, FILE, FTP, FTPS, GOPHER, GOPHERS, HTTP, HTTPS, IMAP, IMAPS, LDAP, LDAPS, MQTT, MQTTS, POP3, POP3S, RTSP, SCP, SFTP, SMTP, SMTPS, TELNET, TFTP, WS, WSS. Features: SSL, SSPI, Unicode, HSTS, HTTP2, HTTP3, HTTPS-proxy, HTTPSIG, HTTPSRR, AsynchDNS, asyn-rr, IDN, IPv6, Kerberos, Largefile, libz, brotli, zstd, PSL, SPNEGO, alt-svc, proxy-HTTP3, threadsafe, UnixSockets",
     },
     .{
         .suffix = "windows-arm64",
         .zig_target = "aarch64-windows-gnu",
         .executable = "curl.exe",
         .runtime_notes = "Links standard Windows OS DLLs only (`ws2_32.dll`, `secur32.dll`, `crypt32.dll`, `advapi32.dll`, `bcrypt.dll`, `normaliz.dll`, `wldap32.dll`).",
-        .enabled_features = "HTTPS/TLS (Schannel), WinIDN, WinLDAP (LDAP/LDAPS), Windows SSPI (Kerberos/SPNEGO/NTLM), HTTP/1.1, FTP/FTPS, FILE, DICT, GOPHER/GOPHERS, IMAP/IMAPS, MQTT, POP3/POP3S, RTSP, SMTP/SMTPS, TELNET, TFTP, WS/WSS, IPv6, AsynchDNS, HSTS, HTTPS-proxy",
+        .enabled_features = "Protocols: DICT, FILE, FTP, FTPS, GOPHER, GOPHERS, HTTP, HTTPS, IMAP, IMAPS, LDAP, LDAPS, MQTT, MQTTS, POP3, POP3S, RTSP, SCP, SFTP, SMTP, SMTPS, TELNET, TFTP, WS, WSS. Features: SSL, SSPI, Unicode, HSTS, HTTP2, HTTP3, HTTPS-proxy, HTTPSIG, HTTPSRR, AsynchDNS, asyn-rr, IDN, IPv6, Kerberos, Largefile, libz, brotli, zstd, PSL, SPNEGO, alt-svc, proxy-HTTP3, threadsafe, UnixSockets",
     },
 };
 
@@ -1326,6 +1432,104 @@ fn runSmokeLoopbackHttpServer(server: *Io.net.Server, io: Io) void {
     }
 }
 
+fn hasWhitespaceToken(text: []const u8, expected: []const u8) bool {
+    var iter = std.mem.tokenizeAny(u8, text, " \t\r\n");
+    while (iter.next()) |token| {
+        if (std.mem.eql(u8, token, expected)) return true;
+    }
+    return false;
+}
+
+pub fn verifyVersionOutputProtocolsAndFeatures(
+    stdout: []const u8,
+    platform_suffix: []const u8,
+    diagnostic: *Diagnostic,
+) Error!void {
+    var protocols_line: ?[]const u8 = null;
+    var features_line: ?[]const u8 = null;
+
+    var lines = std.mem.splitScalar(u8, stdout, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \t\r");
+        if (std.mem.startsWith(u8, line, "Protocols:")) {
+            protocols_line = line;
+        } else if (std.mem.startsWith(u8, line, "Features:")) {
+            features_line = line;
+        }
+    }
+
+    const p_line = protocols_line orelse return diagnostic.fail(
+        error.Failed,
+        "missing Protocols: line in --version output for {s}: {s}",
+        .{ platform_suffix, std.mem.trim(u8, stdout, " \t\r\n") },
+    );
+    const f_line = features_line orelse return diagnostic.fail(
+        error.Failed,
+        "missing Features: line in --version output for {s}: {s}",
+        .{ platform_suffix, std.mem.trim(u8, stdout, " \t\r\n") },
+    );
+
+    const p_tokens = p_line["Protocols:".len..];
+    for (expected_release_protocols) |proto| {
+        if (!hasWhitespaceToken(p_tokens, proto)) {
+            return diagnostic.fail(
+                error.Failed,
+                "missing protocol '{s}' in --version output for {s}: {s}",
+                .{ proto, platform_suffix, p_line },
+            );
+        }
+    }
+
+    const f_tokens = f_line["Features:".len..];
+    for (expected_common_release_features) |feat| {
+        if (!hasWhitespaceToken(f_tokens, feat)) {
+            return diagnostic.fail(
+                error.Failed,
+                "missing feature '{s}' in --version output for {s}: {s}",
+                .{ feat, platform_suffix, f_line },
+            );
+        }
+    }
+
+    if (std.mem.startsWith(u8, platform_suffix, "linux-")) {
+        if (!hasWhitespaceToken(f_tokens, "GSS-API")) {
+            return diagnostic.fail(
+                error.Failed,
+                "missing feature '{s}' in --version output for {s}: {s}",
+                .{ "GSS-API", platform_suffix, f_line },
+            );
+        }
+    } else if (std.mem.startsWith(u8, platform_suffix, "macos-")) {
+        const macos_features = [_][]const u8{ "GSS-API", "AppleSecTrust" };
+        for (macos_features) |feat| {
+            if (!hasWhitespaceToken(f_tokens, feat)) {
+                return diagnostic.fail(
+                    error.Failed,
+                    "missing feature '{s}' in --version output for {s}: {s}",
+                    .{ feat, platform_suffix, f_line },
+                );
+            }
+        }
+    } else if (std.mem.startsWith(u8, platform_suffix, "windows-")) {
+        const windows_features = [_][]const u8{ "SSPI", "Unicode" };
+        for (windows_features) |feat| {
+            if (!hasWhitespaceToken(f_tokens, feat)) {
+                return diagnostic.fail(
+                    error.Failed,
+                    "missing feature '{s}' in --version output for {s}: {s}",
+                    .{ feat, platform_suffix, f_line },
+                );
+            }
+        }
+    } else {
+        return diagnostic.fail(
+            error.Failed,
+            "unsupported platform suffix: {s}",
+            .{platform_suffix},
+        );
+    }
+}
+
 pub fn verifyPackage(
     allocator: Allocator,
     io: Io,
@@ -1497,6 +1701,7 @@ pub fn verifyPackage(
             .{ unpacked_exe, std.mem.trim(u8, ver_res.stdout, " \t\r\n") },
         );
     }
+    try verifyVersionOutputProtocolsAndFeatures(ver_res.stdout, platform.suffix, diagnostic);
 
     // 2. Verify real `file://` transfer from unpacked binary
     const payload_rel = std.fs.path.join(allocator, &.{ temp_dir, "payload.txt" }) catch
@@ -1626,6 +1831,40 @@ pub fn verifyPackage(
             error.Failed,
             "expected non-zero exit code from unpacked {s} on unreachable endpoint",
             .{unpacked_exe},
+        );
+    }
+
+    // 5. Verify `--proto '=https' --tlsv1.2` is accepted (HTTPS protocol and TLS 1.2 enabled)
+    const https_res = runCapture(
+        allocator,
+        io,
+        &.{ unpacked_exe, "--proto", "=https", "--tlsv1.2", "--silent", "--show-error", "https://127.0.0.1:0/unreachable" },
+    ) catch |err| return diagnostic.fail(
+        error.Failed,
+        "cannot run unpacked {s} https/tlsv1.2 check: {t}",
+        .{ unpacked_exe, err },
+    );
+    defer allocator.free(https_res.stdout);
+    defer allocator.free(https_res.stderr);
+    const https_failed_as_expected = switch (https_res.term) {
+        .exited => |code| code != 0,
+        else => false,
+    };
+    if (!https_failed_as_expected) {
+        return diagnostic.fail(
+            error.Failed,
+            "expected non-zero exit code from unpacked {s} on unreachable https endpoint",
+            .{unpacked_exe},
+        );
+    }
+    if (std.mem.indexOf(u8, https_res.stderr, "unrecognized protocol") != null or
+        std.mem.indexOf(u8, https_res.stderr, "is badly used here") != null or
+        std.mem.indexOf(u8, https_res.stderr, "is disabled") != null)
+    {
+        return diagnostic.fail(
+            error.Failed,
+            "unpacked {s} rejected --proto '=https' --tlsv1.2: {s}",
+            .{ unpacked_exe, std.mem.trim(u8, https_res.stderr, " \t\r\n") },
         );
     }
 }
@@ -1871,9 +2110,9 @@ pub fn renderReleaseNotes(
         \\## Highlights
         \\
         \\- **Six-platform Zig-built `curl` CLI archives.** Publishes `linux-musl-x64`, `linux-musl-arm64`, `macos-x64`, `macos-arm64`, `windows-x64`, and `windows-arm64` archives (`curl-{s}-<platform>.tar.gz`) with GitHub build provenance attestations and zero SBOM or SPDX assets.
-        \\- **Pure Zig port of `libcurl` and the `curl` CLI.** Core transfer engine, HTTP/1.1, SOCKS4/5, DNS resolver, MIME, cookie engine, HSTS, alt-svc, WebSockets, FTP, SMTP, IMAP, POP3, RTSP, TFTP, DICT, GOPHER, MQTT, TELNET, and FILE are compiled directly via `zig build`.
-        \\- **Native Windows OS integration on Windows x64 and Arm64.** Windows archives enable Schannel TLS (`-Dssl=schannel`), WinIDN (`-Didn=winidn`), WinLDAP (`-Dldap=winldap`), and Windows SSPI (`-Dsspi=true`) out of the box using standard Windows system DLLs.
-        \\- **Zero external shared library dependencies on Linux musl and macOS.** Linux musl binaries are statically linked; macOS binaries link only system `libSystem.B.dylib`.
+        \\- **All 25 protocols and full feature set across all 6 platforms.** Supports `DICT, FILE, FTP, FTPS, GOPHER, GOPHERS, HTTP, HTTPS, IMAP, IMAPS, LDAP, LDAPS, MQTT, MQTTS, POP3, POP3S, RTSP, SCP, SFTP, SMTP, SMTPS, TELNET, TFTP, WS, WSS` and features `SSL, HSTS, HTTP2, HTTP3, HTTPS-proxy, HTTPSIG, HTTPSRR, AsynchDNS, asyn-rr, IDN, IPv6, Kerberos, Largefile, libz, brotli, zstd, PSL, SPNEGO, alt-svc, proxy-HTTP3, threadsafe, UnixSockets` (`GSS-API` on Linux/macOS, `AppleSecTrust` on macOS, `SSPI` and `Unicode` on Windows).
+        \\- **Native Windows OS integration on Windows x64 and Arm64.** Windows archives enable Schannel TLS (`-Dssl=schannel`), WinIDN (`-Didn=winidn`), WinLDAP (`-Dldap=winldap`), and Windows SSPI (`-Dsspi=true`) alongside bundled compression, HTTP/2, HTTP/3, SSH, PSL, and c-ares backends.
+        \\- **Zero external third-party shared library dependencies.** Linux musl binaries are statically linked; macOS binaries link only system `libSystem.B.dylib` and Apple `Security`/`CoreFoundation` frameworks.
         \\
         \\## Platform Coverage & Runtime Requirements
         \\
@@ -1881,15 +2120,14 @@ pub fn renderReleaseNotes(
         \\|---|---|---|---|
         \\| `curl-{s}-linux-musl-x64.tar.gz` | `x86_64-linux-musl` | `curl` | Static musl binary (none) |
         \\| `curl-{s}-linux-musl-arm64.tar.gz` | `aarch64-linux-musl` | `curl` | Static musl binary (none) |
-        \\| `curl-{s}-macos-x64.tar.gz` | `x86_64-macos` | `curl` | macOS `libSystem.B.dylib` |
-        \\| `curl-{s}-macos-arm64.tar.gz` | `aarch64-macos` | `curl` | macOS `libSystem.B.dylib` |
+        \\| `curl-{s}-macos-x64.tar.gz` | `x86_64-macos` | `curl` | macOS `libSystem.B.dylib` + `Security`/`CoreFoundation` frameworks |
+        \\| `curl-{s}-macos-arm64.tar.gz` | `aarch64-macos` | `curl` | macOS `libSystem.B.dylib` + `Security`/`CoreFoundation` frameworks |
         \\| `curl-{s}-windows-x64.tar.gz` | `x86_64-windows-gnu` | `curl.exe` | Windows system DLLs (`ws2_32`, `secur32`, `crypt32`, `advapi32`, `bcrypt`, `normaliz`, `wldap32`) |
         \\| `curl-{s}-windows-arm64.tar.gz` | `aarch64-windows-gnu` | `curl.exe` | Windows system DLLs (`ws2_32`, `secur32`, `crypt32`, `advapi32`, `bcrypt`, `normaliz`, `wldap32`) |
         \\
         \\## Known Limitations
         \\
         \\- **CLI-only binary packages:** `libcurl` C development headers and static/shared libraries are outside the scope of these release archives.
-        \\- **Optional system backends on Linux and macOS:** To keep the prebuilt Linux musl and macOS binaries self-contained without bundling third-party C/Rust libraries, optional external backends (`-Dssl=openssl|gnutls|mbedtls|wolfssl|rustls`, `-Dquic=ngtcp2|quiche`, `-Dssh=libssh2|libssh`, `-Dldap=openldap`, `-Dares=true`, `-Dgssapi=true`, `-Dzstd=true`, `-Dzlib=true`, `-Dbrotli=true`, `-Dnghttp2=true`, `-Dpsl=true`, `-Didn=libidn2`) are disabled in the prebuilt Unix archives and can be enabled when building from source with `zig build`.
         \\
         \\{s}
     ,
@@ -3259,7 +3497,7 @@ test "isSafeArchiveEntryPath rejects traversal, absolute, drive, dot, NUL, and c
     }
 }
 
-test "release platform zig build args default to ReleaseSafe optimize mode" {
+test "release platform zig build args default to ReleaseSafe optimize mode and full bundled backends" {
     const allocator = std.testing.allocator;
     try std.testing.expectEqual(std.builtin.OptimizeMode.ReleaseSafe, default_release_optimize_mode);
     try std.testing.expectEqualStrings("-Doptimize=ReleaseSafe", default_release_optimize_flag);
@@ -3269,10 +3507,204 @@ test "release platform zig build args default to ReleaseSafe optimize mode" {
         const argv = try platform.zigBuildArgv(allocator);
         defer Platform.freeZigBuildArgv(allocator, argv);
 
-        try std.testing.expect(argv.len >= 4);
+        try std.testing.expectEqual(@as(usize, 20), argv.len);
         try std.testing.expectEqualStrings("zig", argv[0]);
         try std.testing.expectEqualStrings("build", argv[1]);
         try std.testing.expectEqualStrings("-Doptimize=ReleaseSafe", argv[3]);
+        try std.testing.expectEqualStrings("-Dbundled=true", argv[4]);
+    }
+
+    const linux_x64 = findPlatform("linux-musl-x64").?;
+    const linux_argv = try linux_x64.zigBuildArgv(allocator);
+    defer Platform.freeZigBuildArgv(allocator, linux_argv);
+    const expected_linux = [_][]const u8{
+        "zig",
+        "build",
+        "-Dtarget=x86_64-linux-musl",
+        "-Doptimize=ReleaseSafe",
+        "-Dbundled=true",
+        "-Dssl=openssl",
+        "-Dapple-sectrust=false",
+        "-Dzstd=true",
+        "-Dzlib=true",
+        "-Dbrotli=true",
+        "-Dpsl=true",
+        "-Didn=libidn2",
+        "-Dnghttp2=true",
+        "-Dares=true",
+        "-Dhttpsrr=true",
+        "-Dquic=ngtcp2",
+        "-Dssh=libssh2",
+        "-Dldap=openldap",
+        "-Dgssapi=true",
+        "-Dsspi=false",
+    };
+    for (expected_linux, linux_argv) |exp, actual| {
+        try std.testing.expectEqualStrings(exp, actual);
+    }
+
+    const macos_arm64 = findPlatform("macos-arm64").?;
+    const macos_argv = try macos_arm64.zigBuildArgv(allocator);
+    defer Platform.freeZigBuildArgv(allocator, macos_argv);
+    const expected_macos = [_][]const u8{
+        "zig",
+        "build",
+        "-Dtarget=aarch64-macos",
+        "-Doptimize=ReleaseSafe",
+        "-Dbundled=true",
+        "-Dssl=openssl",
+        "-Dapple-sectrust=true",
+        "-Dzstd=true",
+        "-Dzlib=true",
+        "-Dbrotli=true",
+        "-Dpsl=true",
+        "-Didn=libidn2",
+        "-Dnghttp2=true",
+        "-Dares=true",
+        "-Dhttpsrr=true",
+        "-Dquic=ngtcp2",
+        "-Dssh=libssh2",
+        "-Dldap=openldap",
+        "-Dgssapi=true",
+        "-Dsspi=false",
+    };
+    for (expected_macos, macos_argv) |exp, actual| {
+        try std.testing.expectEqualStrings(exp, actual);
+    }
+
+    const windows_x64 = findPlatform("windows-x64").?;
+    const windows_argv = try windows_x64.zigBuildArgv(allocator);
+    defer Platform.freeZigBuildArgv(allocator, windows_argv);
+    const expected_windows = [_][]const u8{
+        "zig",
+        "build",
+        "-Dtarget=x86_64-windows-gnu",
+        "-Doptimize=ReleaseSafe",
+        "-Dbundled=true",
+        "-Dssl=schannel",
+        "-Dapple-sectrust=false",
+        "-Dzstd=true",
+        "-Dzlib=true",
+        "-Dbrotli=true",
+        "-Dpsl=true",
+        "-Didn=winidn",
+        "-Dnghttp2=true",
+        "-Dares=true",
+        "-Dhttpsrr=true",
+        "-Dquic=ngtcp2",
+        "-Dssh=libssh2",
+        "-Dldap=winldap",
+        "-Dgssapi=false",
+        "-Dsspi=true",
+    };
+    for (expected_windows, windows_argv) |exp, actual| {
+        try std.testing.expectEqualStrings(exp, actual);
+    }
+}
+
+test "verifyVersionOutputProtocolsAndFeatures validates all 25 protocols and platform features" {
+    var diagnostic: Diagnostic = .{};
+
+    const all_protocols_line = "Protocols: dict file ftp ftps gopher gophers http https imap imaps ldap ldaps mqtt mqtts pop3 pop3s rtsp scp sftp smtp smtps telnet tftp ws wss";
+    const common_features = "alt-svc asyn-rr AsynchDNS brotli HSTS HTTP2 HTTP3 HTTPS-proxy HTTPSIG HTTPSRR IDN IPv6 Kerberos Largefile libz proxy-HTTP3 PSL SPNEGO SSL threadsafe UnixSockets zstd";
+
+    const valid_linux =
+        "curl 8.23.0-zig.1 (x86_64-unknown-linux-musl) libcurl/8.23.0-zig.1\n" ++
+        all_protocols_line ++ "\n" ++
+        "Features: " ++ common_features ++ " GSS-API\n";
+    try verifyVersionOutputProtocolsAndFeatures(valid_linux, "linux-musl-x64", &diagnostic);
+    try verifyVersionOutputProtocolsAndFeatures(valid_linux, "linux-musl-arm64", &diagnostic);
+
+    const valid_macos =
+        "curl 8.23.0-zig.1 (aarch64-apple-darwin) libcurl/8.23.0-zig.1\n" ++
+        all_protocols_line ++ "\n" ++
+        "Features: " ++ common_features ++ " AppleSecTrust GSS-API\n";
+    try verifyVersionOutputProtocolsAndFeatures(valid_macos, "macos-x64", &diagnostic);
+    try verifyVersionOutputProtocolsAndFeatures(valid_macos, "macos-arm64", &diagnostic);
+
+    const valid_windows =
+        "curl 8.23.0-zig.1 (x86_64-pc-windows-gnu) libcurl/8.23.0-zig.1\n" ++
+        all_protocols_line ++ "\n" ++
+        "Features: " ++ common_features ++ " SSPI Unicode\n";
+    try verifyVersionOutputProtocolsAndFeatures(valid_windows, "windows-x64", &diagnostic);
+    try verifyVersionOutputProtocolsAndFeatures(valid_windows, "windows-arm64", &diagnostic);
+
+    // Reject macOS output missing AppleSecTrust
+    diagnostic = .{};
+    try std.testing.expectError(
+        error.Failed,
+        verifyVersionOutputProtocolsAndFeatures(valid_linux, "macos-arm64", &diagnostic),
+    );
+    try std.testing.expect(std.mem.indexOf(u8, diagnostic.message(), "missing feature 'AppleSecTrust'") != null);
+
+    // Reject Windows output missing SSPI or Unicode
+    diagnostic = .{};
+    try std.testing.expectError(
+        error.Failed,
+        verifyVersionOutputProtocolsAndFeatures(valid_linux, "windows-x64", &diagnostic),
+    );
+    try std.testing.expect(std.mem.indexOf(u8, diagnostic.message(), "missing feature 'SSPI'") != null);
+
+    // Reject output missing each required protocol (e.g. https, ftps, scp, sftp, ldap, ldaps)
+    const tested_missing_protocols = [_][]const u8{
+        "https",
+        "ftps",
+        "scp",
+        "sftp",
+        "ldap",
+        "ldaps",
+        "mqtts",
+        "wss",
+    };
+    for (tested_missing_protocols) |missing_proto| {
+        var proto_buf: std.ArrayList(u8) = .empty;
+        defer proto_buf.deinit(std.testing.allocator);
+        try proto_buf.appendSlice(std.testing.allocator, "curl 8.23.0-zig.1 libcurl/8.23.0-zig.1\nProtocols:");
+        for (expected_release_protocols) |p| {
+            if (std.mem.eql(u8, p, missing_proto)) continue;
+            try proto_buf.append(std.testing.allocator, ' ');
+            try proto_buf.appendSlice(std.testing.allocator, p);
+        }
+        try proto_buf.appendSlice(std.testing.allocator, "\nFeatures: " ++ common_features ++ " GSS-API\n");
+
+        diagnostic = .{};
+        try std.testing.expectError(
+            error.Failed,
+            verifyVersionOutputProtocolsAndFeatures(proto_buf.items, "linux-musl-x64", &diagnostic),
+        );
+        try std.testing.expect(std.mem.indexOf(u8, diagnostic.message(), missing_proto) != null);
+    }
+
+    // Reject output missing each required feature (e.g. SSL, HTTP2, HTTP3, libz, brotli, zstd, IDN, PSL)
+    const tested_missing_features = [_][]const u8{
+        "SSL",
+        "HTTP2",
+        "HTTP3",
+        "libz",
+        "brotli",
+        "zstd",
+        "IDN",
+        "PSL",
+        "HTTPSRR",
+        "AsynchDNS",
+    };
+    for (tested_missing_features) |missing_feat| {
+        var feat_buf: std.ArrayList(u8) = .empty;
+        defer feat_buf.deinit(std.testing.allocator);
+        try feat_buf.appendSlice(std.testing.allocator, "curl 8.23.0-zig.1 libcurl/8.23.0-zig.1\n" ++ all_protocols_line ++ "\nFeatures: GSS-API");
+        for (expected_common_release_features) |f| {
+            if (std.mem.eql(u8, f, missing_feat)) continue;
+            try feat_buf.append(std.testing.allocator, ' ');
+            try feat_buf.appendSlice(std.testing.allocator, f);
+        }
+        try feat_buf.append(std.testing.allocator, '\n');
+
+        diagnostic = .{};
+        try std.testing.expectError(
+            error.Failed,
+            verifyVersionOutputProtocolsAndFeatures(feat_buf.items, "linux-musl-x64", &diagnostic),
+        );
+        try std.testing.expect(std.mem.indexOf(u8, diagnostic.message(), missing_feat) != null);
     }
 }
 
