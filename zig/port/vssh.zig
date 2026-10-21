@@ -14,6 +14,7 @@ const sendf = @import("sendf.zig");
 const cfsocket_transfer = @import("cfsocket_transfer.zig");
 const setopt = @import("setopt.zig");
 const protocol_version_mime = @import("protocol_version_mime.zig");
+const vssh_libssh = @import("vssh_libssh.zig");
 
 pub const ssh_backend = if (@hasDecl(backend_options, "ssh")) backend_options.ssh else .none;
 pub const use_ssh = ssh_backend != .none;
@@ -145,13 +146,13 @@ pub const Curl_protocol = extern struct {
     doing: ?*const fn (?*Curl_easy, *bool) callconv(.c) CURLcode = null,
     proto_pollset: ?*const fn (?*Curl_easy, ?*easy_pollset) callconv(.c) CURLcode = null,
     doing_pollset: ?*const fn (?*Curl_easy, ?*easy_pollset) callconv(.c) CURLcode = null,
+    domore_pollset: ?*const fn (?*Curl_easy, ?*easy_pollset) callconv(.c) CURLcode = null,
     perform_pollset: ?*const fn (?*Curl_easy, ?*easy_pollset) callconv(.c) CURLcode = null,
     disconnect: ?*const fn (?*Curl_easy, ?*connectdata, bool) callconv(.c) CURLcode = null,
-    write_resp: ?*const fn (?*Curl_easy, [*]const u8, usize, bool, *bool) callconv(.c) CURLcode = null,
+    write_resp: ?*const fn (?*Curl_easy, [*]const u8, usize, bool) callconv(.c) CURLcode = null,
     write_resp_hd: ?*const fn (?*Curl_easy, [*]const u8, usize, bool) callconv(.c) CURLcode = null,
     connection_is_dead: ?*const fn (?*Curl_easy, ?*connectdata) callconv(.c) bool = null,
     attach: ?*const fn (?*Curl_easy, ?*connectdata) callconv(.c) void = null,
-    cntrl: ?*const fn (?*Curl_easy, c_int, c_long, ?*anyopaque) callconv(.c) CURLcode = null,
     follow: ?*const fn (?*Curl_easy, [*:0]const u8, c_uint) callconv(.c) CURLcode = null,
 };
 
@@ -3618,9 +3619,12 @@ pub export const Curl_protocol_scp: Curl_protocol = if (use_libssh2) .{
     .doing_pollset = ssh_pollset,
     .perform_pollset = ssh_pollset,
     .disconnect = scp_disconnect,
-} else .{
-    .do_it = sshDisabledDo,
-};
+} else if (use_libssh)
+    vssh_libssh.protocol_scp
+else
+    .{
+        .do_it = sshDisabledDo,
+    };
 
 pub export const Curl_protocol_sftp: Curl_protocol = if (use_libssh2) .{
     .setup_connection = Curl_ssh_setup_connection,
@@ -3633,15 +3637,20 @@ pub export const Curl_protocol_sftp: Curl_protocol = if (use_libssh2) .{
     .doing_pollset = ssh_pollset,
     .perform_pollset = ssh_pollset,
     .disconnect = sftp_disconnect,
-} else .{
-    .do_it = sshDisabledDo,
-};
+} else if (use_libssh)
+    vssh_libssh.protocol_sftp
+else
+    .{
+        .do_it = sshDisabledDo,
+    };
 
 pub export fn Curl_ssh_init() callconv(.c) CURLcode {
     if (comptime use_libssh2) {
         if (libssh2_init(0) != 0) {
             return CURLE_FAILED_INIT;
         }
+    } else if (comptime use_libssh) {
+        return vssh_libssh.init();
     }
     return CURLE_OK;
 }
@@ -3649,6 +3658,8 @@ pub export fn Curl_ssh_init() callconv(.c) CURLcode {
 pub export fn Curl_ssh_cleanup() callconv(.c) void {
     if (comptime use_libssh2) {
         libssh2_exit();
+    } else if (comptime use_libssh) {
+        vssh_libssh.cleanup();
     }
 }
 
@@ -3661,6 +3672,8 @@ pub export fn Curl_ssh_version(buffer: [*]u8, buflen: usize) callconv(.c) void {
             return;
         };
         buffer[s.len] = 0;
+    } else if (comptime use_libssh) {
+        _ = vssh_libssh.version(buffer, buflen);
     } else {
         buffer[0] = 0;
     }
@@ -3762,6 +3775,8 @@ test "CURLOPT_SSH_* options and version info with libssh2" {
         Curl_ssh_version(&vbuf, vbuf.len);
         if (use_libssh2) {
             try std.testing.expect(std.mem.startsWith(u8, std.mem.sliceTo(&vbuf, 0), "libssh2/"));
+        } else if (use_libssh) {
+            try std.testing.expect(std.mem.startsWith(u8, std.mem.sliceTo(&vbuf, 0), "libssh/"));
         }
     } else {
         try std.testing.expectEqual(setopt.CURLE_UNKNOWN_OPTION, curl_easy_setopt(easy, @intCast(setopt.CURLOPT_SSH_AUTH_TYPES), @as(c_long, 3)));

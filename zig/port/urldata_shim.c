@@ -15079,8 +15079,65 @@ const char *Curl_vssh_get_conn_passwd(const struct connectdata *conn)
 const char *Curl_vssh_get_conn_host_name(const struct connectdata *conn);
 const char *Curl_vssh_get_conn_host_name(const struct connectdata *conn)
 {
-  return (conn && conn->origin && conn->origin->hostname) ?
-    conn->origin->hostname : "";
+  if(!conn || !conn->origin)
+    return "";
+  if(conn->origin->ipv6 && conn->origin->user_hostname)
+    return conn->origin->user_hostname;
+  return conn->origin->hostname ? conn->origin->hostname : "";
+}
+
+uint8_t Curl_vssh_get_req_io_flags(const struct Curl_easy *data);
+uint8_t Curl_vssh_get_req_io_flags(const struct Curl_easy *data)
+{
+  return data->req.io_flags;
+}
+
+void Curl_vssh_clear_req_io(struct Curl_easy *data);
+void Curl_vssh_clear_req_io(struct Curl_easy *data)
+{
+  CURL_REQ_CLEAR_IO(data);
+}
+
+void Curl_vssh_set_conn_idx(struct connectdata *conn,
+                            int8_t recv_idx,
+                            int8_t send_idx);
+void Curl_vssh_set_conn_idx(struct connectdata *conn,
+                            int8_t recv_idx,
+                            int8_t send_idx)
+{
+  conn->recv_idx = recv_idx;
+  conn->send_idx = send_idx;
+}
+
+bool Curl_vssh_get_conn_retry(const struct connectdata *conn);
+bool Curl_vssh_get_conn_retry(const struct connectdata *conn)
+{
+  return conn ? (bool)conn->bits.retry : FALSE;
+}
+
+bool Curl_vssh_get_state_use_range(const struct Curl_easy *data);
+bool Curl_vssh_get_state_use_range(const struct Curl_easy *data)
+{
+  return (bool)data->state.use_range;
+}
+
+const char *Curl_vssh_get_state_range(const struct Curl_easy *data);
+const char *Curl_vssh_get_state_range(const struct Curl_easy *data)
+{
+  return data->state.range;
+}
+
+void Curl_vssh_conn_forget_socket(struct Curl_easy *data, int8_t sockindex);
+void Curl_vssh_conn_forget_socket(struct Curl_easy *data, int8_t sockindex)
+{
+  struct connectdata *conn = data->conn;
+  if(conn && CONN_SOCK_IDX_VALID(sockindex)) {
+    struct Curl_cfilter *cf = conn->cfilter[sockindex];
+    if(cf)
+      (void)Curl_conn_cf_cntrl(cf, data, TRUE, CF_CTRL_FORGET_SOCKET, 0, NULL);
+    fake_sclose(conn->sock[sockindex]);
+    conn->sock[sockindex] = CURL_SOCKET_BAD;
+  }
 }
 
 int Curl_vssh_get_conn_remote_port(const struct connectdata *conn);
