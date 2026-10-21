@@ -255,30 +255,6 @@ pub fn addLibcurl(b: *std.Build, options: Options) *std.Build.Step.Compile {
         },
         .macos => {
             mod.linkSystemLibrary("pthread", .{});
-            if (b.graph.host.result.os.tag == .macos) {
-                mod.linkFramework("CoreFoundation", .{});
-                mod.linkFramework("CoreServices", .{});
-                mod.linkFramework("SystemConfiguration", .{});
-            } else {
-                const macos_stubs = b.addWriteFiles();
-                _ = macos_stubs.add("SystemConfiguration/SCDynamicStoreCopySpecific.h",
-                    \\#ifndef SCDYNAMICSTORECOPYSPECIFIC_H
-                    \\#define SCDYNAMICSTORECOPYSPECIFIC_H
-                    \\typedef const void *CFTypeRef;
-                    \\typedef const struct __CFDictionary *CFDictionaryRef;
-                    \\typedef const struct __SCDynamicStore *SCDynamicStoreRef;
-                    \\static inline CFDictionaryRef SCDynamicStoreCopyProxies(SCDynamicStoreRef store) {
-                    \\  (void)store;
-                    \\  return (CFDictionaryRef)0;
-                    \\}
-                    \\static inline void CFRelease(CFTypeRef cf) {
-                    \\  (void)cf;
-                    \\}
-                    \\#endif
-                    \\
-                );
-                mod.addIncludePath(macos_stubs.getDirectory());
-            }
         },
         .windows => {
             mod.addCMacro("WIN32_LEAN_AND_MEAN", "1");
