@@ -4450,6 +4450,16 @@ test "Curl_cf_quic_create and Curl_cf_h3_proxy_create filter initialization" {
         const ver_str = std.mem.sliceTo(&ver_buf, 0);
         try std.testing.expect(std.mem.indexOf(u8, ver_str, "ngtcp2/") != null);
         try std.testing.expect(std.mem.indexOf(u8, ver_str, "nghttp3/") != null);
+    } else if (comptime vquic_core.use_http3) {
+        try std.testing.expectEqual(CURLE_OK, rc);
+        try std.testing.expect(cf != null);
+        const h3_cf = cf.?;
+        if (h3_cf.next) |udp_cf| {
+            udp_cf.cft.destroy(udp_cf, null);
+            mem.free(udp_cf);
+        }
+        h3_cf.cft.destroy(h3_cf, null);
+        mem.free(h3_cf);
     } else {
         try std.testing.expectEqual(CURLE_NOT_BUILT_IN, rc);
         try std.testing.expect(cf == null);

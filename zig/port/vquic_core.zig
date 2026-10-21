@@ -29,6 +29,7 @@ const vtls_gtls = @import("vtls_gtls.zig");
 const vtls_wolfssl = @import("vtls_wolfssl.zig");
 const http1_options = @import("http1_options.zig");
 const vquic_ngtcp2 = @import("vquic_ngtcp2.zig");
+const vquic_quiche = @import("vquic_quiche.zig");
 const ossl_backend = vtls_backends.openssl_backend;
 
 const is_windows = builtin.os.tag == .windows;
@@ -396,26 +397,14 @@ pub fn Curl_cf_ngtcp2_ver(p: [*]u8, len: usize) callconv(.c) void {
 }
 
 /// Format quiche version string (`Curl_cf_quiche_ver` in `lib/vquic/cf-quiche.c`).
-pub fn Curl_cf_quiche_ver(p: [*]u8, len: usize) callconv(.c) void {
-    if (len == 0) return;
-    if (comptime (backend_options.quic == .quiche)) {
-        const qv = std.mem.span(quiche_ext.quiche_version());
-        const s = std.fmt.bufPrint(p[0 .. len - 1], "quiche/{s}", .{qv}) catch {
-            p[0] = 0;
-            return;
-        };
-        p[s.len] = 0;
-    } else {
-        p[0] = 0;
-    }
-}
+pub const Curl_cf_quiche_ver = vquic_quiche.Curl_quiche_ver;
 
 /// Format QUIC version string (`Curl_quic_ver` in `lib/vquic/vquic.c`).
 pub fn Curl_quic_ver(p: [*]u8, len: usize) callconv(.c) void {
     if (len == 0) return;
     switch (comptime backend_options.quic) {
         .ngtcp2 => Curl_cf_ngtcp2_ver(p, len),
-        .quiche => Curl_cf_quiche_ver(p, len),
+        .quiche => vquic_quiche.Curl_quiche_ver(p, len),
         .none => p[0] = 0,
     }
 }
@@ -1092,23 +1081,14 @@ pub const Curl_cf_ngtcp2_insert_after = vquic_ngtcp2.Curl_cf_ngtcp2_insert_after
 pub const Curl_cf_ngtcp2_proxy_create = vquic_ngtcp2.Curl_cf_ngtcp2_proxy_create;
 pub const Curl_cf_ngtcp2_proxy_insert_after = vquic_ngtcp2.Curl_cf_ngtcp2_proxy_insert_after;
 
-/// Temporary Session 4 stub for `Curl_cf_quiche_create` (to be replaced in Session 6).
-pub fn Curl_cf_quiche_create(
-    pcf: *?*CurlCfilter,
-    data: ?*CurlEasy,
-    origin: ?*CurlPeer,
-    peer: ?*CurlPeer,
-    conn: ?*ConnectData,
-    addr: ?*CurlSockaddrEx,
-) callconv(.c) CURLcode {
-    _ = data;
-    _ = origin;
-    _ = peer;
-    _ = conn;
-    _ = addr;
-    pcf.* = null;
-    return CURLE_NOT_BUILT_IN;
-}
+pub const Curl_cf_quiche_create = vquic_quiche.Curl_cf_quiche_create;
+pub const Curl_cf_quiche_insert_after = vquic_quiche.Curl_cf_quiche_insert_after;
+
+pub const Curl_cft_http3 = switch (backend_options.quic) {
+    .ngtcp2 => &vquic_ngtcp2.Curl_cft_http3,
+    .quiche => &vquic_quiche.Curl_cft_http3,
+    .none => null,
+};
 
 /// Create QUIC connection filter (`Curl_cf_quic_create` in `lib/vquic/vquic.c`).
 pub export fn Curl_cf_quic_create(
@@ -1130,7 +1110,7 @@ pub export fn Curl_cf_quic_create(
     std.debug.assert(transport_peer == TRNSPRT_QUIC);
     return switch (comptime backend_options.quic) {
         .ngtcp2 => vquic_ngtcp2.Curl_cf_ngtcp2_create(pcf, data, origin, peer, conn, addr),
-        .quiche => Curl_cf_quiche_create(pcf, data, origin, peer, conn, addr),
+        .quiche => vquic_quiche.Curl_cf_quiche_create(pcf, data, origin, peer, conn, addr),
         .none => CURLE_NOT_BUILT_IN,
     };
 }
@@ -1146,7 +1126,8 @@ pub export fn Curl_cf_quic_insert_after(
     var cf: ?*CurlCfilter = null;
     return switch (comptime backend_options.quic) {
         .ngtcp2 => vquic_ngtcp2.Curl_cf_ngtcp2_insert_after(cf_at, origin, peer, &cf),
-        .quiche, .none => CURLE_NOT_BUILT_IN,
+        .quiche => vquic_quiche.Curl_cf_quiche_insert_after(cf_at, origin, peer, &cf),
+        .none => CURLE_NOT_BUILT_IN,
     };
 }
 

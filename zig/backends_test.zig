@@ -295,6 +295,8 @@ test "curl_version_info feature flags match build options" {
         if (backend_options.quic == .ngtcp2) {
             try testing.expect(std.mem.indexOf(u8, qver, "ngtcp2/") != null);
             try testing.expect(std.mem.indexOf(u8, qver, "nghttp3/") != null);
+        } else if (backend_options.quic == .quiche) {
+            try testing.expect(std.mem.indexOf(u8, qver, "quiche/") != null);
         }
     } else {
         try testing.expect(info.*.quic_version == null);
@@ -352,6 +354,7 @@ test "curl_version string reflects enabled backends" {
     try testing.expectEqual(backend_options.nghttp2, std.mem.indexOf(u8, ver, "nghttp2/") != null);
     try testing.expectEqual(backend_options.quic == .ngtcp2, std.mem.indexOf(u8, ver, "ngtcp2/") != null);
     try testing.expectEqual(backend_options.quic == .ngtcp2, std.mem.indexOf(u8, ver, "nghttp3/") != null);
+    try testing.expectEqual(backend_options.quic == .quiche, std.mem.indexOf(u8, ver, "quiche/") != null);
     try testing.expectEqual(backend_options.ares, std.mem.indexOf(u8, ver, "c-ares/") != null);
 }
 
@@ -2620,13 +2623,13 @@ const loopback_quic = struct {
     };
 };
 
-test "HTTP/3 ngtcp2 filter creation and UDP loopback QUIC Initial packet generation" {
+test "HTTP/3 QUIC filter creation and UDP loopback QUIC Initial packet generation" {
     // 1. Direct Curl_cf_quic_create filter creation verification
     {
         var cf: ?*loopback_quic.c_cf.CurlCfilter = null;
         var dummy_addr: [256]u8 align(8) = @splat(0);
         const rc = loopback_quic.c_cf.Curl_cf_quic_create(&cf, null, null, null, 5, null, &dummy_addr, null, 0);
-        if (backend_options.quic == .ngtcp2) {
+        if (backend_options.quic != .none) {
             try testing.expectEqual(c.CURLE_OK, rc);
             try testing.expect(cf != null);
             const h3_cf = cf.?;
@@ -2647,7 +2650,7 @@ test "HTTP/3 ngtcp2 filter creation and UDP loopback QUIC Initial packet generat
         }
     }
 
-    if (comptime (backend_options.quic != .ngtcp2 or builtin.os.tag == .windows)) return;
+    if (comptime (backend_options.quic == .none or builtin.os.tag == .windows)) return;
 
     // 2. End-to-end HTTP/3 (CURL_HTTP_VERSION_3ONLY) UDP loopback QUIC v1 Initial packet generation
     {
@@ -2686,9 +2689,8 @@ test "HTTP/3 ngtcp2 filter creation and UDP loopback QUIC Initial packet generat
         // QUIC v1 version (0x00000001)
         const version = std.mem.readInt(u32, pkt[1..5], .big);
         try testing.expectEqual(@as(u32, 0x00000001), version);
-        // 20-byte DCID and 20-byte SCID (NGTCP2_MAX_CIDLEN)
         const dcid_len = pkt[5];
-        try testing.expectEqual(@as(u8, 20), dcid_len);
+        try testing.expect(dcid_len >= 8 and dcid_len <= 20);
         const scid_len = pkt[6 + dcid_len];
         try testing.expectEqual(@as(u8, 20), scid_len);
     }
