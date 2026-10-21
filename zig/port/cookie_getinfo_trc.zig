@@ -2726,7 +2726,7 @@ pub export fn Curl_cookie_run(data: ?*Curl_easy, cookies: ?*CookieInfo) callconv
 
 const use_c_vastart = switch (builtin.cpu.arch) {
     .x86_64 => builtin.os.tag != .windows,
-    .aarch64, .aarch64_be => builtin.os.tag.isDarwin(),
+    .aarch64, .aarch64_be => builtin.os.tag.isDarwin() or builtin.os.tag == .windows,
     else => false,
 };
 
@@ -2757,21 +2757,24 @@ fn aarch64Thunk2(comptime target_sym: []const u8) fn () callconv(.naked) void {
             asm volatile ("sub sp, sp, #256\n\t" ++
                     "stp x29, x30, [sp, #240]\n\t" ++
                     "add x29, sp, #240\n\t" ++
-                    "stp x2, x3, [x29, #-112]\n\t" ++
-                    "stp x4, x5, [x29, #-96]\n\t" ++
-                    "stp x6, x7, [x29, #-80]\n\t" ++
-                    "stp q0, q1, [sp]\n\t" ++
-                    "stp q2, q3, [sp, #32]\n\t" ++
-                    "stp q4, q5, [sp, #64]\n\t" ++
-                    "stp q6, q7, [sp, #96]\n\t" ++
-                    "add x9, x29, #16\n\t" ++
-                    "sub x8, x29, #64\n\t" ++
-                    "stp x9, x8, [x29, #-64]\n\t" ++
-                    "add x9, sp, #128\n\t" ++
-                    "mov x8, #-48\n\t" ++
-                    "movk x8, #65408, lsl #32\n\t" ++
-                    "stp x9, x8, [x29, #-48]\n\t" ++
-                    "sub x2, x29, #64\n\t" ++
+                    "stp x2, x3, [x29, #-48]\n\t" ++
+                    "stp x4, x5, [x29, #-32]\n\t" ++
+                    "stp x6, x7, [x29, #-16]\n\t" ++
+                    "stp q0, q1, [sp, #32]\n\t" ++
+                    "stp q2, q3, [sp, #64]\n\t" ++
+                    "stp q4, q5, [sp, #96]\n\t" ++
+                    "stp q6, q7, [sp, #128]\n\t" ++
+                    "add x8, x29, #16\n\t" ++
+                    "str x8, [sp, #0]\n\t" ++
+                    "sub x8, x29, #0\n\t" ++
+                    "str x8, [sp, #8]\n\t" ++
+                    "add x8, sp, #160\n\t" ++
+                    "str x8, [sp, #16]\n\t" ++
+                    "mov w8, #-48\n\t" ++
+                    "str w8, [sp, #24]\n\t" ++
+                    "mov w8, #-128\n\t" ++
+                    "str w8, [sp, #28]\n\t" ++
+                    "mov x2, sp\n\t" ++
                     "bl " ++ target_sym ++ "\n\t" ++
                     "ldp x29, x30, [sp, #240]\n\t" ++
                     "add sp, sp, #256\n\t" ++
@@ -2786,21 +2789,24 @@ fn aarch64Thunk3(comptime target_sym: []const u8) fn () callconv(.naked) void {
             asm volatile ("sub sp, sp, #256\n\t" ++
                     "stp x29, x30, [sp, #240]\n\t" ++
                     "add x29, sp, #240\n\t" ++
-                    "str x3, [x29, #-104]\n\t" ++
-                    "stp x4, x5, [x29, #-96]\n\t" ++
-                    "stp x6, x7, [x29, #-80]\n\t" ++
-                    "stp q0, q1, [sp]\n\t" ++
-                    "stp q2, q3, [sp, #32]\n\t" ++
-                    "stp q4, q5, [sp, #64]\n\t" ++
-                    "stp q6, q7, [sp, #96]\n\t" ++
-                    "add x9, x29, #16\n\t" ++
-                    "sub x8, x29, #64\n\t" ++
-                    "stp x9, x8, [x29, #-64]\n\t" ++
-                    "add x9, sp, #128\n\t" ++
-                    "mov x8, #-40\n\t" ++
-                    "movk x8, #65408, lsl #32\n\t" ++
-                    "stp x9, x8, [x29, #-48]\n\t" ++
-                    "sub x3, x29, #64\n\t" ++
+                    "str x3, [x29, #-40]\n\t" ++
+                    "stp x4, x5, [x29, #-32]\n\t" ++
+                    "stp x6, x7, [x29, #-16]\n\t" ++
+                    "stp q0, q1, [sp, #32]\n\t" ++
+                    "stp q2, q3, [sp, #64]\n\t" ++
+                    "stp q4, q5, [sp, #96]\n\t" ++
+                    "stp q6, q7, [sp, #128]\n\t" ++
+                    "add x8, x29, #16\n\t" ++
+                    "str x8, [sp, #0]\n\t" ++
+                    "sub x8, x29, #0\n\t" ++
+                    "str x8, [sp, #8]\n\t" ++
+                    "add x8, sp, #160\n\t" ++
+                    "str x8, [sp, #16]\n\t" ++
+                    "mov w8, #-40\n\t" ++
+                    "str w8, [sp, #24]\n\t" ++
+                    "mov w8, #-128\n\t" ++
+                    "str w8, [sp, #28]\n\t" ++
+                    "mov x3, sp\n\t" ++
                     "bl " ++ target_sym ++ "\n\t" ++
                     "ldp x29, x30, [sp, #240]\n\t" ++
                     "add sp, sp, #256\n\t" ++
