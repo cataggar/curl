@@ -53,13 +53,78 @@ pub const Diagnostic = struct {
     }
 };
 
+pub const default_release_optimize_mode: std.builtin.OptimizeMode = .ReleaseSafe;
+pub const default_release_optimize_flag = "-Doptimize=ReleaseSafe";
+
 pub const Platform = struct {
     suffix: []const u8,
     zig_target: []const u8,
     executable: []const u8,
     runtime_notes: []const u8,
     enabled_features: []const u8,
+    optimize_mode: std.builtin.OptimizeMode = default_release_optimize_mode,
+
+    pub fn zigBuildArgv(self: Platform, allocator: Allocator) Allocator.Error![][]const u8 {
+        const target_arg = try std.fmt.allocPrint(allocator, "-Dtarget={s}", .{self.zig_target});
+        errdefer allocator.free(target_arg);
+
+        const optimize_str = switch (self.optimize_mode) {
+            .Debug => "-Doptimize=Debug",
+            .ReleaseSafe => "-Doptimize=ReleaseSafe",
+            .ReleaseFast => "-Doptimize=ReleaseFast",
+            .ReleaseSmall => "-Doptimize=ReleaseSmall",
+        };
+        const optimize_arg = try allocator.dupe(u8, optimize_str);
+        errdefer allocator.free(optimize_arg);
+
+        const is_windows = std.mem.startsWith(u8, self.suffix, "windows-");
+        const count: usize = if (is_windows) 8 else 4;
+        var argv = try allocator.alloc([]const u8, count);
+        var initialized: usize = 0;
+        errdefer {
+            for (argv[0..initialized]) |arg| allocator.free(arg);
+            allocator.free(argv);
+        }
+
+        argv[0] = try allocator.dupe(u8, "zig");
+        initialized = 1;
+        argv[1] = try allocator.dupe(u8, "build");
+        initialized = 2;
+        argv[2] = target_arg;
+        initialized = 3;
+        argv[3] = optimize_arg;
+        initialized = 4;
+
+        if (is_windows) {
+            argv[4] = try allocator.dupe(u8, "-Dssl=schannel");
+            initialized = 5;
+            argv[5] = try allocator.dupe(u8, "-Didn=winidn");
+            initialized = 6;
+            argv[6] = try allocator.dupe(u8, "-Dldap=winldap");
+            initialized = 7;
+            argv[7] = try allocator.dupe(u8, "-Dsspi=true");
+            initialized = 8;
+        }
+        return argv;
+    }
+
+    pub fn freeZigBuildArgv(allocator: Allocator, argv: [][]const u8) void {
+        for (argv) |arg| allocator.free(arg);
+        allocator.free(argv);
+    }
 };
+
+pub fn runCapture(
+    allocator: Allocator,
+    io: Io,
+    argv: []const []const u8,
+) !std.process.RunResult {
+    return std.process.run(allocator, io, .{
+        .argv = argv,
+        .stdout_limit = .limited(maximum_gh_output_bytes),
+        .stderr_limit = .limited(maximum_gh_output_bytes),
+    });
+}
 
 pub const platforms = [_]Platform{
     .{
@@ -428,6 +493,45 @@ pub fn validateManifestVersionFile(
     }
 }
 
+/// Validates that a tar archive entry path is a safe, normalized relative POSIX path.
+/// Strictly rejects:
+/// - Empty paths or paths starting with `/` or `\`
+/// - Windows drive prefixes (e.g. `C:`) or backslashes
+/// - Any path component equal to `..` or `.` (or empty `//` components)
+/// - Embedded NUL bytes (`\0`) or ASCII control characters (`< 0x20` or `0x7f`)
+pub fn isSafeArchiveEntryPath(entry_path: []const u8) bool {
+    if (entry_path.len == 0) return false;
+    if (entry_path[0] == '/' or entry_path[0] == '\\') return false;
+    if (std.fs.path.isAbsolutePosix(entry_path) or std.fs.path.isAbsoluteWindows(entry_path)) {
+        return false;
+    }
+    if (entry_path.len >= 2 and std.ascii.isAlphabetic(entry_path[0]) and entry_path[1] == ':') {
+        return false;
+    }
+
+    for (entry_path) |ch| {
+        if (ch == 0 or ch < 0x20 or ch == 0x7f) return false;
+        if (ch == '\\' or ch == ':') return false;
+    }
+
+    const trimmed = if (entry_path[entry_path.len - 1] == '/')
+        entry_path[0 .. entry_path.len - 1]
+    else
+        entry_path;
+    if (trimmed.len == 0) return false;
+    if (trimmed[trimmed.len - 1] == '/') return false;
+
+    var iter = std.mem.splitScalar(u8, trimmed, '/');
+    while (iter.next()) |component| {
+        if (component.len == 0) return false;
+        if (std.mem.eql(u8, component, ".") or std.mem.eql(u8, component, "..")) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 /// Checks whether a filename or archive entry path is an SBOM or SPDX file.
 pub fn isSbOmOrSpdxPath(path: []const u8) bool {
     const base = std.fs.path.basename(path);
@@ -695,9 +799,11 @@ pub fn packageArchive(
         return error.OutOfMemory;
     defer allocator.free(archive_path);
 
-    const tar_res = std.process.run(allocator, io, .{
-        .argv = &.{ "tar", "-czf", archive_path, "-C", output_dir, pkg_name },
-    }) catch |err| return diagnostic.fail(
+    const tar_res = runCapture(
+        allocator,
+        io,
+        &.{ "tar", "-czf", archive_path, "-C", output_dir, pkg_name },
+    ) catch |err| return diagnostic.fail(
         error.Failed,
         "cannot execute tar to create {s}: {t}",
         .{ archive_name, err },
@@ -756,7 +862,7 @@ pub fn inspectArchiveListText(
         const line = std.mem.trimEnd(u8, raw_line, "\r");
         if (line.len == 0) continue;
 
-        if (std.mem.indexOf(u8, line, "..") != null or std.mem.startsWith(u8, line, "/")) {
+        if (!isSafeArchiveEntryPath(line)) {
             return diagnostic.fail(
                 error.Failed,
                 "archive contains unsafe path entry: {s}",
@@ -888,9 +994,11 @@ pub fn inspectArchive(
         );
     }
 
-    const tar_res = std.process.run(allocator, io, .{
-        .argv = &.{ "tar", "-tzf", archive_path },
-    }) catch |err| return diagnostic.fail(
+    const tar_res = runCapture(
+        allocator,
+        io,
+        &.{ "tar", "-tzf", archive_path },
+    ) catch |err| return diagnostic.fail(
         error.Failed,
         "cannot execute tar to inspect {s}: {t}",
         .{ archive_path, err },
@@ -911,6 +1019,8 @@ pub fn inspectArchive(
 
     try inspectArchiveListText(tar_res.stdout, version, platform_suffix, diagnostic);
 }
+
+pub const verifyArchive = inspectArchive;
 
 fn readU16Le(bytes: []const u8, offset: usize) ?u16 {
     if (offset + 2 > bytes.len) return null;
@@ -1274,9 +1384,11 @@ pub fn verifyPackage(
     );
     defer Dir.cwd().deleteTree(io, temp_dir) catch {};
 
-    const untar_res = std.process.run(allocator, io, .{
-        .argv = &.{ "tar", "-xzf", archive_path, "-C", temp_dir },
-    }) catch |err| return diagnostic.fail(
+    const untar_res = runCapture(
+        allocator,
+        io,
+        &.{ "tar", "-xzf", archive_path, "-C", temp_dir },
+    ) catch |err| return diagnostic.fail(
         error.Failed,
         "cannot extract archive {s}: {t}",
         .{ archive_path, err },
@@ -1350,9 +1462,11 @@ pub fn verifyPackage(
     if (!run_smoke) return;
 
     // 1. Verify `curl --version` reports the expected release version and features
-    const ver_res = std.process.run(allocator, io, .{
-        .argv = &.{ unpacked_exe, "--version" },
-    }) catch |err| return diagnostic.fail(
+    const ver_res = runCapture(
+        allocator,
+        io,
+        &.{ unpacked_exe, "--version" },
+    ) catch |err| return diagnostic.fail(
         error.Failed,
         "cannot run unpacked {s} --version: {t}",
         .{ unpacked_exe, err },
@@ -1413,9 +1527,11 @@ pub fn verifyPackage(
         std.fmt.allocPrint(allocator, "file:///{s}", .{normalized_path}) catch return error.OutOfMemory;
     defer allocator.free(file_url);
 
-    const file_res = std.process.run(allocator, io, .{
-        .argv = &.{ unpacked_exe, "-fsS", file_url },
-    }) catch |err| return diagnostic.fail(
+    const file_res = runCapture(
+        allocator,
+        io,
+        &.{ unpacked_exe, "-fsS", file_url },
+    ) catch |err| return diagnostic.fail(
         error.Failed,
         "cannot run unpacked {s} file:// transfer: {t}",
         .{ unpacked_exe, err },
@@ -1456,9 +1572,11 @@ pub fn verifyPackage(
     ) catch return error.OutOfMemory;
     defer allocator.free(http_url);
 
-    const http_res = std.process.run(allocator, io, .{
-        .argv = &.{ unpacked_exe, "-fsSL", "-D", headers_path, http_url },
-    }) catch |err| return diagnostic.fail(
+    const http_res = runCapture(
+        allocator,
+        io,
+        &.{ unpacked_exe, "-fsSL", "-D", headers_path, http_url },
+    ) catch |err| return diagnostic.fail(
         error.Failed,
         "cannot run unpacked {s} loopback HTTP transfer: {t}",
         .{ unpacked_exe, err },
@@ -3180,6 +3298,99 @@ test "inspectArchiveListText validates exact layout and rejects SBOM, SPDX, and 
         error.Failed,
         inspectArchiveListText(with_extra_bin, "8.23.1-zig.1", "linux-musl-x64", &diagnostic),
     );
+}
+
+test "isSafeArchiveEntryPath rejects traversal, absolute, drive, dot, NUL, and control chars" {
+    // Reject traversal, absolute, Windows drive, dot components, NUL bytes, and control chars
+    const unsafe_paths = [_][]const u8{
+        "",
+        "/",
+        "\\",
+        "../",
+        "..",
+        ".",
+        "./",
+        "a/../../b",
+        "/etc/passwd",
+        "\\Windows\\System32\\cmd.exe",
+        "C:\\foo",
+        "C:/foo",
+        "d:bar",
+        "bin/curl\x00.txt",
+        "curl-8.23.1-zig.1-linux-musl-x64/bin/curl\x00.txt",
+        "curl-8.23.1-zig.1-linux-musl-x64/../etc/passwd",
+        "curl-8.23.1-zig.1-linux-musl-x64/./bin/curl",
+        "curl-8.23.1-zig.1-linux-musl-x64/bin//curl",
+        "curl-8.23.1-zig.1-linux-musl-x64//",
+        "curl-8.23.1-zig.1-linux-musl-x64/bin/curl\x01",
+        "curl-8.23.1-zig.1-linux-musl-x64/bin/curl\x1f",
+        "curl-8.23.1-zig.1-linux-musl-x64/bin/curl\x7f",
+        "curl-8.23.1-zig.1-linux-musl-x64/bin\\curl",
+    };
+    for (unsafe_paths) |p| {
+        try std.testing.expect(!isSafeArchiveEntryPath(p));
+    }
+
+    // Accept valid archive relative paths
+    const valid_paths = [_][]const u8{
+        "curl-8.23.1-zig.1-linux-musl-x64",
+        "curl-8.23.1-zig.1-linux-musl-x64/",
+        "curl-8.23.1-zig.1-linux-musl-x64/bin",
+        "curl-8.23.1-zig.1-linux-musl-x64/bin/",
+        "curl-8.23.1-zig.1-linux-musl-x64/bin/curl",
+        "curl-8.23.1-zig.1-windows-x64/bin/curl.exe",
+        "curl-8.23.1-zig.1-linux-musl-x64/COPYING",
+        "curl-8.23.1-zig.1-linux-musl-x64/README.md",
+    };
+    for (valid_paths) |p| {
+        try std.testing.expect(isSafeArchiveEntryPath(p));
+    }
+
+    // Ensure inspectArchiveListText deterministically fails on unsafe tar entries
+    var diagnostic: Diagnostic = .{};
+    const base_listing =
+        \\curl-8.23.1-zig.1-linux-musl-x64/
+        \\curl-8.23.1-zig.1-linux-musl-x64/bin/
+        \\curl-8.23.1-zig.1-linux-musl-x64/bin/curl
+        \\curl-8.23.1-zig.1-linux-musl-x64/COPYING
+        \\curl-8.23.1-zig.1-linux-musl-x64/README.md
+        \\
+    ;
+    const unsafe_listings = [_][]const u8{
+        base_listing ++ "../\n",
+        base_listing ++ "a/../../b\n",
+        base_listing ++ "/etc/passwd\n",
+        base_listing ++ "C:\\foo\n",
+        base_listing ++ "bin/curl\x00.txt\n",
+        base_listing ++ "curl-8.23.1-zig.1-linux-musl-x64/./COPYING\n",
+        base_listing ++ "curl-8.23.1-zig.1-linux-musl-x64/../COPYING\n",
+        base_listing ++ "curl-8.23.1-zig.1-linux-musl-x64/bin/curl\x7f\n",
+    };
+    for (unsafe_listings) |listing| {
+        diagnostic = .{};
+        try std.testing.expectError(
+            error.Failed,
+            inspectArchiveListText(listing, "8.23.1-zig.1", "linux-musl-x64", &diagnostic),
+        );
+        try std.testing.expect(std.mem.indexOf(u8, diagnostic.message(), "unsafe path entry") != null);
+    }
+}
+
+test "release platform zig build args default to ReleaseSafe optimize mode" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectEqual(std.builtin.OptimizeMode.ReleaseSafe, default_release_optimize_mode);
+    try std.testing.expectEqualStrings("-Doptimize=ReleaseSafe", default_release_optimize_flag);
+
+    for (platforms) |platform| {
+        try std.testing.expectEqual(std.builtin.OptimizeMode.ReleaseSafe, platform.optimize_mode);
+        const argv = try platform.zigBuildArgv(allocator);
+        defer Platform.freeZigBuildArgv(allocator, argv);
+
+        try std.testing.expect(argv.len >= 4);
+        try std.testing.expectEqualStrings("zig", argv[0]);
+        try std.testing.expectEqualStrings("build", argv[1]);
+        try std.testing.expectEqualStrings("-Doptimize=ReleaseSafe", argv[3]);
+    }
 }
 
 test "end-to-end packaging, checksum manifest generation, allowlist verification, and SBOM rejection" {
