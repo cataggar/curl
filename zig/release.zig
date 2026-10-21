@@ -3,6 +3,7 @@
 //! publication for the 6-platform curl Zig-port distribution (#63).
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -66,7 +67,7 @@ pub const platforms = [_]Platform{
         .zig_target = "x86_64-linux-musl",
         .executable = "curl",
         .runtime_notes = "Static musl executable; no external shared library dependencies.",
-        .enabled_features = "HTTP/1.1, FTP, FILE, DICT, GOPHER, IMAP, MQTT, POP3, RTSP,ich/SMTP, TELNET, TFTP, WS, IPv6, AsynchDNS, Largefile, alt-svc, HSTS (when built with TLS), NTLM, Digest, Basic, Bearer, OAuth2",
+        .enabled_features = "HTTP/1.1, FTP, FILE, DICT, GOPHER, IMAP, MQTT, POP3, RTSP, SMTP, TELNET, TFTP, WS, IPv6, AsynchDNS, Largefile, alt-svc, NTLM, Digest, Basic, Bearer, OAuth2",
     },
     .{
         .suffix = "linux-musl-arm64",
@@ -909,6 +910,610 @@ pub fn inspectArchive(
     }
 
     try inspectArchiveListText(tar_res.stdout, version, platform_suffix, diagnostic);
+}
+
+fn readU16Le(bytes: []const u8, offset: usize) ?u16 {
+    if (offset + 2 > bytes.len) return null;
+    return std.mem.readInt(u16, bytes[offset..][0..2], .little);
+}
+
+fn readU32Le(bytes: []const u8, offset: usize) ?u32 {
+    if (offset + 4 > bytes.len) return null;
+    return std.mem.readInt(u32, bytes[offset..][0..4], .little);
+}
+
+fn readU64Le(bytes: []const u8, offset: usize) ?u64 {
+    if (offset + 8 > bytes.len) return null;
+    return std.mem.readInt(u64, bytes[offset..][0..8], .little);
+}
+
+fn isAllowedWindowsSystemDll(name: []const u8) bool {
+    const allowed = [_][]const u8{
+        "kernel32.dll",
+        "ntdll.dll",
+        "ws2_32.dll",
+        "advapi32.dll",
+        "crypt32.dll",
+        "secur32.dll",
+        "normaliz.dll",
+        "wldap32.dll",
+        "msvcrt.dll",
+        "ucrtbase.dll",
+        "bcrypt.dll",
+        "user32.dll",
+        "shell32.dll",
+        "iphlpapi.dll",
+    };
+    for (allowed) |item| {
+        if (std.ascii.eqlIgnoreCase(name, item)) return true;
+    }
+    if (name.len > 11 and std.ascii.eqlIgnoreCase(name[0..11], "api-ms-win-")) return true;
+    if (name.len > 11 and std.ascii.eqlIgnoreCase(name[0..11], "ext-ms-win-")) return true;
+    return false;
+}
+
+pub fn inspectBinaryFormatAndDependencies(
+    binary_bytes: []const u8,
+    platform_suffix: []const u8,
+    diagnostic: *Diagnostic,
+) Error!void {
+    if (std.mem.eql(u8, platform_suffix, "linux-musl-x64") or
+        std.mem.eql(u8, platform_suffix, "linux-musl-arm64"))
+    {
+        if (binary_bytes.len < 64 or !std.mem.eql(u8, binary_bytes[0..4], "\x7fELF")) {
+            return diagnostic.fail(
+                error.Failed,
+                "expected ELF64 binary for {s}",
+                .{platform_suffix},
+            );
+        }
+        if (binary_bytes[4] != 2 or binary_bytes[5] != 1) {
+            return diagnostic.fail(
+                error.Failed,
+                "expected 64-bit little-endian ELF binary for {s}",
+                .{platform_suffix},
+            );
+        }
+        const e_machine = readU16Le(binary_bytes, 18) orelse return diagnostic.fail(
+            error.Failed,
+            "truncated ELF header for {s}",
+            .{platform_suffix},
+        );
+        const expected_machine: u16 = if (std.mem.eql(u8, platform_suffix, "linux-musl-x64")) 62 else 183;
+        if (e_machine != expected_machine) {
+            return diagnostic.fail(
+                error.Failed,
+                "ELF e_machine mismatch for {s}: got {d}, expected {d}",
+                .{ platform_suffix, e_machine, expected_machine },
+            );
+        }
+        const e_phoff = readU64Le(binary_bytes, 32) orelse return diagnostic.fail(
+            error.Failed,
+            "truncated ELF e_phoff for {s}",
+            .{platform_suffix},
+        );
+        const e_phentsize = readU16Le(binary_bytes, 54) orelse return diagnostic.fail(
+            error.Failed,
+            "truncated ELF e_phentsize for {s}",
+            .{platform_suffix},
+        );
+        const e_phnum = readU16Le(binary_bytes, 56) orelse return diagnostic.fail(
+            error.Failed,
+            "truncated ELF e_phnum for {s}",
+            .{platform_suffix},
+        );
+        var idx: usize = 0;
+        while (idx < e_phnum) : (idx += 1) {
+            const ph_offset = @as(usize, @intCast(e_phoff)) + idx * @as(usize, e_phentsize);
+            const p_type = readU32Le(binary_bytes, ph_offset) orelse return diagnostic.fail(
+                error.Failed,
+                "truncated ELF program header in {s}",
+                .{platform_suffix},
+            );
+            // PT_INTERP == 3 indicates a dynamically linked binary requiring an external loader.
+            if (p_type == 3) {
+                return diagnostic.fail(
+                    error.Failed,
+                    "{s} binary contains PT_INTERP (must be statically linked with musl)",
+                    .{platform_suffix},
+                );
+            }
+        }
+        return;
+    }
+
+    if (std.mem.eql(u8, platform_suffix, "macos-x64") or
+        std.mem.eql(u8, platform_suffix, "macos-arm64"))
+    {
+        if (binary_bytes.len < 32) {
+            return diagnostic.fail(
+                error.Failed,
+                "truncated Mach-O binary for {s}",
+                .{platform_suffix},
+            );
+        }
+        const magic = readU32Le(binary_bytes, 0) orelse unreachable;
+        if (magic != 0xfeedfacf) {
+            return diagnostic.fail(
+                error.Failed,
+                "expected 64-bit Mach-O magic (0xfeedfacf) for {s}, got 0x{x}",
+                .{ platform_suffix, magic },
+            );
+        }
+        const cputype = readU32Le(binary_bytes, 4) orelse unreachable;
+        const expected_cputype: u32 = if (std.mem.eql(u8, platform_suffix, "macos-x64"))
+            0x01000007
+        else
+            0x0100000c;
+        if (cputype != expected_cputype) {
+            return diagnostic.fail(
+                error.Failed,
+                "Mach-O cputype mismatch for {s}: got 0x{x}, expected 0x{x}",
+                .{ platform_suffix, cputype, expected_cputype },
+            );
+        }
+        const ncmds = readU32Le(binary_bytes, 16) orelse unreachable;
+        var cmd_offset: usize = 32;
+        var cmd_idx: u32 = 0;
+        while (cmd_idx < ncmds) : (cmd_idx += 1) {
+            const cmd = readU32Le(binary_bytes, cmd_offset) orelse return diagnostic.fail(
+                error.Failed,
+                "truncated Mach-O load command in {s}",
+                .{platform_suffix},
+            );
+            const cmdsize = readU32Le(binary_bytes, cmd_offset + 4) orelse return diagnostic.fail(
+                error.Failed,
+                "truncated Mach-O load command size in {s}",
+                .{platform_suffix},
+            );
+            if (cmdsize < 8 or cmd_offset + cmdsize > binary_bytes.len) {
+                return diagnostic.fail(
+                    error.Failed,
+                    "invalid Mach-O load command size in {s}",
+                    .{platform_suffix},
+                );
+            }
+            // LC_LOAD_DYLIB (0xc), LC_LOAD_WEAK_DYLIB (0x80000018), LC_REEXPORT_DYLIB (0x8000001f),
+            // LC_LAZY_LOAD_DYLIB (0x20), LC_LOAD_UPWARD_DYLIB (0x80000023)
+            if (cmd == 0x0c or cmd == 0x80000018 or cmd == 0x8000001f or cmd == 0x20 or cmd == 0x80000023) {
+                const name_offset = readU32Le(binary_bytes, cmd_offset + 8) orelse return diagnostic.fail(
+                    error.Failed,
+                    "invalid Mach-O dylib command in {s}",
+                    .{platform_suffix},
+                );
+                if (name_offset >= cmdsize) {
+                    return diagnostic.fail(
+                        error.Failed,
+                        "Mach-O dylib name offset out of range in {s}",
+                        .{platform_suffix},
+                    );
+                }
+                const str_slice = binary_bytes[cmd_offset + name_offset .. cmd_offset + cmdsize];
+                const nul_idx = std.mem.indexOfScalar(u8, str_slice, 0) orelse str_slice.len;
+                const dylib_name = str_slice[0..nul_idx];
+                if (!std.mem.startsWith(u8, dylib_name, "/usr/lib/") and
+                    !std.mem.startsWith(u8, dylib_name, "/System/Library/"))
+                {
+                    return diagnostic.fail(
+                        error.Failed,
+                        "{s} links non-system dylib: {s}",
+                        .{ platform_suffix, dylib_name },
+                    );
+                }
+            }
+            cmd_offset += cmdsize;
+        }
+        return;
+    }
+
+    if (std.mem.eql(u8, platform_suffix, "windows-x64") or
+        std.mem.eql(u8, platform_suffix, "windows-arm64"))
+    {
+        if (binary_bytes.len < 0x40 or !std.mem.eql(u8, binary_bytes[0..2], "MZ")) {
+            return diagnostic.fail(
+                error.Failed,
+                "expected PE MZ header for {s}",
+                .{platform_suffix},
+            );
+        }
+        const pe_offset = readU32Le(binary_bytes, 0x3c) orelse return diagnostic.fail(
+            error.Failed,
+            "truncated DOS header for {s}",
+            .{platform_suffix},
+        );
+        const pe_pos: usize = @intCast(pe_offset);
+        if (pe_pos + 24 > binary_bytes.len or !std.mem.eql(u8, binary_bytes[pe_pos .. pe_pos + 4], "PE\x00\x00")) {
+            return diagnostic.fail(
+                error.Failed,
+                "invalid PE signature for {s}",
+                .{platform_suffix},
+            );
+        }
+        const machine = readU16Le(binary_bytes, pe_pos + 4) orelse unreachable;
+        const expected_machine: u16 = if (std.mem.eql(u8, platform_suffix, "windows-x64")) 0x8664 else 0xaa64;
+        if (machine != expected_machine) {
+            return diagnostic.fail(
+                error.Failed,
+                "PE machine mismatch for {s}: got 0x{x}, expected 0x{x}",
+                .{ platform_suffix, machine, expected_machine },
+            );
+        }
+        const num_sections = readU16Le(binary_bytes, pe_pos + 6) orelse unreachable;
+        const opt_hdr_size = readU16Le(binary_bytes, pe_pos + 20) orelse unreachable;
+        const opt_pos = pe_pos + 24;
+        if (opt_pos + opt_hdr_size > binary_bytes.len or opt_hdr_size < 120) {
+            return diagnostic.fail(
+                error.Failed,
+                "invalid PE32+ optional header for {s}",
+                .{platform_suffix},
+            );
+        }
+        const opt_magic = readU16Le(binary_bytes, opt_pos) orelse unreachable;
+        if (opt_magic != 0x020b) {
+            return diagnostic.fail(
+                error.Failed,
+                "expected PE32+ magic (0x020b) for {s}, got 0x{x}",
+                .{ platform_suffix, opt_magic },
+            );
+        }
+        // DataDirectory[1] (Import Table) is at opt_pos + 112 + 8 = opt_pos + 120
+        const import_rva = readU32Le(binary_bytes, opt_pos + 120) orelse 0;
+        const sect_table_pos = opt_pos + opt_hdr_size;
+        if (import_rva != 0 and sect_table_pos + @as(usize, num_sections) * 40 <= binary_bytes.len) {
+            const rvaToOffset = struct {
+                fn resolve(bytes: []const u8, sect_base: usize, count: u16, rva: u32) ?usize {
+                    var s_idx: usize = 0;
+                    while (s_idx < count) : (s_idx += 1) {
+                        const sh = sect_base + s_idx * 40;
+                        const vsize = readU32Le(bytes, sh + 8) orelse return null;
+                        const vaddr = readU32Le(bytes, sh + 12) orelse return null;
+                        const raw_size = readU32Le(bytes, sh + 16) orelse return null;
+                        const raw_ptr = readU32Le(bytes, sh + 20) orelse return null;
+                        const span = @max(vsize, raw_size);
+                        if (rva >= vaddr and rva < vaddr + span) {
+                            const off = @as(usize, raw_ptr) + @as(usize, rva - vaddr);
+                            if (off < bytes.len) return off;
+                        }
+                    }
+                    return null;
+                }
+            }.resolve;
+
+            if (rvaToOffset(binary_bytes, sect_table_pos, num_sections, import_rva)) |imp_base| {
+                var desc_off = imp_base;
+                while (desc_off + 20 <= binary_bytes.len) : (desc_off += 20) {
+                    const name_rva = readU32Le(binary_bytes, desc_off + 12) orelse break;
+                    const first_thunk = readU32Le(binary_bytes, desc_off + 16) orelse break;
+                    if (name_rva == 0 and first_thunk == 0) break;
+                    if (name_rva != 0) {
+                        if (rvaToOffset(binary_bytes, sect_table_pos, num_sections, name_rva)) |name_off| {
+                            const rem = binary_bytes[name_off..];
+                            const nul = std.mem.indexOfScalar(u8, rem, 0) orelse rem.len;
+                            const dll_name = rem[0..nul];
+                            if (!isAllowedWindowsSystemDll(dll_name)) {
+                                return diagnostic.fail(
+                                    error.Failed,
+                                    "{s} imports non-system DLL: {s}",
+                                    .{ platform_suffix, dll_name },
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    return diagnostic.fail(error.Failed, "unknown platform suffix: {s}", .{platform_suffix});
+}
+
+fn runSmokeLoopbackHttpServer(server: *Io.net.Server, io: Io) void {
+    var req_idx: usize = 0;
+    while (req_idx < 2) : (req_idx += 1) {
+        var stream = server.accept(io) catch return;
+        defer stream.close(io);
+
+        var rbuf: [1024]u8 = undefined;
+        var reader = stream.reader(io, &rbuf);
+        var req_buf: [2048]u8 = undefined;
+        var req_len: usize = 0;
+        while (req_len < req_buf.len) {
+            var slice = [_][]u8{req_buf[req_len..]};
+            const n = reader.interface.readVec(&slice) catch break;
+            if (n == 0) break;
+            req_len += n;
+            if (std.mem.indexOf(u8, req_buf[0..req_len], "\r\n\r\n") != null) break;
+        }
+
+        const resp: []const u8 = if (req_idx == 0)
+            "HTTP/1.1 302 Found\r\nLocation: /final\r\nX-Release-Hop: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        else
+            "HTTP/1.1 200 OK\r\nX-Release-Check: passed\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nConnection: close\r\n\r\nrelease-http-smoke-body";
+
+        var wbuf: [1024]u8 = undefined;
+        var writer = stream.writer(io, &wbuf);
+        writer.interface.writeAll(resp) catch return;
+        writer.interface.flush() catch return;
+    }
+}
+
+pub fn verifyPackage(
+    allocator: Allocator,
+    io: Io,
+    archive_path: []const u8,
+    version: []const u8,
+    platform_suffix: []const u8,
+    run_smoke: bool,
+    diagnostic: *Diagnostic,
+) Error!void {
+    try validateReleaseVersion(version, diagnostic);
+    const platform = findPlatform(platform_suffix) orelse return diagnostic.fail(
+        error.Failed,
+        "unsupported platform suffix: {s}",
+        .{platform_suffix},
+    );
+
+    try inspectArchive(allocator, io, archive_path, version, platform_suffix, diagnostic);
+
+    var rand_bytes: [8]u8 = undefined;
+    io.random(&rand_bytes);
+    const rand_hex = std.fmt.bytesToHex(rand_bytes, .lower);
+    const temp_dir = std.fmt.allocPrint(
+        allocator,
+        "{s}.verify-{s}",
+        .{ archive_path, &rand_hex },
+    ) catch return error.OutOfMemory;
+    defer allocator.free(temp_dir);
+
+    Dir.cwd().deleteTree(io, temp_dir) catch {};
+    Dir.cwd().createDirPath(io, temp_dir) catch |err| return diagnostic.fail(
+        error.Failed,
+        "cannot create verification directory {s}: {t}",
+        .{ temp_dir, err },
+    );
+    defer Dir.cwd().deleteTree(io, temp_dir) catch {};
+
+    const untar_res = std.process.run(allocator, io, .{
+        .argv = &.{ "tar", "-xzf", archive_path, "-C", temp_dir },
+    }) catch |err| return diagnostic.fail(
+        error.Failed,
+        "cannot extract archive {s}: {t}",
+        .{ archive_path, err },
+    );
+    defer allocator.free(untar_res.stdout);
+    defer allocator.free(untar_res.stderr);
+    const untar_ok = switch (untar_res.term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+    if (!untar_ok) {
+        return diagnostic.fail(
+            error.Failed,
+            "tar -xzf failed on {s}: {s}",
+            .{ archive_path, std.mem.trim(u8, untar_res.stderr, " \t\r\n") },
+        );
+    }
+
+    const root_name = std.fmt.allocPrint(
+        allocator,
+        "curl-{s}-{s}",
+        .{ version, platform.suffix },
+    ) catch return error.OutOfMemory;
+    defer allocator.free(root_name);
+
+    const unpacked_copying = std.fs.path.join(
+        allocator,
+        &.{ temp_dir, root_name, "COPYING" },
+    ) catch return error.OutOfMemory;
+    defer allocator.free(unpacked_copying);
+
+    const unpacked_exe = std.fs.path.join(
+        allocator,
+        &.{ temp_dir, root_name, "bin", platform.executable },
+    ) catch return error.OutOfMemory;
+    defer allocator.free(unpacked_exe);
+
+    const copying_bytes = readBounded(
+        allocator,
+        io,
+        unpacked_copying,
+        1024 * 1024,
+    ) catch |err| return diagnostic.fail(
+        error.Failed,
+        "cannot read unpacked COPYING {s}: {t}",
+        .{ unpacked_copying, err },
+    );
+    defer allocator.free(copying_bytes);
+    if (std.mem.indexOf(u8, copying_bytes, "Copyright") == null) {
+        return diagnostic.fail(
+            error.Failed,
+            "unpacked COPYING {s} is missing copyright notice",
+            .{unpacked_copying},
+        );
+    }
+
+    const binary_bytes = readBounded(
+        allocator,
+        io,
+        unpacked_exe,
+        128 * 1024 * 1024,
+    ) catch |err| return diagnostic.fail(
+        error.Failed,
+        "cannot read unpacked executable {s}: {t}",
+        .{ unpacked_exe, err },
+    );
+    defer allocator.free(binary_bytes);
+
+    try inspectBinaryFormatAndDependencies(binary_bytes, platform.suffix, diagnostic);
+
+    if (!run_smoke) return;
+
+    // 1. Verify `curl --version` reports the expected release version and features
+    const ver_res = std.process.run(allocator, io, .{
+        .argv = &.{ unpacked_exe, "--version" },
+    }) catch |err| return diagnostic.fail(
+        error.Failed,
+        "cannot run unpacked {s} --version: {t}",
+        .{ unpacked_exe, err },
+    );
+    defer allocator.free(ver_res.stdout);
+    defer allocator.free(ver_res.stderr);
+    const ver_ok = switch (ver_res.term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+    if (!ver_ok) {
+        return diagnostic.fail(
+            error.Failed,
+            "unpacked {s} --version exited non-zero: {s}",
+            .{ unpacked_exe, std.mem.trim(u8, ver_res.stderr, " \t\r\n") },
+        );
+    }
+    const expected_prefix = std.fmt.allocPrint(allocator, "curl {s} ", .{version}) catch
+        return error.OutOfMemory;
+    defer allocator.free(expected_prefix);
+    const expected_libcurl = std.fmt.allocPrint(allocator, "libcurl/{s}", .{version}) catch
+        return error.OutOfMemory;
+    defer allocator.free(expected_libcurl);
+    if (!std.mem.startsWith(u8, ver_res.stdout, expected_prefix) or
+        std.mem.indexOf(u8, ver_res.stdout, expected_libcurl) == null or
+        std.mem.indexOf(u8, ver_res.stdout, "Protocols:") == null or
+        std.mem.indexOf(u8, ver_res.stdout, "Features:") == null)
+    {
+        return diagnostic.fail(
+            error.Failed,
+            "unexpected --version output from unpacked {s}: {s}",
+            .{ unpacked_exe, std.mem.trim(u8, ver_res.stdout, " \t\r\n") },
+        );
+    }
+
+    // 2. Verify real `file://` transfer from unpacked binary
+    const payload_rel = std.fs.path.join(allocator, &.{ temp_dir, "payload.txt" }) catch
+        return error.OutOfMemory;
+    defer allocator.free(payload_rel);
+    const payload_expected = "curl-zig-release-file-transfer-ok\n";
+    writeAtomic(io, payload_rel, payload_expected) catch |err| return diagnostic.fail(
+        error.Failed,
+        "cannot write file:// test payload: {t}",
+        .{err},
+    );
+    const payload_abs = Dir.realPathFileAlloc(Dir.cwd(), io, payload_rel, allocator) catch |err|
+        return diagnostic.fail(error.Failed, "cannot resolve payload path: {t}", .{err});
+    defer allocator.free(payload_abs);
+
+    const normalized_path = allocator.dupe(u8, payload_abs) catch return error.OutOfMemory;
+    defer allocator.free(normalized_path);
+    for (normalized_path) |*ch| {
+        if (ch.* == '\\') ch.* = '/';
+    }
+    const file_url = if (std.mem.startsWith(u8, normalized_path, "/"))
+        std.fmt.allocPrint(allocator, "file://{s}", .{normalized_path}) catch return error.OutOfMemory
+    else
+        std.fmt.allocPrint(allocator, "file:///{s}", .{normalized_path}) catch return error.OutOfMemory;
+    defer allocator.free(file_url);
+
+    const file_res = std.process.run(allocator, io, .{
+        .argv = &.{ unpacked_exe, "-fsS", file_url },
+    }) catch |err| return diagnostic.fail(
+        error.Failed,
+        "cannot run unpacked {s} file:// transfer: {t}",
+        .{ unpacked_exe, err },
+    );
+    defer allocator.free(file_res.stdout);
+    defer allocator.free(file_res.stderr);
+    const file_ok = switch (file_res.term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+    if (!file_ok or !std.mem.eql(u8, file_res.stdout, payload_expected)) {
+        return diagnostic.fail(
+            error.Failed,
+            "unpacked {s} file:// transfer failed (stdout='{s}', stderr='{s}')",
+            .{ unpacked_exe, file_res.stdout, std.mem.trim(u8, file_res.stderr, " \t\r\n") },
+        );
+    }
+
+    // 3. Verify real loopback `http://127.0.0.1` transfer (status code, headers, and redirect)
+    const bind_addr = Io.net.IpAddress.parseIp4("127.0.0.1", 0) catch unreachable;
+    var server = bind_addr.listen(io, .{ .reuse_address = true }) catch |err|
+        return diagnostic.fail(error.Failed, "cannot listen on loopback socket: {t}", .{err});
+    defer server.deinit(io);
+    const http_port = server.socket.address.getPort();
+
+    const server_thread = std.Thread.spawn(.{}, runSmokeLoopbackHttpServer, .{ &server, io }) catch |err|
+        return diagnostic.fail(error.Failed, "cannot spawn loopback HTTP server thread: {t}", .{err});
+    var thread_joined = false;
+    defer if (!thread_joined) server_thread.join();
+
+    const headers_path = std.fs.path.join(allocator, &.{ temp_dir, "headers.txt" }) catch
+        return error.OutOfMemory;
+    defer allocator.free(headers_path);
+    const http_url = std.fmt.allocPrint(
+        allocator,
+        "http://127.0.0.1:{d}/redirect",
+        .{http_port},
+    ) catch return error.OutOfMemory;
+    defer allocator.free(http_url);
+
+    const http_res = std.process.run(allocator, io, .{
+        .argv = &.{ unpacked_exe, "-fsSL", "-D", headers_path, http_url },
+    }) catch |err| return diagnostic.fail(
+        error.Failed,
+        "cannot run unpacked {s} loopback HTTP transfer: {t}",
+        .{ unpacked_exe, err },
+    );
+    defer allocator.free(http_res.stdout);
+    defer allocator.free(http_res.stderr);
+    server_thread.join();
+    thread_joined = true;
+
+    const http_ok = switch (http_res.term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+    if (!http_ok or !std.mem.eql(u8, http_res.stdout, "release-http-smoke-body")) {
+        return diagnostic.fail(
+            error.Failed,
+            "unpacked {s} loopback HTTP transfer failed (stdout='{s}', stderr='{s}')",
+            .{ unpacked_exe, http_res.stdout, std.mem.trim(u8, http_res.stderr, " \t\r\n") },
+        );
+    }
+    const headers_bytes = readBounded(allocator, io, headers_path, 64 * 1024) catch |err|
+        return diagnostic.fail(error.Failed, "cannot read HTTP headers dump: {t}", .{err});
+    defer allocator.free(headers_bytes);
+    if (std.mem.indexOf(u8, headers_bytes, "302 Found") == null or
+        std.mem.indexOf(u8, headers_bytes, "200 OK") == null or
+        std.mem.indexOf(u8, headers_bytes, "X-Release-Check: passed") == null)
+    {
+        return diagnostic.fail(
+            error.Failed,
+            "unexpected HTTP headers from loopback smoke test: {s}",
+            .{headers_bytes},
+        );
+    }
+
+    // 4. Verify expected failure behavior and non-zero exit code on malformed URL
+    const fail_res = std.process.run(allocator, io, .{
+        .argv = &.{ unpacked_exe, "--silent", "--show-error", "http://127.0.0.1:0/unreachable" },
+    }) catch |err| return diagnostic.fail(
+        error.Failed,
+        "cannot run unpacked {s} failure check: {t}",
+        .{ unpacked_exe, err },
+    );
+    defer allocator.free(fail_res.stdout);
+    defer allocator.free(fail_res.stderr);
+    const failed_as_expected = switch (fail_res.term) {
+        .exited => |code| code != 0,
+        else => false,
+    };
+    if (!failed_as_expected) {
+        return diagnostic.fail(
+            error.Failed,
+            "expected non-zero exit code from unpacked {s} on unreachable endpoint",
+            .{unpacked_exe},
+        );
+    }
 }
 
 pub fn checksumManifestName(allocator: Allocator, version: []const u8) ![]u8 {
@@ -2353,6 +2958,26 @@ pub fn run(
         );
     }
 
+    if (std.mem.eql(u8, argv[0], "verify-package")) {
+        try options.only(&.{ "--archive", "--version", "--platform", "--run-smoke" });
+        const run_smoke_str = options.get("--run-smoke") orelse "true";
+        const run_smoke = if (std.mem.eql(u8, run_smoke_str, "true"))
+            true
+        else if (std.mem.eql(u8, run_smoke_str, "false"))
+            false
+        else
+            return diagnostic.fail(error.Failed, "invalid --run-smoke value: {s}", .{run_smoke_str});
+        return verifyPackage(
+            allocator,
+            io,
+            try options.require("--archive"),
+            try options.require("--version"),
+            try options.require("--platform"),
+            run_smoke,
+            diagnostic,
+        );
+    }
+
     if (std.mem.eql(u8, argv[0], "generate-checksums")) {
         try options.only(&.{ "--assets-directory", "--version", "--output" });
         return generateChecksums(
@@ -2762,5 +3387,55 @@ test "Publisher.parseRelease and validateRemoteAssets enforce draft-first public
     try std.testing.expectError(
         error.Failed,
         publisher.parseRelease(bad_sbom.value, .require_uploaded),
+    );
+}
+
+test "inspectBinaryFormatAndDependencies enforces static musl ELF, system Mach-O, and system PE imports" {
+    var diagnostic: Diagnostic = .{};
+
+    // 1. Valid static ELF64 x86_64 (1 PT_LOAD program header, no PT_INTERP)
+    var elf_buf: [128]u8 = @splat(0);
+    @memcpy(elf_buf[0..4], "\x7fELF");
+    elf_buf[4] = 2; // ELFCLASS64
+    elf_buf[5] = 1; // ELFDATA2LSB
+    std.mem.writeInt(u16, elf_buf[18..20], 62, .little); // EM_X86_64
+    std.mem.writeInt(u64, elf_buf[32..40], 64, .little); // e_phoff = 64
+    std.mem.writeInt(u16, elf_buf[54..56], 56, .little); // e_phentsize = 56
+    std.mem.writeInt(u16, elf_buf[56..58], 1, .little); // e_phnum = 1
+    std.mem.writeInt(u32, elf_buf[64..68], 1, .little); // PT_LOAD = 1
+    try inspectBinaryFormatAndDependencies(&elf_buf, "linux-musl-x64", &diagnostic);
+
+    // Wrong architecture (linux-musl-arm64 expects 183) must fail
+    try std.testing.expectError(
+        error.Failed,
+        inspectBinaryFormatAndDependencies(&elf_buf, "linux-musl-arm64", &diagnostic),
+    );
+
+    // Dynamic ELF64 with PT_INTERP (p_type == 3) must fail for linux-musl-x64
+    std.mem.writeInt(u32, elf_buf[64..68], 3, .little); // PT_INTERP = 3
+    try std.testing.expectError(
+        error.Failed,
+        inspectBinaryFormatAndDependencies(&elf_buf, "linux-musl-x64", &diagnostic),
+    );
+
+    // 2. Valid 64-bit Mach-O arm64 linking /usr/lib/libSystem.B.dylib
+    var macho_buf: [96]u8 = @splat(0);
+    std.mem.writeInt(u32, macho_buf[0..4], 0xfeedfacf, .little);
+    std.mem.writeInt(u32, macho_buf[4..8], 0x0100000c, .little); // CPU_TYPE_ARM64
+    std.mem.writeInt(u32, macho_buf[16..20], 1, .little); // ncmds = 1
+    std.mem.writeInt(u32, macho_buf[32..36], 0x0c, .little); // LC_LOAD_DYLIB
+    std.mem.writeInt(u32, macho_buf[36..40], 56, .little); // cmdsize = 56
+    std.mem.writeInt(u32, macho_buf[40..44], 24, .little); // name offset = 24
+    const sys_dylib = "/usr/lib/libSystem.B.dylib";
+    @memcpy(macho_buf[56 .. 56 + sys_dylib.len], sys_dylib);
+    try inspectBinaryFormatAndDependencies(&macho_buf, "macos-arm64", &diagnostic);
+
+    // Non-system Homebrew dylib must fail
+    @memset(macho_buf[56..88], 0);
+    const brew_dylib = "/opt/homebrew/lib/libssl.3.dylib";
+    @memcpy(macho_buf[56 .. 56 + brew_dylib.len], brew_dylib);
+    try std.testing.expectError(
+        error.Failed,
+        inspectBinaryFormatAndDependencies(&macho_buf, "macos-arm64", &diagnostic),
     );
 }

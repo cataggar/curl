@@ -195,7 +195,7 @@ pub const Curl_protocol = extern struct {
     write_resp_hd: ?*const fn (data: *Curl_easy, hd: [*]const u8, hdlen: usize, is_eos: bool) callconv(.c) CURLcode,
     connection_is_dead: ?*const fn (data: *Curl_easy, conn: *connectdata) callconv(.c) bool,
     attach: ?*const fn (data: *Curl_easy, conn: *connectdata) callconv(.c) void,
-    cntrl: ?*const fn (data: *Curl_easy, ctrl: c_int, param1: c_int) callconv(.c) CURLcode,
+    follow: ?*const fn (data: *Curl_easy, newurl: [*:0]const u8, ftype: followtype) callconv(.c) CURLcode,
 };
 
 pub const Tm = extern struct {
@@ -4251,7 +4251,7 @@ pub export const Curl_protocol_http = Curl_protocol{
     .write_resp_hd = @ptrCast(&Curl_http_write_resp_hd),
     .connection_is_dead = null,
     .attach = null,
-    .cntrl = null,
+    .follow = @ptrCast(&Curl_http_follow),
 };
 
 // ============================================================================
