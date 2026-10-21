@@ -125,6 +125,7 @@ pub const Curl_send_fn = *const fn (
     sockindex: c_int,
     buf: *const anyopaque,
     len: usize,
+    eos: bool,
     uppercase_pnwritten: *usize,
 ) callconv(.c) CURLcode;
 
@@ -870,7 +871,7 @@ pub const SSHPROTO = extern struct {
     path: ?[*:0]u8 = null,
     readdir_filename: ?[*:0]u8 = null,
     readdir_longentry: ?[*:0]u8 = null,
-    readdir: containers.dynbuf = undefined,
+    readdir: containers.dynbuf = std.mem.zeroes(containers.dynbuf),
     readdir_linkPath: ?[*:0]u8 = null,
     readdir_attrs: LIBSSH2_SFTP_ATTRIBUTES = std.mem.zeroes(LIBSSH2_SFTP_ATTRIBUTES),
 };
@@ -1133,6 +1134,7 @@ fn ssh_easy_dtor(key: [*:0]const u8, klen: usize, entry: ?*anyopaque) callconv(.
         mem.free(p);
         sshp.path = null;
     }
+    containers.curlx_dyn_free(&sshp.readdir);
     mem.free(sshp);
 }
 
@@ -2861,11 +2863,12 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                     mem.free(p);
                     sshp.path = null;
                 }
-                if (sshc.nextstate != .SSH_NO_STATE) {
+                if (sshc.nextstate != .SSH_NO_STATE and sshc.nextstate != .SSH_SFTP_CLOSE) {
                     ssh_state(data, sshc, sshc.nextstate);
-                    sshc.nextstate = .SSH_NO_STATE;
+                    sshc.nextstate = .SSH_SFTP_CLOSE;
                 } else {
                     ssh_state(data, sshc, .SSH_STOP);
+                    sshc.nextstate = .SSH_NO_STATE;
                 }
             },
 
@@ -3507,9 +3510,11 @@ fn scp_send(
     sockindex: c_int,
     mem_buf: *const anyopaque,
     len: usize,
+    eos: bool,
     pnwritten: *usize,
 ) callconv(.c) CURLcode {
     _ = sockindex;
+    _ = eos;
     pnwritten.* = 0;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
     const sshc: *ssh_conn = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
@@ -3555,9 +3560,11 @@ fn sftp_send(
     sockindex: c_int,
     mem_buf: *const anyopaque,
     len: usize,
+    eos: bool,
     pnwritten: *usize,
 ) callconv(.c) CURLcode {
     _ = sockindex;
+    _ = eos;
     pnwritten.* = 0;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
     const sshc: *ssh_conn = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));

@@ -32,7 +32,7 @@ jobs:
       - name: Install TLS system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libssl-dev libmbedtls-dev libgnutls28-dev nettle-dev libwolfssl-dev zlib1g-dev libzstd-dev libnghttp2-dev libbrotli-dev libpsl-dev libidn2-dev libc-ares-dev cmake ninja-build pkg-config
+          sudo apt-get install -y --no-install-recommends libssl-dev libmbedtls-dev libgnutls28-dev nettle-dev libwolfssl-dev zlib1g-dev libzstd-dev libnghttp2-dev libbrotli-dev libpsl-dev libidn2-dev libc-ares-dev libssh2-1-dev libssh-dev openssh-server openssh-client cmake ninja-build pkg-config
           git clone --depth 1 --branch v0.15.5 https://github.com/rustls/rustls-ffi.git /tmp/rustls-ffi
           cargo build --release --manifest-path /tmp/rustls-ffi/Cargo.toml
           sudo cp /tmp/rustls-ffi/target/release/librustls_ffi.a /usr/lib/x86_64-linux-gnu/librustls.a
@@ -93,6 +93,18 @@ jobs:
 
       - name: Run backend tests (HTTP/3 ngtcp2 + GnuTLS + c-ares + HTTPS-RR)
         run: zig build test-backends -Dquic=ngtcp2 -Dssl=gnutls -Dares=true -Dhttpsrr=true --summary all
+
+      - name: Build and test (SSH libssh2)
+        run: zig build test -Dssh=libssh2 --summary all
+
+      - name: Run backend tests (SSH libssh2)
+        run: zig build test-backends -Dssh=libssh2 --summary all
+
+      - name: Build and test (SSH libssh)
+        run: zig build test -Dssh=libssh --summary all
+
+      - name: Run backend tests (SSH libssh)
+        run: zig build test-backends -Dssh=libssh --summary all
 
       - name: Verify CLI --version
         run: |

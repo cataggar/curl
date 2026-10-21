@@ -111,13 +111,21 @@ const c = struct {
     pub const CURLOPTTYPE_LONG: CURLoption = 0;
     pub const CURLOPTTYPE_OBJECTPOINT: CURLoption = 10000;
     pub const CURLOPTTYPE_FUNCTIONPOINT: CURLoption = 20000;
+    pub const CURLOPTTYPE_OFF_T: CURLoption = 30000;
     pub const CURLOPTTYPE_BLOB: CURLoption = 40000;
 
     pub const CURLOPT_WRITEDATA: CURLoption = CURLOPTTYPE_OBJECTPOINT + 1;
     pub const CURLOPT_URL: CURLoption = CURLOPTTYPE_OBJECTPOINT + 2;
     pub const CURLOPT_PROXY: CURLoption = CURLOPTTYPE_OBJECTPOINT + 4;
+    pub const CURLOPT_USERPWD: CURLoption = CURLOPTTYPE_OBJECTPOINT + 5;
+    pub const CURLOPT_RANGE: CURLoption = CURLOPTTYPE_OBJECTPOINT + 7;
+    pub const CURLOPT_READDATA: CURLoption = CURLOPTTYPE_OBJECTPOINT + 9;
+    pub const CURLOPT_READFUNCTION: CURLoption = CURLOPTTYPE_FUNCTIONPOINT + 12;
     pub const CURLOPT_POSTFIELDS: CURLoption = CURLOPTTYPE_OBJECTPOINT + 15;
+    pub const CURLOPT_QUOTE: CURLoption = CURLOPTTYPE_OBJECTPOINT + 28;
     pub const CURLOPT_COOKIEFILE: CURLoption = 10031;
+    pub const CURLOPT_POSTQUOTE: CURLoption = CURLOPTTYPE_OBJECTPOINT + 39;
+    pub const CURLOPT_UPLOAD: CURLoption = CURLOPTTYPE_LONG + 46;
     pub const CURLOPT_POSTFIELDSIZE: CURLoption = CURLOPTTYPE_LONG + 60;
     pub const CURLOPT_SSL_VERIFYPEER: CURLoption = CURLOPTTYPE_LONG + 64;
     pub const CURLOPT_CAINFO: CURLoption = CURLOPTTYPE_OBJECTPOINT + 65;
@@ -127,9 +135,18 @@ const c = struct {
     pub const CURLOPT_NOSIGNAL: CURLoption = CURLOPTTYPE_LONG + 99;
     pub const CURLOPT_PROXYTYPE: CURLoption = CURLOPTTYPE_LONG + 101;
     pub const CURLOPT_ACCEPT_ENCODING: CURLoption = CURLOPTTYPE_OBJECTPOINT + 102;
+    pub const CURLOPT_INFILESIZE_LARGE: CURLoption = CURLOPTTYPE_OFF_T + 115;
+    pub const CURLOPT_SSH_AUTH_TYPES: CURLoption = CURLOPTTYPE_LONG + 151;
+    pub const CURLOPT_SSH_PUBLIC_KEYFILE: CURLoption = CURLOPTTYPE_OBJECTPOINT + 152;
+    pub const CURLOPT_SSH_PRIVATE_KEYFILE: CURLoption = CURLOPTTYPE_OBJECTPOINT + 153;
+    pub const CURLOPT_SSH_HOST_PUBLIC_KEY_MD5: CURLoption = CURLOPTTYPE_OBJECTPOINT + 162;
+    pub const CURLOPT_SSH_KNOWNHOSTS: CURLoption = CURLOPTTYPE_OBJECTPOINT + 183;
     pub const CURLOPT_PIPEWAIT: CURLoption = CURLOPTTYPE_LONG + 237;
     pub const CURLOPT_PROXY_SSL_VERIFYPEER: CURLoption = CURLOPTTYPE_LONG + 248;
     pub const CURLOPT_PROXY_SSL_VERIFYHOST: CURLoption = CURLOPTTYPE_LONG + 249;
+    pub const CURLOPT_SSH_HOST_PUBLIC_KEY_SHA256: CURLoption = CURLOPTTYPE_OBJECTPOINT + 311;
+
+    pub const CURLSSH_AUTH_PUBLICKEY: c_long = 1 << 0;
 
     pub const CURL_HTTP_VERSION_3: c_long = 30;
     pub const CURL_HTTP_VERSION_3ONLY: c_long = 31;
@@ -340,6 +357,21 @@ test "curl_version_info feature flags match build options" {
         try testing.expect(info.*.ares == null);
         try testing.expectEqual(@as(c_int, 0), info.*.ares_num);
     }
+    if (backend_options.ssh != .none) {
+        try testing.expect(info.*.libssh_version != null);
+        const ssh_ver = std.mem.span(info.*.libssh_version.?);
+        if (backend_options.ssh == .libssh2) {
+            try testing.expect(std.mem.startsWith(u8, ssh_ver, "libssh2/"));
+        } else if (backend_options.ssh == .libssh) {
+            try testing.expect(std.mem.startsWith(u8, ssh_ver, "libssh/"));
+        }
+    } else {
+        try testing.expect(info.*.libssh_version == null);
+    }
+    if (info.*.protocols) |protos| {
+        try testing.expectEqual(backend_options.ssh != .none, hasFeature(protos, "scp"));
+        try testing.expectEqual(backend_options.ssh != .none, hasFeature(protos, "sftp"));
+    }
 }
 
 test "curl_version_info feature_names list matches build options" {
@@ -388,6 +420,8 @@ test "curl_version string reflects enabled backends" {
     try testing.expectEqual(backend_options.quic == .ngtcp2, std.mem.indexOf(u8, ver, "nghttp3/") != null);
     try testing.expectEqual(backend_options.quic == .quiche, std.mem.indexOf(u8, ver, "quiche/") != null);
     try testing.expectEqual(backend_options.ares, std.mem.indexOf(u8, ver, "c-ares/") != null);
+    try testing.expectEqual(backend_options.ssh == .libssh2, std.mem.indexOf(u8, ver, "libssh2/") != null);
+    try testing.expectEqual(backend_options.ssh == .libssh, std.mem.indexOf(u8, ver, "libssh/") != null);
 }
 
 test "HTTP/3 CURLOPT_HTTP_VERSION and CURLOPT_PROXYTYPE match build options" {
@@ -3183,5 +3217,365 @@ test "HTTP/3 end-to-end local UDP server: GET, POST, concurrent streams, cert/ho
         try testing.expectEqual(c.CURLE_OK, curl_easy_getinfo(easy, c.CURLINFO_RESPONSE_CODE, &status_code));
         try testing.expectEqual(@as(c_long, 200), status_code);
         try testing.expectEqualStrings("ok", cap.slice());
+    }
+}
+
+const UploadReader = struct {
+    data: []const u8,
+    pos: usize = 0,
+
+    fn readCallback(ptr: [*]u8, size: usize, nmemb: usize, userdata: ?*anyopaque) callconv(.c) usize {
+        const self: *UploadReader = @ptrCast(@alignCast(userdata orelse return 0));
+        const max_bytes = size * nmemb;
+        const rem = self.data.len - self.pos;
+        const n = @min(max_bytes, rem);
+        if (n > 0) {
+            @memcpy(ptr[0..n], self.data[self.pos .. self.pos + n]);
+            self.pos += n;
+        }
+        return n;
+    }
+};
+
+test "SFTP and SCP end-to-end local sshd server: download, upload, quote, range, known_hosts, and host_public_key_sha256" {
+    if (comptime (backend_options.ssh == .none or builtin.os.tag != .linux)) return;
+
+    const gpa = testing.allocator;
+    const io = testing.io;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_abs = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir_abs);
+
+    // Pick an available ephemeral loopback port
+    var port: u16 = 0;
+    {
+        const fd = try loopback_tls.openLoopbackListener(&port);
+        _ = loopback_tls.sock_c.close(fd);
+    }
+
+    const host_key_path = try std.fmt.allocPrintSentinel(gpa, "{s}/host_key", .{dir_abs}, 0);
+    defer gpa.free(host_key_path);
+    const user_key_path = try std.fmt.allocPrintSentinel(gpa, "{s}/user_key", .{dir_abs}, 0);
+    defer gpa.free(user_key_path);
+    const user_pub_path = try std.fmt.allocPrintSentinel(gpa, "{s}/user_key.pub", .{dir_abs}, 0);
+    defer gpa.free(user_pub_path);
+    const known_hosts_path = try std.fmt.allocPrintSentinel(gpa, "{s}/known_hosts", .{dir_abs}, 0);
+    defer gpa.free(known_hosts_path);
+    const sshd_cfg_path = try std.fmt.allocPrintSentinel(gpa, "{s}/sshd_config", .{dir_abs}, 0);
+    defer gpa.free(sshd_cfg_path);
+    const sshd_log_path = try std.fmt.allocPrintSentinel(gpa, "{s}/sshd.log", .{dir_abs}, 0);
+    defer gpa.free(sshd_log_path);
+
+    const kg_host = try std.process.run(gpa, io, .{
+        .argv = &.{ "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", host_key_path },
+    });
+    defer gpa.free(kg_host.stdout);
+    defer gpa.free(kg_host.stderr);
+    try testing.expectEqual(std.process.Child.Term{ .exited = 0 }, kg_host.term);
+
+    const kg_user = try std.process.run(gpa, io, .{
+        .argv = &.{ "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", user_key_path },
+    });
+    defer gpa.free(kg_user.stdout);
+    defer gpa.free(kg_user.stderr);
+    try testing.expectEqual(std.process.Child.Term{ .exited = 0 }, kg_user.term);
+
+    const host_pub_content = try tmp.dir.readFileAlloc(io, "host_key.pub", gpa, .limited(4096));
+    defer gpa.free(host_pub_content);
+
+    // Compute SHA256 base64 fingerprint of the host public key blob
+    var tok_it = std.mem.tokenizeAny(u8, host_pub_content, " \t\r\n");
+    _ = tok_it.next(); // key type ("ssh-ed25519")
+    const host_pub_b64 = tok_it.next() orelse return error.InvalidHostPubKey;
+    var raw_key_buf: [512]u8 = undefined;
+    const decoded_len = try std.base64.standard.Decoder.calcSizeForSlice(host_pub_b64);
+    try std.base64.standard.Decoder.decode(raw_key_buf[0..decoded_len], host_pub_b64);
+    var sha256_digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(raw_key_buf[0..decoded_len], &sha256_digest, .{});
+    var sha256_b64_buf: [64]u8 = undefined;
+    const sha256_b64 = std.base64.standard.Encoder.encode(&sha256_b64_buf, &sha256_digest);
+    var sha256_z_buf: [65]u8 = undefined;
+    const host_sha256_z = try loopback_http.bufPrintZ(&sha256_z_buf, "{s}", .{sha256_b64});
+
+    const kh_data = try std.fmt.allocPrint(
+        gpa,
+        "[127.0.0.1]:{d} {s}127.0.0.1 {s}",
+        .{ port, host_pub_content, host_pub_content },
+    );
+    defer gpa.free(kh_data);
+    try tmp.dir.writeFile(io, .{ .sub_path = "known_hosts", .data = kh_data });
+
+    const download_payload = "hello-zig-sftp-download-payload\n";
+    try tmp.dir.writeFile(io, .{ .sub_path = "hello.txt", .data = download_payload });
+
+    const sshd_cfg = try std.fmt.allocPrint(
+        gpa,
+        "ListenAddress 127.0.0.1:{d}\n" ++
+            "HostKey {s}\n" ++
+            "AuthorizedKeysFile {s}\n" ++
+            "PasswordAuthentication no\n" ++
+            "PubkeyAuthentication yes\n" ++
+            "UsePAM no\n" ++
+            "StrictModes no\n" ++
+            "PidFile {s}/sshd.pid\n" ++
+            "Subsystem sftp internal-sftp\n",
+        .{ port, host_key_path, user_pub_path, dir_abs },
+    );
+    defer gpa.free(sshd_cfg);
+    try tmp.dir.writeFile(io, .{ .sub_path = "sshd_config", .data = sshd_cfg });
+
+    var sshd_child = try std.process.spawn(io, .{
+        .argv = &.{ "/usr/sbin/sshd", "-D", "-f", sshd_cfg_path, "-E", sshd_log_path },
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+    });
+    defer {
+        sshd_child.kill(io);
+    }
+
+    // Wait for sshd to start listening on 127.0.0.1:port
+    {
+        var ready = false;
+        var attempt: usize = 0;
+        while (attempt < 60) : (attempt += 1) {
+            const probe_fd = loopback_tls.sock_c.socket(loopback_tls.sock_c.AF_INET, loopback_tls.sock_c.SOCK_STREAM, 0);
+            if (probe_fd >= 0) {
+                var addr = loopback_tls.sock_c.sockaddr_in{
+                    .sin_family = loopback_tls.sock_c.AF_INET,
+                    .sin_port = std.mem.nativeToBig(u16, port),
+                    .sin_addr = std.mem.nativeToBig(u32, 0x7f000001),
+                };
+                const connect_fn = struct {
+                    extern "c" fn connect(sockfd: c_int, addr: *const loopback_tls.sock_c.sockaddr_in, addrlen: u32) c_int;
+                }.connect;
+                const rc = connect_fn(probe_fd, &addr, @sizeOf(loopback_tls.sock_c.sockaddr_in));
+                _ = loopback_tls.sock_c.close(probe_fd);
+                if (rc == 0) {
+                    ready = true;
+                    break;
+                }
+            }
+            var ts = std.os.linux.timespec{ .sec = 0, .nsec = 50 * std.time.ns_per_ms };
+            _ = std.os.linux.nanosleep(&ts, null);
+        }
+        try testing.expect(ready);
+    }
+
+    const user_c = std.c.getenv("USER") orelse std.c.getenv("LOGNAME") orelse "root";
+    const user_str = std.mem.span(user_c);
+    var userpwd_buf: [128]u8 = undefined;
+    const userpwd_z = try loopback_http.bufPrintZ(&userpwd_buf, "{s}:", .{user_str});
+
+    const user_key_z = user_key_path;
+    const user_pub_z = user_pub_path;
+    const known_hosts_z = known_hosts_path;
+
+    // 1. SFTP download with CURLOPT_SSH_KNOWNHOSTS
+    {
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        const url_z = try std.fmt.allocPrintSentinel(gpa, "sftp://127.0.0.1:{d}{s}/hello.txt", .{ port, dir_abs }, 0);
+        defer gpa.free(url_z);
+
+        var cap = loopback_http.BodySink{};
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_USERPWD, userpwd_z));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSH_AUTH_TYPES, c.CURLSSH_AUTH_PUBLICKEY));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSH_PRIVATE_KEYFILE, user_key_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSH_PUBLIC_KEYFILE, user_pub_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSH_KNOWNHOSTS, known_hosts_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, &cap));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url_z.ptr));
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+        try testing.expectEqualStrings(download_payload, cap.slice());
+    }
+
+    // 2. SFTP download with CURLOPT_SSH_HOST_PUBLIC_KEY_SHA256 (matching + mismatched fingerprint rejection)
+    {
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        const url_z = try std.fmt.allocPrintSentinel(gpa, "sftp://127.0.0.1:{d}{s}/hello.txt", .{ port, dir_abs }, 0);
+        defer gpa.free(url_z);
+
+        var cap = loopback_http.BodySink{};
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_USERPWD, userpwd_z));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSH_AUTH_TYPES, c.CURLSSH_AUTH_PUBLICKEY));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSH_PRIVATE_KEYFILE, user_key_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSH_PUBLIC_KEYFILE, user_pub_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSH_HOST_PUBLIC_KEY_SHA256, host_sha256_z));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, &cap));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url_z.ptr));
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+        try testing.expectEqualStrings(download_payload, cap.slice());
+
+        // Mismatched SHA256 fingerprint must fail verification
+        const bad_easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(bad_easy);
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(bad_easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(bad_easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(bad_easy, c.CURLOPT_USERPWD, userpwd_z));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(bad_easy, c.CURLOPT_SSH_AUTH_TYPES, c.CURLSSH_AUTH_PUBLICKEY));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(bad_easy, c.CURLOPT_SSH_PRIVATE_KEYFILE, user_key_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(bad_easy, c.CURLOPT_SSH_PUBLIC_KEYFILE, user_pub_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(bad_easy, c.CURLOPT_SSH_HOST_PUBLIC_KEY_SHA256, @as([*:0]const u8, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(bad_easy, c.CURLOPT_URL, url_z.ptr));
+
+        try testing.expectEqual(c.CURLE_PEER_FAILED_VERIFICATION, curl_easy_perform(bad_easy));
+    }
+
+    // 3. SFTP byte-range download (CURLOPT_RANGE = "6-13" -> "zig-sftp")
+    {
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        const url_z = try std.fmt.allocPrintSentinel(gpa, "sftp://127.0.0.1:{d}{s}/hello.txt", .{ port, dir_abs }, 0);
+        defer gpa.free(url_z);
+
+        var cap = loopback_http.BodySink{};
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_USERPWD, userpwd_z));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSH_AUTH_TYPES, c.CURLSSH_AUTH_PUBLICKEY));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSH_PRIVATE_KEYFILE, user_key_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSH_PUBLIC_KEYFILE, user_pub_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSH_KNOWNHOSTS, known_hosts_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_RANGE, @as([*:0]const u8, "6-13")));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, &cap));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url_z.ptr));
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+        try testing.expectEqualStrings("zig-sftp", cap.slice());
+    }
+
+    // 4. SFTP upload + QUOTE (mkdir) + POSTQUOTE (rename)
+    {
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        const upload_data = "uploaded-via-zig-sftp-with-quote-commands\n";
+        var reader = UploadReader{ .data = upload_data };
+
+        const url_z = try std.fmt.allocPrintSentinel(gpa, "sftp://127.0.0.1:{d}{s}/sub_q/upload_tmp.txt", .{ port, dir_abs }, 0);
+        defer gpa.free(url_z);
+
+        const mkdir_cmd = try std.fmt.allocPrintSentinel(gpa, "mkdir {s}/sub_q", .{dir_abs}, 0);
+        defer gpa.free(mkdir_cmd);
+        const rename_cmd = try std.fmt.allocPrintSentinel(gpa, "rename {s}/sub_q/upload_tmp.txt {s}/sub_q/upload_final.txt", .{ dir_abs, dir_abs }, 0);
+        defer gpa.free(rename_cmd);
+
+        const quote_list = curl_slist_append(null, mkdir_cmd.ptr) orelse return error.SlistAppendFailed;
+        defer curl_slist_free_all(quote_list);
+        const postquote_list = curl_slist_append(null, rename_cmd.ptr) orelse return error.SlistAppendFailed;
+        defer curl_slist_free_all(postquote_list);
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_USERPWD, userpwd_z));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSH_AUTH_TYPES, c.CURLSSH_AUTH_PUBLICKEY));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSH_PRIVATE_KEYFILE, user_key_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSH_PUBLIC_KEYFILE, user_pub_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSH_KNOWNHOSTS, known_hosts_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_QUOTE, quote_list));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_POSTQUOTE, postquote_list));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_UPLOAD, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_READFUNCTION, &UploadReader.readCallback));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_READDATA, &reader));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_INFILESIZE_LARGE, @as(i64, @intCast(upload_data.len))));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url_z.ptr));
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+
+        const written = try tmp.dir.readFileAlloc(io, "sub_q/upload_final.txt", gpa, .limited(256));
+        defer gpa.free(written);
+        try testing.expectEqualStrings(upload_data, written);
+    }
+
+    // 5. SFTP directory listing
+    {
+        const easy = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy);
+
+        const url_z = try std.fmt.allocPrintSentinel(gpa, "sftp://127.0.0.1:{d}{s}/", .{ port, dir_abs }, 0);
+        defer gpa.free(url_z);
+
+        var cap = loopback_http.BodySink{};
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_USERPWD, userpwd_z));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSH_AUTH_TYPES, c.CURLSSH_AUTH_PUBLICKEY));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSH_PRIVATE_KEYFILE, user_key_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSH_PUBLIC_KEYFILE, user_pub_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSH_KNOWNHOSTS, known_hosts_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, &cap));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url_z.ptr));
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+        try testing.expect(std.mem.indexOf(u8, cap.slice(), "hello.txt") != null);
+    }
+
+    // 6. SCP download and upload
+    {
+        const easy_dl = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy_dl);
+
+        const dl_url_z = try std.fmt.allocPrintSentinel(gpa, "scp://127.0.0.1:{d}{s}/hello.txt", .{ port, dir_abs }, 0);
+        defer gpa.free(dl_url_z);
+
+        var cap = loopback_http.BodySink{};
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_dl, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_dl, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_dl, c.CURLOPT_USERPWD, userpwd_z));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_dl, c.CURLOPT_SSH_AUTH_TYPES, c.CURLSSH_AUTH_PUBLICKEY));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_dl, c.CURLOPT_SSH_PRIVATE_KEYFILE, user_key_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_dl, c.CURLOPT_SSH_PUBLIC_KEYFILE, user_pub_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_dl, c.CURLOPT_SSH_KNOWNHOSTS, known_hosts_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_dl, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_dl, c.CURLOPT_WRITEDATA, &cap));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_dl, c.CURLOPT_URL, dl_url_z.ptr));
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy_dl));
+        try testing.expectEqualStrings(download_payload, cap.slice());
+
+        const easy_ul = curl_easy_init() orelse return error.EasyInitFailed;
+        defer curl_easy_cleanup(easy_ul);
+
+        const scp_upload_data = "uploaded-via-zig-scp-protocol\n";
+        var reader = UploadReader{ .data = scp_upload_data };
+        const ul_url_z = try std.fmt.allocPrintSentinel(gpa, "scp://127.0.0.1:{d}{s}/scp_uploaded.txt", .{ port, dir_abs }, 0);
+        defer gpa.free(ul_url_z);
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_ul, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_ul, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_ul, c.CURLOPT_USERPWD, userpwd_z));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_ul, c.CURLOPT_SSH_AUTH_TYPES, c.CURLSSH_AUTH_PUBLICKEY));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_ul, c.CURLOPT_SSH_PRIVATE_KEYFILE, user_key_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_ul, c.CURLOPT_SSH_PUBLIC_KEYFILE, user_pub_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_ul, c.CURLOPT_SSH_KNOWNHOSTS, known_hosts_z.ptr));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_ul, c.CURLOPT_UPLOAD, @as(c_long, 1)));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_ul, c.CURLOPT_READFUNCTION, &UploadReader.readCallback));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_ul, c.CURLOPT_READDATA, &reader));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_ul, c.CURLOPT_INFILESIZE_LARGE, @as(i64, @intCast(scp_upload_data.len))));
+        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy_ul, c.CURLOPT_URL, ul_url_z.ptr));
+
+        try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy_ul));
+
+        const scp_written = try tmp.dir.readFileAlloc(io, "scp_uploaded.txt", gpa, .limited(256));
+        defer gpa.free(scp_written);
+        try testing.expectEqualStrings(scp_upload_data, scp_written);
     }
 }
