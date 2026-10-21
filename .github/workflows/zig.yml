@@ -32,7 +32,7 @@ jobs:
       - name: Install TLS system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libssl-dev libmbedtls-dev libgnutls28-dev nettle-dev libwolfssl-dev zlib1g-dev libzstd-dev libnghttp2-dev libbrotli-dev libpsl-dev libidn2-dev libc-ares-dev
+          sudo apt-get install -y --no-install-recommends libssl-dev libmbedtls-dev libgnutls28-dev nettle-dev libwolfssl-dev zlib1g-dev libzstd-dev libnghttp2-dev libbrotli-dev libpsl-dev libidn2-dev libc-ares-dev libngtcp2-dev libngtcp2-crypto-gnutls-dev libnghttp3-dev
           git clone --depth 1 --branch v0.15.5 https://github.com/rustls/rustls-ffi.git /tmp/rustls-ffi
           cargo build --release --manifest-path /tmp/rustls-ffi/Cargo.toml
           sudo cp /tmp/rustls-ffi/target/release/librustls_ffi.a /usr/lib/x86_64-linux-gnu/librustls.a
@@ -76,6 +76,12 @@ jobs:
 
       - name: Run backend tests (OpenSSL + zlib + zstd + nghttp2 + brotli + psl + libidn2 + c-ares + HTTPS-RR)
         run: zig build test-backends -Dssl=openssl -Dzlib=true -Dzstd=true -Dnghttp2=true -Dbrotli=true -Dpsl=true -Didn=libidn2 -Dares=true -Dhttpsrr=true --summary all
+
+      - name: Build and test (HTTP/3 ngtcp2 + GnuTLS)
+        run: zig build test -Dquic=ngtcp2 -Dssl=gnutls --summary all
+
+      - name: Run backend tests (HTTP/3 ngtcp2 + GnuTLS + c-ares + HTTPS-RR)
+        run: zig build test-backends -Dquic=ngtcp2 -Dssl=gnutls -Dares=true -Dhttpsrr=true --summary all
 
       - name: Verify CLI --version
         run: |

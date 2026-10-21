@@ -7101,7 +7101,7 @@ pub const openssl_backend = struct {
         }
         _ = ossl_ext.SSL_CTX_set_options(ssl_ctx, ctx_options);
         _ = ossl_ext.SSL_CTX_ctrl(ssl_ctx, SSL_CTRL_SET_READ_AHEAD, 1, null);
-        _ = ossl_ext.SSL_CTX_ctrl(ssl_ctx, SSL_CTRL_MODE, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER | SSL_MODE_RELEASE_BUFFERS, null);
+        _ = ossl_ext.SSL_CTX_ctrl(ssl_ctx, SSL_CTRL_MODE, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER, null);
 
         if (ossl_ext.SSL_CTX_ctrl(ssl_ctx, SSL_CTRL_SET_MIN_PROTO_VERSION, ver_range.min_ver, null) == 0) {
             return CURLE_SSL_CONNECT_ERROR;
