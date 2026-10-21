@@ -1583,8 +1583,9 @@ test "Curl_qlogdir creates sqlog file when QLOGDIR is set" {
         extern "c" fn access(path: [*:0]const u8, mode: c_int) c_int;
     };
 
-    const qlog_dir_path = "/d/tmp/curl-qlog-test";
-    const expected_file = "/d/tmp/curl-qlog-test/deadbeef.sqlog";
+    const qlog_dir_path = ".zig-cache/curl-qlog-test";
+    const expected_file = ".zig-cache/curl-qlog-test/deadbeef.sqlog";
+    _ = c_env.mkdir(".zig-cache", 0o755);
     _ = c_env.unlink(expected_file);
     _ = c_env.mkdir(qlog_dir_path, 0o755);
     defer {
