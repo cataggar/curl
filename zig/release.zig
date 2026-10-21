@@ -2764,12 +2764,17 @@ pub fn publish(
     ) catch return error.OutOfMemory;
     defer allocator.free(title);
 
-    Dir.cwd().deleteTree(io, options.workspace) catch |err| return diagnostic.fail(
+    const remote_directory = std.fs.path.join(
+        allocator,
+        &.{ options.workspace, "remote" },
+    ) catch return error.OutOfMemory;
+    defer allocator.free(remote_directory);
+    Dir.cwd().deleteTree(io, remote_directory) catch |err| return diagnostic.fail(
         error.Failed,
         "cannot reset release workspace: {t}",
         .{err},
     );
-    Dir.cwd().createDirPath(io, options.workspace) catch |err| return diagnostic.fail(
+    Dir.cwd().createDirPath(io, remote_directory) catch |err| return diagnostic.fail(
         error.Failed,
         "cannot create release workspace: {t}",
         .{err},
