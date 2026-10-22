@@ -132,10 +132,10 @@ jobs:
       - name: Verify release packaging and smoke tests
         run: |
           zig build install-curl-release test-release --summary all
-          ./zig-out/bin/curl_release verify-version --tag v8.23.0-zig.1 --manifest build.zig.zon
-          zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseSafe -Dversion=8.23.0-zig.1 -Dbundled=true -Dssl=openssl -Dapple-sectrust=false -Dzstd=true -Dzlib=true -Dbrotli=true -Dpsl=true -Didn=libidn2 -Dnghttp2=true -Dares=true -Dhttpsrr=true -Dquic=ngtcp2 -Dssh=libssh2 -Dldap=openldap -Dgssapi=true -Dsspi=false --summary all
-          ./zig-out/bin/curl_release package --version 8.23.0-zig.1 --platform linux-musl-x64 --executable ./zig-out/bin/curl --copying COPYING --output-dir .zig-cache/ci-dist
-          ./zig-out/bin/curl_release verify-package --archive .zig-cache/ci-dist/curl-8.23.0-zig.1-linux-musl-x64.tar.gz --version 8.23.0-zig.1 --platform linux-musl-x64 --run-smoke true
+          ./zig-out/bin/curl_release verify-version --tag v8.23.0-zig.2 --manifest build.zig.zon
+          zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseSafe -Dversion=8.23.0-zig.2 -Dbundled=true -Dssl=openssl -Dapple-sectrust=false -Dzstd=true -Dzlib=true -Dbrotli=true -Dpsl=true -Didn=libidn2 -Dnghttp2=true -Dares=true -Dhttpsrr=true -Dquic=ngtcp2 -Dssh=libssh2 -Dldap=openldap -Dgssapi=true -Dsspi=false --summary all
+          ./zig-out/bin/curl_release package --version 8.23.0-zig.2 --platform linux-musl-x64 --executable ./zig-out/bin/curl --copying COPYING --output-dir .zig-cache/ci-dist
+          ./zig-out/bin/curl_release verify-package --archive .zig-cache/ci-dist/curl-8.23.0-zig.2-linux-musl-x64.tar.gz --version 8.23.0-zig.2 --platform linux-musl-x64 --run-smoke true
           rm -rf .zig-cache/ci-dist
 
   cross:
