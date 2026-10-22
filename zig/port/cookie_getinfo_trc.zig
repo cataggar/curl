@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const backend_options = @import("backend_options");
 const mem = @import("mem.zig");
+const collections = @import("collections.zig");
 const primitives = @import("primitives.zig");
 const curlx_parse = @import("curlx_parse.zig");
 const curlx_time_net = @import("curlx_time_net.zig");
@@ -44,8 +45,6 @@ extern fn curl_mvsnprintf(buffer: ?[*]u8, maxlength: usize, format: [*:0]const u
 extern fn curl_maprintf(format: [*:0]const u8, ...) callconv(.c) ?[*:0]u8;
 extern fn curl_mfprintf(fd: ?*anyopaque, format: [*:0]const u8, ...) callconv(.c) c_int;
 
-extern fn curlx_memdup(src: ?*const anyopaque, length: usize) callconv(.c) ?*anyopaque;
-extern fn curlx_memdup0(src: ?[*]const u8, length: usize) callconv(.c) ?[*:0]u8;
 extern fn curlx_str_init(out: *curlx_parse.Curl_str) callconv(.c) void;
 extern fn curlx_str_until(linep: *?[*:0]const u8, out: *curlx_parse.Curl_str, max: usize, delim: u8) callconv(.c) c_int;
 extern fn curlx_str_single(linep: *?[*:0]const u8, byte: u8) callconv(.c) c_int;
@@ -58,6 +57,7 @@ extern fn curlx_str_passblanks(linep: *?[*:0]const u8) callconv(.c) void;
 extern fn curlx_dyn_vaddf(s: *containers.dynbuf, fmt: [*:0]const u8, ap: CVaListParam) callconv(.c) CURLcode;
 extern fn Curl_slist_append_nodup(list: ?*containers.curl_slist, data: ?[*:0]const u8) callconv(.c) ?*containers.curl_slist;
 extern fn curl_slist_free_all(list: ?*containers.curl_slist) callconv(.c) void;
+extern fn Curl_get_line(buf: *containers.dynbuf, input: ?*anyopaque, eof: *bool) callconv(.c) CURLcode;
 extern fn Curl_getdate_capped(p: ?[*:0]const u8, tp: *i64) callconv(.c) c_int;
 extern fn curl_easy_strerror(err: CURLcode) callconv(.c) [*:0]const u8;
 extern fn Curl_timeouts_offset_us(timeouts: ?*const anyopaque, now: *const curlx_time_net.Curltime) callconv(.c) timediff_t;
@@ -295,30 +295,30 @@ threadlocal var bound_easy_next: usize = 0;
 
 pub export fn Curl_trc_bind_easy(
     data: ?*const Curl_easy,
-    peasy_id: ?*const anyopaque,
-    pmstate: ?*const anyopaque,
-    plast_conn_id: ?*const anyopaque,
-    pstate_feat: ?*const anyopaque,
-    perrorbuffer: ?*const anyopaque,
-    phttpreq: ?*const anyopaque,
+    peasy_id: ?*const i64,
+    pmstate: ?*const c_uint,
+    plast_conn_id: ?*const i64,
+    pstate_feat: ?*const ?*curl_trc_feat,
+    perrorbuffer: ?*const ?[*]u8,
+    phttpreq: ?[*]u8,
     verbose: bool,
-    pfdebug: ?*const anyopaque,
-    pdebugdata: ?*const anyopaque,
-    perr: ?*const anyopaque,
+    pfdebug: ?*const ?curl_debug_callback,
+    pdebugdata: ?*const ?*anyopaque,
+    perr: ?*const ?*anyopaque,
 ) callconv(.c) bool {
     const d = data orelse return false;
     const entry = BoundEasy{
         .data = d,
-        .peasy_id = if (peasy_id) |p| @ptrCast(@alignCast(p)) else null,
-        .pmstate = if (pmstate) |p| @ptrCast(@alignCast(p)) else null,
-        .plast_conn_id = if (plast_conn_id) |p| @ptrCast(@alignCast(p)) else null,
-        .pstate_feat = if (pstate_feat) |p| @ptrCast(@alignCast(p)) else null,
-        .perrorbuffer = if (perrorbuffer) |p| @ptrCast(@alignCast(p)) else null,
-        .phttpreq = if (phttpreq) |p| @ptrCast(@constCast(p)) else null,
+        .peasy_id = peasy_id,
+        .pmstate = pmstate,
+        .plast_conn_id = plast_conn_id,
+        .pstate_feat = pstate_feat,
+        .perrorbuffer = perrorbuffer,
+        .phttpreq = phttpreq,
         .verbose = verbose,
-        .pfdebug = if (pfdebug) |p| @ptrCast(@alignCast(p)) else null,
-        .pdebugdata = if (pdebugdata) |p| @ptrCast(@alignCast(p)) else null,
-        .perr = if (perr) |p| @ptrCast(@alignCast(p)) else null,
+        .pfdebug = pfdebug,
+        .pdebugdata = pdebugdata,
+        .perr = perr,
     };
 
     for (&bound_easies) |*slot| {
@@ -334,10 +334,14 @@ pub export fn Curl_trc_bind_easy(
 
 extern fn Curl_trc_bind_c(data: ?*const Curl_easy) callconv(.c) void;
 
+inline fn easyPrefix(d: *const Curl_easy) *const Curl_easy_prefix {
+    return @ptrCast(@alignCast(d));
+}
+
 inline fn lookupBoundEasy(data: ?*const Curl_easy) ?*BoundEasy {
     const d = data orelse return null;
     if (in_libcurl) {
-        const pref: *const Curl_easy_prefix = @ptrCast(@alignCast(d));
+        const pref = easyPrefix(d);
         if (pref.magic == CURLEASY_MAGIC_NUMBER) {
             Curl_trc_bind_c(d);
         }
@@ -365,7 +369,7 @@ inline fn easyId(data: ?*const Curl_easy) i64 {
         if (b.peasy_id) |p| return p.*;
     }
     if (data) |d| {
-        const pref: *const Curl_easy_prefix = @ptrCast(@alignCast(d));
+        const pref = easyPrefix(d);
         if (pref.magic == CURLEASY_MAGIC_NUMBER) return pref.id;
     }
     return -1;
@@ -376,7 +380,7 @@ inline fn easyMstate(data: ?*const Curl_easy) c_int {
         if (b.pmstate) |p| return @intCast(p.*);
     }
     if (data) |d| {
-        const pref: *const Curl_easy_prefix = @ptrCast(@alignCast(d));
+        const pref = easyPrefix(d);
         if (pref.magic == CURLEASY_MAGIC_NUMBER) return @intCast(pref.mstate);
     }
     return -1;
@@ -1184,7 +1188,7 @@ pub export fn Curl_pp_vsendf(
 ) callconv(.c) CURLcode {
     if (!in_libcurl) return CURLE_SEND_ERROR;
     const d = data orelse return CURLE_SEND_ERROR;
-    const pref: *const Curl_easy_prefix = @ptrCast(@alignCast(d));
+    const pref = easyPrefix(d);
     if (pref.magic == CURLEASY_MAGIC_NUMBER and pref.conn == null) {
         return CURLE_SEND_ERROR;
     }
@@ -1209,8 +1213,7 @@ pub export fn Curl_pp_vsendf(
 
     pp.setPendingResp(true);
     const write_len = containers.curlx_dyn_len(&pp.sendbuf);
-    const s_opt = containers.curlx_dyn_ptr(&pp.sendbuf);
-    const s: [*]u8 = if (s_opt) |ptr| @ptrCast(ptr) else return CURLE_SEND_ERROR;
+    const s: [*]u8 = containers.curlx_dyn_ptr(&pp.sendbuf) orelse return CURLE_SEND_ERROR;
 
     result = Curl_conn_send(data, FIRSTSOCKET, s, write_len, false, &bytes_written);
     if (result == CURLE_AGAIN) {
@@ -1294,7 +1297,7 @@ pub export fn Curl_pp_readresp(
         while (true) {
             const line_ptr = containers.curlx_dyn_ptr(&pp.recvbuf);
             const rlen = containers.curlx_dyn_len(&pp.recvbuf);
-            const line_opt: ?[*]const u8 = if (line_ptr) |p| @ptrCast(p) else null;
+            const line_opt: ?[*]const u8 = line_ptr;
             const nl_idx: ?usize = if (line_opt) |lp| std.mem.indexOfScalar(u8, lp[0..rlen], '\n') else null;
             if (nl_idx) |idx| {
                 const line = line_opt.?;
@@ -1511,12 +1514,12 @@ fn capExpires(now: i64, co: *Cookie) void {
 }
 
 fn freecookie(co: *Cookie, maintoo: bool) void {
-    mem.free(co.domain);
-    mem.free(co.path);
-    mem.free(co.name);
-    mem.free(co.value);
+    mem.freeTyped(co.domain);
+    mem.freeTyped(co.path);
+    mem.freeTyped(co.name);
+    mem.freeTyped(co.value);
     if (maintoo) {
-        mem.free(co);
+        mem.destroy(co);
     }
 }
 
@@ -1524,7 +1527,7 @@ fn cookieTailmatch(cookie_domain: [*:0]const u8, cookie_domain_len: usize, hostn
     const hostname_len = std.mem.len(hostname);
     if (hostname_len < cookie_domain_len) return false;
 
-    const tail_ptr: [*:0]const u8 = @ptrCast(hostname + (hostname_len - cookie_domain_len));
+    const tail_ptr: [*:0]const u8 = hostname + (hostname_len - cookie_domain_len);
     if (primitives.curl_strnequal(cookie_domain, tail_ptr, cookie_domain_len) == 0) {
         return false;
     }
@@ -1596,19 +1599,17 @@ fn sanitizeCookiePath(cookie_path_in: [*]const u8, len_in: usize) ?[*:0]u8 {
         }
     }
     if (len == 0 or cookie_path[0] != '/') {
-        const dup = mem.strdup("/") orelse return null;
-        return @ptrCast(dup);
+        return mem.strdup("/");
     }
     if (len > 1 and cookie_path[len - 1] == '/') {
         len -= 1;
     }
-    const dup = curlx_memdup0(cookie_path, len) orelse return null;
-    return @ptrCast(dup);
+    return mem.memdup0(cookie_path, len);
 }
 
 fn strstore(str: *?[*:0]u8, newstr: ?[*]const u8, len: usize) CURLcode {
-    const dup = curlx_memdup0(newstr, len) orelse return CURLE_OUT_OF_MEMORY;
-    str.* = @ptrCast(dup);
+    const dup = mem.memdup0(newstr orelse "", len) orelse return CURLE_OUT_OF_MEMORY;
+    str.* = dup;
     return CURLE_OK;
 }
 
@@ -1622,7 +1623,7 @@ fn removeExpired(ci: *CookieInfo) void {
     for (&ci.cookielist) |*bucket| {
         var n = containers.Curl_llist_head(bucket);
         while (n) |node| {
-            const co: *Cookie = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+            const co = collections.llistElemTyped(Cookie, node).?;
             const next_node = containers.Curl_node_next(node);
             if (co.expires != 0) {
                 if (co.expires < now) {
@@ -1639,7 +1640,7 @@ fn removeExpired(ci: *CookieInfo) void {
 }
 
 fn badDomain(domain: [*]const u8, len: usize) bool {
-    if (len == 9 and primitives.curl_strnequal(@ptrCast(domain), "localhost", 9) != 0) {
+    if (len == 9 and std.ascii.eqlIgnoreCase(domain[0..9], "localhost")) {
         return false;
     }
     if (std.mem.indexOfScalar(u8, domain[0..len], '.')) |dot_idx| {
@@ -1663,40 +1664,55 @@ fn storecookie(
     path_in: ?[*:0]const u8,
     domain: ?[*:0]const u8,
 ) CURLcode {
-    var result = strstore(&co.name, cp[COOKIE_NAME].str, cp[COOKIE_NAME].len);
-    if (result == CURLE_OK) {
-        result = strstore(&co.value, cp[COOKIE_VALUE].str, cp[COOKIE_VALUE].len);
+    return storecookieErr(co, cp, path_in, domain) catch CURLE_OUT_OF_MEMORY;
+}
+
+fn storecookieErr(
+    co: *Cookie,
+    cp: *const [COOKIE_PIECES]curlx_parse.Curl_str,
+    path_in: ?[*:0]const u8,
+    domain: ?[*:0]const u8,
+) error{OutOfMemory}!CURLcode {
+    errdefer {
+        mem.freeTyped(co.name);
+        co.name = null;
+        mem.freeTyped(co.value);
+        co.value = null;
+        mem.freeTyped(co.path);
+        co.path = null;
+        mem.freeTyped(co.domain);
+        co.domain = null;
     }
-    if (result == CURLE_OK) {
-        var plen: usize = 0;
-        var p_ptr: ?[*]const u8 = null;
-        if (cp[COOKIE_PATH].len != 0) {
-            p_ptr = cp[COOKIE_PATH].str;
-            plen = cp[COOKIE_PATH].len;
-        } else if (path_in) |p| {
-            p_ptr = p;
-            const p_slice = std.mem.span(p);
-            if (std.mem.lastIndexOfScalar(u8, p_slice, '/')) |endslash| {
-                plen = endslash + 1;
-            } else {
-                plen = p_slice.len;
-            }
-        }
-        if (p_ptr) |pp| {
-            co.path = sanitizeCookiePath(pp, plen);
-            if (co.path == null) result = CURLE_OUT_OF_MEMORY;
-        }
-    }
-    if (result == CURLE_OK) {
-        if (cp[COOKIE_DOMAIN].len != 0) {
-            result = strstore(&co.domain, cp[COOKIE_DOMAIN].str, cp[COOKIE_DOMAIN].len);
-        } else if (domain) |dom| {
-            const dup = mem.strdup(dom);
-            co.domain = if (dup) |d| @ptrCast(d) else null;
-            if (co.domain == null) result = CURLE_OUT_OF_MEMORY;
+    if (strstore(&co.name, cp[COOKIE_NAME].str, cp[COOKIE_NAME].len) != CURLE_OK)
+        return error.OutOfMemory;
+    if (strstore(&co.value, cp[COOKIE_VALUE].str, cp[COOKIE_VALUE].len) != CURLE_OK)
+        return error.OutOfMemory;
+
+    var plen: usize = 0;
+    var p_ptr: ?[*]const u8 = null;
+    if (cp[COOKIE_PATH].len != 0) {
+        p_ptr = cp[COOKIE_PATH].str;
+        plen = cp[COOKIE_PATH].len;
+    } else if (path_in) |p| {
+        p_ptr = p;
+        const p_slice = std.mem.span(p);
+        if (std.mem.lastIndexOfScalar(u8, p_slice, '/')) |endslash| {
+            plen = endslash + 1;
+        } else {
+            plen = p_slice.len;
         }
     }
-    return result;
+    if (p_ptr) |pp| {
+        co.path = sanitizeCookiePath(pp, plen) orelse return error.OutOfMemory;
+    }
+
+    if (cp[COOKIE_DOMAIN].len != 0) {
+        if (strstore(&co.domain, cp[COOKIE_DOMAIN].str, cp[COOKIE_DOMAIN].len) != CURLE_OK)
+            return error.OutOfMemory;
+    } else if (domain) |dom| {
+        co.domain = mem.strdup(dom) orelse return error.OutOfMemory;
+    }
+    return CURLE_OK;
 }
 
 fn parseFirstPair(
@@ -1749,11 +1765,11 @@ fn parseDomain(
         }
     }
 
-    var v_null_buf: [MAX_COOKIE_LINE + 1]u8 = undefined;
+    var v_null_buf: [MAX_COOKIE_LINE:0]u8 = undefined;
     const copy_len = @min(val.len, MAX_COOKIE_LINE);
     @memcpy(v_null_buf[0..copy_len], vptr[0..copy_len]);
     v_null_buf[copy_len] = 0;
-    const v_cstr: [*:0]const u8 = @ptrCast(&v_null_buf);
+    const v_cstr: [*:0]const u8 = &v_null_buf;
 
     const is_ip = netrc_addr_idn.Curl_is_ipaddr(domain orelse v_cstr);
 
@@ -1813,11 +1829,11 @@ fn parseMaxage(co: *Cookie, val: *const curlx_parse.Curl_str, nowp: *i64) void {
 fn parseExpires(co: *Cookie, val: *const curlx_parse.Curl_str, nowp: *i64) void {
     if (co.expires == 0 and val.len < MAX_DATE_LENGTH) {
         if (val.str) |vptr| {
-            var dbuf: [MAX_DATE_LENGTH + 1]u8 = undefined;
+            var dbuf: [MAX_DATE_LENGTH:0]u8 = undefined;
             @memcpy(dbuf[0..val.len], vptr[0..val.len]);
             dbuf[val.len] = 0;
             var date: i64 = 0;
-            if (Curl_getdate_capped(@ptrCast(&dbuf), &date) == 0) {
+            if (Curl_getdate_capped(&dbuf, &date) == 0) {
                 if (date == 0) date += 1;
                 co.expires = date;
             } else {
@@ -1934,8 +1950,28 @@ fn parseNetscape(
     lineptr_in: [*:0]const u8,
     secure_origin: bool,
 ) CURLcode {
+    return parseNetscapeErr(co, ci, okay, lineptr_in, secure_origin) catch CURLE_OUT_OF_MEMORY;
+}
+
+fn parseNetscapeErr(
+    co: *Cookie,
+    ci: *const CookieInfo,
+    okay: *bool,
+    lineptr_in: [*:0]const u8,
+    secure_origin: bool,
+) error{OutOfMemory}!CURLcode {
     var lineptr = lineptr_in;
     okay.* = false;
+    errdefer {
+        mem.freeTyped(co.domain);
+        co.domain = null;
+        mem.freeTyped(co.path);
+        co.path = null;
+        mem.freeTyped(co.name);
+        co.name = null;
+        mem.freeTyped(co.value);
+        co.value = null;
+    }
 
     if (std.mem.startsWith(u8, std.mem.span(lineptr), "#HttpOnly_")) {
         lineptr += 10;
@@ -1959,18 +1995,16 @@ fn parseNetscape(
                     ptr += 1;
                     len -= 1;
                 }
-                const dup = curlx_memdup0(ptr, len) orelse return CURLE_OUT_OF_MEMORY;
-                co.domain = @ptrCast(dup);
+                co.domain = mem.memdup0(ptr, len) orelse return error.OutOfMemory;
             },
             1 => {
                 co.setTailmatch(primitives.curl_strnequal(ptr, "TRUE", len) != 0);
             },
             2 => {
                 if (!std.mem.eql(u8, ptr[0..len], "TRUE") and !std.mem.eql(u8, ptr[0..len], "FALSE")) {
-                    co.path = sanitizeCookiePath(ptr, len) orelse return CURLE_OUT_OF_MEMORY;
+                    co.path = sanitizeCookiePath(ptr, len) orelse return error.OutOfMemory;
                 } else {
-                    const dup = mem.strdup("/") orelse return CURLE_OUT_OF_MEMORY;
-                    co.path = @ptrCast(dup);
+                    co.path = mem.strdup("/") orelse return error.OutOfMemory;
                     fields += 1;
                     co.setSecure(false);
                     if (primitives.curl_strnequal(ptr, "TRUE", len) != 0) {
@@ -1999,8 +2033,7 @@ fn parseNetscape(
                 }
             },
             5 => {
-                const dup = curlx_memdup0(ptr, len) orelse return CURLE_OUT_OF_MEMORY;
-                const name_cstr: [*:0]u8 = @ptrCast(dup);
+                const name_cstr = mem.memdup0(ptr, len) orelse return error.OutOfMemory;
                 co.name = name_cstr;
                 const name_slice = name_cstr[0..len];
                 if (std.mem.startsWith(u8, name_slice, "__Secure-")) {
@@ -2010,16 +2043,14 @@ fn parseNetscape(
                 }
             },
             6 => {
-                const dup = curlx_memdup0(ptr, len) orelse return CURLE_OUT_OF_MEMORY;
-                co.value = @ptrCast(dup);
+                co.value = mem.memdup0(ptr, len) orelse return error.OutOfMemory;
             },
             else => {},
         }
     }
 
     if (fields == 6) {
-        const dup = mem.strdup("") orelse return CURLE_OUT_OF_MEMORY;
-        co.value = @ptrCast(dup);
+        co.value = mem.strdup("") orelse return error.OutOfMemory;
         fields += 1;
     }
 
@@ -2059,27 +2090,27 @@ fn isPublicSuffix(
         if (netrc_addr_idn.Curl_is_ipaddr(co_dom)) return false;
 
         var acceptable = false;
-        var lcase: [256]u8 = undefined;
-        var lcookie: [256]u8 = undefined;
+        var lcase: [256:0]u8 = undefined;
+        var lcookie: [256:0]u8 = undefined;
         var dlen: usize = if (domain) |d| std.mem.len(d) else 0;
         var clen: usize = std.mem.len(co_dom);
 
         if (dlen > 0 and domain.?[dlen - 1] == '.') dlen -= 1;
         if (clen > 0 and co_dom[clen - 1] == '.') clen -= 1;
 
-        if (dlen < lcase.len and clen < lcookie.len) {
+        if (dlen < 256 and clen < 256) {
             const psl: ?*const anyopaque = if (data != null)
                 threads_psl.Curl_psl_use(data)
             else
-                @ptrCast(threads_psl.psl_builtin());
+                threads_psl.psl_builtin();
             if (psl != null) {
                 primitives.Curl_strntolower(&lcookie, co_dom, clen);
                 lcookie[clen] = 0;
-                const lcookie_cstr: [*:0]const u8 = @ptrCast(&lcookie);
+                const lcookie_cstr: [*:0]const u8 = &lcookie;
                 if (domain) |dom| {
                     primitives.Curl_strntolower(&lcase, dom, dlen);
                     lcase[dlen] = 0;
-                    const lcase_cstr: [*:0]const u8 = @ptrCast(&lcase);
+                    const lcase_cstr: [*:0]const u8 = &lcase;
                     acceptable = psl_is_cookie_domain_acceptable(psl, lcase_cstr, lcookie_cstr) != 0;
 
                     if (acceptable and co.isTailmatch() and
@@ -2131,7 +2162,7 @@ fn replaceExisting(
 
     var n = containers.Curl_llist_head(&ci.cookielist[myhash]);
     while (n) |node| : (n = containers.Curl_node_next(node)) {
-        const clist: *Cookie = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+        const clist = collections.llistElemTyped(Cookie, node).?;
         const clist_name = std.mem.span(clist.name.?);
         if (std.mem.eql(u8, clist_name, co_name)) {
             var matching_domains = false;
@@ -2201,7 +2232,7 @@ fn replaceExisting(
     }
 
     if (replace_n) |rnode| {
-        const repl: *Cookie = @ptrCast(@alignCast(containers.Curl_node_elem(rnode).?));
+        const repl = collections.llistElemTyped(Cookie, rnode).?;
         co.creationtime = repl.creationtime;
         containers.Curl_node_remove(rnode);
         freecookie(repl, true);
@@ -2219,11 +2250,24 @@ pub export fn Curl_cookie_add(
     flags: c_int,
     psetcookies: ?*u8,
 ) callconv(.c) CURLcode {
+    return cookieAddErr(data, ci, lineptr, domain, path, flags, psetcookies) catch CURLE_OUT_OF_MEMORY;
+}
+
+fn cookieAddErr(
+    data: ?*Curl_easy,
+    ci: *CookieInfo,
+    lineptr: [*:0]const u8,
+    domain: ?[*:0]const u8,
+    path: ?[*:0]const u8,
+    flags: c_int,
+    psetcookies: ?*u8,
+) error{OutOfMemory}!CURLcode {
     if (psetcookies) |psc| {
         if (psc.* >= MAX_SET_COOKIE_AMOUNT) return CURLE_OK;
     }
 
     var comem: Cookie = .{};
+    errdefer freecookie(&comem, false);
     var result: CURLcode = CURLE_OK;
     var replaces = false;
     var okay = false;
@@ -2276,11 +2320,8 @@ pub export fn Curl_cookie_add(
         return result;
     }
 
-    const co_raw = curlx_memdup(&comem, @sizeOf(Cookie)) orelse {
-        freecookie(&comem, false);
-        return CURLE_OUT_OF_MEMORY;
-    };
-    const co: *Cookie = @ptrCast(@alignCast(co_raw));
+    const co = mem.create(Cookie) orelse return error.OutOfMemory;
+    co.* = comem;
 
     const myhash = cookiehash(co.domain);
     containers.Curl_llist_append(&ci.cookielist[myhash], co, &co.node);
@@ -2316,8 +2357,7 @@ pub export fn Curl_cookie_add(
 }
 
 pub export fn Curl_cookie_init() callconv(.c) ?*CookieInfo {
-    const raw = mem.calloc(1, @sizeOf(CookieInfo)) orelse return null;
-    const ci: *CookieInfo = @ptrCast(@alignCast(raw));
+    const ci = mem.create(CookieInfo) orelse return null;
     for (&ci.cookielist) |*bucket| {
         containers.Curl_llist_init(bucket, null);
     }
@@ -2363,7 +2403,7 @@ fn cookieLoad(
         var eof = false;
         containers.curlx_dyn_init(&buf, DYN_APRINTF + 2);
         while (true) {
-            result = os_leaf.Curl_get_line(@ptrCast(&buf), stream, &eof);
+            result = Curl_get_line(&buf, stream, &eof);
             if (result == CURLE_OK) {
                 if (containers.curlx_dyn_ptr(&buf)) |raw_line| {
                     var lineptr: [*:0]const u8 = raw_line;
@@ -2476,7 +2516,7 @@ pub export fn Curl_cookie_getlist(
 
     var n = containers.Curl_llist_head(&ci.cookielist[myhash]);
     while (n) |node| : (n = containers.Curl_node_next(node)) {
-        const co: *Cookie = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+        const co = collections.llistElemTyped(Cookie, node).?;
         if (if (co.isSecure()) secure else true) {
             const domain_ok = if (co.domain) |cdom|
                 ((co.isTailmatch() and !is_ip and cookieTailmatch(cdom, std.mem.len(cdom), host)) or
@@ -2498,26 +2538,25 @@ pub export fn Curl_cookie_getlist(
     }
 
     if (matches != 0) {
-        const array_raw = mem.malloc(@sizeOf(*Cookie) * matches) orelse {
+        const array = mem.allocSlice(*Cookie, matches) orelse {
             containers.Curl_llist_destroy(list, null);
             return CURLE_OUT_OF_MEMORY;
         };
-        const array: [*]*Cookie = @ptrCast(@alignCast(array_raw));
+        defer mem.freeSlice(array);
 
         var cur = containers.Curl_llist_head(list);
         var i: usize = 0;
         while (cur) |node| : (cur = containers.Curl_node_next(node)) {
-            array[i] = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+            array[i] = collections.llistElemTyped(Cookie, node).?;
             i += 1;
         }
 
-        std.mem.sort(*Cookie, array[0..matches], {}, cookieSortLessThan);
+        std.mem.sort(*Cookie, array, {}, cookieSortLessThan);
 
         containers.Curl_llist_destroy(list, null);
-        for (array[0..matches]) |co| {
+        for (array) |co| {
             containers.Curl_llist_append(list, co, &co.getnode);
         }
-        mem.free(array_raw);
     }
 
     okay.* = true;
@@ -2529,7 +2568,7 @@ pub export fn Curl_cookie_clearall(ci_opt: ?*CookieInfo) callconv(.c) void {
     for (&ci.cookielist) |*bucket| {
         var n = containers.Curl_llist_head(bucket);
         while (n) |node| {
-            const c: *Cookie = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+            const c = collections.llistElemTyped(Cookie, node).?;
             const next_node = containers.Curl_node_next(node);
             containers.Curl_node_remove(node);
             freecookie(c, true);
@@ -2544,7 +2583,7 @@ pub export fn Curl_cookie_clearsess(ci_opt: ?*CookieInfo) callconv(.c) void {
     for (&ci.cookielist) |*bucket| {
         var n = containers.Curl_llist_head(bucket);
         while (n) |node| {
-            const curr: *Cookie = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+            const curr = collections.llistElemTyped(Cookie, node).?;
             const next_node = containers.Curl_node_next(node);
             if (curr.expires == 0) {
                 containers.Curl_node_remove(node);
@@ -2559,7 +2598,7 @@ pub export fn Curl_cookie_clearsess(ci_opt: ?*CookieInfo) callconv(.c) void {
 pub export fn Curl_cookie_cleanup(ci_opt: ?*CookieInfo) callconv(.c) void {
     const ci = ci_opt orelse return;
     Curl_cookie_clearall(ci);
-    mem.free(ci);
+    mem.destroy(ci);
 }
 
 fn getNetscapeFormat(co: *const Cookie) ?[*:0]u8 {
@@ -2587,11 +2626,14 @@ fn getNetscapeFormat(co: *const Cookie) ?[*:0]u8 {
 }
 
 fn cookieOutput(data: ?*Curl_easy, ci_opt: ?*CookieInfo, filename: [*:0]const u8) CURLcode {
+    return cookieOutputErr(data, ci_opt, filename) catch CURLE_OUT_OF_MEMORY;
+}
+
+fn cookieOutputErr(data: ?*Curl_easy, ci_opt: ?*CookieInfo, filename: [*:0]const u8) error{OutOfMemory}!CURLcode {
     const ci = ci_opt orelse return CURLE_OK;
     var out: ?*anyopaque = null;
     var use_stdout = false;
     var tempstore: ?[*:0]u8 = null;
-    var result: CURLcode = CURLE_OK;
 
     removeExpired(ci);
 
@@ -2599,13 +2641,20 @@ fn cookieOutput(data: ?*Curl_easy, ci_opt: ?*CookieInfo, filename: [*:0]const u8
         out = stdio_c.getStdout();
         use_stdout = true;
     } else {
-        result = http1_options.Curl_fopen(data, filename, &out, &tempstore);
+        const result = http1_options.Curl_fopen(data, filename, &out, &tempstore);
         if (result != CURLE_OK) {
             if (tempstore) |ts| {
                 _ = stdio_c.unlinkFile(ts);
-                mem.free(ts);
+                mem.freeTyped(ts);
             }
             return result;
+        }
+    }
+    errdefer {
+        if (out != null and !use_stdout) _ = stdio_c.fclose(out);
+        if (tempstore) |ts| {
+            _ = stdio_c.unlinkFile(ts);
+            mem.freeTyped(ts);
         }
     }
 
@@ -2618,20 +2667,13 @@ fn cookieOutput(data: ?*Curl_easy, ci_opt: ?*CookieInfo, filename: [*:0]const u8
 
     if (ci.numcookies != 0) {
         var nvalid: usize = 0;
-        const array_raw = mem.calloc(1, @sizeOf(*Cookie) * ci.numcookies) orelse {
-            if (out != null and !use_stdout) _ = stdio_c.fclose(out);
-            if (tempstore) |ts| {
-                _ = stdio_c.unlinkFile(ts);
-                mem.free(ts);
-            }
-            return CURLE_OUT_OF_MEMORY;
-        };
-        const array: [*]*Cookie = @ptrCast(@alignCast(array_raw));
+        const array = mem.callocSlice(*Cookie, ci.numcookies) orelse return error.OutOfMemory;
+        defer mem.freeSlice(array);
 
         for (&ci.cookielist) |*bucket| {
             var n = containers.Curl_llist_head(bucket);
             while (n) |node| : (n = containers.Curl_node_next(node)) {
-                const co: *Cookie = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+                const co = collections.llistElemTyped(Cookie, node).?;
                 if (co.domain == null) continue;
                 array[nvalid] = co;
                 nvalid += 1;
@@ -2641,20 +2683,10 @@ fn cookieOutput(data: ?*Curl_easy, ci_opt: ?*CookieInfo, filename: [*:0]const u8
         std.mem.sort(*Cookie, array[0..nvalid], {}, cookieSortCtLessThan);
 
         for (array[0..nvalid]) |co| {
-            const format_ptr = getNetscapeFormat(co) orelse {
-                mem.free(array_raw);
-                if (out != null and !use_stdout) _ = stdio_c.fclose(out);
-                if (tempstore) |ts| {
-                    _ = stdio_c.unlinkFile(ts);
-                    mem.free(ts);
-                }
-                return CURLE_OUT_OF_MEMORY;
-            };
+            const format_ptr = getNetscapeFormat(co) orelse return error.OutOfMemory;
             _ = curl_mfprintf(out, "%s\n", format_ptr);
-            mem.free(format_ptr);
+            mem.freeTyped(format_ptr);
         }
-
-        mem.free(array_raw);
     }
 
     if (!use_stdout) {
@@ -2663,21 +2695,26 @@ fn cookieOutput(data: ?*Curl_easy, ci_opt: ?*CookieInfo, filename: [*:0]const u8
         if (tempstore) |ts| {
             if (stdio_c.renameFile(ts, filename) != 0) {
                 _ = stdio_c.unlinkFile(ts);
-                mem.free(ts);
+                mem.freeTyped(ts);
                 return CURLE_WRITE_ERROR;
             }
         }
     }
 
-    mem.free(tempstore);
+    mem.freeTyped(tempstore);
     return CURLE_OK;
 }
 
 fn cookieListInternal(cookies_opt: ?*CookieInfo) ?*containers.curl_slist {
+    return cookieListInternalErr(cookies_opt) catch null;
+}
+
+fn cookieListInternalErr(cookies_opt: ?*CookieInfo) error{OutOfMemory}!?*containers.curl_slist {
     const cookies = cookies_opt orelse return null;
     if (cookies.numcookies == 0) return null;
 
     var list: ?*containers.curl_slist = null;
+    errdefer curl_slist_free_all(list);
     var tail: *?*containers.curl_slist = &list;
 
     removeExpired(cookies);
@@ -2685,17 +2722,11 @@ fn cookieListInternal(cookies_opt: ?*CookieInfo) ?*containers.curl_slist {
     for (&cookies.cookielist) |*bucket| {
         var n = containers.Curl_llist_head(bucket);
         while (n) |node| : (n = containers.Curl_node_next(node)) {
-            const c: *Cookie = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+            const c = collections.llistElemTyped(Cookie, node).?;
             if (c.domain == null) continue;
-            const line = getNetscapeFormat(c) orelse {
-                curl_slist_free_all(list);
-                return null;
-            };
-            const beg = Curl_slist_append_nodup(null, line) orelse {
-                mem.free(line);
-                curl_slist_free_all(list);
-                return null;
-            };
+            const line = getNetscapeFormat(c) orelse return error.OutOfMemory;
+            errdefer mem.freeTyped(line);
+            const beg = Curl_slist_append_nodup(null, line) orelse return error.OutOfMemory;
             tail.* = beg;
             tail = &beg.next;
         }
@@ -2840,95 +2871,83 @@ fn aarch64Thunk3(comptime target_sym: []const u8) fn () callconv(.naked) void {
 }
 
 const variadic_impl = if (use_c_vastart) struct {
+    inline fn vaListParam(ap: *std.builtin.VaList) CVaListParam {
+        return if (builtin.cpu.arch == .x86_64) ap else @ptrCast(ap.*);
+    }
     pub fn Curl_failf(data: ?*Curl_easy, fmt: [*:0]const u8, ...) callconv(.c) void {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        Curl_vfailf(data, fmt, param);
+        Curl_vfailf(data, fmt, vaListParam(&ap));
     }
     pub fn Curl_infof(data: ?*Curl_easy, fmt: [*:0]const u8, ...) callconv(.c) void {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        Curl_vinfof(data, fmt, param);
+        Curl_vinfof(data, fmt, vaListParam(&ap));
     }
     pub fn Curl_trc_cf_infof(data: ?*Curl_easy, cf: ?*const vfilters.Curl_cfilter, fmt: [*:0]const u8, ...) callconv(.c) void {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        Curl_vtrc_cf_infof(data, cf, fmt, param);
+        Curl_vtrc_cf_infof(data, cf, fmt, vaListParam(&ap));
     }
     pub fn Curl_trc_feat_infof(data: ?*Curl_easy, feat: ?*curl_trc_feat, fmt: [*:0]const u8, ...) callconv(.c) void {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        Curl_vtrc_feat_infof(data, feat, fmt, param);
+        Curl_vtrc_feat_infof(data, feat, fmt, vaListParam(&ap));
     }
     pub fn Curl_trc_timer(data: ?*Curl_easy, tid: c_int, fmt: [*:0]const u8, ...) callconv(.c) void {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        Curl_vtrc_timer(data, tid, fmt, param);
+        Curl_vtrc_timer(data, tid, fmt, vaListParam(&ap));
     }
     pub fn Curl_trc_multi(data: ?*Curl_easy, fmt: [*:0]const u8, ...) callconv(.c) void {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        Curl_vtrc_multi(data, fmt, param);
+        Curl_vtrc_multi(data, fmt, vaListParam(&ap));
     }
     pub fn Curl_trc_read(data: ?*Curl_easy, fmt: [*:0]const u8, ...) callconv(.c) void {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        Curl_vtrc_read(data, fmt, param);
+        Curl_vtrc_read(data, fmt, vaListParam(&ap));
     }
     pub fn Curl_trc_write(data: ?*Curl_easy, fmt: [*:0]const u8, ...) callconv(.c) void {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        Curl_vtrc_write(data, fmt, param);
+        Curl_vtrc_write(data, fmt, vaListParam(&ap));
     }
     pub fn Curl_trc_dns(data: ?*Curl_easy, fmt: [*:0]const u8, ...) callconv(.c) void {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        Curl_vtrc_dns(data, fmt, param);
+        Curl_vtrc_dns(data, fmt, vaListParam(&ap));
     }
     pub fn Curl_trc_ftp(data: ?*Curl_easy, fmt: [*:0]const u8, ...) callconv(.c) void {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        Curl_vtrc_ftp(data, fmt, param);
+        Curl_vtrc_ftp(data, fmt, vaListParam(&ap));
     }
     pub fn Curl_trc_smtp(data: ?*Curl_easy, fmt: [*:0]const u8, ...) callconv(.c) void {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        Curl_vtrc_smtp(data, fmt, param);
+        Curl_vtrc_smtp(data, fmt, vaListParam(&ap));
     }
     pub fn Curl_trc_ssls(data: ?*Curl_easy, fmt: [*:0]const u8, ...) callconv(.c) void {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        Curl_vtrc_ssls(data, fmt, param);
+        Curl_vtrc_ssls(data, fmt, vaListParam(&ap));
     }
     pub fn Curl_trc_ssh(data: ?*Curl_easy, fmt: [*:0]const u8, ...) callconv(.c) void {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        Curl_vtrc_ssh(data, fmt, param);
+        Curl_vtrc_ssh(data, fmt, vaListParam(&ap));
     }
     pub fn Curl_trc_ws(data: ?*Curl_easy, fmt: [*:0]const u8, ...) callconv(.c) void {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        Curl_vtrc_ws(data, fmt, param);
+        Curl_vtrc_ws(data, fmt, vaListParam(&ap));
     }
     pub fn Curl_pp_sendf(data: ?*Curl_easy, pp: *pingpong, fmt: [*:0]const u8, ...) callconv(.c) CURLcode {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        return Curl_pp_vsendf_3(data, pp, fmt, param);
+        return Curl_pp_vsendf_3(data, pp, fmt, vaListParam(&ap));
     }
 } else if (builtin.cpu.arch == .x86_64 and builtin.os.tag == .windows) struct {
     pub const Curl_failf = win64Thunk2("Curl_vfailf");
@@ -3041,13 +3060,13 @@ test "Curl_failf, Curl_reset_fail, and Curl_infof with bound easy" {
         &easy_id,
         &mstate,
         &conn_id,
-        @ptrCast(&state_feat),
-        @ptrCast(&errbuf_ptr),
-        &httpreq_bits[0],
+        &state_feat,
+        &errbuf_ptr,
+        &httpreq_bits,
         true,
-        @ptrCast(&fdebug_ptr),
-        @ptrCast(&debugdata_ptr),
-        @ptrCast(&err_stream),
+        &fdebug_ptr,
+        &debugdata_ptr,
+        &err_stream,
     );
 
     Curl_failf(data, "error %d: %s", @as(c_int, 404), "not found");
@@ -3127,7 +3146,7 @@ test "Cookie engine init, add, getlist, list, clearsess, clearall, cleanup" {
     try std.testing.expectEqual(@as(usize, 2), containers.Curl_llist_count(&llist));
 
     const first_node = containers.Curl_llist_head(&llist).?;
-    const first_cookie: *Cookie = @ptrCast(@alignCast(containers.Curl_node_elem(first_node).?));
+    const first_cookie = collections.llistElemTyped(Cookie, first_node).?;
     try std.testing.expectEqualStrings("/app", std.mem.span(first_cookie.path.?));
     try std.testing.expectEqualStrings("abc123", std.mem.span(first_cookie.value.?));
 
@@ -3202,11 +3221,11 @@ test "adversarial cookie parsing: oversized attributes, control bytes, max-age a
     );
 
     // Oversized cookie name (> MAX_NAME = 4096) must be rejected
-    var big_line: [4200]u8 = @splat('a');
+    var big_line: [4200:0]u8 = @splat('a');
     big_line[4100] = '=';
     big_line[4101] = '1';
     big_line[4102] = 0;
-    const big_cstr: [*:0]const u8 = @ptrCast(&big_line);
+    const big_cstr: [*:0]const u8 = &big_line;
     try std.testing.expectEqual(
         CURLE_OK,
         Curl_cookie_add(null, ci, big_cstr, "example.com", "/", COOKIE_HTTPHEADER | COOKIE_SECURE, &setcookies),
@@ -3222,7 +3241,7 @@ test "adversarial cookie parsing: oversized attributes, control bytes, max-age a
     try std.testing.expect(okay);
     try std.testing.expectEqual(@as(usize, 1), containers.Curl_llist_count(&llist));
     const node = containers.Curl_llist_head(&llist).?;
-    const co: *Cookie = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+    const co = collections.llistElemTyped(Cookie, node).?;
     try std.testing.expectEqualStrings("huge_ma", std.mem.span(co.name.?));
 
     if (comptime backend_options.psl) {

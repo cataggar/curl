@@ -36,7 +36,7 @@ pub const curl_slist = extern struct {
     next: ?*curl_slist,
 };
 
-extern fn curl_strnequal(s1: [*:0]const u8, s2: [*:0]const u8, n: usize) callconv(.c) c_int;
+extern fn curl_strnequal(s1: [*]const u8, s2: [*]const u8, n: usize) callconv(.c) c_int;
 extern fn curl_strequal(s1: [*:0]const u8, s2: [*:0]const u8) callconv(.c) c_int;
 extern fn curl_slist_free_all(list: ?*curl_slist) callconv(.c) void;
 extern fn Curl_slist_duplicate(inlist: ?*curl_slist) callconv(.c) ?*curl_slist;
@@ -154,7 +154,7 @@ extern const Curl_protocol_tftp: Curl_protocol_opaque;
 
 pub export const Curl_scheme_dict: Curl_scheme = .{
     .name = "dict",
-    .run = @ptrCast(&Curl_protocol_dict),
+    .run = &Curl_protocol_dict,
     .protocol = CURLPROTO_DICT,
     .family = CURLPROTO_DICT,
     .flags = PROTOPT_NONE | PROTOPT_NOURLQUERY,
@@ -163,7 +163,7 @@ pub export const Curl_scheme_dict: Curl_scheme = .{
 
 pub export const Curl_scheme_file: Curl_scheme = .{
     .name = "file",
-    .run = @ptrCast(&Curl_protocol_file),
+    .run = &Curl_protocol_file,
     .protocol = CURLPROTO_FILE,
     .family = CURLPROTO_FILE,
     .flags = PROTOPT_NONETWORK | PROTOPT_NOURLQUERY,
@@ -172,7 +172,7 @@ pub export const Curl_scheme_file: Curl_scheme = .{
 
 pub export const Curl_scheme_ftp: Curl_scheme = .{
     .name = "ftp",
-    .run = @ptrCast(&Curl_protocol_ftp),
+    .run = &Curl_protocol_ftp,
     .protocol = CURLPROTO_FTP,
     .family = CURLPROTO_FTP,
     .flags = PROTOPT_DUAL | PROTOPT_CLOSEACTION | PROTOPT_NEEDSPWD |
@@ -184,7 +184,7 @@ pub export const Curl_scheme_ftp: Curl_scheme = .{
 
 pub export const Curl_scheme_ftps: Curl_scheme = .{
     .name = "ftps",
-    .run = if (use_ssl) @ptrCast(&Curl_protocol_ftp) else null,
+    .run = if (use_ssl) &Curl_protocol_ftp else null,
     .protocol = CURLPROTO_FTPS,
     .family = CURLPROTO_FTP,
     .flags = PROTOPT_SSL | PROTOPT_DUAL | PROTOPT_CLOSEACTION |
@@ -195,7 +195,7 @@ pub export const Curl_scheme_ftps: Curl_scheme = .{
 
 pub export const Curl_scheme_gopher: Curl_scheme = .{
     .name = "gopher",
-    .run = @ptrCast(&Curl_protocol_gopher),
+    .run = &Curl_protocol_gopher,
     .protocol = CURLPROTO_GOPHER,
     .family = CURLPROTO_GOPHER,
     .flags = PROTOPT_NONE,
@@ -204,7 +204,7 @@ pub export const Curl_scheme_gopher: Curl_scheme = .{
 
 pub export const Curl_scheme_gophers: Curl_scheme = .{
     .name = "gophers",
-    .run = if (use_ssl) @ptrCast(&Curl_protocol_gophers) else null,
+    .run = if (use_ssl) &Curl_protocol_gophers else null,
     .protocol = CURLPROTO_GOPHERS,
     .family = CURLPROTO_GOPHER,
     .flags = PROTOPT_SSL,
@@ -213,7 +213,7 @@ pub export const Curl_scheme_gophers: Curl_scheme = .{
 
 pub export const Curl_scheme_http: Curl_scheme = .{
     .name = "http",
-    .run = @ptrCast(&Curl_protocol_http),
+    .run = &Curl_protocol_http,
     .protocol = CURLPROTO_HTTP,
     .family = CURLPROTO_HTTP,
     .flags = PROTOPT_CREDSPERREQUEST |
@@ -223,7 +223,7 @@ pub export const Curl_scheme_http: Curl_scheme = .{
 
 pub export const Curl_scheme_https: Curl_scheme = .{
     .name = "https",
-    .run = if (use_ssl) @ptrCast(&Curl_protocol_http) else null,
+    .run = if (use_ssl) &Curl_protocol_http else null,
     .protocol = CURLPROTO_HTTPS,
     .family = CURLPROTO_HTTP,
     .flags = PROTOPT_SSL | PROTOPT_CREDSPERREQUEST | PROTOPT_ALPN |
@@ -234,7 +234,7 @@ pub export const Curl_scheme_https: Curl_scheme = .{
 
 pub export const Curl_scheme_imap: Curl_scheme = .{
     .name = "imap",
-    .run = @ptrCast(&imap_ws.Curl_protocol_imap),
+    .run = &imap_ws.Curl_protocol_imap,
     .protocol = CURLPROTO_IMAP,
     .family = CURLPROTO_IMAP,
     .flags = PROTOPT_CLOSEACTION |
@@ -245,7 +245,7 @@ pub export const Curl_scheme_imap: Curl_scheme = .{
 
 pub export const Curl_scheme_imaps: Curl_scheme = .{
     .name = "imaps",
-    .run = if (use_ssl) @ptrCast(&imap_ws.Curl_protocol_imap) else null,
+    .run = if (use_ssl) &imap_ws.Curl_protocol_imap else null,
     .protocol = CURLPROTO_IMAPS,
     .family = CURLPROTO_IMAP,
     .flags = PROTOPT_CLOSEACTION | PROTOPT_SSL |
@@ -255,7 +255,7 @@ pub export const Curl_scheme_imaps: Curl_scheme = .{
 
 pub export const Curl_scheme_ldap: Curl_scheme = .{
     .name = "ldap",
-    .run = if (has_ldap) @ptrCast(&ldap.Curl_protocol_ldap) else null,
+    .run = if (has_ldap) &ldap.Curl_protocol_ldap else null,
     .protocol = CURLPROTO_LDAP,
     .family = CURLPROTO_LDAP,
     .flags = PROTOPT_SSL_REUSE,
@@ -264,7 +264,7 @@ pub export const Curl_scheme_ldap: Curl_scheme = .{
 
 pub export const Curl_scheme_ldaps: Curl_scheme = .{
     .name = "ldaps",
-    .run = if (has_ldaps) @ptrCast(&ldap.Curl_protocol_ldap) else null,
+    .run = if (has_ldaps) &ldap.Curl_protocol_ldap else null,
     .protocol = CURLPROTO_LDAPS,
     .family = CURLPROTO_LDAP,
     .flags = PROTOPT_SSL,
@@ -273,7 +273,7 @@ pub export const Curl_scheme_ldaps: Curl_scheme = .{
 
 pub export const Curl_scheme_mqtt: Curl_scheme = .{
     .name = "mqtt",
-    .run = @ptrCast(&Curl_protocol_mqtt),
+    .run = &Curl_protocol_mqtt,
     .protocol = CURLPROTO_MQTT,
     .family = CURLPROTO_MQTT,
     .flags = PROTOPT_NONE,
@@ -282,7 +282,7 @@ pub export const Curl_scheme_mqtt: Curl_scheme = .{
 
 pub export const Curl_scheme_mqtts: Curl_scheme = .{
     .name = "mqtts",
-    .run = if (use_ssl) @ptrCast(&Curl_protocol_mqtts) else null,
+    .run = if (use_ssl) &Curl_protocol_mqtts else null,
     .protocol = CURLPROTO_MQTTS,
     .family = CURLPROTO_MQTT,
     .flags = PROTOPT_SSL,
@@ -291,7 +291,7 @@ pub export const Curl_scheme_mqtts: Curl_scheme = .{
 
 pub export const Curl_scheme_pop3: Curl_scheme = .{
     .name = "pop3",
-    .run = @ptrCast(&pop3_smtp.Curl_protocol_pop3),
+    .run = &pop3_smtp.Curl_protocol_pop3,
     .protocol = CURLPROTO_POP3,
     .family = CURLPROTO_POP3,
     .flags = PROTOPT_CLOSEACTION | PROTOPT_NOURLQUERY |
@@ -301,7 +301,7 @@ pub export const Curl_scheme_pop3: Curl_scheme = .{
 
 pub export const Curl_scheme_pop3s: Curl_scheme = .{
     .name = "pop3s",
-    .run = if (use_ssl) @ptrCast(&pop3_smtp.Curl_protocol_pop3) else null,
+    .run = if (use_ssl) &pop3_smtp.Curl_protocol_pop3 else null,
     .protocol = CURLPROTO_POP3S,
     .family = CURLPROTO_POP3,
     .flags = PROTOPT_CLOSEACTION | PROTOPT_SSL |
@@ -311,7 +311,7 @@ pub export const Curl_scheme_pop3s: Curl_scheme = .{
 
 pub export const Curl_scheme_rtsp: Curl_scheme = .{
     .name = "rtsp",
-    .run = @ptrCast(&Curl_protocol_rtsp),
+    .run = &Curl_protocol_rtsp,
     .protocol = CURLPROTO_RTSP,
     .family = CURLPROTO_RTSP,
     .flags = PROTOPT_CONN_REUSE,
@@ -320,7 +320,7 @@ pub export const Curl_scheme_rtsp: Curl_scheme = .{
 
 pub export const Curl_scheme_sftp: Curl_scheme = .{
     .name = "sftp",
-    .run = if (use_ssh) @ptrCast(&vssh.Curl_protocol_sftp) else null,
+    .run = if (use_ssh) &vssh.Curl_protocol_sftp else null,
     .protocol = CURLPROTO_SFTP,
     .family = CURLPROTO_SFTP,
     .flags = PROTOPT_DIRLOCK | PROTOPT_CLOSEACTION |
@@ -330,7 +330,7 @@ pub export const Curl_scheme_sftp: Curl_scheme = .{
 
 pub export const Curl_scheme_scp: Curl_scheme = .{
     .name = "scp",
-    .run = if (use_ssh) @ptrCast(&vssh.Curl_protocol_scp) else null,
+    .run = if (use_ssh) &vssh.Curl_protocol_scp else null,
     .protocol = CURLPROTO_SCP,
     .family = CURLPROTO_SCP,
     .flags = PROTOPT_DIRLOCK | PROTOPT_CLOSEACTION |
@@ -340,7 +340,7 @@ pub export const Curl_scheme_scp: Curl_scheme = .{
 
 pub export const Curl_scheme_smtp: Curl_scheme = .{
     .name = "smtp",
-    .run = @ptrCast(&pop3_smtp.Curl_protocol_smtp),
+    .run = &pop3_smtp.Curl_protocol_smtp,
     .protocol = CURLPROTO_SMTP,
     .family = CURLPROTO_SMTP,
     .flags = PROTOPT_CLOSEACTION | PROTOPT_NOURLQUERY |
@@ -350,7 +350,7 @@ pub export const Curl_scheme_smtp: Curl_scheme = .{
 
 pub export const Curl_scheme_smtps: Curl_scheme = .{
     .name = "smtps",
-    .run = if (use_ssl) @ptrCast(&pop3_smtp.Curl_protocol_smtp) else null,
+    .run = if (use_ssl) &pop3_smtp.Curl_protocol_smtp else null,
     .protocol = CURLPROTO_SMTPS,
     .family = CURLPROTO_SMTP,
     .flags = PROTOPT_CLOSEACTION | PROTOPT_SSL |
@@ -405,7 +405,7 @@ pub export const Curl_scheme_socks5h: Curl_scheme = .{
 
 pub export const Curl_scheme_telnet: Curl_scheme = .{
     .name = "telnet",
-    .run = @ptrCast(&Curl_protocol_telnet),
+    .run = &Curl_protocol_telnet,
     .protocol = CURLPROTO_TELNET,
     .family = CURLPROTO_TELNET,
     .flags = PROTOPT_NONE | PROTOPT_NOURLQUERY,
@@ -414,7 +414,7 @@ pub export const Curl_scheme_telnet: Curl_scheme = .{
 
 pub export const Curl_scheme_tftp: Curl_scheme = .{
     .name = "tftp",
-    .run = @ptrCast(&Curl_protocol_tftp),
+    .run = &Curl_protocol_tftp,
     .protocol = CURLPROTO_TFTP,
     .family = CURLPROTO_TFTP,
     .flags = PROTOPT_NOTCPPROXY | PROTOPT_NOURLQUERY,
@@ -423,7 +423,7 @@ pub export const Curl_scheme_tftp: Curl_scheme = .{
 
 pub export const Curl_scheme_ws: Curl_scheme = .{
     .name = "ws",
-    .run = @ptrCast(&imap_ws.Curl_protocol_ws),
+    .run = &imap_ws.Curl_protocol_ws,
     .protocol = CURLPROTO_WS,
     .family = CURLPROTO_HTTP,
     .flags = PROTOPT_CREDSPERREQUEST |
@@ -433,7 +433,7 @@ pub export const Curl_scheme_ws: Curl_scheme = .{
 
 pub export const Curl_scheme_wss: Curl_scheme = .{
     .name = "wss",
-    .run = if (use_ssl) @ptrCast(&imap_ws.Curl_protocol_ws) else null,
+    .run = if (use_ssl) &imap_ws.Curl_protocol_ws else null,
     .protocol = CURLPROTO_WSS,
     .family = CURLPROTO_HTTP,
     .flags = PROTOPT_SSL | PROTOPT_CREDSPERREQUEST |
@@ -555,17 +555,17 @@ fn six_letter_scheme(scheme: [*]const u8) ?*const Curl_scheme {
     const s0 = primitives.rawTolower(scheme[0]);
     switch (s0) {
         's' => {
-            if (curl_strnequal("ocks4", @ptrCast(scheme + 1), 5) != 0)
+            if (curl_strnequal("ocks4", scheme + 1, 5) != 0)
                 return &Curl_scheme_socks4;
-            if (curl_strnequal("ocks5", @ptrCast(scheme + 1), 5) != 0)
+            if (curl_strnequal("ocks5", scheme + 1, 5) != 0)
                 return &Curl_scheme_socks5;
         },
         'g' => {
-            if (curl_strnequal("opher", @ptrCast(scheme + 1), 5) != 0)
+            if (curl_strnequal("opher", scheme + 1, 5) != 0)
                 return &Curl_scheme_gopher;
         },
         't' => {
-            if (curl_strnequal("elnet", @ptrCast(scheme + 1), 5) != 0)
+            if (curl_strnequal("elnet", scheme + 1, 5) != 0)
                 return &Curl_scheme_telnet;
         },
         else => {},
@@ -576,12 +576,12 @@ fn six_letter_scheme(scheme: [*]const u8) ?*const Curl_scheme {
 fn seven_letter_scheme(scheme: [*]const u8) ?*const Curl_scheme {
     const s0 = primitives.rawTolower(scheme[0]);
     if (s0 == 's') {
-        if (curl_strnequal("ocks4a", @ptrCast(scheme + 1), 6) != 0)
+        if (curl_strnequal("ocks4a", scheme + 1, 6) != 0)
             return &Curl_scheme_socks4a;
-        if (curl_strnequal("ocks5h", @ptrCast(scheme + 1), 6) != 0)
+        if (curl_strnequal("ocks5h", scheme + 1, 6) != 0)
             return &Curl_scheme_socks5h;
     } else if (s0 == 'g') {
-        if (curl_strnequal("ophers", @ptrCast(scheme + 1), 6) != 0)
+        if (curl_strnequal("ophers", scheme + 1, 6) != 0)
             return &Curl_scheme_gophers;
     }
     return null;
@@ -714,18 +714,18 @@ fn brotli_version_fmt(buf: []u8) void {
     buf[s.len] = 0;
 }
 
-var version_out_buf: [300]u8 = undefined;
-var version_ssl_buf: [80]u8 = undefined;
-var version_z_buf: [30]u8 = undefined;
-var version_brotli_buf: [30]u8 = undefined;
-var version_zstd_buf: [30]u8 = undefined;
-var version_cares_buf: [30]u8 = undefined;
-var version_idn_buf: [30]u8 = undefined;
-var version_psl_buf: [30]u8 = undefined;
-var version_ssh_buf: [30]u8 = undefined;
-var version_h2_buf: [30]u8 = undefined;
-var version_h3_buf: [30]u8 = undefined;
-var version_ldap_buf: [30]u8 = undefined;
+var version_out_buf: [300:0]u8 = undefined;
+var version_ssl_buf: [80:0]u8 = undefined;
+var version_z_buf: [30:0]u8 = undefined;
+var version_brotli_buf: [30:0]u8 = undefined;
+var version_zstd_buf: [30:0]u8 = undefined;
+var version_cares_buf: [30:0]u8 = undefined;
+var version_idn_buf: [30:0]u8 = undefined;
+var version_psl_buf: [30:0]u8 = undefined;
+var version_ssh_buf: [30:0]u8 = undefined;
+var version_h2_buf: [30:0]u8 = undefined;
+var version_h3_buf: [30:0]u8 = undefined;
+var version_ldap_buf: [30:0]u8 = undefined;
 
 pub export fn curl_version() callconv(.c) [*:0]u8 {
     var src: [16][*:0]const u8 = undefined;
@@ -736,7 +736,7 @@ pub export fn curl_version() callconv(.c) [*:0]u8 {
 
     if (comptime use_ssl) {
         Curl_ssl_version(&version_ssl_buf, version_ssl_buf.len);
-        src[i] = @ptrCast(&version_ssl_buf);
+        src[i] = &version_ssl_buf;
         i += 1;
     }
 
@@ -744,7 +744,7 @@ pub export fn curl_version() callconv(.c) [*:0]u8 {
         const zv = if (zlibVersion()) |p| std.mem.span(p) else "";
         const s = std.fmt.bufPrint(version_z_buf[0 .. version_z_buf.len - 1], "zlib/{s}", .{zv}) catch "";
         version_z_buf[s.len] = 0;
-        src[i] = @ptrCast(&version_z_buf);
+        src[i] = &version_z_buf;
         i += 1;
     }
 
@@ -754,7 +754,7 @@ pub export fn curl_version() callconv(.c) [*:0]u8 {
         const bv = std.mem.sliceTo(&br_ver, 0);
         const s = std.fmt.bufPrint(version_brotli_buf[0 .. version_brotli_buf.len - 1], "brotli/{s}", .{bv}) catch "";
         version_brotli_buf[s.len] = 0;
-        src[i] = @ptrCast(&version_brotli_buf);
+        src[i] = &version_brotli_buf;
         i += 1;
     }
 
@@ -764,7 +764,7 @@ pub export fn curl_version() callconv(.c) [*:0]u8 {
         const zv = std.mem.sliceTo(&zstd_ver, 0);
         const s = std.fmt.bufPrint(version_zstd_buf[0 .. version_zstd_buf.len - 1], "zstd/{s}", .{zv}) catch "";
         version_zstd_buf[s.len] = 0;
-        src[i] = @ptrCast(&version_zstd_buf);
+        src[i] = &version_zstd_buf;
         i += 1;
     }
 
@@ -772,7 +772,7 @@ pub export fn curl_version() callconv(.c) [*:0]u8 {
         const av = if (ares_version(null)) |p| std.mem.span(p) else "";
         const s = std.fmt.bufPrint(version_cares_buf[0 .. version_cares_buf.len - 1], "c-ares/{s}", .{av}) catch "";
         version_cares_buf[s.len] = 0;
-        src[i] = @ptrCast(&version_cares_buf);
+        src[i] = &version_cares_buf;
         i += 1;
     }
 
@@ -782,7 +782,7 @@ pub export fn curl_version() callconv(.c) [*:0]u8 {
                 const iv = if (idn2_check_version(null)) |p| std.mem.span(p) else "";
                 const s = std.fmt.bufPrint(version_idn_buf[0 .. version_idn_buf.len - 1], "libidn2/{s}", .{iv}) catch "";
                 version_idn_buf[s.len] = 0;
-                src[i] = @ptrCast(&version_idn_buf);
+                src[i] = &version_idn_buf;
                 i += 1;
             },
             .winidn => {
@@ -805,31 +805,31 @@ pub export fn curl_version() callconv(.c) [*:0]u8 {
             .{ num >> 16, (num >> 8) & 0xff, num & 0xff },
         ) catch "";
         version_psl_buf[s.len] = 0;
-        src[i] = @ptrCast(&version_psl_buf);
+        src[i] = &version_psl_buf;
         i += 1;
     }
 
     if (comptime use_ssh) {
         vssh.Curl_ssh_version(&version_ssh_buf, version_ssh_buf.len);
-        src[i] = @ptrCast(&version_ssh_buf);
+        src[i] = &version_ssh_buf;
         i += 1;
     }
 
     if (comptime backend_options.nghttp2) {
         Curl_http2_ver(&version_h2_buf, version_h2_buf.len);
-        src[i] = @ptrCast(&version_h2_buf);
+        src[i] = &version_h2_buf;
         i += 1;
     }
 
     if (comptime use_http3) {
         vquic_core.Curl_quic_ver(&version_h3_buf, version_h3_buf.len);
-        src[i] = @ptrCast(&version_h3_buf);
+        src[i] = &version_h3_buf;
         i += 1;
     }
 
     if (comptime has_ldap) {
         ldap.Curl_ldap_version(&version_ldap_buf, version_ldap_buf.len);
-        src[i] = @ptrCast(&version_ldap_buf);
+        src[i] = &version_ldap_buf;
         i += 1;
     }
 
@@ -847,7 +847,7 @@ pub export fn curl_version() callconv(.c) [*:0]u8 {
     }
     version_out_buf[outp] = 0;
 
-    return @ptrCast(&version_out_buf);
+    return &version_out_buf;
 }
 
 const supported_protocols = blk: {
@@ -1060,11 +1060,11 @@ const features_table = blk: {
 };
 
 var feature_names_buf: [features_table.len + 1]?[*:0]const u8 = @splat(null);
-var info_ssl_buffer: [80]u8 = undefined;
-var info_ssh_buffer: [80]u8 = undefined;
-var info_brotli_buffer: [30]u8 = undefined;
-var info_zstd_buffer: [30]u8 = undefined;
-var info_quic_buffer: [80]u8 = undefined;
+var info_ssl_buffer: [80:0]u8 = undefined;
+var info_ssh_buffer: [80:0]u8 = undefined;
+var info_brotli_buffer: [30:0]u8 = undefined;
+var info_zstd_buffer: [30:0]u8 = undefined;
+var info_quic_buffer: [80:0]u8 = undefined;
 
 const effective_ca_bundle: ?[*:0]const u8 = blk: {
     if (backend_options.ca_bundle) |bundle| {
@@ -1114,7 +1114,7 @@ pub export fn curl_version_info(stamp: c_uint) callconv(.c) *curl_version_info_d
 
     if (comptime use_ssl) {
         Curl_ssl_version(&info_ssl_buffer, info_ssl_buffer.len);
-        version_info.ssl_version = @ptrCast(&info_ssl_buffer);
+        version_info.ssl_version = &info_ssl_buffer;
     }
 
     if (comptime backend_options.zlib) {
@@ -1133,13 +1133,13 @@ pub export fn curl_version_info(stamp: c_uint) callconv(.c) *curl_version_info_d
 
     if (comptime use_ssh) {
         vssh.Curl_ssh_version(&info_ssh_buffer, info_ssh_buffer.len);
-        version_info.libssh_version = @ptrCast(&info_ssh_buffer);
+        version_info.libssh_version = &info_ssh_buffer;
     }
 
     if (comptime backend_options.brotli) {
         version_info.brotli_ver_num = BrotliDecoderVersion();
         brotli_version_fmt(&info_brotli_buffer);
-        version_info.brotli_version = @ptrCast(&info_brotli_buffer);
+        version_info.brotli_version = &info_brotli_buffer;
     }
 
     if (comptime backend_options.nghttp2) {
@@ -1150,13 +1150,13 @@ pub export fn curl_version_info(stamp: c_uint) callconv(.c) *curl_version_info_d
 
     if (comptime use_http3) {
         vquic_core.Curl_quic_ver(&info_quic_buffer, info_quic_buffer.len);
-        version_info.quic_version = @ptrCast(&info_quic_buffer);
+        version_info.quic_version = &info_quic_buffer;
     }
 
     if (comptime backend_options.zstd) {
         version_info.zstd_ver_num = ZSTD_versionNumber();
         zstd_version_fmt(&info_zstd_buffer);
-        version_info.zstd_version = @ptrCast(&info_zstd_buffer);
+        version_info.zstd_version = &info_zstd_buffer;
     }
 
     var features: c_int = 0;
@@ -1273,9 +1273,15 @@ pub const mime_encoder = extern struct {
     sizefunc: *const fn (part: *curl_mimepart) callconv(.c) curl_off_t,
 };
 
+pub const mime_state_ptr = extern union {
+    raw: ?*anyopaque,
+    slist: ?*curl_slist,
+    part: ?*curl_mimepart,
+};
+
 pub const mime_state = extern struct {
     state: c_uint,
-    ptr: ?*anyopaque,
+    ptr: mime_state_ptr,
     offset: curl_off_t,
 };
 
@@ -1283,13 +1289,19 @@ pub const curl_mime = extern struct {
     parent: ?*curl_mimepart,
     firstpart: ?*curl_mimepart,
     lastpart: ?*curl_mimepart,
-    boundary: [MIME_BOUNDARY_LEN + 1]u8,
+    boundary: [MIME_BOUNDARY_LEN:0]u8,
     state: mime_state,
 };
 
 pub const curl_read_callback = *const fn (buffer: [*]u8, size: usize, nitems: usize, instream: ?*anyopaque) callconv(.c) usize;
 pub const curl_seek_callback = *const fn (instream: ?*anyopaque, offset: curl_off_t, origin: c_int) callconv(.c) c_int;
 pub const curl_free_callback = *const fn (arg: ?*anyopaque) callconv(.c) void;
+
+pub const mime_arg = extern union {
+    raw: ?*anyopaque,
+    part: ?*curl_mimepart,
+    mime: ?*curl_mime,
+};
 
 pub const curl_mimepart = extern struct {
     parent: ?*curl_mime,
@@ -1300,7 +1312,7 @@ pub const curl_mimepart = extern struct {
     readfunc: ?curl_read_callback,
     seekfunc: ?curl_seek_callback,
     freefunc: ?curl_free_callback,
-    arg: ?*anyopaque,
+    arg: mime_arg,
     fp: ?*anyopaque,
     curlheaders: ?*curl_slist,
     userheaders: ?*curl_slist,
@@ -1396,11 +1408,23 @@ fn getErrno() c_int {
 
 fn mimesetstate(state: *mime_state, tok: c_uint, ptr: ?*anyopaque) void {
     state.state = tok;
-    state.ptr = ptr;
+    state.ptr = .{ .raw = ptr };
     state.offset = 0;
 }
 
-fn escape_string(mime_formescape: bool, src: [*:0]const u8, strategy: c_uint) ?[*:0]u8 {
+fn mimesetstateSlist(state: *mime_state, tok: c_uint, slist: ?*curl_slist) void {
+    state.state = tok;
+    state.ptr = .{ .slist = slist };
+    state.offset = 0;
+}
+
+fn mimesetstatePart(state: *mime_state, tok: c_uint, part: ?*curl_mimepart) void {
+    state.state = tok;
+    state.ptr = .{ .part = part };
+    state.offset = 0;
+}
+
+fn escape_string_err(mime_formescape: bool, src: [*:0]const u8, strategy: c_uint) error{OutOfMemory}![*:0]u8 {
     const use_backslash = (strategy == MIMESTRATEGY_MAIL) or mime_formescape;
     var s: [*:0]const u8 = src;
     var bytecount: usize = 0;
@@ -1417,8 +1441,8 @@ fn escape_string(mime_formescape: bool, src: [*:0]const u8, strategy: c_uint) ?[
     }
     bytecount += @intFromPtr(s) - @intFromPtr(src);
 
-    const raw = mem.malloc(bytecount + 1) orelse return null;
-    const dst: [*]u8 = @ptrCast(raw);
+    const dst = mem.allocSlice(u8, bytecount + 1) orelse return error.OutOfMemory;
+    errdefer mem.freeSlice(dst);
     var d: usize = 0;
     var i: usize = 0;
     while (src[i] != 0) : (i += 1) {
@@ -1452,7 +1476,11 @@ fn escape_string(mime_formescape: bool, src: [*:0]const u8, strategy: c_uint) ?[
         }
     }
     dst[d] = 0;
-    return @ptrCast(dst);
+    return dst[0..d :0].ptr;
+}
+
+fn escape_string(mime_formescape: bool, src: [*:0]const u8, strategy: c_uint) ?[*:0]u8 {
+    return escape_string_err(mime_formescape, src, strategy) catch null;
 }
 
 fn match_header(hdr: *curl_slist, lbl: [*:0]const u8, len: usize) ?[*:0]u8 {
@@ -1744,15 +1772,23 @@ const encoders = [_]mime_encoder{
     .{ .name = "quoted-printable", .encodefunc = encoder_qp_read, .sizefunc = encoder_qp_size },
 };
 
+inline fn asMimePart(ptr: ?*anyopaque) *curl_mimepart {
+    return @ptrCast(@alignCast(ptr.?));
+}
+
+inline fn asMimeOpt(ptr: ?*anyopaque) ?*curl_mime {
+    return @ptrCast(@alignCast(ptr));
+}
+
 fn mime_mem_read(buffer: [*]u8, size: usize, nitems: usize, instream: ?*anyopaque) callconv(.c) usize {
-    const part: *curl_mimepart = @ptrCast(@alignCast(instream.?));
+    const part = asMimePart(instream);
     _ = size;
     if (nitems == 0)
         return STOP_FILLING;
     const rem: usize = @intCast(part.datasize - part.state.offset);
     const sz = @min(rem, nitems);
     if (sz != 0) {
-        const src: [*]const u8 = @ptrCast(part.data.?);
+        const src: [*]const u8 = part.data.?;
         const off: usize = @intCast(part.state.offset);
         @memcpy(buffer[0..sz], src[off .. off + sz]);
     }
@@ -1760,7 +1796,7 @@ fn mime_mem_read(buffer: [*]u8, size: usize, nitems: usize, instream: ?*anyopaqu
 }
 
 fn mime_mem_seek(instream: ?*anyopaque, offset: curl_off_t, origin: c_int) callconv(.c) c_int {
-    const part: *curl_mimepart = @ptrCast(@alignCast(instream.?));
+    const part = asMimePart(instream);
     var new_off = offset;
     switch (origin) {
         1 => new_off += part.state.offset, // SEEK_CUR
@@ -1774,9 +1810,9 @@ fn mime_mem_seek(instream: ?*anyopaque, offset: curl_off_t, origin: c_int) callc
 }
 
 fn mime_mem_free(ptr: ?*anyopaque) callconv(.c) void {
-    const part: *curl_mimepart = @ptrCast(@alignCast(ptr.?));
+    const part = asMimePart(ptr);
     if (part.data) |d| {
-        mem.free(@ptrCast(d));
+        mem.freeTyped(d);
         part.data = null;
     }
 }
@@ -1790,7 +1826,7 @@ fn mime_open_file(part: *curl_mimepart) c_int {
 }
 
 fn mime_file_read(buffer: [*]u8, size: usize, nitems: usize, instream: ?*anyopaque) callconv(.c) usize {
-    const part: *curl_mimepart = @ptrCast(@alignCast(instream.?));
+    const part = asMimePart(instream);
     if (nitems == 0)
         return STOP_FILLING;
     if (mime_open_file(part) != 0)
@@ -1799,7 +1835,7 @@ fn mime_file_read(buffer: [*]u8, size: usize, nitems: usize, instream: ?*anyopaq
 }
 
 fn mime_file_seek(instream: ?*anyopaque, offset: curl_off_t, whence: c_int) callconv(.c) c_int {
-    const part: *curl_mimepart = @ptrCast(@alignCast(instream.?));
+    const part = asMimePart(instream);
     if (whence == SEEK_SET and offset == 0 and part.fp == null)
         return CURL_SEEKFUNC_OK;
     if (mime_open_file(part) != 0)
@@ -1811,13 +1847,13 @@ fn mime_file_seek(instream: ?*anyopaque, offset: curl_off_t, whence: c_int) call
 }
 
 fn mime_file_free(ptr: ?*anyopaque) callconv(.c) void {
-    const part: *curl_mimepart = @ptrCast(@alignCast(ptr.?));
+    const part = asMimePart(ptr);
     if (part.fp) |fp| {
         _ = fclose(fp);
         part.fp = null;
     }
     if (part.data) |d| {
-        mem.free(@ptrCast(d));
+        mem.freeTyped(d);
         part.data = null;
     }
 }
@@ -1914,7 +1950,7 @@ fn read_part_content(part: *curl_mimepart, buffer: [*]u8, bufsize: usize, hasrea
         }
         switch (part.kind) {
             MIMEKIND_MULTIPART => {
-                sz = mime_subparts_read(buffer, 1, read_size, part.arg, hasread);
+                sz = mime_subparts_read(buffer, 1, read_size, part.arg.mime, hasread);
             },
             MIMEKIND_FILE => {
                 if (part.fp != null and (part.flags & MIME_FILE_TRIED) != 0 and ferror(part.fp) != 0)
@@ -1928,7 +1964,7 @@ fn read_part_content(part: *curl_mimepart, buffer: [*]u8, bufsize: usize, hasrea
                             return STOP_FILLING;
                         hasread.* = true;
                     }
-                    sz = rf(buffer, 1, read_size, part.arg);
+                    sz = rf(buffer, 1, read_size, part.arg.raw);
                 }
             },
             else => {
@@ -1938,7 +1974,7 @@ fn read_part_content(part: *curl_mimepart, buffer: [*]u8, bufsize: usize, hasrea
                             return STOP_FILLING;
                         hasread.* = true;
                     }
-                    sz = rf(buffer, 1, read_size, part.arg);
+                    sz = rf(buffer, 1, read_size, part.arg.raw);
                 }
             },
         }
@@ -1964,10 +2000,10 @@ fn readback_part(part: *curl_mimepart, buffer: [*]u8, bufsize: usize, hasread: *
 
     while (rem_size != 0) {
         var sz: usize = 0;
-        const hdr: ?*curl_slist = @ptrCast(@alignCast(part.state.ptr));
+        const hdr: ?*curl_slist = part.state.ptr.slist;
         switch (part.state.state) {
             MIMESTATE_BEGIN => {
-                mimesetstate(
+                mimesetstateSlist(
                     &part.state,
                     if ((part.flags & MIME_BODY_ONLY) != 0) MIMESTATE_BODY else MIMESTATE_CURL,
                     part.curlheaders,
@@ -1977,22 +2013,22 @@ fn readback_part(part: *curl_mimepart, buffer: [*]u8, bufsize: usize, hasread: *
                 if (hdr == null) {
                     mimesetstate(&part.state, MIMESTATE_EOH, null);
                 } else if (match_header(hdr.?, "Content-Type", 12) != null) {
-                    mimesetstate(&part.state, MIMESTATE_USER, hdr.?.next);
+                    mimesetstateSlist(&part.state, MIMESTATE_USER, hdr.?.next);
                 } else {
                     const hdata = hdr.?.data.?;
                     sz = readback_bytes(&part.state, buf_ptr, rem_size, hdata, std.mem.len(hdata), "\r\n");
                     if (sz == 0)
-                        mimesetstate(&part.state, MIMESTATE_USER, hdr.?.next);
+                        mimesetstateSlist(&part.state, MIMESTATE_USER, hdr.?.next);
                 }
             },
             MIMESTATE_CURL => {
                 if (hdr == null) {
-                    mimesetstate(&part.state, MIMESTATE_USER, part.userheaders);
+                    mimesetstateSlist(&part.state, MIMESTATE_USER, part.userheaders);
                 } else {
                     const hdata = hdr.?.data.?;
                     sz = readback_bytes(&part.state, buf_ptr, rem_size, hdata, std.mem.len(hdata), "\r\n");
                     if (sz == 0)
-                        mimesetstate(&part.state, MIMESTATE_CURL, hdr.?.next);
+                        mimesetstateSlist(&part.state, MIMESTATE_CURL, hdr.?.next);
                 }
             },
             MIMESTATE_EOH => {
@@ -2041,8 +2077,8 @@ fn readback_part(part: *curl_mimepart, buffer: [*]u8, bufsize: usize, hasread: *
     return cursize;
 }
 
-fn mime_subparts_read(buffer: [*]u8, size: usize, nitems: usize, instream: ?*anyopaque, hasread: *bool) usize {
-    const mime: *curl_mime = @ptrCast(@alignCast(instream.?));
+fn mime_subparts_read(buffer: [*]u8, size: usize, nitems: usize, mime_opt: ?*curl_mime, hasread: *bool) usize {
+    const mime = mime_opt.?;
     _ = size;
     var cursize: usize = 0;
     var buf_ptr = buffer;
@@ -2050,26 +2086,26 @@ fn mime_subparts_read(buffer: [*]u8, size: usize, nitems: usize, instream: ?*any
 
     while (rem_size != 0) {
         var sz: usize = 0;
-        const part: ?*curl_mimepart = @ptrCast(@alignCast(mime.state.ptr));
+        const part: ?*curl_mimepart = mime.state.ptr.part;
         switch (mime.state.state) {
             MIMESTATE_BEGIN, MIMESTATE_BODY => {
-                mimesetstate(&mime.state, MIMESTATE_BOUNDARY1, mime.firstpart);
+                mimesetstatePart(&mime.state, MIMESTATE_BOUNDARY1, mime.firstpart);
                 mime.state.offset += 2;
             },
             MIMESTATE_BOUNDARY1 => {
                 sz = readback_bytes(&mime.state, buf_ptr, rem_size, "\r\n--", 4, "");
                 if (sz == 0)
-                    mimesetstate(&mime.state, MIMESTATE_BOUNDARY2, part);
+                    mimesetstatePart(&mime.state, MIMESTATE_BOUNDARY2, part);
             },
             MIMESTATE_BOUNDARY2 => {
-                const blen = std.mem.len(@as([*:0]const u8, @ptrCast(&mime.boundary)));
+                const blen = std.mem.len(@as([*:0]const u8, &mime.boundary));
                 if (part != null) {
                     sz = readback_bytes(&mime.state, buf_ptr, rem_size, &mime.boundary, blen, "\r\n");
                 } else {
                     sz = readback_bytes(&mime.state, buf_ptr, rem_size, &mime.boundary, blen, "--\r\n");
                 }
                 if (sz == 0) {
-                    mimesetstate(&mime.state, MIMESTATE_CONTENT, part);
+                    mimesetstatePart(&mime.state, MIMESTATE_CONTENT, part);
                 }
             },
             MIMESTATE_CONTENT => {
@@ -2083,7 +2119,7 @@ fn mime_subparts_read(buffer: [*]u8, size: usize, nitems: usize, instream: ?*any
                         return if (cursize != 0) cursize else sz;
                     },
                     0 => {
-                        mimesetstate(&mime.state, MIMESTATE_BOUNDARY1, part.?.nextpart);
+                        mimesetstatePart(&mime.state, MIMESTATE_BOUNDARY1, part.?.nextpart);
                     },
                     else => {},
                 }
@@ -2114,7 +2150,7 @@ fn mime_part_rewind(part: *curl_mimepart) c_int {
     if (part.state.state > targetstate) {
         res = CURL_SEEKFUNC_CANTSEEK;
         if (part.seekfunc) |sf| {
-            res = sf(part.arg, 0, SEEK_SET);
+            res = sf(part.arg.raw, 0, SEEK_SET);
             switch (res) {
                 CURL_SEEKFUNC_OK, CURL_SEEKFUNC_FAIL, CURL_SEEKFUNC_CANTSEEK => {},
                 -1 => res = CURL_SEEKFUNC_CANTSEEK,
@@ -2131,7 +2167,7 @@ fn mime_part_rewind(part: *curl_mimepart) c_int {
 }
 
 fn mime_subparts_seek(instream: ?*anyopaque, offset: curl_off_t, whence: c_int) callconv(.c) c_int {
-    const mime: *curl_mime = @ptrCast(@alignCast(instream.?));
+    const mime = asMimeOpt(instream).?;
     var result: c_int = CURL_SEEKFUNC_OK;
 
     if (whence != SEEK_SET or offset != 0)
@@ -2155,13 +2191,13 @@ fn mime_subparts_seek(instream: ?*anyopaque, offset: curl_off_t, whence: c_int) 
 
 fn cleanup_part_content(part: *curl_mimepart) void {
     if (part.freefunc) |ff| {
-        ff(part.arg);
+        ff(part.arg.raw);
     }
 
     part.readfunc = null;
     part.seekfunc = null;
     part.freefunc = null;
-    part.arg = @ptrCast(part);
+    part.arg = .{ .part = part };
     part.data = null;
     part.fp = null;
     part.datasize = 0;
@@ -2174,7 +2210,7 @@ fn cleanup_part_content(part: *curl_mimepart) void {
 }
 
 fn mime_subparts_free(ptr: ?*anyopaque) callconv(.c) void {
-    const mime_opt: ?*curl_mime = @ptrCast(@alignCast(ptr));
+    const mime_opt = asMimeOpt(ptr);
     if (mime_opt) |mime| {
         if (mime.parent) |parent| {
             parent.freefunc = null;
@@ -2183,14 +2219,14 @@ fn mime_subparts_free(ptr: ?*anyopaque) callconv(.c) void {
         while (mime.firstpart) |part| {
             mime.firstpart = part.nextpart;
             Curl_mime_cleanpart(part);
-            mem.free(part);
+            mem.destroy(part);
         }
-        mem.free(mime);
+        mem.destroy(mime);
     }
 }
 
 fn mime_subparts_unbind(ptr: ?*anyopaque) callconv(.c) void {
-    const mime_opt: ?*curl_mime = @ptrCast(@alignCast(ptr));
+    const mime_opt = asMimeOpt(ptr);
     if (mime_opt) |mime| {
         if (mime.parent) |parent| {
             parent.freefunc = null;
@@ -2207,15 +2243,15 @@ pub export fn Curl_mime_cleanpart(part_opt: ?*curl_mimepart) callconv(.c) void {
     if ((part.flags & MIME_USERHEADERS_OWNER) != 0)
         curl_slist_free_all(part.userheaders);
     if (part.mimetype) |p| {
-        mem.free(@ptrCast(p));
+        mem.freeTyped(p);
         part.mimetype = null;
     }
     if (part.name) |p| {
-        mem.free(@ptrCast(p));
+        mem.freeTyped(p);
         part.name = null;
     }
     if (part.filename) |p| {
-        mem.free(@ptrCast(p));
+        mem.freeTyped(p);
         part.filename = null;
     }
     Curl_mime_initpart(part);
@@ -2234,8 +2270,7 @@ fn mime_is_too_deep(part: *const curl_mimepart, call_depth_in: usize) bool {
         return true;
 
     if (part.kind == MIMEKIND_MULTIPART) {
-        if (part.arg) |a| {
-            const mime: *const curl_mime = @ptrCast(@alignCast(a));
+        if (part.arg.mime) |mime| {
             var s = mime.firstpart;
             while (s) |sub| : (s = sub.nextpart) {
                 if (mime_is_too_deep(sub, call_depth))
@@ -2246,12 +2281,14 @@ fn mime_is_too_deep(part: *const curl_mimepart, call_depth_in: usize) bool {
     return false;
 }
 
-fn mime_duppart(data: ?*anyopaque, dst: *curl_mimepart, src: *const curl_mimepart, call_depth_in: usize) CURLcode {
-    var res: CURLcode = CURLE_OK;
+fn mime_duppart_err(data: ?*anyopaque, dst: *curl_mimepart, src: *const curl_mimepart, call_depth_in: usize) error{ TooLarge, OutOfMemory, BadArgument, RewindFailed }!void {
     const call_depth = call_depth_in + 1;
     if (call_depth > MAX_MIME_LEVELS)
-        return CURLE_TOO_LARGE;
+        return error.TooLarge;
 
+    errdefer Curl_mime_cleanpart(dst);
+
+    var res: CURLcode = CURLE_OK;
     switch (src.kind) {
         MIMEKIND_NONE => {},
         MIMEKIND_DATA => {
@@ -2263,47 +2300,54 @@ fn mime_duppart(data: ?*anyopaque, dst: *curl_mimepart, src: *const curl_mimepar
                 res = CURLE_OK;
         },
         MIMEKIND_CALLBACK => {
-            res = curl_mime_data_cb(dst, src.datasize, src.readfunc, src.seekfunc, src.freefunc, src.arg);
+            res = curl_mime_data_cb(dst, src.datasize, src.readfunc, src.seekfunc, src.freefunc, src.arg.raw);
         },
         MIMEKIND_MULTIPART => {
-            const m = curl_mime_init(data);
-            res = if (m != null) curl_mime_subparts(dst, m) else CURLE_OUT_OF_MEMORY;
+            const m = curl_mime_init(data) orelse return error.OutOfMemory;
+            res = curl_mime_subparts(dst, m);
 
-            var s = if (src.arg) |a| @as(*curl_mime, @ptrCast(@alignCast(a))).firstpart else null;
+            var s = if (src.arg.mime) |sm| sm.firstpart else null;
             while (res == CURLE_OK and s != null) : (s = s.?.nextpart) {
-                const d = curl_mime_addpart(m);
-                res = if (d != null) mime_duppart(data, d.?, s.?, call_depth) else CURLE_OUT_OF_MEMORY;
+                const d = curl_mime_addpart(m) orelse return error.OutOfMemory;
+                res = mime_duppart(data, d, s.?, call_depth);
             }
         },
-        else => {
-            res = CURLE_BAD_FUNCTION_ARGUMENT;
-        },
+        else => return error.BadArgument,
+    }
+    if (res != CURLE_OK) {
+        return switch (res) {
+            CURLE_OUT_OF_MEMORY => error.OutOfMemory,
+            CURLE_TOO_LARGE => error.TooLarge,
+            CURLE_SEND_FAIL_REWIND => error.RewindFailed,
+            else => error.BadArgument,
+        };
     }
 
-    if (res == CURLE_OK and src.userheaders != null) {
-        const duphdrs = Curl_slist_duplicate(src.userheaders);
-        if (duphdrs == null) {
-            res = CURLE_OUT_OF_MEMORY;
-        } else {
-            res = curl_mime_headers(dst, duphdrs, 1);
-            if (res != CURLE_OK)
-                curl_slist_free_all(duphdrs);
-        }
+    if (src.userheaders != null) {
+        const duphdrs = Curl_slist_duplicate(src.userheaders) orelse return error.OutOfMemory;
+        errdefer curl_slist_free_all(duphdrs);
+        res = curl_mime_headers(dst, duphdrs, 1);
+        if (res != CURLE_OK)
+            return error.BadArgument;
     }
 
-    if (res == CURLE_OK) {
-        dst.encoder = src.encoder;
-        res = curl_mime_type(dst, src.mimetype);
-    }
-    if (res == CURLE_OK)
-        res = curl_mime_name(dst, src.name);
-    if (res == CURLE_OK)
-        res = curl_mime_filename(dst, src.filename);
+    dst.encoder = src.encoder;
+    if (curl_mime_type(dst, src.mimetype) != CURLE_OK)
+        return error.OutOfMemory;
+    if (curl_mime_name(dst, src.name) != CURLE_OK)
+        return error.OutOfMemory;
+    if (curl_mime_filename(dst, src.filename) != CURLE_OK)
+        return error.OutOfMemory;
+}
 
-    if (res != CURLE_OK)
-        Curl_mime_cleanpart(dst);
-
-    return res;
+fn mime_duppart(data: ?*anyopaque, dst: *curl_mimepart, src: *const curl_mimepart, call_depth_in: usize) CURLcode {
+    mime_duppart_err(data, dst, src, call_depth_in) catch |err| return switch (err) {
+        error.TooLarge => CURLE_TOO_LARGE,
+        error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+        error.RewindFailed => CURLE_SEND_FAIL_REWIND,
+        error.BadArgument => CURLE_BAD_FUNCTION_ARGUMENT,
+    };
+    return CURLE_OK;
 }
 
 pub export fn Curl_mime_duppart(data: ?*anyopaque, dst_opt: ?*curl_mimepart, src_opt: ?*const curl_mimepart) callconv(.c) CURLcode {
@@ -2316,9 +2360,9 @@ pub export fn Curl_mime_duppart(data: ?*anyopaque, dst_opt: ?*curl_mimepart, src
     return mime_duppart(data, dst, src, 0);
 }
 
-pub export fn curl_mime_init(easy: ?*anyopaque) callconv(.c) ?*curl_mime {
-    const raw = mem.malloc(@sizeOf(curl_mime)) orelse return null;
-    const mime: *curl_mime = @ptrCast(@alignCast(raw));
+fn mime_init_err(easy: ?*anyopaque) error{ OutOfMemory, RandFailed }!*curl_mime {
+    const mime = mem.alloc(curl_mime) orelse return error.OutOfMemory;
+    errdefer mem.destroy(mime);
 
     mime.parent = null;
     mime.firstpart = null;
@@ -2326,23 +2370,25 @@ pub export fn curl_mime_init(easy: ?*anyopaque) callconv(.c) ?*curl_mime {
 
     @memset(mime.boundary[0..24], '-');
     if (Curl_rand_alnum(easy, mime.boundary[24..].ptr, MIME_RAND_BOUNDARY_CHARS + 1) != CURLE_OK) {
-        mem.free(mime);
-        return null;
+        return error.RandFailed;
     }
     mimesetstate(&mime.state, MIMESTATE_BEGIN, null);
     return mime;
 }
 
+pub export fn curl_mime_init(easy: ?*anyopaque) callconv(.c) ?*curl_mime {
+    return mime_init_err(easy) catch null;
+}
+
 pub export fn Curl_mime_initpart(part: *curl_mimepart) callconv(.c) void {
-    @memset(@as([*]u8, @ptrCast(part))[0..@sizeOf(curl_mimepart)], 0);
+    part.* = std.mem.zeroes(curl_mimepart);
     part.lastreadstatus = 1;
     mimesetstate(&part.state, MIMESTATE_BEGIN, null);
 }
 
 pub export fn curl_mime_addpart(mime_opt: ?*curl_mime) callconv(.c) ?*curl_mimepart {
     const mime = mime_opt orelse return null;
-    const raw = mem.malloc(@sizeOf(curl_mimepart)) orelse return null;
-    const part: *curl_mimepart = @ptrCast(@alignCast(raw));
+    const part = mem.alloc(curl_mimepart) orelse return null;
 
     Curl_mime_initpart(part);
     part.parent = mime;
@@ -2360,7 +2406,7 @@ pub export fn curl_mime_addpart(mime_opt: ?*curl_mime) callconv(.c) ?*curl_mimep
 pub export fn curl_mime_name(part_opt: ?*curl_mimepart, name_opt: ?[*:0]const u8) callconv(.c) CURLcode {
     const part = part_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     if (part.name) |p| {
-        mem.free(@ptrCast(p));
+        mem.freeTyped(p);
         part.name = null;
     }
     if (name_opt) |name| {
@@ -2372,7 +2418,7 @@ pub export fn curl_mime_name(part_opt: ?*curl_mimepart, name_opt: ?[*:0]const u8
 pub export fn curl_mime_filename(part_opt: ?*curl_mimepart, filename_opt: ?[*:0]const u8) callconv(.c) CURLcode {
     const part = part_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     if (part.filename) |p| {
-        mem.free(@ptrCast(p));
+        mem.freeTyped(p);
         part.filename = null;
     }
     if (filename_opt) |filename| {
@@ -2381,24 +2427,19 @@ pub export fn curl_mime_filename(part_opt: ?*curl_mimepart, filename_opt: ?[*:0]
     return CURLE_OK;
 }
 
-pub export fn curl_mime_data(part_opt: ?*curl_mimepart, ptr_opt: ?[*]const u8, datasize_in: usize) callconv(.c) CURLcode {
+pub export fn curl_mime_data(part_opt: ?*curl_mimepart, ptr_opt: ?[*:0]const u8, datasize_in: usize) callconv(.c) CURLcode {
     const part = part_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     cleanup_part_content(part);
 
     if (ptr_opt) |ptr| {
         var datasize = datasize_in;
         if (datasize == CURL_ZERO_TERMINATED)
-            datasize = std.mem.len(@as([*:0]const u8, @ptrCast(ptr)));
+            datasize = std.mem.len(ptr);
 
         if (datasize >= @as(usize, @intCast(std.math.maxInt(curl_off_t))))
             return CURLE_OUT_OF_MEMORY;
 
-        const raw = mem.malloc(datasize + 1) orelse return CURLE_OUT_OF_MEMORY;
-        const data_buf: [*]u8 = @ptrCast(raw);
-        part.data = @ptrCast(data_buf);
-        if (datasize != 0)
-            @memcpy(data_buf[0..datasize], ptr[0..datasize]);
-        data_buf[datasize] = 0;
+        part.data = mem.memdup0(ptr, datasize) orelse return CURLE_OUT_OF_MEMORY;
         part.datasize = @intCast(datasize);
         part.readfunc = mime_mem_read;
         part.seekfunc = mime_mem_seek;
@@ -2410,41 +2451,45 @@ pub export fn curl_mime_data(part_opt: ?*curl_mimepart, ptr_opt: ?[*]const u8, d
     return CURLE_OK;
 }
 
+fn mime_filedata_err(part: *curl_mimepart, filename: [*:0]const u8) error{ ReadError, OutOfMemory, BadArgument }!void {
+    var filesize: curl_off_t = -1;
+    if (!mimeStatFile(filename, &filesize))
+        return error.ReadError;
+    part.datasize = filesize;
+
+    const d = mem.strdup(filename) orelse return error.OutOfMemory;
+    part.data = d;
+    part.readfunc = mime_file_read;
+    part.seekfunc = mime_file_seek;
+    part.freefunc = mime_file_free;
+    part.kind = MIMEKIND_FILE;
+    errdefer cleanup_part_content(part);
+
+    const base = strippath(filename) orelse return error.OutOfMemory;
+    defer mem.freeTyped(base);
+    const result = curl_mime_filename(part, base);
+    if (result != CURLE_OK)
+        return error.OutOfMemory;
+}
+
 pub export fn curl_mime_filedata(part_opt: ?*curl_mimepart, filename_opt: ?[*:0]const u8) callconv(.c) CURLcode {
     const part = part_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
-    var result: CURLcode = CURLE_OK;
-
     cleanup_part_content(part);
 
     if (filename_opt) |filename| {
-        var filesize: curl_off_t = -1;
-        if (!mimeStatFile(filename, &filesize))
-            return CURLE_READ_ERROR;
-        part.datasize = filesize;
-
-        const d = mem.strdup(filename) orelse return CURLE_OUT_OF_MEMORY;
-        part.data = d;
-        part.readfunc = mime_file_read;
-        part.seekfunc = mime_file_seek;
-        part.freefunc = mime_file_free;
-        part.kind = MIMEKIND_FILE;
-
-        const base = strippath(filename) orelse {
-            cleanup_part_content(part);
-            return CURLE_OUT_OF_MEMORY;
+        mime_filedata_err(part, filename) catch |err| return switch (err) {
+            error.ReadError => CURLE_READ_ERROR,
+            error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+            error.BadArgument => CURLE_BAD_FUNCTION_ARGUMENT,
         };
-        result = curl_mime_filename(part, base);
-        mem.free(@ptrCast(base));
-        if (result != CURLE_OK)
-            cleanup_part_content(part);
     }
-    return result;
+    return CURLE_OK;
 }
 
 pub export fn curl_mime_type(part_opt: ?*curl_mimepart, mimetype_opt: ?[*:0]const u8) callconv(.c) CURLcode {
     const part = part_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     if (part.mimetype) |p| {
-        mem.free(@ptrCast(p));
+        mem.freeTyped(p);
         part.mimetype = null;
     }
     if (mimetype_opt) |mimetype| {
@@ -2498,7 +2543,7 @@ pub export fn curl_mime_data_cb(
         part.readfunc = readfunc;
         part.seekfunc = seekfunc;
         part.freefunc = freefunc;
-        part.arg = arg;
+        part.arg = .{ .raw = arg };
         part.datasize = datasize;
         part.kind = MIMEKIND_CALLBACK;
     }
@@ -2509,7 +2554,7 @@ pub export fn curl_mime_data_cb(
 pub export fn Curl_mime_set_subparts(part_opt: ?*curl_mimepart, subparts_opt: ?*curl_mime, take_ownership: bool) callconv(.c) CURLcode {
     const part = part_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
 
-    if (part.kind == MIMEKIND_MULTIPART and part.arg == @as(?*anyopaque, @ptrCast(subparts_opt)))
+    if (part.kind == MIMEKIND_MULTIPART and part.arg.mime == subparts_opt)
         return CURLE_OK;
 
     cleanup_part_content(part);
@@ -2533,7 +2578,7 @@ pub export fn Curl_mime_set_subparts(part_opt: ?*curl_mimepart, subparts_opt: ?*
         subparts.parent = part;
         part.seekfunc = mime_subparts_seek;
         part.freefunc = if (take_ownership) mime_subparts_free else mime_subparts_unbind;
-        part.arg = subparts;
+        part.arg = .{ .mime = subparts };
         part.datasize = -1;
         part.kind = MIMEKIND_MULTIPART;
     }
@@ -2546,7 +2591,7 @@ pub export fn curl_mime_subparts(part: ?*curl_mimepart, subparts: ?*curl_mime) c
 }
 
 pub export fn Curl_mime_read(buffer: [*]u8, size: usize, nitems: usize, instream: ?*anyopaque) callconv(.c) usize {
-    const part: *curl_mimepart = @ptrCast(@alignCast(instream.?));
+    const part = asMimePart(instream);
     var hasread: bool = false;
     var ret: usize = 0;
     _ = size;
@@ -2566,7 +2611,7 @@ pub export fn Curl_mime_read(buffer: [*]u8, size: usize, nitems: usize, instream
 
 fn mime_size(part: *curl_mimepart) curl_off_t {
     if (part.kind == MIMEKIND_MULTIPART)
-        part.datasize = multipart_size(@ptrCast(@alignCast(part.arg)));
+        part.datasize = multipart_size(part.arg.mime);
 
     var size = part.datasize;
 
@@ -2595,7 +2640,7 @@ fn mime_size(part: *curl_mimepart) curl_off_t {
 
 fn multipart_size(mime_opt: ?*curl_mime) curl_off_t {
     const mime = mime_opt orelse return 0;
-    const blen = std.mem.len(@as([*:0]const u8, @ptrCast(&mime.boundary)));
+    const blen = std.mem.len(@as([*:0]const u8, &mime.boundary));
     const boundarysize: curl_off_t = @intCast(4 + blen + 2);
     var size: curl_off_t = boundarysize;
 
@@ -2618,7 +2663,7 @@ fn mime_add_header_str(slp: *?*curl_slist, hdr: ?[*:0]u8) CURLcode {
         slp.* = s;
         return CURLE_OK;
     }
-    mem.free(@ptrCast(h));
+    mem.freeTyped(h);
     return CURLE_OUT_OF_MEMORY;
 }
 
@@ -2801,9 +2846,9 @@ fn mime_prepare_headers(
     }
 
     if (part.kind == MIMEKIND_MULTIPART) {
-        mime = @ptrCast(@alignCast(part.arg));
+        mime = part.arg.mime;
         if (mime) |m|
-            boundary = @ptrCast(&m.boundary);
+            boundary = &m.boundary;
     } else if (contenttype != null and customct == null and
         content_type_match(contenttype, "text/plain", 10) and
         (strategy == MIMESTRATEGY_MAIL or part.filename == null))
@@ -2836,15 +2881,14 @@ fn mime_prepare_headers(
                 }
             }
             var name: ?[*:0]u8 = null;
+            defer mem.freeTyped(name);
             var filename: ?[*:0]u8 = null;
+            defer mem.freeTyped(filename);
             if (part.name) |pname| {
                 name = escape_string(mime_formescape, pname, strategy) orelse return CURLE_OUT_OF_MEMORY;
             }
             if (part.filename) |pfn| {
-                filename = escape_string(mime_formescape, pfn, strategy) orelse {
-                    if (name) |n| mem.free(@ptrCast(n));
-                    return CURLE_OUT_OF_MEMORY;
-                };
+                filename = escape_string(mime_formescape, pfn, strategy) orelse return CURLE_OUT_OF_MEMORY;
             }
             const name_pre: [*:0]const u8 = if (name != null) "; name=\"" else "";
             const name_val: [*:0]const u8 = name orelse "";
@@ -2857,8 +2901,6 @@ fn mime_prepare_headers(
                 &part.curlheaders,
                 curl_maprintf("Content-Disposition: %s%s%s%s%s%s%s", disposition.?, name_pre, name_val, name_suf, fn_pre, fn_val, fn_suf),
             );
-            if (name) |n| mem.free(@ptrCast(n));
-            if (filename) |f| mem.free(@ptrCast(f));
             if (result != CURLE_OK)
                 return result;
         }
@@ -2884,7 +2926,7 @@ fn mime_prepare_headers(
     }
 
     if (part.state.state == MIMESTATE_CURL) {
-        mimesetstate(&part.state, MIMESTATE_CURL, part.curlheaders);
+        mimesetstateSlist(&part.state, MIMESTATE_CURL, part.curlheaders);
     }
 
     if (part.kind == MIMEKIND_MULTIPART) {
@@ -2953,7 +2995,7 @@ pub const Curl_crtype = extern struct {
 pub const Curl_creader = extern struct {
     crt: *const Curl_crtype,
     next: ?*Curl_creader,
-    ctx: ?*anyopaque,
+    ctx: ?*cr_mime_ctx,
     phase: c_uint,
 };
 
@@ -2981,14 +3023,14 @@ extern fn Curl_xfer_pause_send(data: ?*anyopaque, enable: bool) callconv(.c) CUR
 
 fn cr_mime_init(data: ?*anyopaque, reader: *Curl_creader) callconv(.c) CURLcode {
     _ = data;
-    const ctx: *cr_mime_ctx = @ptrCast(@alignCast(reader.ctx.?));
+    const ctx = reader.ctx.?;
     io_buffers.Curl_bufq_init2(&ctx.tempbuf, 1024, 1, io_buffers.BUFQ_OPT_NO_SPARES);
     return CURLE_OK;
 }
 
 fn cr_mime_close(data: ?*anyopaque, reader: *Curl_creader) callconv(.c) void {
     _ = data;
-    const ctx: *cr_mime_ctx = @ptrCast(@alignCast(reader.ctx.?));
+    const ctx = reader.ctx.?;
     io_buffers.Curl_bufq_free(&ctx.tempbuf);
 }
 
@@ -2999,7 +3041,7 @@ const cr_mime_slurp_ctx = struct {
 
 fn cr_mime_read_cb(reader_ctx: ?*anyopaque, buf: [*]u8, blen: usize, pnread: *usize) callconv(.c) CURLcode {
     const sctx: *cr_mime_slurp_ctx = @ptrCast(@alignCast(reader_ctx.?));
-    const ctx: *cr_mime_ctx = @ptrCast(@alignCast(sctx.reader.ctx.?));
+    const ctx = sctx.reader.ctx.?;
     const data = sctx.data;
     pnread.* = 0;
 
@@ -3040,7 +3082,7 @@ fn cr_mime_read(
     nread: *usize,
     eos: *bool,
 ) callconv(.c) CURLcode {
-    const ctx: *cr_mime_ctx = @ptrCast(@alignCast(reader.ctx.?));
+    const ctx = reader.ctx.?;
     nread.* = 0;
     eos.* = false;
 
@@ -3089,13 +3131,13 @@ fn cr_mime_read(
 
 fn cr_mime_needs_rewind(data: ?*anyopaque, reader: *Curl_creader) callconv(.c) bool {
     _ = data;
-    const ctx: *cr_mime_ctx = @ptrCast(@alignCast(reader.ctx.?));
+    const ctx = reader.ctx.?;
     return ctx.part.state.state != MIMESTATE_BEGIN;
 }
 
 fn cr_mime_total_length(data: ?*anyopaque, reader: *Curl_creader) callconv(.c) curl_off_t {
     _ = data;
-    const ctx: *cr_mime_ctx = @ptrCast(@alignCast(reader.ctx.?));
+    const ctx = reader.ctx.?;
     return ctx.total_len;
 }
 
@@ -3104,8 +3146,7 @@ fn mime_unpause(part_opt: ?*curl_mimepart) void {
     if (part.lastreadstatus == CURL_READFUNC_PAUSE)
         part.lastreadstatus = 1;
     if (part.kind == MIMEKIND_MULTIPART) {
-        if (part.arg) |arg| {
-            const mime: *curl_mime = @ptrCast(@alignCast(arg));
+        if (part.arg.mime) |mime| {
             var subpart = mime.firstpart;
             while (subpart) |sp| : (subpart = sp.nextpart) {
                 mime_unpause(sp);
@@ -3115,7 +3156,7 @@ fn mime_unpause(part_opt: ?*curl_mimepart) void {
 }
 
 fn cr_mime_resume_from(data: ?*anyopaque, reader: *Curl_creader, offset: curl_off_t) callconv(.c) CURLcode {
-    const ctx: *cr_mime_ctx = @ptrCast(@alignCast(reader.ctx.?));
+    const ctx = reader.ctx.?;
     if (offset > 0) {
         var passed: curl_off_t = 0;
         var scratch: [4 * 1024]u8 = undefined;
@@ -3144,7 +3185,7 @@ fn cr_mime_resume_from(data: ?*anyopaque, reader: *Curl_creader, offset: curl_of
 }
 
 fn cr_mime_cntrl(data: ?*anyopaque, reader: *Curl_creader, opcode: c_uint) callconv(.c) CURLcode {
-    const ctx: *cr_mime_ctx = @ptrCast(@alignCast(reader.ctx.?));
+    const ctx = reader.ctx.?;
     switch (opcode) {
         CURL_CRCNTRL_REWIND => {
             const res = mime_part_rewind(ctx.part);
@@ -3173,7 +3214,7 @@ fn cr_mime_cntrl(data: ?*anyopaque, reader: *Curl_creader, opcode: c_uint) callc
 
 fn cr_mime_is_paused(data: ?*anyopaque, reader: *Curl_creader) callconv(.c) bool {
     _ = data;
-    const ctx: *cr_mime_ctx = @ptrCast(@alignCast(reader.ctx.?));
+    const ctx = reader.ctx.?;
     return ctx.part.lastreadstatus == CURL_READFUNC_PAUSE;
 }
 
@@ -3197,21 +3238,27 @@ const cr_mime: Curl_crtype = .{
     .creader_size = @sizeOf(cr_mime_ctx),
 };
 
-pub export fn Curl_creader_set_mime(data: ?*anyopaque, part: *curl_mimepart) callconv(.c) CURLcode {
+fn creader_set_mime_err(data: ?*anyopaque, part: *curl_mimepart) error{ CreaderError, RewindFailed }!CURLcode {
     var r: ?*Curl_creader = null;
-    var result = Curl_creader_create(&r, data, &cr_mime, CURL_CR_CLIENT);
-    if (result != CURLE_OK)
-        return result;
-    const ctx: *cr_mime_ctx = @ptrCast(@alignCast(r.?.ctx.?));
+    const create_res = Curl_creader_create(&r, data, &cr_mime, CURL_CR_CLIENT);
+    if (create_res != CURLE_OK)
+        return create_res;
+    errdefer Curl_creader_free(data, r.?);
+    const ctx = r.?.ctx.?;
     ctx.part = part;
     if (mime_part_rewind(ctx.part) != CURL_SEEKFUNC_OK) {
-        Curl_creader_free(data, r.?);
-        return CURLE_SEND_FAIL_REWIND;
+        return error.RewindFailed;
     }
     ctx.total_len = mime_size(ctx.part);
 
-    result = Curl_creader_set(data, r.?);
-    return result;
+    return Curl_creader_set(data, r.?);
+}
+
+pub export fn Curl_creader_set_mime(data: ?*anyopaque, part: *curl_mimepart) callconv(.c) CURLcode {
+    return creader_set_mime_err(data, part) catch |err| switch (err) {
+        error.RewindFailed => CURLE_SEND_FAIL_REWIND,
+        error.CreaderError => CURLE_READ_ERROR,
+    };
 }
 
 // ============================================================================
