@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const mem = @import("mem.zig");
 const primitives = @import("primitives.zig");
 const containers = @import("containers.zig");
+const io_buffers = @import("io_buffers.zig");
 const curlx_time_net = @import("curlx_time_net.zig");
 const os_leaf = @import("os_leaf.zig");
 
@@ -761,8 +762,8 @@ pub export fn curl_easy_option_by_id(id: c_uint) callconv(.c) ?*const curl_easyo
 pub export fn curl_easy_option_next(prev: ?*const curl_easyoption) callconv(.c) ?*const curl_easyoption {
     if (prev) |p| {
         if (p.name != null) {
-            const mp: [*]const curl_easyoption = @ptrCast(p);
-            const next = &mp[1];
+            const idx = (@intFromPtr(p) - @intFromPtr(&Curl_easyopts[0])) / @sizeOf(curl_easyoption);
+            const next = &Curl_easyopts[idx + 1];
             if (next.name != null)
                 return next;
         }
@@ -780,15 +781,7 @@ pub const H1_PARSE_OPT_NONE: c_int = 0;
 pub const H1_PARSE_OPT_STRICT: c_int = 1 << 0;
 const H1_MAX_URL_LEN: usize = 8 * 1024;
 
-pub const dynhds = extern struct {
-    hds: ?*anyopaque,
-    hds_len: usize,
-    hds_allc: usize,
-    max_entries: usize,
-    strs_len: usize,
-    max_strs_size: usize,
-    opts: c_int,
-};
+pub const dynhds = io_buffers.dynhds;
 
 pub const httpreq = extern struct {
     headers: dynhds,
@@ -797,6 +790,12 @@ pub const httpreq = extern struct {
     authority: ?[*:0]u8,
     path: ?[*:0]u8,
     method: [1]u8,
+
+    pub inline fn methodZ(self: *const httpreq) [*:0]const u8 {
+        return @ptrCast(&self.method[0]);
+    }
+
+    pub const methodPtr = methodZ;
 };
 
 pub const h1_req_parser = extern struct {
@@ -1087,8 +1086,7 @@ pub export fn Curl_h1_req_write_head(
 ) callconv(.c) CURLcode {
     if (!in_libcurl) return CURLE_NOT_BUILT_IN;
 
-    const method_z: [*:0]const u8 = @ptrCast(&req.method[0]);
-    var result = containers.curlx_dyn_add(dbuf, method_z);
+    var result = containers.curlx_dyn_add(dbuf, req.methodZ());
     if (result != CURLE_OK) return result;
     result = containers.curlx_dyn_addn(dbuf, " ", 1);
     if (result != CURLE_OK) return result;
@@ -1205,7 +1203,7 @@ pub export fn capsule_encap_udp_hdr(hdr: [*]u8, hdrlen: usize, payload_len: usiz
 
 pub export fn Curl_capsule_encap_udp_datagram(
     q: *anyopaque,
-    buf: *const anyopaque,
+    buf: [*]const u8,
     blen: usize,
 ) callconv(.c) CURLcode {
     if (!in_libcurl) return CURLE_NOT_BUILT_IN;
@@ -1221,8 +1219,7 @@ pub export fn Curl_capsule_encap_udp_datagram(
     if (result == CURLE_OK and nwritten != hdr_len)
         return CURLE_WRITE_ERROR;
     if (result == CURLE_OK) {
-        const buf_bytes: [*]const u8 = @ptrCast(buf);
-        result = Curl_bufq_write(q, buf_bytes, blen, &nwritten);
+        result = Curl_bufq_write(q, buf, blen, &nwritten);
         if (result == CURLE_OK and nwritten != blen)
             return CURLE_WRITE_ERROR;
     }
@@ -1380,6 +1377,13 @@ pub const Curl_creds = extern struct {
 
 extern fn Curl_trc_multi(data: ?*anyopaque, fmt: [*:0]const u8, ...) callconv(.c) void;
 
+inline fn copyCredField(dst: [*]u8, src: ?[*:0]const u8, len: usize) [*:0]const u8 {
+    if (len > 0) {
+        @memcpy(dst[0 .. len + 1], src.?[0 .. len + 1]);
+    }
+    return dst[0..len :0].ptr;
+}
+
 pub export fn Curl_creds_create(
     user: ?[*:0]const u8,
     passwd: ?[*:0]const u8,
@@ -1423,30 +1427,20 @@ pub export fn Curl_creds_create(
     c.refcount = 1;
     c.source = source;
 
-    const buf_base: [*]u8 = @as([*]u8, @ptrCast(c)) + @offsetOf(Curl_creds, "buf");
-    c.user = @ptrCast(buf_base);
-    if (ulen > 0)
-        @memcpy(buf_base[0 .. ulen + 1], user.?[0 .. ulen + 1]);
+    const buf_base: [*]u8 = raw + @offsetOf(Curl_creds, "buf");
+    c.user = copyCredField(buf_base, user, ulen);
 
     const passwd_ptr = buf_base + ulen + 1;
-    c.passwd = @ptrCast(passwd_ptr);
-    if (plen > 0)
-        @memcpy(passwd_ptr[0 .. plen + 1], passwd.?[0 .. plen + 1]);
+    c.passwd = copyCredField(passwd_ptr, passwd, plen);
 
     const oauth_ptr = passwd_ptr + plen + 1;
-    c.oauth_bearer = @ptrCast(oauth_ptr);
-    if (olen > 0)
-        @memcpy(oauth_ptr[0 .. olen + 1], oauth_bearer.?[0 .. olen + 1]);
+    c.oauth_bearer = copyCredField(oauth_ptr, oauth_bearer, olen);
 
     const authzid_ptr = oauth_ptr + olen + 1;
-    c.sasl_authzid = @ptrCast(authzid_ptr);
-    if (salen > 0)
-        @memcpy(authzid_ptr[0 .. salen + 1], sasl_authzid.?[0 .. salen + 1]);
+    c.sasl_authzid = copyCredField(authzid_ptr, sasl_authzid, salen);
 
     const service_ptr = authzid_ptr + salen + 1;
-    c.sasl_service = @ptrCast(service_ptr);
-    if (sslen > 0)
-        @memcpy(service_ptr[0 .. sslen + 1], sasl_service.?[0 .. sslen + 1]);
+    c.sasl_service = copyCredField(service_ptr, sasl_service, sslen);
 
     pcreds.* = c;
     return CURLE_OK;
@@ -1495,9 +1489,9 @@ pub export fn Curl_creds_unlink(pcreds_opt: ?*?*Curl_creds) callconv(.c) void {
         if (creds.refcount > 0)
             creds.refcount -= 1;
         if (creds.refcount == 0) {
-            const raw_bytes: [*]u8 = @ptrCast(creds);
-            std.crypto.secureZero(u8, raw_bytes[0 .. @sizeOf(Curl_creds) + creds.bufsize]);
-            mem.free(creds);
+            const total_len = @sizeOf(Curl_creds) + creds.bufsize;
+            mem.secureZero(creds, total_len);
+            mem.freeSized(creds, total_len);
         }
     }
 }
@@ -1761,10 +1755,11 @@ fn dirslash(path: [*:0]const u8) ?[*:0]u8 {
         @memcpy(out[0..n], slice[0..n]);
         out[n] = pathsep;
         out[n + 1] = 0;
+        return out[0 .. n + 1 :0].ptr;
     } else {
         out[0] = 0;
+        return out[0..0 :0].ptr;
     }
-    return @ptrCast(out);
 }
 
 const fopen_win32 = struct {
@@ -1825,9 +1820,8 @@ const fopen_posix = struct {
     }
 };
 
-fn buildTempstore(dir: [*:0]const u8, randbuf: [*:0]const u8) ?[*:0]u8 {
+fn buildTempstore(dir: [*:0]const u8, rand_slice: []const u8) ?[*:0]u8 {
     const dir_slice = std.mem.span(dir);
-    const rand_slice = std.mem.span(randbuf);
     const suffix = ".tmp";
     const total = dir_slice.len + rand_slice.len + suffix.len;
     const out = mem.malloc(total + 1) orelse return null;
@@ -1835,7 +1829,91 @@ fn buildTempstore(dir: [*:0]const u8, randbuf: [*:0]const u8) ?[*:0]u8 {
     @memcpy(out[dir_slice.len .. dir_slice.len + rand_slice.len], rand_slice);
     @memcpy(out[dir_slice.len + rand_slice.len .. total], suffix);
     out[total] = 0;
-    return @ptrCast(out);
+    return out[0..total :0].ptr;
+}
+
+fn fopenWin32Impl(
+    data: ?*anyopaque,
+    filename: [*:0]const u8,
+    fh: *?*anyopaque,
+    tempname: *?[*:0]u8,
+) error{ OutOfMemory, WriteError }!CURLcode {
+    var randbuf: [41]u8 = undefined;
+    fh.* = null;
+
+    const rrc = Curl_rand_alnum(data, &randbuf, randbuf.len);
+    if (rrc != CURLE_OK) return rrc;
+
+    const dir = dirslash(filename) orelse return error.OutOfMemory;
+    defer mem.free(dir);
+    const tempstore = buildTempstore(dir, std.mem.sliceTo(&randbuf, 0)) orelse return error.OutOfMemory;
+    errdefer mem.free(tempstore);
+
+    const fd = os_leaf.win32.curlx_win32_open(
+        tempstore,
+        fopen_win32.O_WRONLY | fopen_win32.O_CREAT | fopen_win32.O_EXCL,
+        fopen_win32.S_IREAD | fopen_win32.S_IWRITE,
+    );
+    if (fd == -1) return error.WriteError;
+    errdefer {
+        _ = fopen_win32._close(fd);
+        _ = fopen_win32._unlink(tempstore);
+    }
+
+    fh.* = fopen_win32._fdopen(fd, "w");
+    if (fh.* == null) return error.WriteError;
+
+    tempname.* = tempstore;
+    return CURLE_OK;
+}
+
+fn fopenPosixImpl(
+    data: ?*anyopaque,
+    filename: [*:0]const u8,
+    fh: *?*anyopaque,
+    tempname: *?[*:0]u8,
+) error{ OutOfMemory, WriteError }!CURLcode {
+    fh.* = fopen_posix.fopen(filename, "w");
+    if (fh.* == null) return error.WriteError;
+    var sb: fopen_posix.FstatInfo = undefined;
+    const fno = fopen_posix.fileno(fh.*);
+    if (!fopen_posix.getFstat(fno, &sb) or (sb.mode & 0o170000) != 0o100000) {
+        return CURLE_OK;
+    }
+    _ = fopen_posix.fclose(fh.*);
+    fh.* = null;
+
+    var randbuf: [41]u8 = undefined;
+    const rrc = Curl_rand_alnum(data, &randbuf, randbuf.len);
+    if (rrc != CURLE_OK) return rrc;
+
+    const dir = dirslash(filename) orelse return error.OutOfMemory;
+    defer mem.free(dir);
+    const tempstore = buildTempstore(dir, std.mem.sliceTo(&randbuf, 0)) orelse return error.OutOfMemory;
+    errdefer mem.free(tempstore);
+
+    const o_wronly: c_int = @bitCast(std.c.O{ .ACCMODE = .WRONLY });
+    const o_creat: c_int = @bitCast(std.c.O{ .CREAT = true });
+    const o_excl: c_int = @bitCast(std.c.O{ .EXCL = true });
+    const fd = fopen_posix.open(tempstore, o_wronly | o_creat | o_excl, @as(c_uint, 0o600));
+    if (fd == -1) return error.WriteError;
+    errdefer {
+        _ = fopen_posix.close(fd);
+        _ = fopen_posix.unlink(tempstore);
+    }
+
+    var nsb: fopen_posix.FstatInfo = undefined;
+    if (fopen_posix.getFstat(fd, &nsb) and nsb.uid == sb.uid and nsb.gid == sb.gid) {
+        if (fopen_posix.fchmod(fd, @intCast(sb.mode)) == -1) {
+            return error.WriteError;
+        }
+    }
+
+    fh.* = fopen_posix.fdopen(fd, "w");
+    if (fh.* == null) return error.WriteError;
+
+    tempname.* = tempstore;
+    return CURLE_OK;
 }
 
 pub export fn Curl_fopen(
@@ -1844,93 +1922,17 @@ pub export fn Curl_fopen(
     fh: *?*anyopaque,
     tempname: *?[*:0]u8,
 ) callconv(.c) CURLcode {
-    var result: CURLcode = CURLE_WRITE_ERROR;
-    var randbuf: [41]u8 = undefined;
-    var tempstore: ?[*:0]u8 = null;
-    var fd: c_int = -1;
-
     tempname.* = null;
-
     if (builtin.os.tag == .windows) {
-        fh.* = null;
-
-        result = Curl_rand_alnum(data, &randbuf, randbuf.len);
-        if (result != CURLE_OK) return result;
-
-        if (dirslash(filename)) |dir| {
-            tempstore = buildTempstore(dir, @ptrCast(&randbuf));
-            mem.free(dir);
-        }
-        if (tempstore == null) return CURLE_OUT_OF_MEMORY;
-
-        result = CURLE_WRITE_ERROR;
-        fd = os_leaf.win32.curlx_win32_open(
-            tempstore,
-            fopen_win32.O_WRONLY | fopen_win32.O_CREAT | fopen_win32.O_EXCL,
-            fopen_win32.S_IREAD | fopen_win32.S_IWRITE,
-        );
-        if (fd == -1) {
-            mem.free(tempstore);
-            return result;
-        }
-        fh.* = fopen_win32._fdopen(fd, "w");
-        if (fh.* == null) {
-            _ = fopen_win32._close(fd);
-            _ = fopen_win32._unlink(tempstore.?);
-            mem.free(tempstore);
-            return result;
-        }
-        tempname.* = tempstore;
-        return CURLE_OK;
+        return fopenWin32Impl(data, filename, fh, tempname) catch |err| switch (err) {
+            error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+            error.WriteError => CURLE_WRITE_ERROR,
+        };
     } else {
-        fh.* = fopen_posix.fopen(filename, "w");
-        if (fh.* == null) return CURLE_WRITE_ERROR;
-        var sb: fopen_posix.FstatInfo = undefined;
-        const fno = fopen_posix.fileno(fh.*);
-        if (!fopen_posix.getFstat(fno, &sb) or (sb.mode & 0o170000) != 0o100000) {
-            return CURLE_OK;
-        }
-        _ = fopen_posix.fclose(fh.*);
-        fh.* = null;
-
-        result = Curl_rand_alnum(data, &randbuf, randbuf.len);
-        if (result != CURLE_OK) return result;
-
-        if (dirslash(filename)) |dir| {
-            tempstore = buildTempstore(dir, @ptrCast(&randbuf));
-            mem.free(dir);
-        }
-        if (tempstore == null) return CURLE_OUT_OF_MEMORY;
-
-        result = CURLE_WRITE_ERROR;
-        const o_wronly: c_int = @bitCast(std.c.O{ .ACCMODE = .WRONLY });
-        const o_creat: c_int = @bitCast(std.c.O{ .CREAT = true });
-        const o_excl: c_int = @bitCast(std.c.O{ .EXCL = true });
-        fd = fopen_posix.open(tempstore.?, o_wronly | o_creat | o_excl, @as(c_uint, 0o600));
-        if (fd == -1) {
-            mem.free(tempstore);
-            return result;
-        }
-
-        var nsb: fopen_posix.FstatInfo = undefined;
-        if (fopen_posix.getFstat(fd, &nsb) and nsb.uid == sb.uid and nsb.gid == sb.gid) {
-            if (fopen_posix.fchmod(fd, @intCast(sb.mode)) == -1) {
-                _ = fopen_posix.close(fd);
-                _ = fopen_posix.unlink(tempstore.?);
-                mem.free(tempstore);
-                return result;
-            }
-        }
-
-        fh.* = fopen_posix.fdopen(fd, "w");
-        if (fh.* == null) {
-            _ = fopen_posix.close(fd);
-            _ = fopen_posix.unlink(tempstore.?);
-            mem.free(tempstore);
-            return result;
-        }
-        tempname.* = tempstore;
-        return CURLE_OK;
+        return fopenPosixImpl(data, filename, fh, tempname) catch |err| switch (err) {
+            error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+            error.WriteError => CURLE_WRITE_ERROR,
+        };
     }
 }
 
@@ -1992,7 +1994,7 @@ test "Curl_h1_req_parse_read parses HTTP/1.1 request and serializes head" {
     try std.testing.expect(p.req != null);
 
     const req = p.req.?;
-    const method_str = std.mem.span(@as([*:0]const u8, @ptrCast(&req.method[0])));
+    const method_str = std.mem.span(req.methodZ());
     try std.testing.expectEqualStrings("GET", method_str);
     try std.testing.expect(req.path != null);
     try std.testing.expectEqualStrings("/index.html?a=1", std.mem.span(req.path.?));

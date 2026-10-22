@@ -714,6 +714,57 @@ inline fn sztouz(v: isize, out: *usize) bool {
     return true;
 }
 
+inline fn cfFromUserp(userp: ?*anyopaque) *Curl_cfilter {
+    return @ptrCast(@alignCast(userp.?));
+}
+
+inline fn cfH2CtxOpt(cf: *const Curl_cfilter) ?*cf_h2_ctx {
+    const raw = cf.ctx orelse return null;
+    return @ptrCast(@alignCast(raw));
+}
+
+inline fn cfH2Ctx(cf: *const Curl_cfilter) *cf_h2_ctx {
+    return cfH2CtxOpt(cf).?;
+}
+
+inline fn cfH2ProxyCtxOpt(cf: *const Curl_cfilter) ?*cf_h2_proxy_ctx {
+    const raw = cf.ctx orelse return null;
+    return @ptrCast(@alignCast(raw));
+}
+
+inline fn cfH2ProxyCtx(cf: *const Curl_cfilter) *cf_h2_proxy_ctx {
+    return cfH2ProxyCtxOpt(cf).?;
+}
+
+inline fn streamCtxFromRaw(raw_opt: ?*anyopaque) ?*h2_stream_ctx {
+    const raw = raw_opt orelse return null;
+    return @ptrCast(@alignCast(raw));
+}
+
+inline fn tunnelStreamUserData(session: ?*nghttp2_session, stream_id: i32) ?*tunnel_stream {
+    const raw = nghttp2_session_get_stream_user_data(session, stream_id) orelse return null;
+    return @ptrCast(@alignCast(raw));
+}
+
+inline fn pollsetTyped(ps: *easy_pollset) *headers_sock.EasyPollset {
+    return @ptrCast(@alignCast(ps));
+}
+
+inline fn queryStrOut(pres2: ?*anyopaque) ?*?[*:0]const u8 {
+    const raw = pres2 orelse return null;
+    return @ptrCast(@alignCast(raw));
+}
+
+fn formatFrameTrace(frame: *const nghttp2_frame, buffer: *[256]u8) [*:0]const u8 {
+    const len = Curl_nghttp2_fr_print(frame, buffer, buffer.len - 1);
+    const ulen: usize = if (len >= 0 and @as(usize, @intCast(len)) < buffer.len)
+        @intCast(len)
+    else
+        buffer.len - 1;
+    buffer[ulen] = 0;
+    return buffer[0..ulen :0].ptr;
+}
+
 // ============================================================================
 // 1. lib/http2.c — HTTP/2 Direct Filter, Push Headers & Allocators
 // ============================================================================
@@ -821,7 +872,7 @@ pub fn pushheaderByNameImpl(h_opt: ?*curl_pushheaders, name_opt: ?[*:0]const u8)
         const entry = hdrs[i];
         const entry_slice = std.mem.span(entry);
         if (entry_slice.len > len and std.mem.eql(u8, entry_slice[0..len], name_slice) and entry_slice[len] == ':') {
-            return @ptrCast(entry + len + 1);
+            return entry + len + 1;
         }
     }
     return null;
@@ -839,7 +890,7 @@ pub export fn curl_pushheader_byname(h: ?*curl_pushheaders, header: ?[*:0]const 
 
 pub fn Curl_nghttp2_malloc(size: usize, user_data: ?*anyopaque) callconv(.c) ?*anyopaque {
     _ = user_data;
-    return if (mem.malloc(size)) |p| @ptrCast(p) else null;
+    return mem.toRawPtr(mem.malloc(size));
 }
 
 pub fn Curl_nghttp2_free(ptr: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) void {
@@ -849,12 +900,12 @@ pub fn Curl_nghttp2_free(ptr: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) 
 
 pub fn Curl_nghttp2_calloc(nmemb: usize, size: usize, user_data: ?*anyopaque) callconv(.c) ?*anyopaque {
     _ = user_data;
-    return if (mem.calloc(nmemb, size)) |p| @ptrCast(p) else null;
+    return mem.toRawPtr(mem.calloc(nmemb, size));
 }
 
 pub fn Curl_nghttp2_realloc(ptr: ?*anyopaque, size: usize, user_data: ?*anyopaque) callconv(.c) ?*anyopaque {
     _ = user_data;
-    return if (mem.realloc(ptr, size)) |p| @ptrCast(p) else null;
+    return mem.toRawPtr(mem.realloc(ptr, size));
 }
 
 pub fn Curl_nghttp2_fr_print(
@@ -951,7 +1002,7 @@ pub fn Curl_nghttp2_fr_print(
                 blen,
                 "FRAME[GOAWAY, error=%u, reason='%s', last_stream=%d]",
                 frame.goaway.error_code,
-                @as([*:0]const u8, @ptrCast(&scratch)),
+                scratch[0..len :0].ptr,
                 frame.goaway.last_stream_id,
             );
         },
@@ -982,7 +1033,7 @@ fn free_push_headers(stream: *h2_stream_ctx) void {
         while (i < stream.push_headers_used) : (i += 1) {
             mem.free(hdrs[i]);
         }
-        mem.free(@ptrCast(hdrs));
+        mem.freeTyped(hdrs);
         stream.push_headers = null;
     }
     stream.push_headers_used = 0;
@@ -997,13 +1048,12 @@ fn h2_stream_ctx_free(stream: *h2_stream_ctx) void {
     stream.id = -1;
     stream.mid = std.math.maxInt(u32);
     stream.xfer_id = -1;
-    mem.free(stream);
+    mem.destroy(stream);
 }
 
 fn h2_stream_hash_free(id: u32, stream_ptr: ?*anyopaque) callconv(.c) void {
     _ = id;
-    if (stream_ptr) |raw| {
-        const stream: *h2_stream_ctx = @ptrCast(@alignCast(raw));
+    if (streamCtxFromRaw(stream_ptr)) |stream| {
         h2_stream_ctx_free(stream);
     }
 }
@@ -1032,7 +1082,7 @@ fn cf_h2_ctx_free(ctx_opt: ?*cf_h2_ctx) void {
         Curl_u32_ptrset_clear(&ctx.streams);
         ctx.* = std.mem.zeroes(cf_h2_ctx);
     }
-    mem.free(ctx);
+    mem.destroy(ctx);
 }
 
 fn cf_h2_initial_win_size(data: ?*Curl_easy) u32 {
@@ -1086,13 +1136,11 @@ fn cf_h2_update_settings(ctx: *cf_h2_ctx, initial_win_size: u32) CURLcode {
 
 inline fn h2StreamCtx(ctx: *cf_h2_ctx, data: ?*const Curl_easy) ?*h2_stream_ctx {
     const d = data orelse return null;
-    const raw = Curl_u32_ptrset_get(&ctx.streams, Curl_h2_easy_mid(d)) orelse return null;
-    return @ptrCast(@alignCast(raw));
+    return streamCtxFromRaw(Curl_u32_ptrset_get(&ctx.streams, Curl_h2_easy_mid(d)));
 }
 
 fn h2_stream_ctx_create(ctx: *cf_h2_ctx, data: *Curl_easy) ?*h2_stream_ctx {
-    const raw = mem.calloc(1, @sizeOf(h2_stream_ctx)) orelse return null;
-    const stream: *h2_stream_ctx = @ptrCast(@alignCast(raw));
+    const stream = mem.create(h2_stream_ctx) orelse return null;
 
     stream.id = -1;
     stream.xfer_id = Curl_h2_easy_id(data);
@@ -1120,20 +1168,18 @@ fn cf_h2_get_stream_xfer(
     stream_id: i32,
     pstream: ?*?*h2_stream_ctx,
 ) ?*Curl_easy {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     if (pstream) |ps| {
         ps.* = null;
     }
-    const raw_stream = nghttp2_session_get_stream_user_data(ctx.h2, stream_id) orelse return null;
-    const s: *h2_stream_ctx = @ptrCast(@alignCast(raw_stream));
+    const s = streamCtxFromRaw(nghttp2_session_get_stream_user_data(ctx.h2, stream_id)) orelse return null;
     if (s.mid != std.math.maxInt(u32)) {
         const call_data = ctx.call_data.data;
         if (!goodEasyHandle(call_data) or !Curl_h2_has_multi(call_data)) {
             return null;
         }
         const data = Curl_h2_multi_get_easy(call_data, s.mid);
-        if (data != null and
-            @as(*const u32, @ptrCast(@alignCast(data.?))).* == CURLEASY_MAGIC_NUMBER and
+        if (goodEasyHandle(data) and
             Curl_h2_easy_mid(data) == s.mid and
             Curl_h2_easy_id(data) == s.xfer_id)
         {
@@ -1164,7 +1210,7 @@ fn cf_h2_update_local_win(
     data: ?*Curl_easy,
     stream: *h2_stream_ctx,
 ) CURLcode {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     const dwsize: i32 = if (stream.write_paused or stream.xfer_result != CURLE_OK)
         0
     else
@@ -1210,30 +1256,36 @@ fn cf_h2_update_local_win(
     return CURLE_OK;
 }
 
+fn http2DataSetupImpl(
+    ctx: *cf_h2_ctx,
+    data: *Curl_easy,
+) error{OutOfMemory}!*h2_stream_ctx {
+    if (h2StreamCtx(ctx, data)) |existing| {
+        return existing;
+    }
+
+    const stream = h2_stream_ctx_create(ctx, data) orelse return error.OutOfMemory;
+    errdefer h2_stream_ctx_free(stream);
+
+    if (Curl_u32_ptrset_set(&ctx.streams, Curl_h2_easy_mid(data), stream) != CURLE_OK) {
+        return error.OutOfMemory;
+    }
+    return stream;
+}
+
 fn http2_data_setup(
     cf: *Curl_cfilter,
     data_opt: ?*Curl_easy,
     pstream: *?*h2_stream_ctx,
 ) CURLcode {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     const data = data_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
-
-    if (h2StreamCtx(ctx, data)) |existing| {
-        pstream.* = existing;
-        return CURLE_OK;
-    }
-
-    const stream = h2_stream_ctx_create(ctx, data) orelse return CURLE_OUT_OF_MEMORY;
-    if (Curl_u32_ptrset_set(&ctx.streams, Curl_h2_easy_mid(data), stream) != CURLE_OK) {
-        h2_stream_ctx_free(stream);
-        return CURLE_OUT_OF_MEMORY;
-    }
-    pstream.* = stream;
+    pstream.* = http2DataSetupImpl(ctx, data) catch return CURLE_OUT_OF_MEMORY;
     return CURLE_OK;
 }
 
 fn nw_out_flush(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     var nwritten: usize = 0;
 
     if (io_buffers.Curl_bufq_is_empty(&ctx.outbufq))
@@ -1256,7 +1308,7 @@ fn nw_out_flush(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
 }
 
 fn http2_data_done(cf: *Curl_cfilter, data: ?*Curl_easy) void {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     const stream = h2StreamCtx(ctx, data) orelse return;
 
     if (ctx.h2) |h2| {
@@ -1283,7 +1335,7 @@ fn http2_data_done(cf: *Curl_cfilter, data: ?*Curl_easy) void {
 }
 
 fn h2_client_new(cf: *Curl_cfilter, cbs: ?*nghttp2_session_callbacks) c_int {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     var o: ?*nghttp2_option = null;
     var h2_mem = nghttp2_mem{
         .mem_user_data = null,
@@ -1310,7 +1362,7 @@ fn should_close_session(ctx: *cf_h2_ctx) bool {
 }
 
 fn h2_process_pending_input(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     var buf: ?[*]const u8 = null;
     var blen: usize = 0;
     var nread: usize = 0;
@@ -1345,7 +1397,7 @@ fn h2_process_pending_input(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
 }
 
 fn http2_connisalive(cf: *Curl_cfilter, data: ?*Curl_easy, input_pending: *bool) bool {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     var alive = true;
 
     input_pending.* = false;
@@ -1374,7 +1426,7 @@ fn http2_connisalive(cf: *Curl_cfilter, data: ?*Curl_easy, input_pending: *bool)
 }
 
 fn http2_send_ping(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     var rc = nghttp2_submit_ping(ctx.h2, 0, null);
     if (rc != 0) {
         failf(data, "nghttp2_submit_ping() failed: %s(%d)", .{ nghttp2_strerror(rc), rc });
@@ -1402,8 +1454,8 @@ fn send_callback(
 ) callconv(.c) isize {
     _ = h2;
     _ = flags;
-    const cf: *Curl_cfilter = @ptrCast(@alignCast(userp.?));
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const cf = cfFromUserp(userp);
+    const ctx = cfH2Ctx(cf);
     const data = ctx.call_data.data;
     var nwritten: usize = 0;
 
@@ -1439,50 +1491,51 @@ fn h2_duphandle(cf: *Curl_cfilter, data: *Curl_easy) ?*Curl_easy {
     return second;
 }
 
+fn setTransferUrlImpl(
+    newhandle: *Curl_easy,
+    hp: *curl_pushheaders,
+    data: *Curl_easy,
+) error{ Scheme, Authority, Path, GetUrl, OutOfMemory }!void {
+    var url: ?[*:0]u8 = null;
+    const u = curl_url() orelse return error.OutOfMemory;
+    errdefer curl_url_cleanup(u);
+
+    if (curl_pushheader_byname(hp, HTTP_PSEUDO_SCHEME)) |v| {
+        if (curl_url_set(u, CURLUPART_SCHEME, v, 0) != CURLUE_OK)
+            return error.Scheme;
+    }
+
+    if (curl_pushheader_byname(hp, HTTP_PSEUDO_AUTHORITY)) |v| {
+        if (Curl_url_set_authority(u, v) != CURLUE_OK)
+            return error.Authority;
+    }
+
+    if (curl_pushheader_byname(hp, HTTP_PSEUDO_PATH)) |v| {
+        if (curl_url_set(u, CURLUPART_PATH, v, 0) != CURLUE_OK)
+            return error.Path;
+    }
+
+    if (!Curl_url_same_origin(Curl_h2_easy_uh(data), u))
+        return error.Scheme;
+
+    if (curl_url_get(u, CURLUPART_URL, &url, 0) != CURLUE_OK)
+        return error.GetUrl;
+
+    Curl_h2_set_transfer_url_commit(newhandle, u, url);
+}
+
 fn set_transfer_url(
     newhandle: *Curl_easy,
     hp: *curl_pushheaders,
     data: *Curl_easy,
 ) c_int {
-    var url: ?[*:0]u8 = null;
-    var rc: c_int = 0;
-    const u = curl_url() orelse return 5;
-
-    if (curl_pushheader_byname(hp, HTTP_PSEUDO_SCHEME)) |v| {
-        if (curl_url_set(u, CURLUPART_SCHEME, v, 0) != CURLUE_OK) {
-            curl_url_cleanup(u);
-            return 1;
-        }
-    }
-
-    if (curl_pushheader_byname(hp, HTTP_PSEUDO_AUTHORITY)) |v| {
-        if (Curl_url_set_authority(u, v) != CURLUE_OK) {
-            curl_url_cleanup(u);
-            return 2;
-        }
-    }
-
-    if (curl_pushheader_byname(hp, HTTP_PSEUDO_PATH)) |v| {
-        if (curl_url_set(u, CURLUPART_PATH, v, 0) != CURLUE_OK) {
-            curl_url_cleanup(u);
-            return 3;
-        }
-    }
-
-    if (!Curl_url_same_origin(Curl_h2_easy_uh(data), u)) {
-        curl_url_cleanup(u);
-        return 1;
-    }
-
-    if (curl_url_get(u, CURLUPART_URL, &url, 0) != CURLUE_OK) {
-        rc = 4;
-    }
-    if (rc != 0) {
-        curl_url_cleanup(u);
-        return rc;
-    }
-
-    Curl_h2_set_transfer_url_commit(newhandle, u, url);
+    setTransferUrlImpl(newhandle, hp, data) catch |err| return switch (err) {
+        error.Scheme => 1,
+        error.Authority => 2,
+        error.Path => 3,
+        error.GetUrl => 4,
+        error.OutOfMemory => 5,
+    };
     return 0;
 }
 
@@ -1492,80 +1545,93 @@ fn discard_newhandle(cf: *Curl_cfilter, newhandle: *Curl_easy) void {
     _ = Curl_close(&nh);
 }
 
+fn pushPromiseImpl(
+    cf: *Curl_cfilter,
+    ctx: *cf_h2_ctx,
+    data: *Curl_easy,
+    frame: *const nghttp2_push_promise,
+    out_rv: *c_int,
+) error{PushFailed}!c_int {
+    var newstream: ?*h2_stream_ctx = null;
+    var heads: curl_pushheaders = undefined;
+
+    const newhandle = h2_duphandle(cf, data) orelse {
+        infof(data, "failed to duplicate handle", .{});
+        out_rv.* = CURL_PUSH_DENY;
+        return error.PushFailed;
+    };
+    errdefer discard_newhandle(cf, newhandle);
+
+    const stream = h2StreamCtx(ctx, data) orelse {
+        failf(data, "Internal NULL stream", .{});
+        out_rv.* = CURL_PUSH_DENY;
+        return error.PushFailed;
+    };
+
+    heads = .{
+        .data = data,
+        .stream = stream,
+        .frame = frame,
+    };
+
+    var rv = set_transfer_url(newhandle, &heads, data);
+    if (rv != 0) {
+        trcCf(data, cf, "[%d] PUSH_PROMISE, failed to set URL -> %d", .{ frame.promised_stream_id, rv });
+        out_rv.* = CURL_PUSH_DENY;
+        return error.PushFailed;
+    }
+
+    rv = Curl_h2_call_push_cb(data, newhandle, stream.push_headers_used, &heads);
+    free_push_headers(stream);
+
+    if (rv != 0) {
+        trcCf(data, cf, "[%d] PUSH_PROMISE, denied by application -> %d", .{ frame.promised_stream_id, rv });
+        out_rv.* = rv;
+        return error.PushFailed;
+    }
+
+    const mresult = Curl_h2_multi_add_perform(data, newhandle, cf.conn);
+    if (mresult != CURLM_OK) {
+        infof(data, "failed to add handle to multi", .{});
+        out_rv.* = CURL_PUSH_DENY;
+        return error.PushFailed;
+    }
+
+    const result = http2_data_setup(cf, newhandle, &newstream);
+    if (result != CURLE_OK) {
+        failf(data, "error setting up stream: %d", .{@as(c_int, @intCast(result))});
+        out_rv.* = CURL_PUSH_DENY;
+        return error.PushFailed;
+    }
+
+    const ns = newstream.?;
+    ns.id = frame.promised_stream_id;
+    Curl_h2_init_pushed_req(newhandle);
+
+    trcCf(data, cf, "promise easy handle added to multi, mid=%u", .{Curl_h2_easy_mid(newhandle)});
+    rv = nghttp2_session_set_stream_user_data(ctx.h2, ns.id, ns);
+    if (rv != 0) {
+        infof(data, "failed to set user_data for stream %d", .{ns.id});
+        out_rv.* = CURL_PUSH_DENY;
+        return error.PushFailed;
+    }
+
+    if (ns.id > ctx.local_max_sid)
+        ctx.local_max_sid = ns.id;
+    return rv;
+}
+
 fn push_promise(
     cf: *Curl_cfilter,
     data: *Curl_easy,
     frame: *const nghttp2_push_promise,
 ) c_int {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     trcCf(data, cf, "[%d] PUSH_PROMISE received", .{frame.promised_stream_id});
 
     if (Curl_h2_multi_has_push_cb(data)) {
-        var newstream: ?*h2_stream_ctx = null;
-        var heads: curl_pushheaders = undefined;
-
-        const newhandle = h2_duphandle(cf, data) orelse {
-            infof(data, "failed to duplicate handle", .{});
-            return CURL_PUSH_DENY;
-        };
-
-        const stream = h2StreamCtx(ctx, data) orelse {
-            failf(data, "Internal NULL stream", .{});
-            discard_newhandle(cf, newhandle);
-            return CURL_PUSH_DENY;
-        };
-
-        heads = .{
-            .data = data,
-            .stream = stream,
-            .frame = frame,
-        };
-
-        var rv = set_transfer_url(newhandle, &heads, data);
-        if (rv != 0) {
-            trcCf(data, cf, "[%d] PUSH_PROMISE, failed to set URL -> %d", .{ frame.promised_stream_id, rv });
-            discard_newhandle(cf, newhandle);
-            return CURL_PUSH_DENY;
-        }
-
-        rv = Curl_h2_call_push_cb(data, newhandle, stream.push_headers_used, &heads);
-        free_push_headers(stream);
-
-        if (rv != 0) {
-            trcCf(data, cf, "[%d] PUSH_PROMISE, denied by application -> %d", .{ frame.promised_stream_id, rv });
-            discard_newhandle(cf, newhandle);
-            return rv;
-        }
-
-        const mresult = Curl_h2_multi_add_perform(data, newhandle, cf.conn);
-        if (mresult != CURLM_OK) {
-            infof(data, "failed to add handle to multi", .{});
-            discard_newhandle(cf, newhandle);
-            return CURL_PUSH_DENY;
-        }
-
-        const result = http2_data_setup(cf, newhandle, &newstream);
-        if (result != CURLE_OK) {
-            failf(data, "error setting up stream: %d", .{@as(c_int, @intCast(result))});
-            discard_newhandle(cf, newhandle);
-            return CURL_PUSH_DENY;
-        }
-
-        const ns = newstream.?;
-        ns.id = frame.promised_stream_id;
-        Curl_h2_init_pushed_req(newhandle);
-
-        trcCf(data, cf, "promise easy handle added to multi, mid=%u", .{Curl_h2_easy_mid(newhandle)});
-        rv = nghttp2_session_set_stream_user_data(ctx.h2, ns.id, ns);
-        if (rv != 0) {
-            infof(data, "failed to set user_data for stream %d", .{ns.id});
-            discard_newhandle(cf, newhandle);
-            return CURL_PUSH_DENY;
-        }
-
-        if (ns.id > ctx.local_max_sid)
-            ctx.local_max_sid = ns.id;
-        return rv;
+        var out_rv: c_int = CURL_PUSH_DENY;
+        return pushPromiseImpl(cf, ctx, data, frame, &out_rv) catch out_rv;
     } else {
         trcCf(data, cf, "Got PUSH_PROMISE, ignore it", .{});
         return CURL_PUSH_DENY;
@@ -1606,7 +1672,7 @@ fn h2_xfer_write_resp(
     if (stream.xfer_result == CURLE_OK)
         stream.xfer_result = Curl_xfer_write_resp(data, buf, blen, eos);
     if (stream.xfer_result != CURLE_OK) {
-        const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+        const ctx = cfH2Ctx(cf);
         trcCf(
             data,
             cf,
@@ -1632,7 +1698,7 @@ fn on_stream_frame(
     stream_opt: ?*h2_stream_ctx,
     frame: *const nghttp2_frame,
 ) CURLcode {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     const stream_id = frame.hd.stream_id;
 
     const stream = stream_opt orelse {
@@ -1732,19 +1798,13 @@ fn on_frame_send(
     userp: ?*anyopaque,
 ) callconv(.c) c_int {
     _ = session;
-    const cf: *Curl_cfilter = @ptrCast(@alignCast(userp.?));
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const cf = cfFromUserp(userp);
+    const ctx = cfH2Ctx(cf);
     const data = ctx.call_data.data;
 
     if (trcCfIsVerbose(cf, data)) {
         var buffer: [256]u8 = undefined;
-        const len = Curl_nghttp2_fr_print(frame, &buffer, buffer.len - 1);
-        if (len >= 0 and @as(usize, @intCast(len)) < buffer.len) {
-            buffer[@intCast(len)] = 0;
-        } else {
-            buffer[buffer.len - 1] = 0;
-        }
-        trcCf(data, cf, "[%d] -> %s", .{ frame.hd.stream_id, @as([*:0]const u8, @ptrCast(&buffer)) });
+        trcCf(data, cf, "[%d] -> %s", .{ frame.hd.stream_id, formatFrameTrace(frame, &buffer) });
     }
     if (frame.hd.type == NGHTTP2_GOAWAY and !ctx.sent_goaway) {
         failf(
@@ -1761,20 +1821,14 @@ fn on_frame_recv(
     frame: *const nghttp2_frame,
     userp: ?*anyopaque,
 ) callconv(.c) c_int {
-    const cf: *Curl_cfilter = @ptrCast(@alignCast(userp.?));
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const cf = cfFromUserp(userp);
+    const ctx = cfH2Ctx(cf);
     const data = ctx.call_data.data;
     const stream_id = frame.hd.stream_id;
 
     if (trcCfIsVerbose(cf, data)) {
         var buffer: [256]u8 = undefined;
-        const len = Curl_nghttp2_fr_print(frame, &buffer, buffer.len - 1);
-        if (len >= 0 and @as(usize, @intCast(len)) < buffer.len) {
-            buffer[@intCast(len)] = 0;
-        } else {
-            buffer[buffer.len - 1] = 0;
-        }
-        trcCf(data, cf, "[%d] <- %s", .{ frame.hd.stream_id, @as([*:0]const u8, @ptrCast(&buffer)) });
+        trcCf(data, cf, "[%d] <- %s", .{ frame.hd.stream_id, formatFrameTrace(frame, &buffer) });
     }
 
     if (stream_id == 0) {
@@ -1843,23 +1897,17 @@ fn cf_h2_on_invalid_frame_recv(
     userp: ?*anyopaque,
 ) callconv(.c) c_int {
     _ = session;
-    const cf: *Curl_cfilter = @ptrCast(@alignCast(userp.?));
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const cf = cfFromUserp(userp);
+    const ctx = cfH2Ctx(cf);
     const stream_id = frame.hd.stream_id;
 
     var stream: ?*h2_stream_ctx = null;
     if (cf_h2_get_stream_xfer(cf, stream_id, &stream)) |data| {
         var buffer: [256]u8 = undefined;
-        const len = Curl_nghttp2_fr_print(frame, &buffer, buffer.len - 1);
-        if (len >= 0 and @as(usize, @intCast(len)) < buffer.len) {
-            buffer[@intCast(len)] = 0;
-        } else {
-            buffer[buffer.len - 1] = 0;
-        }
         failf(
             data,
             "[HTTP2] [%d] received invalid frame: %s, error %d: %s",
-            .{ stream_id, @as([*:0]const u8, @ptrCast(&buffer)), ngerr, nghttp2_strerror(ngerr) },
+            .{ stream_id, formatFrameTrace(frame, &buffer), ngerr, nghttp2_strerror(ngerr) },
         );
         if (stream) |s| {
             _ = nghttp2_submit_rst_stream(ctx.h2, NGHTTP2_FLAG_NONE, s.id, NGHTTP2_STREAM_CLOSED);
@@ -1880,8 +1928,8 @@ fn on_data_chunk_recv(
     userp: ?*anyopaque,
 ) callconv(.c) c_int {
     _ = flags;
-    const cf: *Curl_cfilter = @ptrCast(@alignCast(userp.?));
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const cf = cfFromUserp(userp);
+    const ctx = cfH2Ctx(cf);
     var stream: ?*h2_stream_ctx = null;
 
     const data_s = cf_h2_get_stream_xfer(cf, stream_id, &stream) orelse {
@@ -1903,8 +1951,8 @@ fn on_stream_close(
     error_code: u32,
     userp: ?*anyopaque,
 ) callconv(.c) c_int {
-    const cf: *Curl_cfilter = @ptrCast(@alignCast(userp.?));
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const cf = cfFromUserp(userp);
+    const ctx = cfH2Ctx(cf);
     const call_data = ctx.call_data.data;
     var stream: ?*h2_stream_ctx = null;
 
@@ -1957,7 +2005,7 @@ fn cf_h2_header_error(
     stream_opt: ?*h2_stream_ctx,
     result: CURLcode,
 ) void {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     failf(
         data,
         "Error receiving HTTP2 header: %d(%s)",
@@ -1968,6 +2016,45 @@ fn cf_h2_header_error(
         stream.closed = true;
         stream.reset = true;
     }
+}
+
+fn appendPushHeader(
+    stream: *h2_stream_ctx,
+    data: ?*Curl_easy,
+    name_slice: []const u8,
+    value_slice: []const u8,
+) error{InvalidHeader}!void {
+    errdefer free_push_headers(stream);
+
+    if (stream.push_headers == null) {
+        stream.push_headers_alloc = 10;
+        stream.push_headers = mem.allocMany([*:0]u8, stream.push_headers_alloc) orelse
+            return error.InvalidHeader;
+        stream.push_headers_used = 0;
+    } else if (stream.push_headers_used == stream.push_headers_alloc) {
+        if (stream.push_headers_alloc > 1000) {
+            failf(data, "Too many PUSH_PROMISE headers", .{});
+            return error.InvalidHeader;
+        }
+        stream.push_headers_alloc *= 2;
+        stream.push_headers = mem.reallocMany([*:0]u8, stream.push_headers, stream.push_headers_alloc) orelse
+            return error.InvalidHeader;
+    }
+
+    if (std.mem.indexOfScalar(u8, name_slice, 0) != null or
+        std.mem.indexOfScalar(u8, value_slice, 0) != null)
+    {
+        return error.InvalidHeader;
+    }
+    const total_len = std.math.add(usize, name_slice.len, value_slice.len) catch return error.InvalidHeader;
+    const alloc_len = std.math.add(usize, total_len, 2) catch return error.InvalidHeader;
+    const h_slice = mem.allocSlice(u8, alloc_len) orelse return error.InvalidHeader;
+    @memcpy(h_slice[0..name_slice.len], name_slice);
+    h_slice[name_slice.len] = ':';
+    @memcpy(h_slice[name_slice.len + 1 .. name_slice.len + 1 + value_slice.len], value_slice);
+    h_slice[name_slice.len + 1 + value_slice.len] = 0;
+    stream.push_headers.?[stream.push_headers_used] = h_slice[0 .. alloc_len - 1 :0].ptr;
+    stream.push_headers_used += 1;
 }
 
 fn on_header(
@@ -1981,8 +2068,8 @@ fn on_header(
     userp: ?*anyopaque,
 ) callconv(.c) c_int {
     _ = flags;
-    const cf: *Curl_cfilter = @ptrCast(@alignCast(userp.?));
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const cf = cfFromUserp(userp);
+    const ctx = cfH2Ctx(cf);
     const stream_id = frame.hd.stream_id;
     var stream_opt: ?*h2_stream_ctx = null;
 
@@ -2028,57 +2115,8 @@ fn on_header(
             return 0;
         }
 
-        if (stream.push_headers == null) {
-            stream.push_headers_alloc = 10;
-            const raw_hdrs = mem.malloc(stream.push_headers_alloc * @sizeOf([*:0]u8)) orelse
-                return NGHTTP2_ERR_CALLBACK_FAILURE;
-            stream.push_headers = @ptrCast(@alignCast(raw_hdrs));
-            stream.push_headers_used = 0;
-        } else if (stream.push_headers_used == stream.push_headers_alloc) {
-            if (stream.push_headers_alloc > 1000) {
-                failf(data, "Too many PUSH_PROMISE headers", .{});
-                free_push_headers(stream);
-                return NGHTTP2_ERR_CALLBACK_FAILURE;
-            }
-            stream.push_headers_alloc *= 2;
-            const raw_hdrs = mem.realloc(
-                @ptrCast(stream.push_headers),
-                stream.push_headers_alloc * @sizeOf([*:0]u8),
-            ) orelse {
-                free_push_headers(stream);
-                return NGHTTP2_ERR_CALLBACK_FAILURE;
-            };
-            stream.push_headers = @ptrCast(@alignCast(raw_hdrs));
-        }
-
-        const name_slice = name[0..namelen];
-        const value_slice = value[0..valuelen];
-        if (std.mem.indexOfScalar(u8, name_slice, 0) != null or
-            std.mem.indexOfScalar(u8, value_slice, 0) != null)
-        {
-            free_push_headers(stream);
+        appendPushHeader(stream, data, name[0..namelen], value[0..valuelen]) catch
             return NGHTTP2_ERR_CALLBACK_FAILURE;
-        }
-        const total_len = std.math.add(usize, namelen, valuelen) catch {
-            free_push_headers(stream);
-            return NGHTTP2_ERR_CALLBACK_FAILURE;
-        };
-        const alloc_len = std.math.add(usize, total_len, 2) catch {
-            free_push_headers(stream);
-            return NGHTTP2_ERR_CALLBACK_FAILURE;
-        };
-        const h_raw = mem.malloc(alloc_len) orelse {
-            free_push_headers(stream);
-            return NGHTTP2_ERR_CALLBACK_FAILURE;
-        };
-        const h_buf: [*]u8 = @ptrCast(h_raw);
-        @memcpy(h_buf[0..namelen], name_slice);
-        h_buf[namelen] = ':';
-        @memcpy(h_buf[namelen + 1 .. namelen + 1 + valuelen], value_slice);
-        h_buf[namelen + 1 + valuelen] = 0;
-        const h: [*:0]u8 = @ptrCast(h_buf);
-        stream.push_headers.?[stream.push_headers_used] = h;
-        stream.push_headers_used += 1;
         return 0;
     }
 
@@ -2178,7 +2216,7 @@ fn req_body_read_callback(
     if (stream_id == 0)
         return NGHTTP2_ERR_INVALID_ARGUMENT;
 
-    const cf: *Curl_cfilter = @ptrCast(@alignCast(userp.?));
+    const cf = cfFromUserp(userp);
     var stream_opt: ?*h2_stream_ctx = null;
     const data_s = cf_h2_get_stream_xfer(cf, stream_id, &stream_opt);
     const stream = stream_opt orelse return NGHTTP2_ERR_CALLBACK_FAILURE;
@@ -2219,14 +2257,16 @@ fn error_callback(
 ) callconv(.c) c_int {
     _ = session;
     _ = lib_error_code;
-    const cf: *Curl_cfilter = @ptrCast(@alignCast(userp.?));
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const cf = cfFromUserp(userp);
+    const ctx = cfH2Ctx(cf);
     const data = ctx.call_data.data;
     failf(data, "%.*s", .{ @as(c_int, @intCast(len)), msg });
     return 0;
 }
 
-pub fn Curl_http2_request_upgrade(req: *dynbuf, data: *Curl_easy) callconv(.c) CURLcode {
+fn http2RequestUpgradeImpl(req: *dynbuf, data: *Curl_easy, out_err: *CURLcode) error{UpgradeFailed}!void {
+    errdefer containers.curlx_dyn_free(req);
+
     var base64: ?[*:0]u8 = null;
     var blen: usize = 0;
     var binsettings: [H2_BINSETTINGS_LEN]u8 = undefined;
@@ -2235,25 +2275,29 @@ pub fn Curl_http2_request_upgrade(req: *dynbuf, data: *Curl_easy) callconv(.c) C
     const rc = populate_binsettings(&binsettings, data);
     if (!sztouz(rc, &binlen) or binlen == 0) {
         failf(data, "nghttp2 unexpectedly failed on pack_settings_payload", .{});
-        containers.curlx_dyn_free(req);
-        return CURLE_FAILED_INIT;
+        out_err.* = CURLE_FAILED_INIT;
+        return error.UpgradeFailed;
     }
 
-    var result = curlx_base64url_encode(&binsettings, binlen, &base64, &blen);
-    if (result != CURLE_OK) {
-        containers.curlx_dyn_free(req);
-        return result;
+    const enc_res = curlx_base64url_encode(&binsettings, binlen, &base64, &blen);
+    if (enc_res != CURLE_OK) {
+        out_err.* = enc_res;
+        return error.UpgradeFailed;
     }
+    defer mem.free(base64);
 
-    result = curlx_dyn_addf(
+    out_err.* = curlx_dyn_addf(
         req,
         "Upgrade: %s\r\nHTTP2-Settings: %s\r\n",
         NGHTTP2_CLEARTEXT_PROTO_VERSION_ID,
         base64.?,
     );
-    mem.free(base64);
-
     Curl_h2_set_upgrade_state(data);
+}
+
+pub fn Curl_http2_request_upgrade(req: *dynbuf, data: *Curl_easy) callconv(.c) CURLcode {
+    var result: CURLcode = CURLE_OK;
+    http2RequestUpgradeImpl(req, data, &result) catch return result;
     return result;
 }
 
@@ -2373,7 +2417,7 @@ fn h2_pri_spec(data: ?*Curl_easy, pri_spec: *nghttp2_priority_spec) void {
 }
 
 fn h2_progress_egress(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     var rv: c_int = 0;
 
     if (sweight_wanted(data) != sweight_in_effect(data)) {
@@ -2411,7 +2455,7 @@ fn stream_recv(
     pnread: *usize,
 ) CURLcode {
     _ = buf;
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     var result: CURLcode = CURLE_AGAIN;
 
     pnread.* = 0;
@@ -2449,7 +2493,7 @@ fn h2_progress_ingress(
     data: ?*Curl_easy,
     data_max_bytes_arg: usize,
 ) CURLcode {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     var result: CURLcode = CURLE_OK;
     var nread: usize = 0;
     var data_max_bytes = data_max_bytes_arg;
@@ -2530,7 +2574,7 @@ fn cf_h2_recv(
     len: usize,
     pnread: *usize,
 ) callconv(.c) CURLcode {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     var save: cf_call_data = undefined;
 
     const data = data_opt orelse return CURLE_HTTP2;
@@ -2602,7 +2646,7 @@ fn cf_h2_body_send(
     eos: bool,
     pnwritten: *usize,
 ) CURLcode {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     pnwritten.* = 0;
 
     if (stream.closed) {
@@ -2642,7 +2686,7 @@ fn h2_submit(
     eos: bool,
     pnwritten: *usize,
 ) CURLcode {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     var stream: ?*h2_stream_ctx = null;
     var h2_headers: dynhds = undefined;
     var nva: ?[*]nghttp2_nv = null;
@@ -2792,7 +2836,7 @@ fn cf_h2_send(
     eos: bool,
     pnwritten: *usize,
 ) callconv(.c) CURLcode {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     var stream = h2StreamCtx(ctx, data);
     var save: cf_call_data = undefined;
     var result: CURLcode = CURLE_OK;
@@ -2894,7 +2938,7 @@ fn finishCfH2Send(
 }
 
 fn cf_h2_flush(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     const stream = h2StreamCtx(ctx, data);
     var save: cf_call_data = undefined;
     var result: CURLcode = CURLE_OK;
@@ -2956,8 +3000,8 @@ fn cf_h2_adjust_pollset(
     data: ?*Curl_easy,
     ps: *easy_pollset,
 ) callconv(.c) CURLcode {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
-    const ps_ptr: *headers_sock.EasyPollset = @ptrCast(@alignCast(ps));
+    const ctx = cfH2Ctx(cf);
+    const ps_ptr = pollsetTyped(ps);
     var save: cf_call_data = undefined;
     var want_recv = false;
     var want_send = false;
@@ -2993,7 +3037,7 @@ fn cf_h2_adjust_pollset(
 }
 
 fn cf_h2_ctx_open(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     var stream: ?*h2_stream_ctx = null;
     var result: CURLcode = CURLE_OUT_OF_MEMORY;
     var cbs: ?*nghttp2_session_callbacks = null;
@@ -3096,7 +3140,7 @@ fn cf_h2_connect(
     data: ?*Curl_easy,
     done: *bool,
 ) callconv(.c) CURLcode {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     var result: CURLcode = CURLE_OK;
     var save: cf_call_data = undefined;
     var first_time = false;
@@ -3151,8 +3195,7 @@ fn cf_h2_connect(
 
 fn cf_h2_destroy(cf: *Curl_cfilter, data: ?*Curl_easy) callconv(.c) void {
     _ = data;
-    if (cf.ctx) |raw| {
-        const ctx: *cf_h2_ctx = @ptrCast(@alignCast(raw));
+    if (cfH2CtxOpt(cf)) |ctx| {
         cf_h2_ctx_free(ctx);
         cf.ctx = null;
     }
@@ -3163,7 +3206,7 @@ fn cf_h2_shutdown(
     data: ?*Curl_easy,
     done: *bool,
 ) callconv(.c) CURLcode {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     var save: cf_call_data = undefined;
     var result: CURLcode = CURLE_OK;
 
@@ -3213,8 +3256,7 @@ fn cf_h2_shutdown(
 }
 
 fn http2_data_pause(cf: *Curl_cfilter, data: ?*Curl_easy, pause: bool) CURLcode {
-    const ctx_raw = cf.ctx orelse return CURLE_OK;
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(ctx_raw));
+    const ctx = cfH2CtxOpt(cf) orelse return CURLE_OK;
     const stream = h2StreamCtx(ctx, data);
 
     if (ctx.h2 != null and stream != null) {
@@ -3247,7 +3289,7 @@ fn cf_h2_cntrl(
     arg2: ?*anyopaque,
 ) callconv(.c) CURLcode {
     _ = arg2;
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     var result: CURLcode = CURLE_OK;
     var save: cf_call_data = undefined;
 
@@ -3275,8 +3317,7 @@ fn cf_h2_cntrl(
 }
 
 fn cf_h2_data_pending(cf: *Curl_cfilter, data: ?*const Curl_easy) callconv(.c) bool {
-    if (cf.ctx) |raw| {
-        const ctx: *cf_h2_ctx = @ptrCast(@alignCast(raw));
+    if (cfH2CtxOpt(cf)) |ctx| {
         if (!io_buffers.Curl_bufq_is_empty(&ctx.inbufq))
             return true;
     }
@@ -3291,7 +3332,7 @@ fn cf_h2_is_alive(
     data: ?*Curl_easy,
     input_pending: *bool,
 ) callconv(.c) bool {
-    const ctx_opt: ?*cf_h2_ctx = if (cf.ctx) |raw| @ptrCast(@alignCast(raw)) else null;
+    const ctx_opt = cfH2CtxOpt(cf);
     input_pending.* = false;
     const ctx = ctx_opt orelse return false;
     var save: cf_call_data = undefined;
@@ -3309,7 +3350,7 @@ fn cf_h2_is_alive(
 }
 
 fn cf_h2_keep_alive(cf: *Curl_cfilter, data: ?*Curl_easy) callconv(.c) CURLcode {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     var save: cf_call_data = undefined;
 
     cfDataSave(&save, &ctx.call_data, data);
@@ -3325,7 +3366,7 @@ fn cf_h2_query(
     pres1: ?*c_int,
     pres2: ?*anyopaque,
 ) callconv(.c) CURLcode {
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2Ctx(cf);
     var save: cf_call_data = undefined;
 
     switch (query) {
@@ -3389,6 +3430,23 @@ pub var Curl_cft_nghttp2: Curl_cftype = .{
     .query = cf_h2_query,
 };
 
+fn createH2Cfilter(via_h1_upgrade: bool, out_err: *CURLcode) error{CreateFailed}!*Curl_cfilter {
+    const ctx = mem.create(cf_h2_ctx) orelse {
+        out_err.* = CURLE_OUT_OF_MEMORY;
+        return error.CreateFailed;
+    };
+    cf_h2_ctx_init(ctx, via_h1_upgrade);
+    errdefer cf_h2_ctx_free(ctx);
+
+    var cf: ?*Curl_cfilter = null;
+    const result = Curl_cf_create(&cf, &Curl_cft_nghttp2, ctx);
+    if (result != CURLE_OK) {
+        out_err.* = result;
+        return error.CreateFailed;
+    }
+    return cf.?;
+}
+
 fn http2_cfilter_add(
     pcf: *?*Curl_cfilter,
     data: ?*Curl_easy,
@@ -3396,22 +3454,13 @@ fn http2_cfilter_add(
     sockindex: i8,
     via_h1_upgrade: bool,
 ) CURLcode {
-    var cf: ?*Curl_cfilter = null;
-    const raw = mem.calloc(1, @sizeOf(cf_h2_ctx)) orelse {
-        pcf.* = null;
-        return CURLE_OUT_OF_MEMORY;
-    };
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(raw));
-    cf_h2_ctx_init(ctx, via_h1_upgrade);
-
-    const result = Curl_cf_create(&cf, &Curl_cft_nghttp2, ctx);
-    if (result != CURLE_OK) {
-        cf_h2_ctx_free(ctx);
+    var result: CURLcode = CURLE_OK;
+    const cf = createH2Cfilter(via_h1_upgrade, &result) catch {
         pcf.* = null;
         return result;
-    }
+    };
 
-    Curl_conn_cf_add(data, conn, sockindex, cf.?);
+    Curl_conn_cf_add(data, conn, sockindex, cf);
     pcf.* = cf;
     return CURLE_OK;
 }
@@ -3422,18 +3471,10 @@ fn http2_cfilter_insert_after(
     via_h1_upgrade: bool,
 ) CURLcode {
     _ = data;
-    var cf_h2: ?*Curl_cfilter = null;
-    const raw = mem.calloc(1, @sizeOf(cf_h2_ctx)) orelse return CURLE_OUT_OF_MEMORY;
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(raw));
-    cf_h2_ctx_init(ctx, via_h1_upgrade);
+    var result: CURLcode = CURLE_OK;
+    const cf_h2 = createH2Cfilter(via_h1_upgrade, &result) catch return result;
 
-    const result = Curl_cf_create(&cf_h2, &Curl_cft_nghttp2, ctx);
-    if (result != CURLE_OK) {
-        cf_h2_ctx_free(ctx);
-        return result;
-    }
-
-    Curl_conn_cf_insert_after(cf, cf_h2.?);
+    Curl_conn_cf_insert_after(cf, cf_h2);
     return CURLE_OK;
 }
 
@@ -3483,7 +3524,7 @@ pub fn Curl_http2_upgrade(
         return result;
     trcCf(data, cf, "upgrading connection to HTTP/2", .{});
 
-    const ctx: *cf_h2_ctx = @ptrCast(@alignCast(cf.?.ctx.?));
+    const ctx = cfH2Ctx(cf.?);
     Curl_h2_set_upgraded_req(data);
 
     if (nread > 0) {
@@ -3695,7 +3736,7 @@ fn cf_h2_proxy_ctx_free(ctx_opt: ?*cf_h2_proxy_ctx) void {
     if (ctx_opt) |ctx| {
         cf_h2_proxy_ctx_clear(ctx);
         ctx.* = std.mem.zeroes(cf_h2_proxy_ctx);
-        mem.free(ctx);
+        mem.destroy(ctx);
     }
 }
 
@@ -3704,7 +3745,7 @@ fn drain_tunnel(
     data: ?*Curl_easy,
     tunnel: *tunnel_stream,
 ) void {
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2ProxyCtx(cf);
     if (!tunnel.closed and !tunnel.reset and
         (!io_buffers.Curl_bufq_is_empty(&ctx.tunnel.sendbuf) or
             !io_buffers.Curl_bufq_is_empty(&ctx.tunnel.recvbuf)))
@@ -3721,8 +3762,8 @@ fn proxy_h2_nw_out_writer(
 ) callconv(.c) CURLcode {
     pnwritten.* = 0;
     if (writer_ctx) |raw| {
-        const cf: *Curl_cfilter = @ptrCast(@alignCast(raw));
-        const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+        const cf = cfFromUserp(raw);
+        const ctx = cfH2ProxyCtx(cf);
         const data = ctx.call_data.data;
         const result = Curl_conn_cf_send(cf.next, data, buf, buflen, false, pnwritten);
         trcCf(data, cf, "[0] nw_out_writer(len=%zu) -> %d, %zu", .{ buflen, @as(c_int, @intCast(result)), pnwritten.* });
@@ -3732,7 +3773,7 @@ fn proxy_h2_nw_out_writer(
 }
 
 fn proxy_h2_client_new(cf: *Curl_cfilter, cbs: ?*nghttp2_session_callbacks) c_int {
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2ProxyCtx(cf);
     var o: ?*nghttp2_option = null;
     var h2_mem = nghttp2_mem{
         .mem_user_data = null,
@@ -3758,7 +3799,7 @@ fn proxy_h2_should_close_session(ctx: *cf_h2_proxy_ctx) bool {
 }
 
 fn proxy_h2_nw_out_flush(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2ProxyCtx(cf);
     var nwritten: usize = 0;
 
     if (io_buffers.Curl_bufq_is_empty(&ctx.outbufq))
@@ -3777,7 +3818,7 @@ fn proxy_h2_nw_out_flush(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
 }
 
 fn proxy_h2_process_pending_input(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2ProxyCtx(cf);
     var buf: ?[*]const u8 = null;
     var blen: usize = 0;
     var nread: usize = 0;
@@ -3812,7 +3853,7 @@ fn proxy_h2_process_pending_input(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode
 }
 
 fn proxy_h2_progress_ingress(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2ProxyCtx(cf);
     var result: CURLcode = CURLE_OK;
     var nread: usize = 0;
 
@@ -3856,7 +3897,7 @@ fn proxy_h2_progress_ingress(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
 }
 
 fn proxy_h2_progress_egress(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2ProxyCtx(cf);
     var rv: c_int = 0;
 
     ctx.nw_out_blocked = false;
@@ -3880,8 +3921,8 @@ fn on_session_send(
 ) callconv(.c) isize {
     _ = h2;
     _ = flags;
-    const cf: *Curl_cfilter = @ptrCast(@alignCast(userp.?));
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const cf = cfFromUserp(userp);
+    const ctx = cfH2ProxyCtx(cf);
     const data = ctx.call_data.data;
     var nwritten: usize = 0;
 
@@ -3917,19 +3958,13 @@ fn proxy_h2_on_frame_send(
     userp: ?*anyopaque,
 ) callconv(.c) c_int {
     _ = session;
-    const cf: *Curl_cfilter = @ptrCast(@alignCast(userp.?));
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const cf = cfFromUserp(userp);
+    const ctx = cfH2ProxyCtx(cf);
     const data = ctx.call_data.data;
 
     if (trcCfIsVerbose(cf, data)) {
         var buffer: [256]u8 = undefined;
-        const len = Curl_nghttp2_fr_print(frame, &buffer, buffer.len - 1);
-        if (len >= 0 and @as(usize, @intCast(len)) < buffer.len) {
-            buffer[@intCast(len)] = 0;
-        } else {
-            buffer[buffer.len - 1] = 0;
-        }
-        trcCf(data, cf, "[%d] -> %s", .{ frame.hd.stream_id, @as([*:0]const u8, @ptrCast(&buffer)) });
+        trcCf(data, cf, "[%d] -> %s", .{ frame.hd.stream_id, formatFrameTrace(frame, &buffer) });
     }
     return 0;
 }
@@ -3940,20 +3975,14 @@ fn proxy_h2_on_frame_recv(
     userp: ?*anyopaque,
 ) callconv(.c) c_int {
     _ = session;
-    const cf: *Curl_cfilter = @ptrCast(@alignCast(userp.?));
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const cf = cfFromUserp(userp);
+    const ctx = cfH2ProxyCtx(cf);
     const data = ctx.call_data.data;
     const stream_id = frame.hd.stream_id;
 
     if (trcCfIsVerbose(cf, data)) {
         var buffer: [256]u8 = undefined;
-        const len = Curl_nghttp2_fr_print(frame, &buffer, buffer.len - 1);
-        if (len >= 0 and @as(usize, @intCast(len)) < buffer.len) {
-            buffer[@intCast(len)] = 0;
-        } else {
-            buffer[buffer.len - 1] = 0;
-        }
-        trcCf(data, cf, "[%d] <- %s", .{ frame.hd.stream_id, @as([*:0]const u8, @ptrCast(&buffer)) });
+        trcCf(data, cf, "[%d] <- %s", .{ frame.hd.stream_id, formatFrameTrace(frame, &buffer) });
     }
 
     if (stream_id == 0) {
@@ -4017,8 +4046,8 @@ fn proxy_h2_on_header(
 ) callconv(.c) c_int {
     _ = session;
     _ = flags;
-    const cf: *Curl_cfilter = @ptrCast(@alignCast(userp.?));
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const cf = cfFromUserp(userp);
+    const ctx = cfH2ProxyCtx(cf);
     const data = ctx.call_data.data;
     const stream_id = frame.hd.stream_id;
 
@@ -4085,13 +4114,12 @@ fn tunnel_send_callback(
     if (stream_id == 0)
         return NGHTTP2_ERR_INVALID_ARGUMENT;
 
-    const cf: *Curl_cfilter = @ptrCast(@alignCast(userp.?));
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const cf = cfFromUserp(userp);
+    const ctx = cfH2ProxyCtx(cf);
     const data = ctx.call_data.data;
 
-    const raw_ts = nghttp2_session_get_stream_user_data(session, stream_id) orelse
+    const ts = tunnelStreamUserData(session, stream_id) orelse
         return NGHTTP2_ERR_CALLBACK_FAILURE;
-    const ts: *tunnel_stream = @ptrCast(@alignCast(raw_ts));
 
     var nread: usize = 0;
     const result = io_buffers.Curl_bufq_read(&ts.sendbuf, buf, length, &nread);
@@ -4120,8 +4148,8 @@ fn tunnel_recv_callback(
 ) callconv(.c) c_int {
     _ = session;
     _ = flags;
-    const cf: *Curl_cfilter = @ptrCast(@alignCast(userp.?));
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const cf = cfFromUserp(userp);
+    const ctx = cfH2ProxyCtx(cf);
     var nwritten: usize = 0;
 
     if (stream_id != ctx.tunnel.stream_id)
@@ -4142,8 +4170,8 @@ fn proxy_h2_on_stream_close(
     userp: ?*anyopaque,
 ) callconv(.c) c_int {
     _ = session;
-    const cf: *Curl_cfilter = @ptrCast(@alignCast(userp.?));
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const cf = cfFromUserp(userp);
+    const ctx = cfH2ProxyCtx(cf);
     const data = ctx.call_data.data;
 
     if (stream_id != ctx.tunnel.stream_id)
@@ -4225,7 +4253,7 @@ fn submit_CONNECT(
     data: *Curl_easy,
     ts: *tunnel_stream,
 ) CURLcode {
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2ProxyCtx(cf);
     var req: ?*httpreq = null;
 
     var result = Curl_http_proxy_create_tunnel_request(
@@ -4274,7 +4302,7 @@ fn inspect_response(
     data: *Curl_easy,
     ts: *tunnel_stream,
 ) CURLcode {
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2ProxyCtx(cf);
     var res: proxy_inspect_result = .PROXY_INSPECT_OK;
 
     var result = Curl_http_proxy_inspect_tunnel_response(
@@ -4307,7 +4335,7 @@ fn H2_CONNECT(
     data: *Curl_easy,
     ts: *tunnel_stream,
 ) CURLcode {
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2ProxyCtx(cf);
     var result: CURLcode = CURLE_OK;
 
     if (ctx.conn_closed) {
@@ -4362,7 +4390,7 @@ fn H2_CONNECT(
 }
 
 fn cf_h2_proxy_ctx_init(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2ProxyCtx(cf);
     var result: CURLcode = CURLE_OUT_OF_MEMORY;
     var cbs: ?*nghttp2_session_callbacks = null;
 
@@ -4436,7 +4464,7 @@ fn cf_h2_proxy_connect(
     data: ?*Curl_easy,
     done: *bool,
 ) callconv(.c) CURLcode {
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2ProxyCtx(cf);
     var result: CURLcode = CURLE_OK;
     var save: cf_call_data = undefined;
     const ts = &ctx.tunnel;
@@ -4483,8 +4511,7 @@ fn cf_h2_proxy_connect(
 
 fn cf_h2_proxy_destroy(cf: *Curl_cfilter, data: ?*Curl_easy) callconv(.c) void {
     _ = data;
-    if (cf.ctx) |raw| {
-        const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(raw));
+    if (cfH2ProxyCtxOpt(cf)) |ctx| {
         cf_h2_proxy_ctx_free(ctx);
         cf.ctx = null;
     }
@@ -4495,7 +4522,7 @@ fn cf_h2_proxy_shutdown(
     data: ?*Curl_easy,
     done: *bool,
 ) callconv(.c) CURLcode {
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2ProxyCtx(cf);
     var save: cf_call_data = undefined;
     var result: CURLcode = CURLE_OK;
 
@@ -4541,8 +4568,7 @@ fn cf_h2_proxy_shutdown(
 }
 
 fn cf_h2_proxy_data_pending(cf: *Curl_cfilter, data: ?*const Curl_easy) callconv(.c) bool {
-    if (cf.ctx) |raw| {
-        const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(raw));
+    if (cfH2ProxyCtxOpt(cf)) |ctx| {
         if (!io_buffers.Curl_bufq_is_empty(&ctx.inbufq) or
             (ctx.tunnel.state == .H2_TUNNEL_ESTABLISHED and
                 !io_buffers.Curl_bufq_is_empty(&ctx.tunnel.recvbuf)))
@@ -4561,8 +4587,8 @@ fn cf_h2_proxy_adjust_pollset(
     data: ?*Curl_easy,
     ps: *easy_pollset,
 ) callconv(.c) CURLcode {
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
-    const ps_ptr: *headers_sock.EasyPollset = @ptrCast(@alignCast(ps));
+    const ctx = cfH2ProxyCtx(cf);
+    const ps_ptr = pollsetTyped(ps);
     var save: cf_call_data = undefined;
     const sock = Curl_conn_cf_get_socket(cf, data);
     var want_recv = false;
@@ -4620,7 +4646,7 @@ fn h2_handle_tunnel_close(
     data: ?*Curl_easy,
     pnread: *usize,
 ) CURLcode {
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2ProxyCtx(cf);
     pnread.* = 0;
 
     if (ctx.tunnel.@"error" != 0) {
@@ -4648,7 +4674,7 @@ fn tunnel_recv(
     len: usize,
     pnread: *usize,
 ) CURLcode {
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2ProxyCtx(cf);
     var result: CURLcode = CURLE_AGAIN;
 
     pnread.* = 0;
@@ -4683,7 +4709,7 @@ fn cf_h2_proxy_recv(
     len: usize,
     pnread: *usize,
 ) callconv(.c) CURLcode {
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2ProxyCtx(cf);
     var save: cf_call_data = undefined;
     var result: CURLcode = CURLE_OK;
 
@@ -4744,7 +4770,7 @@ fn cf_h2_proxy_send(
     pnwritten: *usize,
 ) callconv(.c) CURLcode {
     _ = eos;
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2ProxyCtx(cf);
     var save: cf_call_data = undefined;
     var result: CURLcode = CURLE_OK;
 
@@ -4818,7 +4844,7 @@ fn finishCfH2ProxySend(
 }
 
 fn cf_h2_proxy_flush(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2ProxyCtx(cf);
     var save: cf_call_data = undefined;
     var result: CURLcode = CURLE_OK;
 
@@ -4863,7 +4889,7 @@ fn proxy_h2_connisalive(
     data: ?*Curl_easy,
     input_pending: *bool,
 ) bool {
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2ProxyCtx(cf);
     var alive = true;
 
     input_pending.* = false;
@@ -4894,7 +4920,7 @@ fn cf_h2_proxy_is_alive(
     data: ?*Curl_easy,
     input_pending: *bool,
 ) callconv(.c) bool {
-    const ctx_opt: ?*cf_h2_proxy_ctx = if (cf.ctx) |raw| @ptrCast(@alignCast(raw)) else null;
+    const ctx_opt = cfH2ProxyCtxOpt(cf);
     input_pending.* = false;
     const ctx = ctx_opt orelse return false;
     var save: cf_call_data = undefined;
@@ -4918,13 +4944,12 @@ fn cf_h2_proxy_query(
     pres1: ?*c_int,
     pres2: ?*anyopaque,
 ) callconv(.c) CURLcode {
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2ProxyCtx(cf);
 
     switch (query) {
         CF_QUERY_HOST_PORT => {
             if (pres1) |p1| p1.* = @intCast(ctx.dest.?.port);
-            if (pres2) |p2| {
-                const host_out: *?[*:0]const u8 = @ptrCast(@alignCast(p2));
+            if (queryStrOut(pres2)) |host_out| {
                 host_out.* = ctx.dest.?.hostname;
             }
             return CURLE_OK;
@@ -4939,8 +4964,7 @@ fn cf_h2_proxy_query(
             }
         },
         CF_QUERY_ALPN_NEGOTIATED => {
-            if (pres2) |p2| {
-                const palpn: *?[*:0]const u8 = @ptrCast(@alignCast(p2));
+            if (queryStrOut(pres2)) |palpn| {
                 palpn.* = null;
             }
             return CURLE_OK;
@@ -4962,7 +4986,7 @@ fn cf_h2_proxy_cntrl(
 ) callconv(.c) CURLcode {
     _ = arg1;
     _ = arg2;
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfH2ProxyCtx(cf);
     var result: CURLcode = CURLE_OK;
     var save: cf_call_data = undefined;
 
@@ -4994,6 +5018,30 @@ pub var Curl_cft_h2_proxy: Curl_cftype = .{
     .query = cf_h2_proxy_query,
 };
 
+fn createH2ProxyCfilter(
+    peer: *Curl_peer,
+    dest: *Curl_peer,
+    udp_tunnel: bool,
+    out_err: *CURLcode,
+) error{CreateFailed}!*Curl_cfilter {
+    const ctx = mem.create(cf_h2_proxy_ctx) orelse {
+        out_err.* = CURLE_OUT_OF_MEMORY;
+        return error.CreateFailed;
+    };
+    altsvc_hsts_peer.Curl_peer_link(&ctx.peer, peer);
+    altsvc_hsts_peer.Curl_peer_link(&ctx.dest, dest);
+    ctx.udp_tunnel = udp_tunnel;
+    errdefer cf_h2_proxy_ctx_free(ctx);
+
+    var cf_h2_proxy: ?*Curl_cfilter = null;
+    const result = Curl_cf_create(&cf_h2_proxy, &Curl_cft_h2_proxy, ctx);
+    if (result != CURLE_OK) {
+        out_err.* = result;
+        return error.CreateFailed;
+    }
+    return cf_h2_proxy.?;
+}
+
 pub fn Curl_cf_h2_proxy_insert_after(
     cf: *Curl_cfilter,
     data: ?*Curl_easy,
@@ -5002,19 +5050,9 @@ pub fn Curl_cf_h2_proxy_insert_after(
     udp_tunnel: bool,
 ) callconv(.c) CURLcode {
     _ = data;
-    var cf_h2_proxy: ?*Curl_cfilter = null;
-    const raw = mem.calloc(1, @sizeOf(cf_h2_proxy_ctx)) orelse return CURLE_OUT_OF_MEMORY;
-    const ctx: *cf_h2_proxy_ctx = @ptrCast(@alignCast(raw));
-    altsvc_hsts_peer.Curl_peer_link(&ctx.peer, peer);
-    altsvc_hsts_peer.Curl_peer_link(&ctx.dest, dest);
-    ctx.udp_tunnel = udp_tunnel;
-
-    const result = Curl_cf_create(&cf_h2_proxy, &Curl_cft_h2_proxy, ctx);
-    if (result != CURLE_OK) {
-        cf_h2_proxy_ctx_free(ctx);
-        return result;
-    }
-    Curl_conn_cf_insert_after(cf, cf_h2_proxy.?);
+    var result: CURLcode = CURLE_OK;
+    const cf_h2_proxy = createH2ProxyCfilter(peer, dest, udp_tunnel, &result) catch return result;
+    Curl_conn_cf_insert_after(cf, cf_h2_proxy);
     return CURLE_OK;
 }
 

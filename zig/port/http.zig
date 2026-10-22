@@ -18,6 +18,7 @@ const urlapi = @import("urlapi.zig");
 const io_buffers = @import("io_buffers.zig");
 const headers_sock = @import("headers_sock.zig");
 const sendf = @import("sendf.zig");
+const http1_options = @import("http1_options.zig");
 
 pub const CURLcode = c_uint;
 pub const CURLUcode = urlapi.CURLUcode;
@@ -162,7 +163,7 @@ inline fn hasFeat(bit: c_uint) bool {
     return (Curl_http_acc_features() & bit) != 0;
 }
 
-pub const Curl_easy = opaque {};
+pub const Curl_easy = sendf.CurlEasy;
 pub const connectdata = opaque {};
 pub const Curl_multi = opaque {};
 pub const http_negotiation = opaque {};
@@ -192,7 +193,7 @@ pub const Curl_protocol = extern struct {
     perform_pollset: ?*const fn (data: *Curl_easy, ps: *easy_pollset) callconv(.c) CURLcode,
     disconnect: ?*const fn (data: *Curl_easy, conn: *connectdata, dead_connection: bool) callconv(.c) CURLcode,
     write_resp: ?*const fn (data: *Curl_easy, buf: [*]const u8, blen: usize, is_eos: bool) callconv(.c) CURLcode,
-    write_resp_hd: ?*const fn (data: *Curl_easy, hd: [*]const u8, hdlen: usize, is_eos: bool) callconv(.c) CURLcode,
+    write_resp_hd: ?*const fn (data: *Curl_easy, hd: [*:0]const u8, hdlen: usize, is_eos: bool) callconv(.c) CURLcode,
     connection_is_dead: ?*const fn (data: *Curl_easy, conn: *connectdata) callconv(.c) bool,
     attach: ?*const fn (data: *Curl_easy, conn: *connectdata) callconv(.c) void,
     follow: ?*const fn (data: *Curl_easy, newurl: [*:0]const u8, ftype: followtype) callconv(.c) CURLcode,
@@ -245,14 +246,7 @@ inline fn Curl_bufref_dup(br: *const bufref) ?[*:0]u8 {
     return mem.strdup(p);
 }
 
-pub const httpreq = extern struct {
-    headers: dynhds,
-    trailers: dynhds,
-    scheme: ?[*:0]u8,
-    authority: ?[*:0]u8,
-    path: ?[*:0]u8,
-    method: [1]u8,
-};
+pub const httpreq = http1_options.httpreq;
 
 pub const http_resp = extern struct {
     status: c_int,
@@ -309,7 +303,7 @@ extern fn Curl_http_acc_set_expect_100_timeout(data: *const Curl_easy) callconv(
 extern fn Curl_http_acc_set_connect_only(data: *const Curl_easy) callconv(.c) u8;
 extern fn Curl_http_acc_set_timecondition(data: *const Curl_easy) callconv(.c) u8;
 extern fn Curl_http_acc_set_timevalue(data: *const Curl_easy) callconv(.c) curl_off_t;
-extern fn Curl_http_acc_set_postfields(data: *const Curl_easy) callconv(.c) ?*const anyopaque;
+extern fn Curl_http_acc_set_postfields(data: *const Curl_easy) callconv(.c) ?[*]const u8;
 extern fn Curl_http_acc_set_set_resume_from(data: *const Curl_easy) callconv(.c) curl_off_t;
 extern fn Curl_http_acc_set_get_filetime(data: *const Curl_easy) callconv(.c) bool;
 extern fn Curl_http_acc_set_http_fail_on_error(data: *const Curl_easy) callconv(.c) bool;
@@ -786,16 +780,16 @@ fn pickoneauth(pick: *auth, mask: u32, creds: ?*const Curl_creds) bool {
 
 fn http_perhapsrewind(data: *Curl_easy, conn: *connectdata) CURLcode {
     const bytessent = Curl_http_acc_req_writebytecount(data);
-    const expectsend = sendf.Curl_creader_total_length(@ptrCast(data));
+    const expectsend = sendf.Curl_creader_total_length(data);
     const upload_remain: curl_off_t = if (expectsend >= 0) (expectsend - bytessent) else -1;
     const little_upload_remains = (upload_remain >= 0 and upload_remain < 2000);
-    const needs_rewind = sendf.Curl_creader_needs_rewind(@ptrCast(data));
+    const needs_rewind = sendf.Curl_creader_needs_rewind(data);
     var abort_upload = (!Curl_http_acc_req_upload_done(data) and !little_upload_remains);
     var ongoing_auth: ?[*:0]const u8 = null;
 
     if (needs_rewind) {
         Curl_infof(data, "Need to rewind upload for next request");
-        sendf.Curl_creader_set_rewind(@ptrCast(data), true);
+        sendf.Curl_creader_set_rewind(data, true);
     }
 
     if (Curl_http_acc_conn_bits_close(conn))
@@ -1207,7 +1201,7 @@ pub export fn Curl_http_input_auth(
 
         const slice = std.mem.span(a);
         if (std.mem.indexOfScalar(u8, slice, ',')) |idx| {
-            var next_p: ?[*:0]const u8 = @ptrCast(a + idx + 1);
+            var next_p: ?[*:0]const u8 = a + idx + 1;
             curlx_str_passblanks(&next_p);
             cur = next_p;
         } else {
@@ -1233,7 +1227,7 @@ fn http_switch_to_get(data: *Curl_easy, code: c_int) void {
             Curl_infof(data, "Stick to %s instead of GET", r);
     }
     Curl_http_acc_state_set_httpreq(data, @intCast(HTTPREQ_GET));
-    sendf.Curl_creader_set_rewind(@ptrCast(data), false);
+    sendf.Curl_creader_set_rewind(data, false);
 }
 
 fn httpreq_is_post(data: *const Curl_easy) bool {
@@ -1454,7 +1448,7 @@ pub export fn Curl_compareheader(
     if (curl_strnequal(headerline, header, hlen) == 0)
         return false;
 
-    var p: ?[*:0]const u8 = @ptrCast(headerline + hlen);
+    var p: ?[*:0]const u8 = headerline + hlen;
     var val = std.mem.zeroes(Curl_str);
     if (curlx_str_cspn(&p, &val, "\r\n") != 0)
         return false;
@@ -1501,8 +1495,12 @@ const cr_exp100_ctx = extern struct {
     state: c_uint,
 };
 
+inline fn crExp100Ctx(reader: *sendf.CurlCreader) *cr_exp100_ctx {
+    return @ptrCast(@alignCast(reader.ctx));
+}
+
 fn http_exp100_continue(data: *Curl_easy, reader: *sendf.CurlCreader) void {
-    const ctx: *cr_exp100_ctx = @ptrCast(@alignCast(reader.ctx));
+    const ctx = crExp100Ctx(reader);
     if (ctx.state > EXP100_SEND_DATA) {
         ctx.state = EXP100_SEND_DATA;
         Curl_expire_clear(data, EXPIRE_100_TIMEOUT);
@@ -1517,8 +1515,8 @@ fn cr_exp100_read(
     nread: *usize,
     eos: *bool,
 ) callconv(.c) CURLcode {
-    const d: *Curl_easy = @ptrCast(data orelse return CURLE_BAD_FUNCTION_ARGUMENT);
-    const ctx: *cr_exp100_ctx = @ptrCast(@alignCast(reader.ctx));
+    const d = data orelse return CURLE_BAD_FUNCTION_ARGUMENT;
+    const ctx = crExp100Ctx(reader);
 
     switch (ctx.state) {
         EXP100_SENDING_REQUEST => {
@@ -1563,8 +1561,8 @@ fn cr_exp100_done(
     reader: *sendf.CurlCreader,
     premature: c_int,
 ) callconv(.c) void {
-    const d: *Curl_easy = @ptrCast(data orelse return);
-    const ctx: *cr_exp100_ctx = @ptrCast(@alignCast(reader.ctx));
+    const d = data orelse return;
+    const ctx = crExp100Ctx(reader);
     ctx.state = if (premature != 0) EXP100_FAILED else EXP100_SEND_DATA;
     Curl_expire_clear(d, EXPIRE_100_TIMEOUT);
 }
@@ -1585,40 +1583,40 @@ pub const cr_exp100 = sendf.CurlCrtype{
 
 fn http_exp100_add_reader(data: *Curl_easy) CURLcode {
     var reader: ?*sendf.CurlCreader = null;
-    var result = sendf.Curl_creader_create(&reader, @ptrCast(data), &cr_exp100, sendf.CURL_CR_PROTOCOL);
+    var result = sendf.Curl_creader_create(&reader, data, &cr_exp100, sendf.CURL_CR_PROTOCOL);
     if (result == CURLE_OK)
-        result = sendf.Curl_creader_add(@ptrCast(data), reader.?);
+        result = sendf.Curl_creader_add(data, reader.?);
     if (result == CURLE_OK) {
-        const ctx: *cr_exp100_ctx = @ptrCast(@alignCast(reader.?.ctx));
+        const ctx = crExp100Ctx(reader.?);
         ctx.state = EXP100_SENDING_REQUEST;
     }
     if (result != CURLE_OK and reader != null)
-        sendf.Curl_creader_free(@ptrCast(data), reader);
+        sendf.Curl_creader_free(data, reader);
     return result;
 }
 
 fn http_exp100_got100(data: *Curl_easy) void {
-    if (sendf.Curl_creader_get_by_type(@ptrCast(data), &cr_exp100)) |r| {
+    if (sendf.Curl_creader_get_by_type(data, &cr_exp100)) |r| {
         http_exp100_continue(data, r);
     }
 }
 
 fn http_exp100_is_waiting(data: *Curl_easy) bool {
-    if (sendf.Curl_creader_get_by_type(@ptrCast(data), &cr_exp100)) |r| {
-        const ctx: *cr_exp100_ctx = @ptrCast(@alignCast(r.ctx));
+    if (sendf.Curl_creader_get_by_type(data, &cr_exp100)) |r| {
+        const ctx = crExp100Ctx(r);
         return ctx.state == EXP100_AWAITING_CONTINUE;
     }
     return false;
 }
 
 fn http_exp100_send_anyway(data: *Curl_easy) void {
-    if (sendf.Curl_creader_get_by_type(@ptrCast(data), &cr_exp100)) |r| {
+    if (sendf.Curl_creader_get_by_type(data, &cr_exp100)) |r| {
         http_exp100_continue(data, r);
     }
 }
 
 fn http_exp100_is_selected(data: *Curl_easy) bool {
-    return sendf.Curl_creader_get_by_type(@ptrCast(data), &cr_exp100) != null;
+    return sendf.Curl_creader_get_by_type(data, &cr_exp100) != null;
 }
 
 pub export fn Curl_http_doing_pollset(
@@ -1627,7 +1625,7 @@ pub export fn Curl_http_doing_pollset(
 ) callconv(.c) CURLcode {
     const conn = Curl_http_acc_conn(data) orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     return headers_sock.Curl_pollset_change(
-        @ptrCast(data),
+        data,
         ps,
         Curl_http_acc_conn_firstsocket(conn),
         headers_sock.CURL_POLL_OUT,
@@ -1644,7 +1642,7 @@ pub export fn Curl_http_perform_pollset(
 
     if (Curl_http_acc_req_want_recv(data)) {
         result = headers_sock.Curl_pollset_change(
-            @ptrCast(data),
+            data,
             ps,
             Curl_http_acc_conn_firstsocket(conn),
             headers_sock.CURL_POLL_IN,
@@ -1654,7 +1652,7 @@ pub export fn Curl_http_perform_pollset(
 
     if (result == CURLE_OK and Curl_req_want_send(data) and !http_exp100_is_waiting(data)) {
         result = headers_sock.Curl_pollset_change(
-            @ptrCast(data),
+            data,
             ps,
             Curl_http_acc_conn_firstsocket(conn),
             headers_sock.CURL_POLL_OUT,
@@ -1675,7 +1673,7 @@ fn http_write_header(
     const writetype: c_int = sendf.CLIENTWRITE_HEADER |
         (if (@divTrunc(httpcode, 100) == 1) sendf.CLIENTWRITE_1XX else 0);
 
-    var result = sendf.Curl_client_write(@ptrCast(data), writetype, hd, hdlen);
+    var result = sendf.Curl_client_write(data, writetype, hd, hdlen);
     if (result != CURLE_OK)
         return result;
 
@@ -2007,7 +2005,7 @@ fn http_set_aptr_host(data: *Curl_easy) CURLcode {
         }
 
         if (curl_strequal("Host:", p) == 0) {
-            const h = curl_maprintf("Host:%s", @as([*:0]const u8, @ptrCast(p + 5))) orelse
+            const h = curl_maprintf("Host:%s", p + 5) orelse
                 return CURLE_OUT_OF_MEMORY;
             Curl_http_acc_state_set_http_host(data, h);
         }
@@ -2128,33 +2126,33 @@ fn set_reader(data: *Curl_easy, httpreq_val: Curl_HttpReq) CURLcode {
     const postsize = Curl_http_acc_state_infilesize(data);
 
     if (Curl_http_acc_req_authneg(data))
-        return sendf.Curl_creader_set_null(@ptrCast(data));
+        return sendf.Curl_creader_set_null(data);
 
     switch (httpreq_val) {
         HTTPREQ_PUT => {
             return if (postsize != 0)
-                sendf.Curl_creader_set_fread(@ptrCast(data), postsize)
+                sendf.Curl_creader_set_fread(data, postsize)
             else
-                sendf.Curl_creader_set_null(@ptrCast(data));
+                sendf.Curl_creader_set_null(data);
         },
         HTTPREQ_POST_FORM, HTTPREQ_POST_MIME => {
             if (hasFeat(FEAT_MIME) or hasFeat(FEAT_FORM_API)) {
                 return Curl_http_acc_set_post_reader(data, httpreq_val);
             }
             Curl_http_acc_state_set_infilesize(data, 0);
-            return sendf.Curl_creader_set_null(@ptrCast(data));
+            return sendf.Curl_creader_set_null(data);
         },
         HTTPREQ_POST => {
             if (postsize == 0) {
-                result = sendf.Curl_creader_set_null(@ptrCast(data));
+                result = sendf.Curl_creader_set_null(data);
             } else if (Curl_http_acc_set_postfields(data)) |pf| {
                 if (postsize < 0 or @as(u64, @intCast(postsize)) >= std.math.maxInt(usize))
                     return CURLE_OUT_OF_MEMORY;
                 const plen: usize = @intCast(postsize);
                 if (plen != 0) {
-                    result = sendf.Curl_creader_set_buf(@ptrCast(data), @ptrCast(pf), plen);
+                    result = sendf.Curl_creader_set_buf(data, pf, plen);
                 } else {
-                    result = sendf.Curl_creader_set_null(@ptrCast(data));
+                    result = sendf.Curl_creader_set_null(data);
                 }
             } else {
                 var chunked = false;
@@ -2167,13 +2165,13 @@ fn set_reader(data: *Curl_easy, httpreq_val: Curl_HttpReq) CURLcode {
                         "chunked".len,
                     );
                 }
-                result = sendf.Curl_creader_set_fread(@ptrCast(data), if (chunked) -1 else postsize);
+                result = sendf.Curl_creader_set_fread(data, if (chunked) -1 else postsize);
             }
             return result;
         },
         else => {
             Curl_http_acc_state_set_infilesize(data, 0);
-            return sendf.Curl_creader_set_null(@ptrCast(data));
+            return sendf.Curl_creader_set_null(data);
         },
     }
 }
@@ -2205,7 +2203,7 @@ fn http_req_set_TE(data: *Curl_easy, req: *dynbuf, httpversion: c_int) CURLcode 
             Curl_http_acc_req_set_upload_chunky(data, false);
         }
     } else {
-        const req_clen = sendf.Curl_creader_total_length(@ptrCast(data));
+        const req_clen = sendf.Curl_creader_total_length(data);
         if (req_clen < 0) {
             if (httpversion > 10) {
                 Curl_http_acc_req_set_upload_chunky(data, httpversion < 20);
@@ -2242,7 +2240,7 @@ fn addexpect(
             "100-continue".len,
         );
     } else if (!Curl_http_acc_state_disableexpect(data) and httpversion == 11) {
-        const client_len = sendf.Curl_creader_client_length(@ptrCast(data));
+        const client_len = sendf.Curl_creader_client_length(data);
         if (client_len > EXPECT_100_THRESHOLD or client_len < 0) {
             const result = containers.curlx_dyn_addn(r, "Expect: 100-continue\r\n", "Expect: 100-continue\r\n".len);
             if (result != CURLE_OK)
@@ -2268,7 +2266,7 @@ fn http_add_content_hds(
             return result;
     }
 
-    const req_clen = sendf.Curl_creader_total_length(@ptrCast(data));
+    const req_clen = sendf.Curl_creader_total_length(data);
     switch (httpreq_val) {
         HTTPREQ_PUT, HTTPREQ_POST, HTTPREQ_POST_FORM, HTTPREQ_POST_MIME => {
             if ((httpreq_val == HTTPREQ_POST_FORM or httpreq_val == HTTPREQ_POST_MIME) and
@@ -2342,7 +2340,7 @@ fn http_range(data: *Curl_easy, httpreq_val: Curl_HttpReq) CURLcode {
         } else if ((httpreq_val == HTTPREQ_POST or httpreq_val == HTTPREQ_PUT) and
             Curl_checkheaders(data, "Content-Range", "Content-Range".len) == null)
         {
-            const req_clen = sendf.Curl_creader_total_length(@ptrCast(data));
+            const req_clen = sendf.Curl_creader_total_length(data);
             mem.free(Curl_http_acc_state_rangeline(data));
             var rl: ?[*:0]u8 = null;
             if (Curl_http_acc_set_set_resume_from(data) < 0) {
@@ -2829,7 +2827,7 @@ inline fn hdIs(hd: [*]const u8, hdlen: usize, comptime name: []const u8) bool {
 
 inline fn hdVal(hd: [*:0]const u8, hdlen: usize, comptime name: []const u8) ?[*:0]const u8 {
     if (hdlen >= name.len and curl_strnequal(name.ptr, hd, name.len) != 0) {
-        return @ptrCast(hd + name.len);
+        return hd + name.len;
     }
     return null;
 }
@@ -3348,7 +3346,7 @@ fn http_handle_send_error(data: *Curl_easy) CURLcode {
 
     if (!Curl_http_acc_req_authneg(data) and
         !Curl_http_acc_conn_bits_close(conn) and
-        !sendf.Curl_creader_will_rewind(@ptrCast(data)))
+        !sendf.Curl_creader_will_rewind(data))
     {
         switch (Curl_http_acc_state_httpreq(data)) {
             HTTPREQ_PUT, HTTPREQ_POST, HTTPREQ_POST_FORM, HTTPREQ_POST_MIME => {
@@ -3385,7 +3383,7 @@ fn http_handle_send_error(data: *Curl_easy) CURLcode {
         }
     }
 
-    if (sendf.Curl_creader_will_rewind(@ptrCast(data)) and !Curl_req_done_sending(data)) {
+    if (sendf.Curl_creader_will_rewind(data) and !Curl_req_done_sending(data)) {
         Curl_infof(data, "Keep sending data to get tossed away");
         Curl_http_acc_req_set_send(data);
     }
@@ -3659,7 +3657,7 @@ fn http_rw_hd(
 
     if (@divTrunc(Curl_http_acc_req_httpcode(data), 100) == 1)
         writetype |= sendf.CLIENTWRITE_1XX;
-    result = sendf.Curl_client_write(@ptrCast(data), writetype, hd, hdlen);
+    result = sendf.Curl_client_write(data, writetype, hd, hdlen);
     if (result != CURLE_OK)
         return result;
 
@@ -3836,7 +3834,7 @@ pub export fn Curl_http_write_resp_hd(
     var result = http_rw_hd(data, hd, hdlen, &tmp, 0, &consumed);
     if (result == CURLE_OK and is_eos) {
         result = sendf.Curl_client_write(
-            @ptrCast(data),
+            data,
             sendf.CLIENTWRITE_BODY | sendf.CLIENTWRITE_EOS,
             &tmp,
             0,
@@ -3861,7 +3859,7 @@ pub export fn Curl_http_write_resp_hds(
             if (!Curl_http_acc_req_no_body(data) and containers.curlx_dyn_len(hb) > 0) {
                 if (containers.curlx_dyn_ptr(hb)) |ptr| {
                     result = sendf.Curl_client_write(
-                        @ptrCast(data),
+                        data,
                         sendf.CLIENTWRITE_BODY,
                         ptr,
                         containers.curlx_dyn_len(hb),
@@ -3894,7 +3892,7 @@ pub export fn Curl_http_write_resp(
         var flags: c_int = sendf.CLIENTWRITE_BODY;
         if (is_eos)
             flags |= sendf.CLIENTWRITE_EOS;
-        result = sendf.Curl_client_write(@ptrCast(data), flags, buf, blen);
+        result = sendf.Curl_client_write(data, flags, buf, blen);
     }
     return result;
 }
@@ -3926,6 +3924,41 @@ pub export fn Curl_http_decode_status(
 // 8. HTTP Request & Response Struct Helpers (httpreq, http_resp, H2 convert)
 // ============================================================================
 
+fn allocHttpReq(method: [*]const u8, m_len: usize) ?*httpreq {
+    const raw = mem.callocMany(u8, @sizeOf(httpreq) + m_len) orelse return null;
+    const method_offset = @offsetOf(httpreq, "method");
+    @memcpy(raw[method_offset .. method_offset + m_len], method[0..m_len]);
+    const req: *httpreq = @ptrCast(@alignCast(raw));
+    return req;
+}
+
+fn httpReqMakeImpl(
+    method: [*]const u8,
+    m_len: usize,
+    scheme: ?[*]const u8,
+    s_len: usize,
+    authority: ?[*]const u8,
+    a_len: usize,
+    path: ?[*]const u8,
+    p_len: usize,
+) error{OutOfMemory}!*httpreq {
+    const req = allocHttpReq(method, m_len) orelse return error.OutOfMemory;
+    errdefer Curl_http_req_free(req);
+
+    if (scheme) |s| {
+        req.scheme = curlx_memdup0(s, s_len) orelse return error.OutOfMemory;
+    }
+    if (authority) |a| {
+        req.authority = curlx_memdup0(a, a_len) orelse return error.OutOfMemory;
+    }
+    if (path) |p| {
+        req.path = curlx_memdup0(p, p_len) orelse return error.OutOfMemory;
+    }
+    io_buffers.Curl_dynhds_init(&req.headers, 0, DYN_HTTP_REQUEST);
+    io_buffers.Curl_dynhds_init(&req.trailers, 0, DYN_HTTP_REQUEST);
+    return req;
+}
+
 pub export fn Curl_http_req_make(
     preq: *?*httpreq,
     method: [*]const u8,
@@ -3938,33 +3971,8 @@ pub export fn Curl_http_req_make(
     p_len: usize,
 ) callconv(.c) CURLcode {
     preq.* = null;
-    const raw = mem.calloc(1, @sizeOf(httpreq) + m_len) orelse return CURLE_OUT_OF_MEMORY;
-    const req: *httpreq = @ptrCast(@alignCast(raw));
-
-    const method_dst: [*]u8 = @ptrCast(&req.method);
-    @memcpy(method_dst[0..m_len], method[0..m_len]);
-
-    if (scheme) |s| {
-        req.scheme = curlx_memdup0(s, s_len) orelse {
-            Curl_http_req_free(req);
-            return CURLE_OUT_OF_MEMORY;
-        };
-    }
-    if (authority) |a| {
-        req.authority = curlx_memdup0(a, a_len) orelse {
-            Curl_http_req_free(req);
-            return CURLE_OUT_OF_MEMORY;
-        };
-    }
-    if (path) |p| {
-        req.path = curlx_memdup0(p, p_len) orelse {
-            Curl_http_req_free(req);
-            return CURLE_OUT_OF_MEMORY;
-        };
-    }
-    io_buffers.Curl_dynhds_init(&req.headers, 0, DYN_HTTP_REQUEST);
-    io_buffers.Curl_dynhds_init(&req.trailers, 0, DYN_HTTP_REQUEST);
-    preq.* = req;
+    preq.* = httpReqMakeImpl(method, m_len, scheme, s_len, authority, a_len, path, p_len) catch
+        return CURLE_OUT_OF_MEMORY;
     return CURLE_OK;
 }
 
@@ -4047,6 +4055,37 @@ fn req_assign_url_path(req: *httpreq, url: *CURLU) CURLcode {
     return result;
 }
 
+fn httpReqMake2Impl(
+    preq: *?*httpreq,
+    method: [*]const u8,
+    m_len: usize,
+    url: *CURLU,
+    scheme_default: ?[*:0]const u8,
+) error{ OutOfMemory, UrlMalformat }!void {
+    const req = allocHttpReq(method, m_len) orelse return error.OutOfMemory;
+    errdefer Curl_http_req_free(req);
+
+    const uc = urlapi.curl_url_get(url, .CURLUPART_SCHEME, &req.scheme, 0);
+    if (uc != .CURLUE_OK and uc != .CURLUE_NO_SCHEME)
+        return error.OutOfMemory;
+    if (req.scheme == null and scheme_default != null) {
+        req.scheme = mem.strdup(scheme_default.?) orelse return error.OutOfMemory;
+    }
+
+    const r1 = req_assign_url_authority(req, url);
+    if (r1 != CURLE_OK) {
+        return if (r1 == CURLE_OUT_OF_MEMORY) error.OutOfMemory else error.UrlMalformat;
+    }
+    const r2 = req_assign_url_path(req, url);
+    if (r2 != CURLE_OK) {
+        return if (r2 == CURLE_OUT_OF_MEMORY) error.OutOfMemory else error.UrlMalformat;
+    }
+
+    io_buffers.Curl_dynhds_init(&req.headers, 0, DYN_HTTP_REQUEST);
+    io_buffers.Curl_dynhds_init(&req.trailers, 0, DYN_HTTP_REQUEST);
+    preq.* = req;
+}
+
 pub export fn Curl_http_req_make2(
     preq: *?*httpreq,
     method: [*]const u8,
@@ -4055,38 +4094,10 @@ pub export fn Curl_http_req_make2(
     scheme_default: ?[*:0]const u8,
 ) callconv(.c) CURLcode {
     preq.* = null;
-    const raw = mem.calloc(1, @sizeOf(httpreq) + m_len) orelse return CURLE_OUT_OF_MEMORY;
-    const req: *httpreq = @ptrCast(@alignCast(raw));
-
-    const method_dst: [*]u8 = @ptrCast(&req.method);
-    @memcpy(method_dst[0..m_len], method[0..m_len]);
-
-    const uc = urlapi.curl_url_get(url, .CURLUPART_SCHEME, &req.scheme, 0);
-    if (uc != .CURLUE_OK and uc != .CURLUE_NO_SCHEME) {
-        Curl_http_req_free(req);
-        return CURLE_OUT_OF_MEMORY;
-    }
-    if (req.scheme == null and scheme_default != null) {
-        req.scheme = mem.strdup(scheme_default.?) orelse {
-            Curl_http_req_free(req);
-            return CURLE_OUT_OF_MEMORY;
-        };
-    }
-
-    var result = req_assign_url_authority(req, url);
-    if (result != CURLE_OK) {
-        Curl_http_req_free(req);
-        return result;
-    }
-    result = req_assign_url_path(req, url);
-    if (result != CURLE_OK) {
-        Curl_http_req_free(req);
-        return result;
-    }
-
-    io_buffers.Curl_dynhds_init(&req.headers, 0, DYN_HTTP_REQUEST);
-    io_buffers.Curl_dynhds_init(&req.trailers, 0, DYN_HTTP_REQUEST);
-    preq.* = req;
+    httpReqMake2Impl(preq, method, m_len, url, scheme_default) catch |err| return switch (err) {
+        error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+        error.UrlMalformat => CURLE_URL_MALFORMAT,
+    };
     return CURLE_OK;
 }
 
@@ -4097,7 +4108,7 @@ pub export fn Curl_http_req_free(req: ?*httpreq) callconv(.c) void {
     mem.free(r.path);
     io_buffers.Curl_dynhds_free(&r.headers);
     io_buffers.Curl_dynhds_free(&r.trailers);
-    mem.free(r);
+    mem.freeTyped(r);
 }
 
 const H2_NON_FIELD = [_][]const u8{
@@ -4152,11 +4163,11 @@ pub export fn Curl_http_req_to_h2(
 ) callconv(.c) CURLcode {
     var scheme: ?[*:0]const u8 = req.scheme;
     var authority: ?[*:0]const u8 = req.authority;
-    const m_ptr: [*:0]const u8 = @ptrCast(&req.method);
+    const m_ptr: [*:0]const u8 = req.methodZ();
 
     if (scheme == null and !std.mem.eql(u8, std.mem.span(m_ptr), "CONNECT")) {
         if (Curl_checkheaders(data, ":scheme", ":scheme".len)) |hdr| {
-            var s_opt: ?[*:0]const u8 = @ptrCast(hdr + ":scheme".len + 1);
+            var s_opt: ?[*:0]const u8 = hdr + ":scheme".len + 1;
             curlx_str_passblanks(&s_opt);
             scheme = s_opt;
             if (scheme) |sc|
@@ -4202,25 +4213,29 @@ pub export fn Curl_http_req_to_h2(
     return result;
 }
 
+fn httpRespMakeImpl(
+    status: c_int,
+    description: ?[*:0]const u8,
+) error{OutOfMemory}!*http_resp {
+    const resp = mem.create(http_resp) orelse return error.OutOfMemory;
+    errdefer Curl_http_resp_free(resp);
+
+    resp.status = status;
+    if (description) |desc| {
+        resp.description = mem.strdup(desc) orelse return error.OutOfMemory;
+    }
+    io_buffers.Curl_dynhds_init(&resp.headers, 0, DYN_HTTP_REQUEST);
+    io_buffers.Curl_dynhds_init(&resp.trailers, 0, DYN_HTTP_REQUEST);
+    return resp;
+}
+
 pub export fn Curl_http_resp_make(
     presp: *?*http_resp,
     status: c_int,
     description: ?[*:0]const u8,
 ) callconv(.c) CURLcode {
     presp.* = null;
-    const raw = mem.calloc(1, @sizeOf(http_resp)) orelse return CURLE_OUT_OF_MEMORY;
-    const resp: *http_resp = @ptrCast(@alignCast(raw));
-
-    resp.status = status;
-    if (description) |desc| {
-        resp.description = mem.strdup(desc) orelse {
-            Curl_http_resp_free(resp);
-            return CURLE_OUT_OF_MEMORY;
-        };
-    }
-    io_buffers.Curl_dynhds_init(&resp.headers, 0, DYN_HTTP_REQUEST);
-    io_buffers.Curl_dynhds_init(&resp.trailers, 0, DYN_HTTP_REQUEST);
-    presp.* = resp;
+    presp.* = httpRespMakeImpl(status, description) catch return CURLE_OUT_OF_MEMORY;
     return CURLE_OK;
 }
 
@@ -4231,27 +4246,27 @@ pub export fn Curl_http_resp_free(resp: ?*http_resp) callconv(.c) void {
     io_buffers.Curl_dynhds_free(&r.trailers);
     if (r.prev) |prev|
         Curl_http_resp_free(prev);
-    mem.free(r);
+    mem.freeTyped(r);
 }
 
 pub export const Curl_protocol_http = Curl_protocol{
-    .setup_connection = @ptrCast(&Curl_http_setup_conn),
-    .do_it = @ptrCast(&Curl_http),
-    .done = @ptrCast(&Curl_http_done),
+    .setup_connection = &Curl_http_setup_conn,
+    .do_it = &Curl_http,
+    .done = &Curl_http_done,
     .do_more = null,
     .connect_it = null,
     .connecting = null,
     .doing = null,
     .proto_pollset = null,
-    .doing_pollset = @ptrCast(&Curl_http_doing_pollset),
+    .doing_pollset = &Curl_http_doing_pollset,
     .domore_pollset = null,
-    .perform_pollset = @ptrCast(&Curl_http_perform_pollset),
+    .perform_pollset = &Curl_http_perform_pollset,
     .disconnect = null,
-    .write_resp = @ptrCast(&Curl_http_write_resp),
-    .write_resp_hd = @ptrCast(&Curl_http_write_resp_hd),
+    .write_resp = &Curl_http_write_resp,
+    .write_resp_hd = &Curl_http_write_resp_hd,
     .connection_is_dead = null,
     .attach = null,
-    .follow = @ptrCast(&Curl_http_follow),
+    .follow = &Curl_http_follow,
 };
 
 // ============================================================================
@@ -4317,8 +4332,7 @@ test "Curl_http_req_make and Curl_http_req_free" {
     defer Curl_http_req_free(req);
 
     const r = req.?;
-    const method_str: [*:0]const u8 = @ptrCast(&r.method);
-    try std.testing.expectEqualStrings("POST", std.mem.span(method_str));
+    try std.testing.expectEqualStrings("POST", std.mem.span(r.methodPtr()));
     try std.testing.expectEqualStrings("https", std.mem.span(r.scheme.?));
     try std.testing.expectEqualStrings("example.com", std.mem.span(r.authority.?));
     try std.testing.expectEqualStrings("/v1/items", std.mem.span(r.path.?));

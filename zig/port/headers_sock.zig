@@ -124,7 +124,7 @@ const win32 = struct {
         s: curl_socket_t,
         level: c_int,
         optname: c_int,
-        optval: [*]const u8,
+        optval: *const anyopaque,
         optlen: c_int,
     ) callconv(.winapi) c_int;
     extern "ws2_32" fn bind(s: curl_socket_t, name: *const anyopaque, namelen: c_int) callconv(.winapi) c_int;
@@ -437,7 +437,7 @@ pub export fn Curl_pollfds_reset(cpfds: *CurlPollfds) callconv(.c) void {
 
 pub export fn Curl_pollfds_cleanup(cpfds: *CurlPollfds) callconv(.c) void {
     if ((cpfds.allocated_pfds & 1) != 0) {
-        mem.free(cpfds.pfds);
+        mem.freeTyped(cpfds.pfds);
         cpfds.pfds = null;
         cpfds.count = 0;
         cpfds.allocated_pfds = 0;
@@ -447,8 +447,7 @@ pub export fn Curl_pollfds_cleanup(cpfds: *CurlPollfds) callconv(.c) void {
 
 fn cpfdsIncrease(cpfds: *CurlPollfds, inc: c_uint) c_uint {
     const new_count: c_uint = cpfds.count + inc;
-    const raw = mem.calloc(new_count, @sizeOf(Pollfd)) orelse return CURLE_OUT_OF_MEMORY;
-    const new_fds: [*]Pollfd = @ptrCast(@alignCast(raw));
+    const new_fds = mem.callocMany(Pollfd, new_count) orelse return CURLE_OUT_OF_MEMORY;
 
     if (cpfds.count > 0) {
         if (cpfds.pfds) |old_pfds| {
@@ -456,7 +455,7 @@ fn cpfdsIncrease(cpfds: *CurlPollfds, inc: c_uint) c_uint {
         }
     }
     if ((cpfds.allocated_pfds & 1) != 0) {
-        mem.free(cpfds.pfds);
+        mem.freeTyped(cpfds.pfds);
     }
     cpfds.pfds = new_fds;
     cpfds.count = new_count;
@@ -572,8 +571,7 @@ pub export fn Curl_pollset_init(ps: *EasyPollset) callconv(.c) void {
 }
 
 pub export fn Curl_pollset_create() callconv(.c) ?*EasyPollset {
-    const raw = mem.calloc(1, @sizeOf(EasyPollset)) orelse return null;
-    const ps: *EasyPollset = @ptrCast(@alignCast(raw));
+    const ps = mem.create(EasyPollset) orelse return null;
     Curl_pollset_init(ps);
     return ps;
 }
@@ -581,12 +579,12 @@ pub export fn Curl_pollset_create() callconv(.c) ?*EasyPollset {
 pub export fn Curl_pollset_cleanup(ps: *EasyPollset) callconv(.c) void {
     const def_sockets_ptr: [*]curl_socket_t = &ps.def_sockets;
     if (ps.sockets != def_sockets_ptr) {
-        mem.free(ps.sockets);
+        mem.freeTyped(ps.sockets);
         ps.sockets = def_sockets_ptr;
     }
     const def_actions_ptr: [*]u8 = &ps.def_actions;
     if (ps.actions != def_actions_ptr) {
-        mem.free(ps.actions);
+        mem.freeTyped(ps.actions);
         ps.actions = def_actions_ptr;
     }
     ps.count = EZ_POLLSET_DEF_COUNT;
@@ -612,6 +610,28 @@ pub export fn Curl_pollset_move(to: *EasyPollset, from: *EasyPollset) callconv(.
         to.n = from.n;
         Curl_pollset_init(from);
     }
+}
+
+fn pollsetGrow(ps: *EasyPollset) error{OutOfMemory}!void {
+    const doubled = ps.count *% 2;
+    const new_count: c_uint = if (doubled > 8) doubled else 8;
+    if (new_count <= ps.count)
+        return error.OutOfMemory;
+    const nsockets = mem.callocMany(curl_socket_t, new_count) orelse return error.OutOfMemory;
+    errdefer mem.freeTyped(nsockets);
+    const nactions = mem.callocMany(u8, new_count) orelse return error.OutOfMemory;
+
+    @memcpy(nsockets[0..ps.count], ps.sockets.?[0..ps.count]);
+    @memcpy(nactions[0..ps.count], ps.actions.?[0..ps.count]);
+    const def_sockets_ptr: [*]curl_socket_t = &ps.def_sockets;
+    if (ps.sockets != def_sockets_ptr)
+        mem.freeTyped(ps.sockets);
+    ps.sockets = nsockets;
+    const def_actions_ptr: [*]u8 = &ps.def_actions;
+    if (ps.actions != def_actions_ptr)
+        mem.freeTyped(ps.actions);
+    ps.actions = nactions;
+    ps.count = new_count;
 }
 
 pub export fn Curl_pollset_change(
@@ -648,27 +668,7 @@ pub export fn Curl_pollset_change(
 
     if (add_flags != 0) {
         if (i >= ps.count) {
-            const doubled = ps.count *% 2;
-            const new_count: c_uint = if (doubled > 8) doubled else 8;
-            if (new_count <= ps.count)
-                return CURLE_OUT_OF_MEMORY;
-            const nsockets_raw = mem.calloc(new_count, @sizeOf(curl_socket_t)) orelse return CURLE_OUT_OF_MEMORY;
-            const nsockets: [*]curl_socket_t = @ptrCast(@alignCast(nsockets_raw));
-            const nactions = mem.calloc(new_count, @sizeOf(u8)) orelse {
-                mem.free(nsockets_raw);
-                return CURLE_OUT_OF_MEMORY;
-            };
-            @memcpy(nsockets[0..ps.count], ps.sockets.?[0..ps.count]);
-            @memcpy(nactions[0..ps.count], ps.actions.?[0..ps.count]);
-            const def_sockets_ptr: [*]curl_socket_t = &ps.def_sockets;
-            if (ps.sockets != def_sockets_ptr)
-                mem.free(ps.sockets);
-            ps.sockets = nsockets;
-            const def_actions_ptr: [*]u8 = &ps.def_actions;
-            if (ps.actions != def_actions_ptr)
-                mem.free(ps.actions);
-            ps.actions = nactions;
-            ps.count = new_count;
+            pollsetGrow(ps) catch return CURLE_OUT_OF_MEMORY;
         }
         if (i < ps.count) {
             ps.sockets.?[i] = sock;
@@ -719,9 +719,8 @@ pub export fn Curl_pollset_poll(
     if (ps.n == 0)
         return curlx_time_net.curlx_wait_ms(timeout_ms);
 
-    const raw = mem.calloc(ps.n, @sizeOf(Pollfd)) orelse return -1;
-    const pfds: [*]Pollfd = @ptrCast(@alignCast(raw));
-    defer mem.free(raw);
+    const pfds = mem.callocMany(Pollfd, ps.n) orelse return -1;
+    defer mem.freeTyped(pfds);
 
     const sockets = ps.sockets.?;
     const actions = ps.actions.?;
@@ -821,40 +820,43 @@ fn wakeupEventfd(socks: *[2]curl_socket_t, nonblocking: bool) c_int {
     return 0;
 }
 
-fn wakeupPipe(socks: *[2]curl_socket_t, nonblocking: bool) c_int {
+fn wakeupPipeImpl(socks: *[2]curl_socket_t, nonblocking: bool) error{WakeupFailed}!void {
     if (posix_c.pipe(socks) != 0)
-        return -1;
+        return error.WakeupFailed;
+    errdefer {
+        _ = posix_c.close(socks[0]);
+        _ = posix_c.close(socks[1]);
+        socks[0] = CURL_SOCKET_BAD;
+        socks[1] = CURL_SOCKET_BAD;
+    }
 
     const F_SETFD: c_int = 2;
     const FD_CLOEXEC: c_int = 1;
     if (std.c.fcntl(socks[0], F_SETFD, FD_CLOEXEC) != 0 or
         std.c.fcntl(socks[1], F_SETFD, FD_CLOEXEC) != 0)
     {
-        _ = posix_c.close(socks[0]);
-        _ = posix_c.close(socks[1]);
-        socks[0] = CURL_SOCKET_BAD;
-        socks[1] = CURL_SOCKET_BAD;
-        return -1;
+        return error.WakeupFailed;
     }
 
     if (nonblocking) {
         if (curlx_time_net.curlx_nonblock(socks[0], 1) < 0 or
             curlx_time_net.curlx_nonblock(socks[1], 1) < 0)
         {
-            _ = posix_c.close(socks[0]);
-            _ = posix_c.close(socks[1]);
-            socks[0] = CURL_SOCKET_BAD;
-            socks[1] = CURL_SOCKET_BAD;
-            return -1;
+            return error.WakeupFailed;
         }
     }
+}
+
+fn wakeupPipe(socks: *[2]curl_socket_t, nonblocking: bool) c_int {
+    wakeupPipeImpl(socks, nonblocking) catch return -1;
     return 0;
 }
 
-fn wakeupInet(socks: *[2]curl_socket_t, nonblocking: bool) c_int {
+fn wakeupInetImpl(socks: *[2]curl_socket_t, nonblocking: bool) error{WakeupFailed}!void {
     const listener = win32.socket(curlx_time_net.AF_INET, win32.SOCK_STREAM, win32.IPPROTO_TCP);
     if (listener == CURL_SOCKET_BAD)
-        return -1;
+        return error.WakeupFailed;
+    defer _ = win32.closesocket(listener);
 
     var inaddr: WinSockaddrIn = .{
         .sin_family = @intCast(curlx_time_net.AF_INET),
@@ -866,33 +868,39 @@ fn wakeupInet(socks: *[2]curl_socket_t, nonblocking: bool) c_int {
 
     socks[0] = CURL_SOCKET_BAD;
     socks[1] = CURL_SOCKET_BAD;
+    errdefer {
+        _ = win32.closesocket(socks[0]);
+        _ = win32.closesocket(socks[1]);
+        socks[0] = CURL_SOCKET_BAD;
+        socks[1] = CURL_SOCKET_BAD;
+    }
 
     var exclusive: c_int = 1;
     if (win32.setsockopt(
         listener,
         win32.SOL_SOCKET,
         win32.SO_EXCLUSIVEADDRUSE,
-        @ptrCast(&exclusive),
+        &exclusive,
         @sizeOf(c_int),
     ) == -1) {
-        return wakeupInetError(listener, socks);
+        return error.WakeupFailed;
     }
 
     if (win32.bind(listener, &inaddr, @sizeOf(WinSockaddrIn)) == -1)
-        return wakeupInetError(listener, socks);
+        return error.WakeupFailed;
     if (win32.getsockname(listener, &inaddr, &addrlen) == -1 or addrlen < @sizeOf(WinSockaddrIn))
-        return wakeupInetError(listener, socks);
+        return error.WakeupFailed;
     if (win32.listen(listener, 1) == -1)
-        return wakeupInetError(listener, socks);
+        return error.WakeupFailed;
 
     socks[0] = win32.socket(curlx_time_net.AF_INET, win32.SOCK_STREAM, 0);
     if (socks[0] == CURL_SOCKET_BAD)
-        return wakeupInetError(listener, socks);
+        return error.WakeupFailed;
     if (win32.connect(socks[0], &inaddr, @sizeOf(WinSockaddrIn)) == -1)
-        return wakeupInetError(listener, socks);
+        return error.WakeupFailed;
 
     if (curlx_time_net.curlx_nonblock(listener, 1) < 0)
-        return wakeupInetError(listener, socks);
+        return error.WakeupFailed;
 
     var pfd: [1]Pollfd = .{.{
         .fd = listener,
@@ -902,7 +910,7 @@ fn wakeupInet(socks: *[2]curl_socket_t, nonblocking: bool) c_int {
     _ = Curl_poll(&pfd, 1, 1000);
     socks[1] = win32.accept(listener, null, null);
     if (socks[1] == CURL_SOCKET_BAD)
-        return wakeupInetError(listener, socks);
+        return error.WakeupFailed;
 
     const start = curlx_time_net.curlx_now();
     var rnd: [9]u8 = undefined;
@@ -910,13 +918,13 @@ fn wakeupInet(socks: *[2]curl_socket_t, nonblocking: bool) c_int {
     var offset: usize = 0;
 
     if (Curl_rand_bytes(null, &rnd, rnd.len) != CURLE_OK)
-        return wakeupInetError(listener, socks);
+        return error.WakeupFailed;
 
     _ = win32.send(socks[0], &rnd, @intCast(rnd.len), 0);
 
     while (true) {
         if (curlx_time_net.curlx_timediff_ms(curlx_time_net.curlx_now(), start) > 60 * 1000)
-            return wakeupInetError(listener, socks);
+            return error.WakeupFailed;
 
         pfd[0].fd = socks[1];
         pfd[0].events = POLLIN;
@@ -924,20 +932,20 @@ fn wakeupInet(socks: *[2]curl_socket_t, nonblocking: bool) c_int {
         _ = Curl_poll(&pfd, 1, 1000);
 
         const rem = check.len - offset;
-        const nread = win32.recv(socks[1], @ptrCast(&check[offset]), @intCast(rem), 0);
+        const nread = win32.recv(socks[1], check[offset..].ptr, @intCast(rem), 0);
         if (nread == 0) {
-            return wakeupInetError(listener, socks);
+            return error.WakeupFailed;
         } else if (nread == -1) {
             const sockerr = getSockErrno();
             if (isSockEagain(sockerr))
                 continue;
-            return wakeupInetError(listener, socks);
+            return error.WakeupFailed;
         }
         offset += @intCast(nread);
         if (offset < check.len)
             continue;
         if (!std.mem.eql(u8, &rnd, &check))
-            return wakeupInetError(listener, socks);
+            return error.WakeupFailed;
         break;
     }
 
@@ -945,21 +953,14 @@ fn wakeupInet(socks: *[2]curl_socket_t, nonblocking: bool) c_int {
         if (curlx_time_net.curlx_nonblock(socks[0], 1) < 0 or
             curlx_time_net.curlx_nonblock(socks[1], 1) < 0)
         {
-            return wakeupInetError(listener, socks);
+            return error.WakeupFailed;
         }
     }
-
-    _ = win32.closesocket(listener);
-    return 0;
 }
 
-fn wakeupInetError(listener: curl_socket_t, socks: *[2]curl_socket_t) c_int {
-    _ = win32.closesocket(listener);
-    _ = win32.closesocket(socks[0]);
-    _ = win32.closesocket(socks[1]);
-    socks[0] = CURL_SOCKET_BAD;
-    socks[1] = CURL_SOCKET_BAD;
-    return -1;
+fn wakeupInet(socks: *[2]curl_socket_t, nonblocking: bool) c_int {
+    wakeupInetImpl(socks, nonblocking) catch return -1;
+    return 0;
 }
 
 pub export fn Curl_wakeup_init(socks: *[2]curl_socket_t, nonblocking: bool) callconv(.c) c_int {
@@ -1338,11 +1339,17 @@ else
         sin6_scope_id: u32,
     };
 
+const IfaSockaddr = extern union {
+    sa: Sockaddr,
+    in4: SockaddrIn,
+    in6: SockaddrIn6,
+};
+
 const Ifaddrs = extern struct {
     ifa_next: ?*Ifaddrs,
     ifa_name: ?[*:0]const u8,
     ifa_flags: c_uint,
-    ifa_addr: ?*Sockaddr,
+    ifa_addr: ?*const IfaSockaddr,
 };
 
 const ifaddrs_c = struct {
@@ -1350,10 +1357,10 @@ const ifaddrs_c = struct {
     extern "c" fn freeifaddrs(ifa: ?*Ifaddrs) void;
 };
 
-pub export fn Curl_ipv6_scope(sa: *const Sockaddr) callconv(.c) c_uint {
-    if (@as(c_int, sa.sa_family) == curlx_time_net.AF_INET6) {
-        const sa6: *const SockaddrIn6 = @ptrCast(@alignCast(sa));
-        const b = &sa6.sin6_addr;
+pub export fn Curl_ipv6_scope(sa_raw: *const anyopaque) callconv(.c) c_uint {
+    const addr: *const IfaSockaddr = @ptrCast(@alignCast(sa_raw));
+    if (@as(c_int, addr.sa.sa_family) == curlx_time_net.AF_INET6) {
+        const b = &addr.in6.sin6_addr;
         var w: u16 = (@as(u16, b[0]) << 8) | @as(u16, b[1]);
 
         if ((b[0] & 0xFE) == 0xFC)
@@ -1393,7 +1400,7 @@ pub export fn Curl_if2ip(
             while (iface_opt) |iface| : (iface_opt = iface.ifa_next) {
                 if (iface.ifa_addr) |ifa_addr| {
                     const ifa_name = iface.ifa_name orelse continue;
-                    if (@as(c_int, ifa_addr.sa_family) == af) {
+                    if (@as(c_int, ifa_addr.sa.sa_family) == af) {
                         if (std.mem.orderZ(u8, ifa_name, interf) == .eq) {
                             var addr: *const anyopaque = undefined;
                             var scope_buf: [12]u8 = undefined;
@@ -1408,7 +1415,7 @@ pub export fn Curl_if2ip(
                                     continue;
                                 }
 
-                                const sa6: *const SockaddrIn6 = @ptrCast(@alignCast(ifa_addr));
+                                const sa6 = &ifa_addr.in6;
                                 addr = &sa6.sin6_addr;
                                 const scopeid: c_uint = sa6.sin6_scope_id;
                                 if (local_scope_id != 0 and scopeid != local_scope_id) {
@@ -1420,7 +1427,7 @@ pub export fn Curl_if2ip(
                                     scope_slice = std.fmt.bufPrint(&scope_buf, "%{d}", .{scopeid}) catch "";
                                 }
                             } else {
-                                const sa4: *const SockaddrIn = @ptrCast(@alignCast(ifa_addr));
+                                const sa4 = &ifa_addr.in4;
                                 addr = &sa4.sin_addr;
                             }
 
@@ -1564,15 +1571,15 @@ test "Curl_ipv6_scope classification" {
 
     // Loopback ::1 -> NODELOCAL
     sa6.sin6_addr[15] = 1;
-    try std.testing.expectEqual(IPV6_SCOPE_NODELOCAL, Curl_ipv6_scope(@ptrCast(&sa6)));
+    try std.testing.expectEqual(IPV6_SCOPE_NODELOCAL, Curl_ipv6_scope(&sa6));
 
     // Link-local fe80::1 -> LINKLOCAL
     sa6.sin6_addr[0] = 0xfe;
     sa6.sin6_addr[1] = 0x80;
-    try std.testing.expectEqual(IPV6_SCOPE_LINKLOCAL, Curl_ipv6_scope(@ptrCast(&sa6)));
+    try std.testing.expectEqual(IPV6_SCOPE_LINKLOCAL, Curl_ipv6_scope(&sa6));
 
     // Unique-local fd00::1 -> UNIQUELOCAL
     sa6.sin6_addr[0] = 0xfd;
     sa6.sin6_addr[1] = 0x00;
-    try std.testing.expectEqual(IPV6_SCOPE_UNIQUELOCAL, Curl_ipv6_scope(@ptrCast(&sa6)));
+    try std.testing.expectEqual(IPV6_SCOPE_UNIQUELOCAL, Curl_ipv6_scope(&sa6));
 }
