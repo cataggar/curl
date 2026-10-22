@@ -1332,7 +1332,9 @@ const cr_eob_ctx = extern struct {
     super: Curl_creader,
     buf: bufq,
     n_eob: usize,
-    eob_added: bool,
+    eob: usize,
+    read_eos: bool,
+    processed_eos: bool,
     eos: bool,
 };
 
@@ -1361,27 +1363,24 @@ fn cr_eob_read(
     const ctx: *cr_eob_ctx = @fieldParentPtr("super", reader);
     var result: CURLcode = CURLE_OK;
     var nread: usize = 0;
-    var i: usize = 0;
-    var start: usize = 0;
+    var n: usize = 0;
     var eos: bool = false;
 
-    if (!ctx.eos and io_buffers.Curl_bufq_is_empty(&ctx.buf)) {
+    if (!ctx.read_eos and io_buffers.Curl_bufq_is_empty(&ctx.buf)) {
         result = Curl_creader_read(data, reader.next, buf, blen, &nread, &eos);
         Curl_pop3_smtp_trc_smtp_read(data, blen, @intCast(result), nread, @intFromBool(eos));
         if (result != CURLE_OK)
             return result;
 
-        ctx.eos = eos;
+        ctx.read_eos = eos;
         if (nread != 0) {
             if (ctx.n_eob == 0 and std.mem.indexOfScalar(u8, buf[0..nread], SMTP_EOB[0]) == null) {
                 pnread.* = nread;
                 peos.* = false;
                 return CURLE_OK;
             }
-            var n: usize = 0;
-            start = 0;
-            for (0..nread) |idx| {
-                i = idx;
+            var start: usize = 0;
+            for (0..nread) |i| {
                 if (ctx.n_eob >= SMTP_EOB_FIND_LEN) {
                     result = io_buffers.Curl_bufq_cwrite(&ctx.buf, buf + start, i - start, &n);
                     if (result != CURLE_OK)
@@ -1411,17 +1410,16 @@ fn cr_eob_read(
 
     peos.* = false;
 
-    if (ctx.eos and !ctx.eob_added) {
-        var n: usize = 0;
-        const eob: [*:0]const u8 = switch (ctx.n_eob) {
-            2 => ".\r\n",
-            3 => ".\r\n.\r\n",
-            else => "\r\n.\r\n",
+    if (ctx.read_eos and !ctx.processed_eos) {
+        const eob: []const u8 = switch (ctx.n_eob) {
+            2 => SMTP_EOB[2..],
+            3 => "." ++ SMTP_EOB,
+            else => SMTP_EOB,
         };
-        result = io_buffers.Curl_bufq_cwrite(&ctx.buf, eob, std.mem.len(eob), &n);
+        result = io_buffers.Curl_bufq_cwrite(&ctx.buf, eob.ptr, eob.len, &n);
         if (result != CURLE_OK)
             return result;
-        ctx.eob_added = true;
+        ctx.processed_eos = true;
     }
 
     if (!io_buffers.Curl_bufq_is_empty(&ctx.buf)) {
@@ -1430,9 +1428,10 @@ fn cr_eob_read(
         pnread.* = 0;
     }
 
-    if (result == CURLE_OK and ctx.eos and io_buffers.Curl_bufq_is_empty(&ctx.buf)) {
-        peos.* = true;
+    if (ctx.read_eos and io_buffers.Curl_bufq_is_empty(&ctx.buf)) {
+        ctx.eos = true;
     }
+    peos.* = ctx.eos;
 
     return result;
 }
