@@ -1295,7 +1295,7 @@ fn initVquicTlsInner(
             cb_setup,
             cb_user_data,
             ssl_user_data,
-            fromOpaque(vtls_gtls.Curl_vquic_session_reuse_cb, session_reuse_cb),
+            fromOpaque(vtls_gtls.CurlGtlsInitSessionReuseCb, session_reuse_cb),
         ),
         .wolfssl => vtls_wolfssl.Curl_wssl_ctx_init(
             &ctx.wssl,
@@ -1306,7 +1306,7 @@ fn initVquicTlsInner(
             cb_setup,
             cb_user_data,
             ssl_user_data,
-            fromOpaque(vtls_wolfssl.Curl_vquic_session_reuse_cb, session_reuse_cb),
+            fromOpaque(vtls_wolfssl.CurlWsslInitSessionReuseCb, session_reuse_cb),
         ),
         else => CURLE_NOT_BUILT_IN,
     };
