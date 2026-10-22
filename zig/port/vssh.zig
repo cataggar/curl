@@ -782,12 +782,19 @@ pub const LIBSSH2_USERAUTH_KBDINT_RESPONSE = extern struct {
 };
 
 const LIBSSH2_ERROR_NONE: c_int = 0;
-const LIBSSH2_ERROR_EAGAIN: c_int = -37;
-const LIBSSH2_ERROR_SFTP_PROTOCOL: c_int = -31;
+const LIBSSH2_ERROR_SOCKET_NONE: c_int = -1;
 const LIBSSH2_ERROR_ALLOC: c_int = -6;
 const LIBSSH2_ERROR_SOCKET_SEND: c_int = -7;
-const LIBSSH2_ERROR_SOCKET_TIMEOUT: c_int = -30;
+const LIBSSH2_ERROR_TIMEOUT: c_int = -9;
+const LIBSSH2_ERROR_HOSTKEY_INIT: c_int = -10;
+const LIBSSH2_ERROR_HOSTKEY_SIGN: c_int = -11;
+const LIBSSH2_ERROR_PASSWORD_EXPIRED: c_int = -15;
+const LIBSSH2_ERROR_PUBLICKEY_UNRECOGNIZED: c_int = -18;
 const LIBSSH2_ERROR_PUBLICKEY_UNVERIFIED: c_int = -19;
+const LIBSSH2_ERROR_SCP_PROTOCOL: c_int = -28;
+const LIBSSH2_ERROR_SOCKET_TIMEOUT: c_int = -30;
+const LIBSSH2_ERROR_SFTP_PROTOCOL: c_int = -31;
+const LIBSSH2_ERROR_EAGAIN: c_int = -37;
 
 const LIBSSH2_FLAG_COMPRESS: c_int = 2;
 
@@ -1260,10 +1267,20 @@ inline fn sftp_libssh2_last_error(sftp: ?*LIBSSH2_SFTP) c_ulong {
 fn session_error_to_CURLE(err: c_int) CURLcode {
     return switch (err) {
         LIBSSH2_ERROR_NONE => CURLE_OK,
+        LIBSSH2_ERROR_SCP_PROTOCOL => CURLE_REMOTE_FILE_NOT_FOUND,
+        LIBSSH2_ERROR_SOCKET_NONE => CURLE_COULDNT_CONNECT,
         LIBSSH2_ERROR_ALLOC => CURLE_OUT_OF_MEMORY,
         LIBSSH2_ERROR_SOCKET_SEND => CURLE_SEND_ERROR,
-        LIBSSH2_ERROR_SOCKET_TIMEOUT => CURLE_OPERATION_TIMEDOUT,
-        LIBSSH2_ERROR_PUBLICKEY_UNVERIFIED => CURLE_PEER_FAILED_VERIFICATION,
+        LIBSSH2_ERROR_HOSTKEY_INIT,
+        LIBSSH2_ERROR_HOSTKEY_SIGN,
+        LIBSSH2_ERROR_PUBLICKEY_UNRECOGNIZED,
+        LIBSSH2_ERROR_PUBLICKEY_UNVERIFIED,
+        => CURLE_PEER_FAILED_VERIFICATION,
+        LIBSSH2_ERROR_PASSWORD_EXPIRED => CURLE_LOGIN_DENIED,
+        LIBSSH2_ERROR_SOCKET_TIMEOUT,
+        LIBSSH2_ERROR_TIMEOUT,
+        => CURLE_OPERATION_TIMEDOUT,
+        LIBSSH2_ERROR_EAGAIN => CURLE_AGAIN,
         else => CURLE_SSH,
     };
 }
@@ -3004,7 +3021,10 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                         rc = LIBSSH2_ERROR_EAGAIN;
                         break;
                     }
-                    sshc.actualcode = session_error_to_CURLE(err);
+                    var scperr = session_error_to_CURLE(err);
+                    if (scperr == CURLE_SSH or scperr == CURLE_REMOTE_FILE_NOT_FOUND)
+                        scperr = CURLE_UPLOAD_FAILED;
+                    sshc.actualcode = scperr;
                     ssh_state(data, sshc, .SSH_SCP_CHANNEL_FREE);
                     break;
                 }

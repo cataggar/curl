@@ -98,7 +98,7 @@ pub const CF_QUERY_REALLY_CONNECTED: c_int = 16;
 pub const CURL_MAX_HTTP_HEADER: usize = 100 * 1024;
 pub const DYN_HTTP_REQUEST: usize = 1024 * 1024;
 pub const DYN_TRAILERS: usize = 64 * 1024;
-pub const MAX_HTTP_RESP_HEADER_COUNT: usize = 300;
+pub const MAX_HTTP_RESP_HEADER_COUNT: usize = 5000;
 pub const H1_PARSE_DEFAULT_MAX_LINE_LEN: usize = CURL_MAX_HTTP_HEADER;
 pub const DEFAULT_MAX_CONCURRENT_STREAMS: u32 = 100;
 
