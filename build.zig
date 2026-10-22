@@ -2,6 +2,7 @@ const std = @import("std");
 const libcurl = @import("zig/libcurl.zig");
 const cli = @import("zig/cli.zig");
 const backends = @import("zig/backends.zig");
+const test_servers = @import("zig/test_servers.zig");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -141,6 +142,18 @@ pub fn build(b: *std.Build) void {
     const run_release_tests = b.addRunArtifact(release_tests);
     const test_release_step = b.step("test-release", "Run release tooling tests");
     test_release_step.dependOn(&run_release_tests.step);
+
+    _ = test_servers.addTestServersStep(
+        b,
+        target,
+        optimize,
+        exe,
+        lib,
+        config_header,
+        backend_opts,
+        backend_options_step,
+        shared,
+    );
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(b.getInstallStep());
