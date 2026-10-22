@@ -114,14 +114,14 @@ pub const CURLUPART_PATH: c_uint = 7;
 pub const CURLUPART_QUERY: c_uint = 8;
 
 // CURLU flags
-pub const CURLU_NON_SUPPORT_SCHEME: c_uint = 1 << 3;
-pub const CURLU_PATH_AS_IS: c_uint = 1 << 4;
-pub const CURLU_DISALLOW_USER: c_uint = 1 << 5;
-pub const CURLU_URLDECODE: c_uint = 1 << 6;
-pub const CURLU_URLENCODE: c_uint = 1 << 7;
-pub const CURLU_GUESS_SCHEME: c_uint = 1 << 9;
-pub const CURLU_GET_EMPTY: c_uint = 1 << 14;
-pub const CURLU_NO_GUESS_SCHEME: c_uint = 1 << 15;
+pub const CURLU_NON_SUPPORT_SCHEME: c_uint = urlapi.CURLU_NON_SUPPORT_SCHEME;
+pub const CURLU_PATH_AS_IS: c_uint = urlapi.CURLU_PATH_AS_IS;
+pub const CURLU_DISALLOW_USER: c_uint = urlapi.CURLU_DISALLOW_USER;
+pub const CURLU_URLDECODE: c_uint = urlapi.CURLU_URLDECODE;
+pub const CURLU_URLENCODE: c_uint = urlapi.CURLU_URLENCODE;
+pub const CURLU_GUESS_SCHEME: c_uint = urlapi.CURLU_GUESS_SCHEME;
+pub const CURLU_GET_EMPTY: c_uint = urlapi.CURLU_GET_EMPTY;
+pub const CURLU_NO_GUESS_SCHEME: c_uint = urlapi.CURLU_NO_GUESS_SCHEME;
 
 // Protocol flags & families
 pub const PROTOPT_SSL: u32 = protocol_version_mime.PROTOPT_SSL;

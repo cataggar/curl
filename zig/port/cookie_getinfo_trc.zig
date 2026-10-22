@@ -332,14 +332,14 @@ pub export fn Curl_trc_bind_easy(
     return true;
 }
 
-extern fn Curl_trc_bind_c(data: ?*Curl_easy) callconv(.c) void;
+extern fn Curl_trc_bind_c(data: ?*const Curl_easy) callconv(.c) void;
 
 inline fn lookupBoundEasy(data: ?*const Curl_easy) ?*BoundEasy {
     const d = data orelse return null;
     if (in_libcurl) {
         const pref: *const Curl_easy_prefix = @ptrCast(@alignCast(d));
         if (pref.magic == CURLEASY_MAGIC_NUMBER) {
-            Curl_trc_bind_c(@constCast(d));
+            Curl_trc_bind_c(d);
         }
     }
     for (&bound_easies) |*slot| {

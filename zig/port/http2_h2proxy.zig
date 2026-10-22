@@ -3579,7 +3579,7 @@ pub const cf_h2_proxy_ctx = extern struct {
 };
 
 inline fn peerIsIpv6(peer: *const Curl_peer) bool {
-    return (peer.flags & 0x02) != 0;
+    return (peer.flags & 0x04) != 0;
 }
 
 fn tunnel_stream_init(ts: *tunnel_stream, dest: *Curl_peer) CURLcode {

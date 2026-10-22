@@ -109,6 +109,7 @@ inline fn isCntrl(c: u8) bool {
 }
 
 pub const CLIENTWRITE_BODY: c_int = 1 << 0;
+pub const CLIENTWRITE_INFO: c_int = 1 << 1;
 pub const CLIENTWRITE_HEADER: c_int = 1 << 2;
 pub const CLIENTWRITE_EOS: c_int = 1 << 7;
 pub const CURL_CW_CONTENT_DECODE: c_uint = 4;

@@ -1416,7 +1416,7 @@ fn fileinfoDtor(user: ?*anyopaque, element: ?*anyopaque) callconv(.c) void {
 
 pub export fn Curl_wildcard_init(wc: *WildcardData) callconv(.c) void {
     containers.Curl_llist_init(&wc.filelist, &fileinfoDtor);
-    wc.state = CURLWC_CLEAR;
+    wc.state = CURLWC_INIT;
 }
 
 pub export fn Curl_wildcard_dtor(wcp: *?*WildcardData) callconv(.c) void {
@@ -1434,7 +1434,7 @@ pub export fn Curl_wildcard_dtor(wcp: *?*WildcardData) callconv(.c) void {
     wc.path = null;
     mem.free(wc.pattern);
     wc.pattern = null;
-    wc.state = CURLWC_CLEAR;
+    wc.state = CURLWC_INIT;
     mem.freeSized(wc, @sizeOf(WildcardData));
     wcp.* = null;
 }
@@ -1561,7 +1561,7 @@ fn ftpPlInsertFinfo(data: ?*Curl_easy, parser: *ftp_parselist_data) CURLcode {
     }
 
     const fname_slice = std.mem.span(infop.filename.?);
-    if (!std.mem.eql(u8, fname_slice, ".") and !std.mem.eql(u8, fname_slice, "..")) {
+    if (std.mem.indexOfScalar(u8, fname_slice, '/') == null) {
         var wc_opt: ?*WildcardData = null;
         var fnmatch_opt: ?curl_fnmatch_callback = null;
         var fnmatch_data: ?*anyopaque = null;
@@ -1585,20 +1585,21 @@ fn ftpPlInsertFinfo(data: ?*Curl_easy, parser: *ftp_parselist_data) CURLcode {
             c_ext.Curl_cbapi_leave(&guard);
         }
 
+        var add = false;
         if (fnm_res == CURL_FNMATCH_MATCH) {
+            add = true;
             if (infop.filetype == CURLFILETYPE_SYMLINK and infop.strings.target != null) {
                 const target_slice = std.mem.span(infop.strings.target.?);
                 if (std.mem.indexOf(u8, target_slice, " -> ") != null) {
-                    infop.filetype = CURLFILETYPE_UNKNOWN;
+                    add = false;
                 }
             }
+        }
+
+        if (add) {
             containers.Curl_llist_insert_next(list, list._tail, infop, &finfo.list);
-        } else if (fnm_res == CURL_FNMATCH_NOMATCH) {
-            containers.Curl_fileinfo_cleanup(finfo);
         } else {
             containers.Curl_fileinfo_cleanup(finfo);
-            parser.file_data = null;
-            return CURLE_FTP_BAD_FILE_LIST;
         }
     } else {
         containers.Curl_fileinfo_cleanup(finfo);
@@ -2079,7 +2080,7 @@ fn winntLineParser(
                             }
                             infop.filetype = CURLFILETYPE_FILE;
                         }
-                        infop.flags |= CURLFINFOFLAG_KNOWN_FILETYPE;
+                        infop.flags |= CURLFINFOFLAG_KNOWN_SIZE | CURLFINFOFLAG_KNOWN_FILETYPE;
                         parser.item_length = 0;
                         parser.nt_main = .FILENAME;
                         parser.nt_sub = PL_WINNT_FILENAME_PRESPACE;
@@ -2152,6 +2153,14 @@ pub export fn Curl_ftp_parselist(
     var i: usize = 0;
     var result: CURLcode = CURLE_OK;
 
+    if (parser.err != CURLE_OK) {
+        if (parser.file_data) |fd| {
+            containers.Curl_fileinfo_cleanup(fd);
+            parser.file_data = null;
+        }
+        return bufflen;
+    }
+
     while (i < bufflen) {
         const c = buffer[i];
         var finfo: *fileinfo = undefined;
@@ -2159,7 +2168,7 @@ pub export fn Curl_ftp_parselist(
             parser.file_data = containers.Curl_fileinfo_alloc();
             if (parser.file_data == null) {
                 parser.err = CURLE_OUT_OF_MEMORY;
-                return CURL_WRITEFUNC_ERROR;
+                return bufflen;
             }
             finfo = parser.file_data.?;
             io_buffers.curlx_dyn_init(&finfo.buf, MAX_FTPLIST_BUFFER);
@@ -2171,26 +2180,23 @@ pub export fn Curl_ftp_parselist(
 
         if (io_buffers.curlx_dyn_addn(&finfo.buf, buffer + i, 1) != CURLE_OK) {
             parser.err = CURLE_OUT_OF_MEMORY;
-            return CURL_WRITEFUNC_ERROR;
+            if (parser.file_data) |fd| {
+                containers.Curl_fileinfo_cleanup(fd);
+                parser.file_data = null;
+            }
+            return bufflen;
         }
 
         switch (parser.os_type) {
             .UNKNOWN => {
-                switch (c) {
-                    'b', 'c', 'd', 'l', 'p', 's', '-', 'D', 't' => {
-                        parser.os_type = .UNIX;
-                        parser.unix_main = .TOTALSIZE;
-                        parser.unix_sub = PL_UNIX_TOTALSIZE_INIT;
-                    },
-                    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9' => {
-                        parser.os_type = .WIN_NT;
-                        parser.nt_main = .DATE;
-                        parser.nt_sub = 0;
-                    },
-                    else => {
-                        parser.err = CURLE_FTP_BAD_FILE_LIST;
-                        return CURL_WRITEFUNC_ERROR;
-                    },
+                if (primitives.curlx_isdigit(c)) {
+                    parser.os_type = .WIN_NT;
+                    parser.nt_main = .DATE;
+                    parser.nt_sub = 0;
+                } else {
+                    parser.os_type = .UNIX;
+                    parser.unix_main = .TOTALSIZE;
+                    parser.unix_sub = PL_UNIX_TOTALSIZE_INIT;
                 }
                 if (parser.os_type == .UNIX) {
                     result = unixLineParser(data, parser, finfo, c);
@@ -2208,7 +2214,11 @@ pub export fn Curl_ftp_parselist(
 
         if (result != CURLE_OK) {
             parser.err = result;
-            return CURL_WRITEFUNC_ERROR;
+            if (parser.file_data) |fd| {
+                containers.Curl_fileinfo_cleanup(fd);
+                parser.file_data = null;
+            }
+            return bufflen;
         }
 
         i += 1;
@@ -3277,7 +3287,7 @@ test "Curl_ftp_parselist_data_alloc, free, permission parser, and wildcard init/
     var wc_ptr: ?*WildcardData = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(WildcardData))));
     try std.testing.expect(wc_ptr != null);
     Curl_wildcard_init(wc_ptr.?);
-    try std.testing.expectEqual(CURLWC_CLEAR, wc_ptr.?.state);
+    try std.testing.expectEqual(CURLWC_INIT, wc_ptr.?.state);
     try std.testing.expect(Curl_ftp_listmode_zig(null, true, wc_ptr));
     wc_ptr.?.state = CURLWC_DONE;
     try std.testing.expect(!Curl_ftp_listmode_zig(null, true, wc_ptr));

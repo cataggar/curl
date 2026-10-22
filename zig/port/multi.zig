@@ -288,7 +288,7 @@ pub const CURL_PREREQFUNC_OK: c_int = 0;
 pub const PROTOPT_DUAL: u32 = 1 << 1;
 pub const PROTOPT_WILDCARD: u32 = 1 << 12;
 pub const PROTOPT_CONN_REUSE: u32 = 1 << 16;
-pub const PROTO_FAMILY_HTTP: curl_prot_t = (1 << 0) | (1 << 1);
+pub const PROTO_FAMILY_HTTP: curl_prot_t = (1 << 0) | (1 << 1) | (1 << 30) | (1 << 31);
 
 pub const CURLPIPE_MULTIPLEX: c_long = 2;
 
