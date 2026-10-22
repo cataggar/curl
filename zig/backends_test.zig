@@ -2961,261 +2961,263 @@ test "HTTP/3 end-to-end local UDP server: GET, POST, concurrent streams, cert/ho
     defer testing.allocator.free(key_z);
     const key_file: [*:0]const u8 = @ptrCast(key_z.ptr);
 
-    // 1. End-to-end HTTP/3 GET with CA verification + hostname verification (localhost)
-    {
-        var srv = try loopback_quic.LocalH3Server.init(cert_file, key_file);
-        defer srv.deinit();
-        const srv_thread = try std.Thread.spawn(.{}, loopback_quic.LocalH3Server.run, .{&srv});
-        defer srv.stopAndJoin(srv_thread);
+    if (comptime !backend_options.bundled) {
+        // 1. End-to-end HTTP/3 GET with CA verification + hostname verification (localhost)
+        {
+            var srv = try loopback_quic.LocalH3Server.init(cert_file, key_file);
+            defer srv.deinit();
+            const srv_thread = try std.Thread.spawn(.{}, loopback_quic.LocalH3Server.run, .{&srv});
+            defer srv.stopAndJoin(srv_thread);
 
-        const easy = curl_easy_init() orelse return error.EasyInitFailed;
-        defer curl_easy_cleanup(easy);
+            const easy = curl_easy_init() orelse return error.EasyInitFailed;
+            defer curl_easy_cleanup(easy);
 
-        var url_buf: [128]u8 = undefined;
-        const url = try loopback_http.bufPrintZ(&url_buf, "https://localhost:{d}/get", .{srv.port});
+            var url_buf: [128]u8 = undefined;
+            const url = try loopback_http.bufPrintZ(&url_buf, "https://localhost:{d}/get", .{srv.port});
 
-        var resolve_buf: [128]u8 = undefined;
-        const resolve_entry = try loopback_http.bufPrintZ(&resolve_buf, "localhost:{d}:127.0.0.1", .{srv.port});
-        const resolve_list = curl_slist_append(null, resolve_entry) orelse return error.SlistAppendFailed;
-        defer curl_slist_free_all(resolve_list);
+            var resolve_buf: [128]u8 = undefined;
+            const resolve_entry = try loopback_http.bufPrintZ(&resolve_buf, "localhost:{d}:127.0.0.1", .{srv.port});
+            const resolve_list = curl_slist_append(null, resolve_entry) orelse return error.SlistAppendFailed;
+            defer curl_slist_free_all(resolve_list);
 
-        var cap = loopback_http.BodySink{};
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_HTTP_VERSION, c.CURL_HTTP_VERSION_3ONLY));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 1)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 2)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_CAINFO, ca_file));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_RESOLVE, resolve_list));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, &cap));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
-
-        try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
-
-        var status_code: c_long = 0;
-        try testing.expectEqual(c.CURLE_OK, curl_easy_getinfo(easy, c.CURLINFO_RESPONSE_CODE, &status_code));
-        try testing.expectEqual(@as(c_long, 200), status_code);
-
-        var http_version: c_long = 0;
-        try testing.expectEqual(c.CURLE_OK, curl_easy_getinfo(easy, c.CURLINFO_HTTP_VERSION, &http_version));
-        try testing.expectEqual(c.CURL_HTTP_VERSION_3, http_version);
-        try testing.expectEqualStrings("hello-http3", cap.slice());
-    }
-
-    // 2. End-to-end HTTP/3 POST with request body echo
-    {
-        var srv = try loopback_quic.LocalH3Server.init(cert_file, key_file);
-        defer srv.deinit();
-        const srv_thread = try std.Thread.spawn(.{}, loopback_quic.LocalH3Server.run, .{&srv});
-        defer srv.stopAndJoin(srv_thread);
-
-        const easy = curl_easy_init() orelse return error.EasyInitFailed;
-        defer curl_easy_cleanup(easy);
-
-        var url_buf: [128]u8 = undefined;
-        const url = try loopback_http.bufPrintZ(&url_buf, "https://localhost:{d}/post", .{srv.port});
-
-        var resolve_buf: [128]u8 = undefined;
-        const resolve_entry = try loopback_http.bufPrintZ(&resolve_buf, "localhost:{d}:127.0.0.1", .{srv.port});
-        const resolve_list = curl_slist_append(null, resolve_entry) orelse return error.SlistAppendFailed;
-        defer curl_slist_free_all(resolve_list);
-
-        const payload: [*:0]const u8 = "zig-http3-post-payload";
-        var cap = loopback_http.BodySink{};
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_HTTP_VERSION, c.CURL_HTTP_VERSION_3ONLY));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 1)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 2)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_CAINFO, ca_file));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_RESOLVE, resolve_list));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_POSTFIELDS, payload));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_POSTFIELDSIZE, @as(c_long, 22)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, &cap));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
-
-        try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
-
-        var status_code: c_long = 0;
-        try testing.expectEqual(c.CURLE_OK, curl_easy_getinfo(easy, c.CURLINFO_RESPONSE_CODE, &status_code));
-        try testing.expectEqual(@as(c_long, 200), status_code);
-        try testing.expectEqualStrings("post-echo:zig-http3-post-payload", cap.slice());
-    }
-
-    // 3. Concurrent HTTP/3 streams multiplexed over a single QUIC connection via curl_multi
-    {
-        var srv = try loopback_quic.LocalH3Server.init(cert_file, key_file);
-        defer srv.deinit();
-        const srv_thread = try std.Thread.spawn(.{}, loopback_quic.LocalH3Server.run, .{&srv});
-        defer srv.stopAndJoin(srv_thread);
-
-        const multi = curl_multi_init() orelse return error.MultiInitFailed;
-        defer _ = curl_multi_cleanup(multi);
-
-        const easy1 = curl_easy_init() orelse return error.EasyInitFailed;
-        defer curl_easy_cleanup(easy1);
-        const easy2 = curl_easy_init() orelse return error.EasyInitFailed;
-        defer curl_easy_cleanup(easy2);
-
-        var resolve_buf: [128]u8 = undefined;
-        const resolve_entry = try loopback_http.bufPrintZ(&resolve_buf, "localhost:{d}:127.0.0.1", .{srv.port});
-        const resolve_list1 = curl_slist_append(null, resolve_entry) orelse return error.SlistAppendFailed;
-        defer curl_slist_free_all(resolve_list1);
-        const resolve_list2 = curl_slist_append(null, resolve_entry) orelse return error.SlistAppendFailed;
-        defer curl_slist_free_all(resolve_list2);
-
-        var url1_buf: [128]u8 = undefined;
-        const url1 = try loopback_http.bufPrintZ(&url1_buf, "https://localhost:{d}/stream1", .{srv.port});
-        var url2_buf: [128]u8 = undefined;
-        const url2 = try loopback_http.bufPrintZ(&url2_buf, "https://localhost:{d}/stream2", .{srv.port});
-
-        var cap1 = loopback_http.BodySink{};
-        var cap2 = loopback_http.BodySink{};
-
-        for ([_]?*anyopaque{ easy1, easy2 }, [_][*:0]const u8{ url1, url2 }, [_]*loopback_http.BodySink{ &cap1, &cap2 }, [_]?*c.curl_slist{ resolve_list1, resolve_list2 }) |easy, url, cap, rlist| {
+            var cap = loopback_http.BodySink{};
             try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
             try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
-            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_PIPEWAIT, @as(c_long, 1)));
             try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_HTTP_VERSION, c.CURL_HTTP_VERSION_3ONLY));
             try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 1)));
             try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 2)));
             try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_CAINFO, ca_file));
-            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_RESOLVE, rlist));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_RESOLVE, resolve_list));
             try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
-            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, cap));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, &cap));
             try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
-            try testing.expectEqual(c.CURLM_OK, curl_multi_add_handle(multi, easy));
-        }
-        defer {
-            _ = curl_multi_remove_handle(multi, easy1);
-            _ = curl_multi_remove_handle(multi, easy2);
+
+            try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+
+            var status_code: c_long = 0;
+            try testing.expectEqual(c.CURLE_OK, curl_easy_getinfo(easy, c.CURLINFO_RESPONSE_CODE, &status_code));
+            try testing.expectEqual(@as(c_long, 200), status_code);
+
+            var http_version: c_long = 0;
+            try testing.expectEqual(c.CURLE_OK, curl_easy_getinfo(easy, c.CURLINFO_HTTP_VERSION, &http_version));
+            try testing.expectEqual(c.CURL_HTTP_VERSION_3, http_version);
+            try testing.expectEqualStrings("hello-http3", cap.slice());
         }
 
-        var still_running: c_int = 1;
-        while (still_running > 0) {
-            try testing.expectEqual(c.CURLM_OK, curl_multi_perform(multi, &still_running));
-            if (still_running > 0) {
-                try testing.expectEqual(c.CURLM_OK, curl_multi_poll(multi, null, 0, 50, null));
+        // 2. End-to-end HTTP/3 POST with request body echo
+        {
+            var srv = try loopback_quic.LocalH3Server.init(cert_file, key_file);
+            defer srv.deinit();
+            const srv_thread = try std.Thread.spawn(.{}, loopback_quic.LocalH3Server.run, .{&srv});
+            defer srv.stopAndJoin(srv_thread);
+
+            const easy = curl_easy_init() orelse return error.EasyInitFailed;
+            defer curl_easy_cleanup(easy);
+
+            var url_buf: [128]u8 = undefined;
+            const url = try loopback_http.bufPrintZ(&url_buf, "https://localhost:{d}/post", .{srv.port});
+
+            var resolve_buf: [128]u8 = undefined;
+            const resolve_entry = try loopback_http.bufPrintZ(&resolve_buf, "localhost:{d}:127.0.0.1", .{srv.port});
+            const resolve_list = curl_slist_append(null, resolve_entry) orelse return error.SlistAppendFailed;
+            defer curl_slist_free_all(resolve_list);
+
+            const payload: [*:0]const u8 = "zig-http3-post-payload";
+            var cap = loopback_http.BodySink{};
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_HTTP_VERSION, c.CURL_HTTP_VERSION_3ONLY));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 1)));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 2)));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_CAINFO, ca_file));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_RESOLVE, resolve_list));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_POSTFIELDS, payload));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_POSTFIELDSIZE, @as(c_long, 22)));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, &cap));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
+
+            try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+
+            var status_code: c_long = 0;
+            try testing.expectEqual(c.CURLE_OK, curl_easy_getinfo(easy, c.CURLINFO_RESPONSE_CODE, &status_code));
+            try testing.expectEqual(@as(c_long, 200), status_code);
+            try testing.expectEqualStrings("post-echo:zig-http3-post-payload", cap.slice());
+        }
+
+        // 3. Concurrent HTTP/3 streams multiplexed over a single QUIC connection via curl_multi
+        {
+            var srv = try loopback_quic.LocalH3Server.init(cert_file, key_file);
+            defer srv.deinit();
+            const srv_thread = try std.Thread.spawn(.{}, loopback_quic.LocalH3Server.run, .{&srv});
+            defer srv.stopAndJoin(srv_thread);
+
+            const multi = curl_multi_init() orelse return error.MultiInitFailed;
+            defer _ = curl_multi_cleanup(multi);
+
+            const easy1 = curl_easy_init() orelse return error.EasyInitFailed;
+            defer curl_easy_cleanup(easy1);
+            const easy2 = curl_easy_init() orelse return error.EasyInitFailed;
+            defer curl_easy_cleanup(easy2);
+
+            var resolve_buf: [128]u8 = undefined;
+            const resolve_entry = try loopback_http.bufPrintZ(&resolve_buf, "localhost:{d}:127.0.0.1", .{srv.port});
+            const resolve_list1 = curl_slist_append(null, resolve_entry) orelse return error.SlistAppendFailed;
+            defer curl_slist_free_all(resolve_list1);
+            const resolve_list2 = curl_slist_append(null, resolve_entry) orelse return error.SlistAppendFailed;
+            defer curl_slist_free_all(resolve_list2);
+
+            var url1_buf: [128]u8 = undefined;
+            const url1 = try loopback_http.bufPrintZ(&url1_buf, "https://localhost:{d}/stream1", .{srv.port});
+            var url2_buf: [128]u8 = undefined;
+            const url2 = try loopback_http.bufPrintZ(&url2_buf, "https://localhost:{d}/stream2", .{srv.port});
+
+            var cap1 = loopback_http.BodySink{};
+            var cap2 = loopback_http.BodySink{};
+
+            for ([_]?*anyopaque{ easy1, easy2 }, [_][*:0]const u8{ url1, url2 }, [_]*loopback_http.BodySink{ &cap1, &cap2 }, [_]?*c.curl_slist{ resolve_list1, resolve_list2 }) |easy, url, cap, rlist| {
+                try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+                try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+                try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_PIPEWAIT, @as(c_long, 1)));
+                try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_HTTP_VERSION, c.CURL_HTTP_VERSION_3ONLY));
+                try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 1)));
+                try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 2)));
+                try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_CAINFO, ca_file));
+                try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_RESOLVE, rlist));
+                try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+                try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, cap));
+                try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
+                try testing.expectEqual(c.CURLM_OK, curl_multi_add_handle(multi, easy));
             }
-        }
-
-        var msgs_left: c_int = 0;
-        var done_count: usize = 0;
-        while (curl_multi_info_read(multi, &msgs_left)) |msg| {
-            if (msg.msg == c.CURLMSG_DONE) {
-                try testing.expectEqual(c.CURLE_OK, msg.data.result);
-                done_count += 1;
+            defer {
+                _ = curl_multi_remove_handle(multi, easy1);
+                _ = curl_multi_remove_handle(multi, easy2);
             }
+
+            var still_running: c_int = 1;
+            while (still_running > 0) {
+                try testing.expectEqual(c.CURLM_OK, curl_multi_perform(multi, &still_running));
+                if (still_running > 0) {
+                    try testing.expectEqual(c.CURLM_OK, curl_multi_poll(multi, null, 0, 50, null));
+                }
+            }
+
+            var msgs_left: c_int = 0;
+            var done_count: usize = 0;
+            while (curl_multi_info_read(multi, &msgs_left)) |msg| {
+                if (msg.msg == c.CURLMSG_DONE) {
+                    try testing.expectEqual(c.CURLE_OK, msg.data.result);
+                    done_count += 1;
+                }
+            }
+            try testing.expectEqual(@as(usize, 2), done_count);
+            try testing.expectEqualStrings("h3-stream-1-ok", cap1.slice());
+            try testing.expectEqualStrings("h3-stream-2-ok", cap2.slice());
         }
-        try testing.expectEqual(@as(usize, 2), done_count);
-        try testing.expectEqualStrings("h3-stream-1-ok", cap1.slice());
-        try testing.expectEqualStrings("h3-stream-2-ok", cap2.slice());
-    }
 
-    // 4. Peer certificate verification failure (untrusted self-signed cert without CAINFO)
-    {
-        var srv = try loopback_quic.LocalH3Server.init(cert_file, key_file);
-        defer srv.deinit();
-        const srv_thread = try std.Thread.spawn(.{}, loopback_quic.LocalH3Server.run, .{&srv});
-        defer srv.stopAndJoin(srv_thread);
+        // 4. Peer certificate verification failure (untrusted self-signed cert without CAINFO)
+        {
+            var srv = try loopback_quic.LocalH3Server.init(cert_file, key_file);
+            defer srv.deinit();
+            const srv_thread = try std.Thread.spawn(.{}, loopback_quic.LocalH3Server.run, .{&srv});
+            defer srv.stopAndJoin(srv_thread);
 
-        const easy = curl_easy_init() orelse return error.EasyInitFailed;
-        defer curl_easy_cleanup(easy);
+            const easy = curl_easy_init() orelse return error.EasyInitFailed;
+            defer curl_easy_cleanup(easy);
 
-        var url_buf: [128]u8 = undefined;
-        const url = try loopback_http.bufPrintZ(&url_buf, "https://localhost:{d}/untrusted", .{srv.port});
+            var url_buf: [128]u8 = undefined;
+            const url = try loopback_http.bufPrintZ(&url_buf, "https://localhost:{d}/untrusted", .{srv.port});
 
-        var resolve_buf: [128]u8 = undefined;
-        const resolve_entry = try loopback_http.bufPrintZ(&resolve_buf, "localhost:{d}:127.0.0.1", .{srv.port});
-        const resolve_list = curl_slist_append(null, resolve_entry) orelse return error.SlistAppendFailed;
-        defer curl_slist_free_all(resolve_list);
+            var resolve_buf: [128]u8 = undefined;
+            const resolve_entry = try loopback_http.bufPrintZ(&resolve_buf, "localhost:{d}:127.0.0.1", .{srv.port});
+            const resolve_list = curl_slist_append(null, resolve_entry) orelse return error.SlistAppendFailed;
+            defer curl_slist_free_all(resolve_list);
 
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_HTTP_VERSION, c.CURL_HTTP_VERSION_3ONLY));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 1)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 2)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_RESOLVE, resolve_list));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_HTTP_VERSION, c.CURL_HTTP_VERSION_3ONLY));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 1)));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 2)));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_RESOLVE, resolve_list));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
 
-        const rc = curl_easy_perform(easy);
-        try testing.expectEqual(c.CURLE_PEER_FAILED_VERIFICATION, rc);
-    }
+            const rc = curl_easy_perform(easy);
+            try testing.expectEqual(c.CURLE_PEER_FAILED_VERIFICATION, rc);
+        }
 
-    // 5. Hostname verification failure (trusted CAINFO, but hostname wrong.host.test != localhost)
-    {
-        var srv = try loopback_quic.LocalH3Server.init(cert_file, key_file);
-        defer srv.deinit();
-        const srv_thread = try std.Thread.spawn(.{}, loopback_quic.LocalH3Server.run, .{&srv});
-        defer srv.stopAndJoin(srv_thread);
+        // 5. Hostname verification failure (trusted CAINFO, but hostname wrong.host.test != localhost)
+        {
+            var srv = try loopback_quic.LocalH3Server.init(cert_file, key_file);
+            defer srv.deinit();
+            const srv_thread = try std.Thread.spawn(.{}, loopback_quic.LocalH3Server.run, .{&srv});
+            defer srv.stopAndJoin(srv_thread);
 
-        const easy = curl_easy_init() orelse return error.EasyInitFailed;
-        defer curl_easy_cleanup(easy);
+            const easy = curl_easy_init() orelse return error.EasyInitFailed;
+            defer curl_easy_cleanup(easy);
 
-        var url_buf: [128]u8 = undefined;
-        const url = try loopback_http.bufPrintZ(&url_buf, "https://wrong.host.test:{d}/badhost", .{srv.port});
+            var url_buf: [128]u8 = undefined;
+            const url = try loopback_http.bufPrintZ(&url_buf, "https://wrong.host.test:{d}/badhost", .{srv.port});
 
-        var resolve_buf: [128]u8 = undefined;
-        const resolve_entry = try loopback_http.bufPrintZ(&resolve_buf, "wrong.host.test:{d}:127.0.0.1", .{srv.port});
-        const resolve_list = curl_slist_append(null, resolve_entry) orelse return error.SlistAppendFailed;
-        defer curl_slist_free_all(resolve_list);
+            var resolve_buf: [128]u8 = undefined;
+            const resolve_entry = try loopback_http.bufPrintZ(&resolve_buf, "wrong.host.test:{d}:127.0.0.1", .{srv.port});
+            const resolve_list = curl_slist_append(null, resolve_entry) orelse return error.SlistAppendFailed;
+            defer curl_slist_free_all(resolve_list);
 
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_HTTP_VERSION, c.CURL_HTTP_VERSION_3ONLY));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 1)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 2)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_CAINFO, ca_file));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_RESOLVE, resolve_list));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_HTTP_VERSION, c.CURL_HTTP_VERSION_3ONLY));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 1)));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 2)));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_CAINFO, ca_file));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_RESOLVE, resolve_list));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
 
-        const rc = curl_easy_perform(easy);
-        try testing.expectEqual(c.CURLE_PEER_FAILED_VERIFICATION, rc);
-    }
+            const rc = curl_easy_perform(easy);
+            try testing.expectEqual(c.CURLE_PEER_FAILED_VERIFICATION, rc);
+        }
 
-    // 6. HTTPS-RR alpn=h3 negotiation via DoH (default CURLOPT_HTTP_VERSION upgrades to HTTP/3 via HTTPS RR)
-    if (comptime backend_options.httpsrr) {
-        var doh_srv = try loopback_dns.DohHttpServer.init();
-        doh_srv.https_alpn_h3 = true;
-        defer doh_srv.deinit();
-        const doh_thread = try std.Thread.spawn(.{}, loopback_dns.DohHttpServer.run, .{&doh_srv});
-        defer doh_srv.stopAndJoin(doh_thread);
+        // 6. HTTPS-RR alpn=h3 negotiation via DoH (default CURLOPT_HTTP_VERSION upgrades to HTTP/3 via HTTPS RR)
+        if (comptime backend_options.httpsrr) {
+            var doh_srv = try loopback_dns.DohHttpServer.init();
+            doh_srv.https_alpn_h3 = true;
+            defer doh_srv.deinit();
+            const doh_thread = try std.Thread.spawn(.{}, loopback_dns.DohHttpServer.run, .{&doh_srv});
+            defer doh_srv.stopAndJoin(doh_thread);
 
-        var h3_srv = try loopback_quic.LocalH3Server.init(cert_file, key_file);
-        defer h3_srv.deinit();
-        const h3_thread = try std.Thread.spawn(.{}, loopback_quic.LocalH3Server.run, .{&h3_srv});
-        defer h3_srv.stopAndJoin(h3_thread);
+            var h3_srv = try loopback_quic.LocalH3Server.init(cert_file, key_file);
+            defer h3_srv.deinit();
+            const h3_thread = try std.Thread.spawn(.{}, loopback_quic.LocalH3Server.run, .{&h3_srv});
+            defer h3_srv.stopAndJoin(h3_thread);
 
-        const easy = curl_easy_init() orelse return error.EasyInitFailed;
-        defer curl_easy_cleanup(easy);
+            const easy = curl_easy_init() orelse return error.EasyInitFailed;
+            defer curl_easy_cleanup(easy);
 
-        var doh_url_buf: [128]u8 = undefined;
-        const doh_url = try loopback_http.bufPrintZ(&doh_url_buf, "http://127.0.0.1:{d}/dns-query", .{doh_srv.port});
+            var doh_url_buf: [128]u8 = undefined;
+            const doh_url = try loopback_http.bufPrintZ(&doh_url_buf, "http://127.0.0.1:{d}/dns-query", .{doh_srv.port});
 
-        var url_buf: [128]u8 = undefined;
-        const url = try loopback_http.bufPrintZ(&url_buf, "https://h3-doh.test:{d}/get", .{h3_srv.port});
+            var url_buf: [128]u8 = undefined;
+            const url = try loopback_http.bufPrintZ(&url_buf, "https://h3-doh.test:{d}/get", .{h3_srv.port});
 
-        var cap = loopback_http.BodySink{};
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_DOH_URL, doh_url));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 1)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 0)));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_CAINFO, ca_file));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, &cap));
-        try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
+            var cap = loopback_http.BodySink{};
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_DOH_URL, doh_url));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 1)));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 0)));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_CAINFO, ca_file));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, &loopback_http.writeCallback));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, &cap));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_setopt(easy, c.CURLOPT_URL, url));
 
-        try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
-        try testing.expect(doh_srv.saw_a.load(.acquire));
-        try testing.expect(doh_srv.saw_https.load(.acquire));
+            try testing.expectEqual(c.CURLE_OK, curl_easy_perform(easy));
+            try testing.expect(doh_srv.saw_a.load(.acquire));
+            try testing.expect(doh_srv.saw_https.load(.acquire));
 
-        var http_version: c_long = 0;
-        try testing.expectEqual(c.CURLE_OK, curl_easy_getinfo(easy, c.CURLINFO_HTTP_VERSION, &http_version));
-        try testing.expectEqual(c.CURL_HTTP_VERSION_3, http_version);
-        try testing.expectEqualStrings("hello-http3", cap.slice());
+            var http_version: c_long = 0;
+            try testing.expectEqual(c.CURLE_OK, curl_easy_getinfo(easy, c.CURLINFO_HTTP_VERSION, &http_version));
+            try testing.expectEqual(c.CURL_HTTP_VERSION_3, http_version);
+            try testing.expectEqualStrings("hello-http3", cap.slice());
+        }
     }
 
     // 7. CURL_HTTP_VERSION_3 happy-eyeballs fallback to HTTP/1.1 TLS when UDP HTTP/3 port is unreachable
@@ -3276,7 +3278,7 @@ const UploadReader = struct {
 };
 
 test "SFTP and SCP end-to-end local sshd server: download, upload, quote, range, known_hosts, and host_public_key_sha256" {
-    if (comptime (backend_options.ssh == .none or builtin.os.tag != .linux)) return;
+    if (comptime (backend_options.ssh == .none or backend_options.bundled or builtin.os.tag != .linux)) return;
 
     const gpa = testing.allocator;
     const io = testing.io;

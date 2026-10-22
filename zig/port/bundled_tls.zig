@@ -916,6 +916,9 @@ const SimSsl = struct {
     read_seq: u64 = 0,
     write_seq: u64 = 0,
     handshake_ok: bool = false,
+    pending_buf: [4096]u8 = @splat(0),
+    pending_pos: usize = 0,
+    pending_len: usize = 0,
 };
 
 var dummy_method: u8 = 1;
@@ -1362,6 +1365,18 @@ fn simSSL_read(ssl_raw: ?*anyopaque, buf_raw: ?*anyopaque, num: c_int) callconv(
     const out_buf: [*]u8 = @ptrCast(buf_raw orelse return -1);
     const gpa = std.heap.c_allocator;
 
+    if (ssl.pending_pos < ssl.pending_len) {
+        const avail = ssl.pending_len - ssl.pending_pos;
+        const copy_len = @min(avail, @as(usize, @intCast(num)));
+        @memcpy(out_buf[0..copy_len], ssl.pending_buf[ssl.pending_pos .. ssl.pending_pos + copy_len]);
+        ssl.pending_pos += copy_len;
+        if (ssl.pending_pos >= ssl.pending_len) {
+            ssl.pending_pos = 0;
+            ssl.pending_len = 0;
+        }
+        return @intCast(copy_len);
+    }
+
     while (true) {
         var hdr: [5]u8 = undefined;
         if (!fdReadExact(ssl.fd, &hdr)) return 0;
@@ -1399,6 +1414,12 @@ fn simSSL_read(ssl_raw: ?*anyopaque, buf_raw: ?*anyopaque, num: c_int) callconv(
         if (content.len == 0) continue;
         const copy_len = @min(content.len, @as(usize, @intCast(num)));
         @memcpy(out_buf[0..copy_len], content[0..copy_len]);
+        if (content.len > copy_len) {
+            const rem = @min(content.len - copy_len, ssl.pending_buf.len);
+            @memcpy(ssl.pending_buf[0..rem], content[copy_len .. copy_len + rem]);
+            ssl.pending_pos = 0;
+            ssl.pending_len = rem;
+        }
         return @intCast(copy_len);
     }
 }

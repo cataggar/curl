@@ -120,6 +120,8 @@ typedef struct gss_buffer_desc_struct {
   size_t length;
   void *value;
 } gss_buffer_desc, *gss_buffer_t;
+#define GSS_S_COMPLETE 0
+#define GSS_S_CONTINUE_NEEDED 1
 #  endif
 #endif
 
@@ -130,6 +132,7 @@ typedef struct gss_buffer_desc_struct {
 #else
 #ifndef CURL_ZIG_LIBSSH2_FALLBACK_DEFINED
 #define CURL_ZIG_LIBSSH2_FALLBACK_DEFINED
+#define LIBSSH2_VERSION_NUM 0x010b01
 typedef struct _LIBSSH2_SESSION LIBSSH2_SESSION;
 typedef struct _LIBSSH2_CHANNEL LIBSSH2_CHANNEL;
 typedef struct _LIBSSH2_SFTP LIBSSH2_SFTP;
@@ -138,7 +141,7 @@ typedef struct _LIBSSH2_KNOWNHOSTS LIBSSH2_KNOWNHOSTS;
 typedef struct _LIBSSH2_AGENT LIBSSH2_AGENT;
 typedef struct _LIBSSH2_SFTP_ATTRIBUTES {
   unsigned long flags;
-  curl_uint64_t filesize;
+  uint64_t filesize;
   unsigned long uid, gid;
   unsigned long permissions;
   unsigned long atime, mtime;
