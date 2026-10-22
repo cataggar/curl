@@ -328,6 +328,18 @@ inline fn trcDns(data: ?*Curl_easy, fmt: [*:0]const u8, args: anytype) void {
     }
 }
 
+inline fn fromOpaque(comptime T: type, raw: anytype) *T {
+    return @ptrCast(@alignCast(raw));
+}
+
+inline fn cfHcCtx(cf: *Curl_cfilter) *cf_hc_ctx {
+    return fromOpaque(cf_hc_ctx, cf.ctx.?);
+}
+
+inline fn cfIpHappyCtx(cf: *Curl_cfilter) *cf_ip_happy_ctx {
+    return fromOpaque(cf_ip_happy_ctx, cf.ctx.?);
+}
+
 // ============================================================================
 // 1. lib/connect.c
 // ============================================================================
@@ -471,8 +483,8 @@ fn conn_connect_trace(data: ?*Curl_easy, cf: *Curl_cfilter) CURLcode {
         }
         const prefix: [*:0]const u8 = if (cf.sockindex == SECONDARYSOCKET) "2nd " else "";
         const dispname = Curl_zig_conn_host_dispname(Curl_zig_data_get_conn(data));
-        const remote_ip_ptr: [*:0]const u8 = @ptrCast(&ipquad.remote_ip);
-        const local_ip_ptr: [*:0]const u8 = @ptrCast(&ipquad.local_ip);
+        const remote_ip_ptr: [*]const u8 = &ipquad.remote_ip;
+        const local_ip_ptr: [*]const u8 = &ipquad.local_ip;
         infof(
             data,
             "Established %sconnection to %s (%s port %u) from %s port %u ",
@@ -755,7 +767,7 @@ fn cf_hc_ctx_destroy(data: ?*Curl_easy, ctx_opt: ?*cf_hc_ctx) void {
         cf_hc_baller_discard(&ctx.ballers[i], data);
     }
     Curl_peer_unlink(&ctx.destination);
-    mem.free(ctx);
+    mem.destroy(ctx);
 }
 
 fn cf_hc_baller_assign(b: *cf_hc_baller, alpn_id: c_uint, def_transport: u8) void {
@@ -803,7 +815,7 @@ fn cf_hc_baller_connect(b: *cf_hc_baller, cf: *Curl_cfilter, data: ?*Curl_easy, 
 }
 
 fn baller_connected(cf: *Curl_cfilter, data: ?*Curl_easy, winner: *cf_hc_baller) CURLcode {
-    const ctx: *cf_hc_ctx = @ptrCast(@alignCast(cf.ctx));
+    const ctx = cfHcCtx(cf);
     if (cf.next != null) {
         return CURLE_FAILED_INIT;
     }
@@ -834,7 +846,7 @@ fn baller_connected(cf: *Curl_cfilter, data: ?*Curl_easy, winner: *cf_hc_baller)
 }
 
 fn time_to_start_baller2(cf: *Curl_cfilter, data: ?*Curl_easy, pnow: *const Curltime) bool {
-    const ctx: *cf_hc_ctx = @ptrCast(@alignCast(cf.ctx));
+    const ctx = cfHcCtx(cf);
 
     if (ctx.baller_count < 2) {
         return false;
@@ -870,7 +882,7 @@ fn time_to_start_baller2(cf: *Curl_cfilter, data: ?*Curl_easy, pnow: *const Curl
 }
 
 fn cf_hc_may_h3(cf: *Curl_cfilter, data: ?*Curl_easy) bool {
-    const ctx: *cf_hc_ctx = @ptrCast(@alignCast(cf.ctx));
+    const ctx = cfHcCtx(cf);
     if (!ctx.checked_h3) {
         ctx.check_h3_result = Curl_conn_may_http3(data, cf.conn);
         ctx.checked_h3 = true;
@@ -880,7 +892,7 @@ fn cf_hc_may_h3(cf: *Curl_cfilter, data: ?*Curl_easy) bool {
 
 fn cf_hc_get_httpsrr_alpn(cf: *Curl_cfilter, data: ?*Curl_easy, not_this_one: c_uint) c_uint {
     if (comptime use_httpsrr) {
-        const ctx: *cf_hc_ctx = @ptrCast(@alignCast(cf.ctx));
+        const ctx = cfHcCtx(cf);
         const d = data orelse return ALPN_none;
         const rr = Curl_conn_dns_get_https(data, cf.sockindex, ctx.destination);
         const avail_prefix: [*:0]const u8 = if (rr != null) "" else "not ";
@@ -963,7 +975,7 @@ fn cf_hc_get_first_alpn(cf: *Curl_cfilter, data: ?*Curl_easy, choices: u8, not_t
 }
 
 fn cf_hc_set_baller1(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
-    const ctx: *cf_hc_ctx = @ptrCast(@alignCast(cf.ctx));
+    const ctx = cfHcCtx(cf);
     const d = data orelse return CURLE_FAILED_INIT;
     var wanted: u8 = 0;
     var allowed: u8 = 0;
@@ -1008,7 +1020,7 @@ fn cf_hc_set_baller1(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
 }
 
 fn cf_hc_set_baller2(cf: *Curl_cfilter, data: ?*Curl_easy) void {
-    const ctx: *cf_hc_ctx = @ptrCast(@alignCast(cf.ctx));
+    const ctx = cfHcCtx(cf);
     const d = data orelse return;
     if (ctx.ballers_complete) return;
     if (!ctx.httpsrr_resolved) return;
@@ -1041,7 +1053,7 @@ fn cf_hc_set_baller2(cf: *Curl_cfilter, data: ?*Curl_easy) void {
 }
 
 fn cf_hc_connect(cf: *Curl_cfilter, data: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
-    const ctx: *cf_hc_ctx = @ptrCast(@alignCast(cf.ctx));
+    const ctx = cfHcCtx(cf);
     var result: CURLcode = CURLE_OK;
 
     if (cf.isConnected()) {
@@ -1142,7 +1154,7 @@ fn cf_hc_connect(cf: *Curl_cfilter, data: ?*Curl_easy, done: *bool) callconv(.c)
 }
 
 fn cf_hc_shutdown(cf: *Curl_cfilter, data: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
-    const ctx: *cf_hc_ctx = @ptrCast(@alignCast(cf.ctx));
+    const ctx = cfHcCtx(cf);
     var result: CURLcode = CURLE_OK;
 
     if (cf.isConnected()) {
@@ -1183,10 +1195,10 @@ fn cf_hc_shutdown(cf: *Curl_cfilter, data: ?*Curl_easy, done: *bool) callconv(.c
 }
 
 fn cf_hc_adjust_pollset(cf: *Curl_cfilter, data: ?*Curl_easy, ps_opaque: *vdns_cfilters.easy_pollset) callconv(.c) CURLcode {
-    const ps: *easy_pollset = @ptrCast(@alignCast(ps_opaque));
+    const ps = fromOpaque(easy_pollset, ps_opaque);
     var result: CURLcode = CURLE_OK;
     if (!cf.isConnected()) {
-        const ctx: *cf_hc_ctx = @ptrCast(@alignCast(cf.ctx));
+        const ctx = cfHcCtx(cf);
         var i: usize = 0;
         while (i < ctx.baller_count and result == CURLE_OK) : (i += 1) {
             const b = &ctx.ballers[i];
@@ -1199,7 +1211,7 @@ fn cf_hc_adjust_pollset(cf: *Curl_cfilter, data: ?*Curl_easy, ps_opaque: *vdns_c
 }
 
 fn cf_hc_data_pending(cf: *Curl_cfilter, data: ?*const Curl_easy) callconv(.c) bool {
-    const ctx: *cf_hc_ctx = @ptrCast(@alignCast(cf.ctx));
+    const ctx = cfHcCtx(cf);
     if (cf.isConnected()) {
         if (cf.next) |next_cf| {
             return next_cf.cft.has_data_pending(next_cf, data);
@@ -1223,7 +1235,7 @@ fn cf_hc_query(
     pres1: ?*c_int,
     pres2: ?*anyopaque,
 ) callconv(.c) CURLcode {
-    const ctx: *cf_hc_ctx = @ptrCast(@alignCast(cf.ctx));
+    const ctx = cfHcCtx(cf);
     if (!cf.isConnected()) {
         if (query == CF_QUERY_NEED_FLUSH) {
             var i: usize = 0;
@@ -1248,7 +1260,7 @@ fn cf_hc_cntrl(
     arg1: c_int,
     arg2: ?*anyopaque,
 ) callconv(.c) CURLcode {
-    const ctx: *cf_hc_ctx = @ptrCast(@alignCast(cf.ctx));
+    const ctx = cfHcCtx(cf);
     var result: CURLcode = CURLE_OK;
 
     if (!cf.isConnected()) {
@@ -1278,7 +1290,7 @@ fn cf_hc_cntrl(
 }
 
 fn cf_hc_destroy(cf: *Curl_cfilter, data: ?*Curl_easy) callconv(.c) void {
-    const ctx: ?*cf_hc_ctx = @ptrCast(@alignCast(cf.ctx));
+    const ctx: ?*cf_hc_ctx = if (cf.ctx) |raw| fromOpaque(cf_hc_ctx, raw) else null;
     trcCf(data, cf, "destroy", .{});
     cf_hc_ctx_destroy(data, ctx);
 }
@@ -1300,36 +1312,42 @@ pub export var Curl_cft_http_connect: Curl_cftype = .{
     .query = cf_hc_query,
 };
 
+fn cfHcCreateChecked(
+    pcf: *?*Curl_cfilter,
+    data: ?*Curl_easy,
+    destination: ?*Curl_peer,
+    def_transport: u8,
+) !void {
+    pcf.* = null;
+    const d = data orelse return error.FailedInit;
+    const ctx = mem.create(cf_hc_ctx) orelse return error.OutOfMemory;
+    errdefer cf_hc_ctx_destroy(data, ctx);
+
+    Curl_peer_link(&ctx.destination, destination);
+    ctx.def_transport = def_transport;
+    const he_timeout = Curl_zig_data_happy_eyeballs_timeout(d);
+    ctx.hard_eyeballs_timeout_ms = he_timeout;
+    ctx.soft_eyeballs_timeout_ms = @divTrunc(he_timeout, 2);
+
+    var cf: ?*Curl_cfilter = null;
+    const result = Curl_cf_create(&cf, &Curl_cft_http_connect, ctx);
+    if (result != CURLE_OK) {
+        return error.OutOfMemory;
+    }
+    pcf.* = cf;
+}
+
 fn cf_hc_create(
     pcf: *?*Curl_cfilter,
     data: ?*Curl_easy,
     destination: ?*Curl_peer,
     def_transport: u8,
 ) CURLcode {
-    var cf: ?*Curl_cfilter = null;
-    const d = data orelse {
-        pcf.* = null;
-        return CURLE_FAILED_INIT;
+    cfHcCreateChecked(pcf, data, destination, def_transport) catch |err| switch (err) {
+        error.FailedInit => return CURLE_FAILED_INIT,
+        error.OutOfMemory => return CURLE_OUT_OF_MEMORY,
     };
-
-    const raw = mem.calloc(1, @sizeOf(cf_hc_ctx)) orelse {
-        pcf.* = null;
-        return CURLE_OUT_OF_MEMORY;
-    };
-    var ctx: ?*cf_hc_ctx = @ptrCast(@alignCast(raw));
-    Curl_peer_link(&ctx.?.destination, destination);
-    ctx.?.def_transport = def_transport;
-    const he_timeout = Curl_zig_data_happy_eyeballs_timeout(d);
-    ctx.?.hard_eyeballs_timeout_ms = he_timeout;
-    ctx.?.soft_eyeballs_timeout_ms = @divTrunc(he_timeout, 2);
-
-    const result = Curl_cf_create(&cf, &Curl_cft_http_connect, ctx);
-    if (result == CURLE_OK) {
-        ctx = null;
-    }
-    pcf.* = if (result != CURLE_OK) null else cf;
-    cf_hc_ctx_destroy(data, ctx);
-    return result;
+    return CURLE_OK;
 }
 
 fn cf_hc_add(
@@ -1479,7 +1497,61 @@ fn cf_ip_attempt_free(a_opt: ?*cf_ip_attempt, data: ?*Curl_easy) void {
     Curl_peer_unlink(&a.origin);
     Curl_peer_unlink(&a.peer);
     Curl_peer_unlink(&a.tunnel_peer);
-    mem.free(a);
+    mem.destroy(a);
+}
+
+fn cfIpAttemptNewChecked(
+    data: ?*Curl_easy,
+    cf: *Curl_cfilter,
+    origin: ?*Curl_peer,
+    peer: ?*Curl_peer,
+    transport_peer: u8,
+    addr: *const Curl_sockaddr_ex,
+    ai_family: c_int,
+    tunnel_peer: ?*Curl_peer,
+    tunnel_transport: u8,
+    cf_create: cf_ip_connect_create,
+    out_result: *CURLcode,
+) !*cf_ip_attempt {
+    const a = mem.create(cf_ip_attempt) orelse {
+        out_result.* = CURLE_OUT_OF_MEMORY;
+        return error.OutOfMemory;
+    };
+    errdefer cf_ip_attempt_free(a, data);
+
+    Curl_peer_link(&a.origin, origin);
+    Curl_peer_link(&a.peer, peer);
+    a.transport_peer = transport_peer;
+    Curl_peer_link(&a.tunnel_peer, tunnel_peer);
+    a.tunnel_transport = tunnel_transport;
+    a.addr = addr.*;
+    a.ai_family = ai_family;
+    a.result = CURLE_OK;
+    a.cf_create = cf_create;
+
+    const result = a.cf_create(
+        &a.cf,
+        data,
+        a.origin,
+        a.peer,
+        a.transport_peer,
+        cf.conn,
+        &a.addr,
+        a.tunnel_peer,
+        a.tunnel_transport,
+    );
+    if (result != CURLE_OK) {
+        out_result.* = result;
+        return error.CreateFailed;
+    }
+
+    var wcf = a.cf;
+    while (wcf) |sub_cf| : (wcf = sub_cf.next) {
+        sub_cf.conn = cf.conn;
+        sub_cf.sockindex = cf.sockindex;
+    }
+    out_result.* = CURLE_OK;
+    return a;
 }
 
 fn cf_ip_attempt_new(
@@ -1495,43 +1567,23 @@ fn cf_ip_attempt_new(
     tunnel_transport: u8,
     cf_create: cf_ip_connect_create,
 ) CURLcode {
-    pa.* = null;
-    const raw = mem.calloc(1, @sizeOf(cf_ip_attempt)) orelse return CURLE_OUT_OF_MEMORY;
-    const a: *cf_ip_attempt = @ptrCast(@alignCast(raw));
-
-    Curl_peer_link(&a.origin, origin);
-    Curl_peer_link(&a.peer, peer);
-    a.transport_peer = transport_peer;
-    Curl_peer_link(&a.tunnel_peer, tunnel_peer);
-    a.tunnel_transport = tunnel_transport;
-    a.addr = addr.*;
-    a.ai_family = ai_family;
-    a.result = CURLE_OK;
-    a.cf_create = cf_create;
-    pa.* = a;
-
-    const result = a.cf_create(
-        &a.cf,
+    var result: CURLcode = CURLE_OK;
+    pa.* = cfIpAttemptNewChecked(
         data,
-        a.origin,
-        a.peer,
-        a.transport_peer,
-        cf.conn,
-        &a.addr,
-        a.tunnel_peer,
-        a.tunnel_transport,
-    );
-    if (result != CURLE_OK) {
-        cf_ip_attempt_free(a, data);
+        cf,
+        origin,
+        peer,
+        transport_peer,
+        addr,
+        ai_family,
+        tunnel_peer,
+        tunnel_transport,
+        cf_create,
+        &result,
+    ) catch {
         pa.* = null;
         return result;
-    }
-
-    var wcf = a.cf;
-    while (wcf) |sub_cf| : (wcf = sub_cf.next) {
-        sub_cf.conn = cf.conn;
-        sub_cf.sockindex = cf.sockindex;
-    }
+    };
     return CURLE_OK;
 }
 
@@ -1978,7 +2030,7 @@ const cf_ip_happy_ctx = struct {
 };
 
 fn is_connected(cf: *Curl_cfilter, data: ?*Curl_easy, connected: *bool) CURLcode {
-    const ctx: *cf_ip_happy_ctx = @ptrCast(@alignCast(cf.ctx));
+    const ctx = cfIpHappyCtx(cf);
     const conn = cf.conn orelse return CURLE_FAILED_INIT;
     var result = cf_ip_ballers_run(&ctx.ballers, cf, data, ctx.dns_resolved, connected);
     if (result == CURLE_OK) {
@@ -2007,7 +2059,7 @@ fn is_connected(cf: *Curl_cfilter, data: ?*Curl_easy, connected: *bool) CURLcode
         }
     }
 
-    const viamsg_ptr: [*:0]const u8 = @ptrCast(&viamsg);
+    const viamsg_ptr: [*]const u8 = &viamsg;
     const over_proxy: [*:0]const u8 = if (proxy_peer != null) "over proxy " else "";
     const proxy_host: [*:0]const u8 = if (proxy_peer) |pp| pp.hostname.? else "";
     const proxy_space: [*:0]const u8 = if (proxy_peer != null) " " else "";
@@ -2039,7 +2091,7 @@ fn is_connected(cf: *Curl_cfilter, data: ?*Curl_easy, connected: *bool) CURLcode
 const IP_HE_MAX_CONCURRENT_ATTEMPTS: u32 = 6;
 
 fn cf_ip_happy_init(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
-    const ctx: *cf_ip_happy_ctx = @ptrCast(@alignCast(cf.ctx));
+    const ctx = cfIpHappyCtx(cf);
 
     if (Curl_timeleft_ms(data) < 0) {
         failf(data, "Connection time-out", .{});
@@ -2065,11 +2117,11 @@ fn cf_ip_happy_ctx_clear(ctx_opt: ?*cf_ip_happy_ctx, data: ?*Curl_easy) void {
 fn cf_ip_happy_ctx_destroy(ctx_opt: ?*cf_ip_happy_ctx, data: ?*Curl_easy) void {
     const ctx = ctx_opt orelse return;
     cf_ip_happy_ctx_clear(ctx, data);
-    mem.free(ctx);
+    mem.destroy(ctx);
 }
 
 fn cf_ip_happy_shutdown(cf: *Curl_cfilter, data: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
-    const ctx: *cf_ip_happy_ctx = @ptrCast(@alignCast(cf.ctx));
+    const ctx = cfIpHappyCtx(cf);
     if (cf.isConnected()) {
         done.* = true;
         return CURLE_OK;
@@ -2081,8 +2133,8 @@ fn cf_ip_happy_shutdown(cf: *Curl_cfilter, data: ?*Curl_easy, done: *bool) callc
 }
 
 fn cf_ip_happy_adjust_pollset(cf: *Curl_cfilter, data: ?*Curl_easy, ps_opaque: *vdns_cfilters.easy_pollset) callconv(.c) CURLcode {
-    const ps: *easy_pollset = @ptrCast(@alignCast(ps_opaque));
-    const ctx: *cf_ip_happy_ctx = @ptrCast(@alignCast(cf.ctx));
+    const ps = fromOpaque(easy_pollset, ps_opaque);
+    const ctx = cfIpHappyCtx(cf);
     var result: CURLcode = CURLE_OK;
     if (!cf.isConnected()) {
         result = cf_ip_ballers_pollset(&ctx.ballers, data, ps);
@@ -2092,7 +2144,7 @@ fn cf_ip_happy_adjust_pollset(cf: *Curl_cfilter, data: ?*Curl_easy, ps_opaque: *
 }
 
 fn cf_ip_happy_connect(cf: *Curl_cfilter, data: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
-    const ctx: *cf_ip_happy_ctx = @ptrCast(@alignCast(cf.ctx));
+    const ctx = cfIpHappyCtx(cf);
     const d = data orelse return CURLE_FAILED_INIT;
     var result: CURLcode = CURLE_OK;
 
@@ -2141,7 +2193,7 @@ fn cf_ip_happy_connect(cf: *Curl_cfilter, data: ?*Curl_easy, done: *bool) callco
                     var ipquad: ip_quadruple = undefined;
                     var is_ipv6: bool = false;
                     if (Curl_conn_cf_get_ip_info(cf.next, d, &is_ipv6, &ipquad) == CURLE_OK) {
-                        const remote_ip_ptr: [*:0]const u8 = @ptrCast(&ipquad.remote_ip);
+                        const remote_ip_ptr: [*]const u8 = &ipquad.remote_ip;
                         trcCf(
                             d,
                             cf,
@@ -2164,7 +2216,7 @@ fn cf_ip_happy_connect(cf: *Curl_cfilter, data: ?*Curl_easy, done: *bool) callco
 }
 
 fn cf_ip_happy_data_pending(cf: *Curl_cfilter, data: ?*const Curl_easy) callconv(.c) bool {
-    const ctx: *cf_ip_happy_ctx = @ptrCast(@alignCast(cf.ctx));
+    const ctx = cfIpHappyCtx(cf);
     if (!cf.isConnected()) {
         return cf_ip_ballers_pending(&ctx.ballers, data);
     }
@@ -2181,7 +2233,7 @@ fn cf_ip_happy_query(
     pres1: ?*c_int,
     pres2: ?*anyopaque,
 ) callconv(.c) CURLcode {
-    const ctx: *cf_ip_happy_ctx = @ptrCast(@alignCast(cf.ctx));
+    const ctx = cfIpHappyCtx(cf);
     if (!cf.isConnected()) {
         if (query == CF_QUERY_CONNECT_REPLY_MS) {
             const r = cf_ip_ballers_min_reply_ms(&ctx.ballers, data);
@@ -2197,7 +2249,7 @@ fn cf_ip_happy_query(
 }
 
 fn cf_ip_happy_destroy(cf: *Curl_cfilter, data: ?*Curl_easy) callconv(.c) void {
-    const ctx: ?*cf_ip_happy_ctx = @ptrCast(@alignCast(cf.ctx));
+    const ctx: ?*cf_ip_happy_ctx = if (cf.ctx) |raw| fromOpaque(cf_ip_happy_ctx, raw) else null;
     trcCf(data, cf, "destroy", .{});
     if (ctx) |c| {
         cf_ip_happy_ctx_clear(c, data);
@@ -2222,21 +2274,26 @@ pub export var Curl_cft_ip_happy: Curl_cftype = .{
     .query = cf_ip_happy_query,
 };
 
-fn cf_ip_happy_create(
+fn cfIpHappyCreateChecked(
     pcf: *?*Curl_cfilter,
     data: ?*Curl_easy,
     origin: ?*Curl_peer,
     peer: ?*Curl_peer,
     transport_peer: u8,
-    conn: ?*connectdata,
     tunnel_peer: ?*Curl_peer,
     tunnel_transport: u8,
-) CURLcode {
-    _ = conn;
+    out_result: *CURLcode,
+) !void {
     pcf.* = null;
-    const d = data orelse return CURLE_FAILED_INIT;
-    const raw = mem.calloc(1, @sizeOf(cf_ip_happy_ctx)) orelse return CURLE_OUT_OF_MEMORY;
-    const ctx: *cf_ip_happy_ctx = @ptrCast(@alignCast(raw));
+    const d = data orelse {
+        out_result.* = CURLE_FAILED_INIT;
+        return error.FailedInit;
+    };
+    const ctx = mem.create(cf_ip_happy_ctx) orelse {
+        out_result.* = CURLE_OUT_OF_MEMORY;
+        return error.OutOfMemory;
+    };
+    errdefer cf_ip_happy_ctx_destroy(ctx, d);
 
     var result = cf_ip_ballers_init(
         &ctx.ballers,
@@ -2249,17 +2306,46 @@ fn cf_ip_happy_create(
         Curl_zig_data_happy_eyeballs_timeout(d),
         IP_HE_MAX_CONCURRENT_ATTEMPTS,
     );
-    if (result == CURLE_OK) {
-        result = Curl_cf_create(pcf, &Curl_cft_ip_happy, ctx);
+    if (result != CURLE_OK) {
+        out_result.* = result;
+        return error.InitFailed;
     }
+
+    result = Curl_cf_create(pcf, &Curl_cft_ip_happy, ctx);
     if (result != CURLE_OK) {
         if (pcf.*) |cf| {
-            mem.free(cf);
+            mem.freeTyped(cf);
             pcf.* = null;
         }
-        cf_ip_happy_ctx_destroy(ctx, d);
+        out_result.* = result;
+        return error.CreateFailed;
     }
-    return result;
+    out_result.* = CURLE_OK;
+}
+
+fn cf_ip_happy_create(
+    pcf: *?*Curl_cfilter,
+    data: ?*Curl_easy,
+    origin: ?*Curl_peer,
+    peer: ?*Curl_peer,
+    transport_peer: u8,
+    conn: ?*connectdata,
+    tunnel_peer: ?*Curl_peer,
+    tunnel_transport: u8,
+) CURLcode {
+    _ = conn;
+    var result: CURLcode = CURLE_OK;
+    cfIpHappyCreateChecked(
+        pcf,
+        data,
+        origin,
+        peer,
+        transport_peer,
+        tunnel_peer,
+        tunnel_transport,
+        &result,
+    ) catch return result;
+    return CURLE_OK;
 }
 
 export fn Curl_cf_ip_happy_insert_after(
@@ -2441,7 +2527,7 @@ fn async_thrdd_rr_done(
 ) callconv(.c) void {
     _ = timeouts;
     if (comptime use_httpsrr_ares) {
-        const a: *Curl_resolv_async = @ptrCast(@alignCast(user_data orelse return));
+        const a = fromOpaque(Curl_resolv_async, user_data orelse return);
         a.queries_ongoing &= ~CURL_DNSQ_HTTPS;
         a.dns_responses |= CURL_DNSQ_HTTPS;
         if (status == ARES_SUCCESS) {
@@ -2504,6 +2590,7 @@ fn async_rr_start(data: *Curl_easy, a: *Curl_resolv_async) void {
             if (rrname == null) return;
             hostname = rrname.?;
         }
+        defer mem.freeTyped(rrname);
         trcDns(data, "[%u] starting HTTPS-RR for %s", .{ a.id, hostname });
         a.queries_ongoing |= CURL_DNSQ_HTTPS;
         ares_c.ares_query(
@@ -2514,7 +2601,6 @@ fn async_rr_start(data: *Curl_easy, a: *Curl_resolv_async) void {
             async_thrdd_rr_query_cb,
             a,
         );
-        mem.free(@ptrCast(rrname));
     }
 }
 
@@ -2523,7 +2609,7 @@ fn async_thrdd_item_destroy(item_opt: ?*async_thrdd_item) void {
     if (item.res) |res| {
         Curl_freeaddrinfo(res);
     }
-    mem.free(item);
+    mem.freeTyped(item);
 }
 
 fn async_thrdd_item_create(
@@ -2536,10 +2622,10 @@ fn async_thrdd_item_create(
 ) ?*async_thrdd_item {
     const hostlen = std.mem.len(hostname);
     const raw = mem.calloc(1, @sizeOf(async_thrdd_item) + hostlen) orelse return null;
-    const item: *async_thrdd_item = @ptrCast(@alignCast(raw));
+    const item = fromOpaque(async_thrdd_item, raw);
 
     if (hostlen > 0) {
-        const dst: [*]u8 = @ptrCast(&item.hostname);
+        const dst: [*]u8 = &item.hostname;
         @memcpy(dst[0..hostlen], hostname[0..hostlen]);
     }
     item.mid = Curl_zig_data_get_mid(data);
@@ -2572,8 +2658,8 @@ const async_thrdd_match_ctx = extern struct {
 };
 
 fn async_thrdd_match_item(qitem: ?*anyopaque, match_data: ?*anyopaque) callconv(.c) bool {
-    const ctx: *const async_thrdd_match_ctx = @ptrCast(@alignCast(match_data.?));
-    const item: *const async_thrdd_item = @ptrCast(@alignCast(qitem.?));
+    const ctx = fromOpaque(async_thrdd_match_ctx, match_data.?);
+    const item = fromOpaque(async_thrdd_item, qitem.?);
     return (item.mid == ctx.mid) and (item.resolv_id == ctx.resolv_id);
 }
 
@@ -2631,9 +2717,9 @@ fn Curl_async_await(data: ?*Curl_easy, resolv_id: u32, pdns: *?*Curl_dns_entry) 
 }
 
 fn async_thrdd_item_process(arg: ?*anyopaque) callconv(.c) void {
-    const item: *async_thrdd_item = @ptrCast(@alignCast(arg.?));
+    const item = fromOpaque(async_thrdd_item, arg.?);
     var hints: CAddrinfo = .{};
-    var service: [12]u8 = undefined;
+    var service: [12:0]u8 = undefined;
     var pf: c_int = PF_INET;
 
     if ((item.dns_queries & CURL_DNSQ_AAAA) != 0) {
@@ -2649,8 +2735,7 @@ fn async_thrdd_item_process(arg: ?*anyopaque) callconv(.c) void {
     _ = curl_msnprintf(&service, service.len, "%u", @as(c_uint, item.port));
     hints.ai_flags |= AI_NUMERICSERV;
 
-    const service_ptr: [*:0]const u8 = @ptrCast(&service);
-    const rc = Curl_getaddrinfo_ex(item.hostnamePtr(), service_ptr, &hints, &item.res);
+    const rc = Curl_getaddrinfo_ex(item.hostnamePtr(), &service, &hints, &item.res);
     if (rc != 0) {
         Curl_zig_async_thrdd_classify_gai_error(rc, &item.sockerr, &item.negative);
     } else {
@@ -2660,14 +2745,14 @@ fn async_thrdd_item_process(arg: ?*anyopaque) callconv(.c) void {
 
 fn async_thrdd_event(tqueue: ?*const curl_thrdq, ev: c_int, user_data: ?*anyopaque) callconv(.c) void {
     _ = tqueue;
-    const multi: ?*Curl_multi = @ptrCast(user_data);
+    const multi: ?*Curl_multi = if (user_data) |raw| fromOpaque(Curl_multi, raw) else null;
     if (ev == CURL_THRDQ_EV_ITEM_DONE) {
         Curl_multi_wakeup_internal(multi);
     }
 }
 
 fn async_thrdd_item_free(item: ?*anyopaque) callconv(.c) void {
-    async_thrdd_item_destroy(@ptrCast(@alignCast(item)));
+    async_thrdd_item_destroy(if (item) |raw| fromOpaque(async_thrdd_item, raw) else null);
 }
 
 fn Curl_async_thrdd_multi_init(
@@ -2715,7 +2800,7 @@ fn async_thrdd_report_item(data: ?*Curl_easy, item: *async_thrdd_item) void {
     while (ai) |cur| : (ai = cur.ai_next) {
         if (cur.ai_family == ai_family) {
             Curl_printable_address(cur, &buf, buf.len);
-            const buf_ptr: [*:0]const u8 = @ptrCast(&buf);
+            const buf_ptr: [*]const u8 = &buf;
             const result = curlx_dyn_addf(&tmp, "%s%s", sep, buf_ptr);
             if (result != CURLE_OK) {
                 trcDns(data, "too many IP, cannot show", .{});
@@ -2740,7 +2825,7 @@ fn Curl_async_thrdd_multi_process(multi: ?*Curl_multi) callconv(.c) void {
     var qitem: ?*anyopaque = null;
 
     while (Curl_thrdq_recv(thrdq, &qitem) == CURLE_OK) {
-        var item: ?*async_thrdd_item = @ptrCast(@alignCast(qitem));
+        var item: ?*async_thrdd_item = if (qitem) |raw| fromOpaque(async_thrdd_item, raw) else null;
         const data = Curl_multi_get_easy(m, item.?.mid);
         const a: ?*Curl_resolv_async = if (data != null) Curl_async_get(data, item.?.resolv_id) else null;
         if (a) |async_ctx| {
@@ -2756,7 +2841,7 @@ fn Curl_async_thrdd_multi_process(multi: ?*Curl_multi) callconv(.c) void {
             async_ctx.queries_ongoing &= ~q;
             Curl_multi_mark_dirty(data);
         }
-        async_thrdd_item_free(item);
+        async_thrdd_item_destroy(item);
     }
     Curl_zig_thrdq_trace(thrdq, Curl_zig_multi_get_admin(m));
 }
@@ -2775,28 +2860,43 @@ fn Curl_async_thrdd_multi_set_props(
     );
 }
 
-fn async_thrdd_query(data: *Curl_easy, async_ctx: *Curl_resolv_async, dns_queries: u8) CURLcode {
-    const peer = async_ctx.peer orelse return CURLE_FAILED_INIT;
-    const hostname = peer.hostname orelse return CURLE_FAILED_INIT;
-    var item = async_thrdd_item_create(
+fn asyncThrddQueryChecked(data: *Curl_easy, async_ctx: *Curl_resolv_async, dns_queries: u8, out_result: *CURLcode) !void {
+    const peer = async_ctx.peer orelse {
+        out_result.* = CURLE_FAILED_INIT;
+        return error.FailedInit;
+    };
+    const hostname = peer.hostname orelse {
+        out_result.* = CURLE_FAILED_INIT;
+        return error.FailedInit;
+    };
+    const item = async_thrdd_item_create(
         data,
         async_ctx.id,
         dns_queries,
         hostname,
         peer.port,
         async_ctx.transport,
-    ) orelse return CURLE_OUT_OF_MEMORY;
+    ) orelse {
+        out_result.* = CURLE_OUT_OF_MEMORY;
+        return error.OutOfMemory;
+    };
+    errdefer async_thrdd_item_destroy(item);
 
     trcDns(data, "queueing query %s", .{item.descriptionPtr()});
     const thrdq = Curl_zig_multi_get_resolv_thrdq(Curl_zig_data_get_multi(data));
     const result = Curl_thrdq_send(thrdq, item, item.descriptionPtr(), async_ctx.timeout_ms);
-    if (result == CURLE_OK) {
-        item = undefined;
-        async_ctx.queries_ongoing |= dns_queries;
-    } else {
-        async_thrdd_item_free(item);
+    if (result != CURLE_OK) {
+        out_result.* = result;
+        return error.SendFailed;
     }
-    return result;
+    async_ctx.queries_ongoing |= dns_queries;
+    out_result.* = CURLE_OK;
+}
+
+fn async_thrdd_query(data: *Curl_easy, async_ctx: *Curl_resolv_async, dns_queries: u8) CURLcode {
+    var result: CURLcode = CURLE_OK;
+    asyncThrddQueryChecked(data, async_ctx, dns_queries, &result) catch return result;
+    return CURLE_OK;
 }
 
 fn Curl_async_getaddrinfo(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) callconv(.c) CURLcode {
@@ -2880,7 +2980,7 @@ fn Curl_async_pollset(
 
     if (comptime use_httpsrr_ares) {
         if (a.thrdd.rr.channel) |ch| {
-            const result = vdns_cfilters.Curl_ares_pollset(data, ch, @ptrCast(ps));
+            const result = vdns_cfilters.Curl_ares_pollset(data, ch, fromOpaque(vdns_cfilters.easy_pollset, ps));
             if (result != CURLE_OK) return result;
             timeout_ms = vdns_cfilters.Curl_ares_timeout_ms(data, a, ch);
         }
@@ -2919,7 +3019,7 @@ fn async_thrdd_item_missing_scope(data: ?*Curl_easy, item: *async_thrdd_item) bo
     while (ai) |cur| : (ai = cur.ai_next) {
         if (cur.ai_family == AF_INET6) {
             if (cur.ai_addr) |addr_ptr| {
-                const sa6: *const headers_sock.SockaddrIn6 = @ptrCast(@alignCast(addr_ptr));
+                const sa6 = fromOpaque(headers_sock.SockaddrIn6, addr_ptr);
                 const is_linklocal = (sa6.sin6_addr[0] == 0xfe) and ((sa6.sin6_addr[1] & 0xc0) == 0x80);
                 if (is_linklocal and sa6.sin6_scope_id == 0) {
                     return true;
@@ -3190,7 +3290,7 @@ test "cf_ai_iter_init and async_thrdd_item_missing_scope" {
 
     var ai6 = std.mem.zeroes(Curl_addrinfo);
     ai6.ai_family = AF_INET6;
-    ai6.ai_addr = @ptrCast(&sa6);
+    ai6.ai_addr = &sa6;
 
     var item = std.mem.zeroes(async_thrdd_item);
     item.res = &ai6;

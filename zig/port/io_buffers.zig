@@ -38,11 +38,11 @@ pub const buf_chunk = extern struct {
     x: buf_chunk_x,
 
     pub inline fn dataPtr(self: *buf_chunk) [*]u8 {
-        return @as([*]u8, @ptrCast(&self.x));
+        return &self.x.data;
     }
 
     pub inline fn dataPtrConst(self: *const buf_chunk) [*]const u8 {
-        return @as([*]const u8, @ptrCast(&self.x));
+        return &self.x.data;
     }
 };
 
@@ -186,7 +186,7 @@ fn chunkSkip(chunk: *buf_chunk, amount: usize) usize {
 fn chunkListFree(anchor: *?*buf_chunk) void {
     while (anchor.*) |chunk| {
         anchor.* = chunk.next;
-        mem.free(chunk);
+        mem.freeTyped(chunk);
     }
 }
 
@@ -205,7 +205,17 @@ pub export fn Curl_bufq_cpool_init(pool: *bufc_pool, chunk_size: usize, spare_ma
     Curl_bufcp_init(pool, chunk_size, spare_max);
 }
 
+fn chunkAlloc(chunk_size: usize) error{OutOfMemory}!*buf_chunk {
+    const total_size = std.math.add(usize, @sizeOf(buf_chunk), chunk_size) catch return error.OutOfMemory;
+    const raw = mem.calloc(1, total_size) orelse return error.OutOfMemory;
+    const chunk: *buf_chunk = @ptrCast(@alignCast(raw));
+    errdefer mem.freeTyped(chunk);
+    chunk.dlen = chunk_size;
+    return chunk;
+}
+
 fn bufcpTake(pool: *bufc_pool, pchunk: *?*buf_chunk) CURLcode {
+    errdefer pchunk.* = null;
     if (pool.spare) |chunk| {
         pool.spare = chunk.next;
         pool.spare_count -= 1;
@@ -214,24 +224,17 @@ fn bufcpTake(pool: *bufc_pool, pchunk: *?*buf_chunk) CURLcode {
         return CURLE_OK;
     }
 
-    if (pool.chunk_size > std.math.maxInt(usize) - @sizeOf(buf_chunk)) {
-        pchunk.* = null;
-        return CURLE_OUT_OF_MEMORY;
-    }
-
-    const raw = mem.calloc(1, @sizeOf(buf_chunk) + pool.chunk_size) orelse {
+    const chunk = chunkAlloc(pool.chunk_size) catch {
         pchunk.* = null;
         return CURLE_OUT_OF_MEMORY;
     };
-    const chunk: *buf_chunk = @ptrCast(@alignCast(raw));
-    chunk.dlen = pool.chunk_size;
     pchunk.* = chunk;
     return CURLE_OK;
 }
 
 fn bufcpPut(pool: *bufc_pool, chunk: *buf_chunk) void {
     if (pool.spare_count >= pool.spare_max) {
-        mem.free(chunk);
+        mem.freeTyped(chunk);
     } else {
         chunkReset(chunk);
         chunk.next = pool.spare;
@@ -345,12 +348,8 @@ fn getSpare(q: *bufq) ?*buf_chunk {
         q.chunk_count += 1;
         return chunk;
     } else {
-        if (q.chunk_size > std.math.maxInt(usize) - @sizeOf(buf_chunk))
-            return null;
-
-        const raw = mem.calloc(1, @sizeOf(buf_chunk) + q.chunk_size) orelse return null;
-        const chunk: *buf_chunk = @ptrCast(@alignCast(raw));
-        chunk.dlen = q.chunk_size;
+        const chunk = chunkAlloc(q.chunk_size) catch return null;
+        errdefer mem.freeTyped(chunk);
         q.chunk_count += 1;
         return chunk;
     }
@@ -367,7 +366,7 @@ fn pruneHead(q: *bufq) void {
             bufcpPut(pool, chunk);
             q.chunk_count -= 1;
         } else if ((q.chunk_count > q.max_chunks) or ((q.opts & BUFQ_OPT_NO_SPARES) != 0)) {
-            mem.free(chunk);
+            mem.freeTyped(chunk);
             q.chunk_count -= 1;
         } else {
             chunk.next = q.spare;
@@ -700,17 +699,20 @@ fn entryNew(
         return null;
     const raw = mem.calloc(1, @sizeOf(dynhds_entry) + namelen + valuelen + 2) orelse return null;
     const e: *dynhds_entry = @ptrCast(@alignCast(raw));
+    errdefer mem.freeTyped(e);
     const p_name = raw + @sizeOf(dynhds_entry);
     @memcpy(p_name[0..namelen], name[0..namelen]);
-    e.name = @ptrCast(p_name);
+    p_name[namelen] = 0;
+    e.name = p_name[0..namelen :0].ptr;
     e.namelen = namelen;
     const p_val = p_name + namelen + 1;
-    e.value = @ptrCast(p_val);
     if (valuelen != 0) {
         const v = value.?;
         @memcpy(p_val[0..valuelen], v[0..valuelen]);
         e.valuelen = valuelen;
     }
+    p_val[valuelen] = 0;
+    e.value = p_val[0..valuelen :0].ptr;
     if ((opts & DYNHDS_OPT_LOWERCASE) != 0) {
         primitives.Curl_strntolower(e.name, e.name, e.namelen);
     }
@@ -718,7 +720,7 @@ fn entryNew(
 }
 
 inline fn entryFree(e: ?*dynhds_entry) void {
-    mem.free(e);
+    mem.freeTyped(e);
 }
 
 pub export fn Curl_dynhds_init(
@@ -745,7 +747,7 @@ pub export fn Curl_dynhds_free(h: ?*dynhds) callconv(.c) void {
                 entryFree(hds_arr[i]);
             }
         }
-        mem.free(@ptrCast(hds_arr));
+        mem.freeTyped(hds_arr);
         d.hds = null;
     }
     d.hds_len = 0;
@@ -797,7 +799,7 @@ pub export fn Curl_dynhds_get(
     const hds_arr = d.hds orelse return null;
     for (0..d.hds_len) |i| {
         if (hds_arr[i]) |e| {
-            if (e.namelen == namelen and primitives.curl_strnequal(e.name, @ptrCast(n), namelen) != 0) {
+            if (e.namelen == namelen and std.ascii.eqlIgnoreCase(e.name[0..namelen], n[0..namelen])) {
                 return e;
             }
         }
@@ -808,6 +810,21 @@ pub export fn Curl_dynhds_get(
 pub export fn Curl_dynhds_cget(h: ?*dynhds, name: ?[*:0]const u8) callconv(.c) ?*dynhds_entry {
     const n = name orelse return null;
     return Curl_dynhds_get(h, n, std.mem.len(n));
+}
+
+fn dynhdsEnsureCap(d: *dynhds) error{OutOfMemory}!void {
+    if (d.hds_len + 1 < d.hds_allc) return;
+    var nallc: usize = if (d.hds_allc != 0) d.hds_allc * 2 else 16;
+    if (d.max_entries != 0 and nallc > d.max_entries)
+        nallc = d.max_entries;
+
+    const nhds = mem.callocMany(?*dynhds_entry, nallc) orelse return error.OutOfMemory;
+    if (d.hds) |old_hds| {
+        @memcpy(nhds[0..d.hds_len], old_hds[0..d.hds_len]);
+        mem.freeTyped(old_hds);
+    }
+    d.hds = nhds;
+    d.hds_allc = nallc;
 }
 
 pub export fn Curl_dynhds_add(
@@ -831,24 +848,9 @@ pub export fn Curl_dynhds_add(
     }
 
     const entry = entryNew(n, namelen, value, valuelen, d.opts) orelse return CURLE_OUT_OF_MEMORY;
+    errdefer entryFree(entry);
 
-    if (d.hds_len + 1 >= d.hds_allc) {
-        var nallc: usize = if (d.hds_allc != 0) d.hds_allc * 2 else 16;
-        if (d.max_entries != 0 and nallc > d.max_entries)
-            nallc = d.max_entries;
-
-        const raw = mem.calloc(nallc, @sizeOf(?*dynhds_entry)) orelse {
-            entryFree(entry);
-            return CURLE_OUT_OF_MEMORY;
-        };
-        const nhds: [*]?*dynhds_entry = @ptrCast(@alignCast(raw));
-        if (d.hds) |old_hds| {
-            @memcpy(nhds[0..d.hds_len], old_hds[0..d.hds_len]);
-            mem.free(@ptrCast(old_hds));
-        }
-        d.hds = nhds;
-        d.hds_allc = nallc;
-    }
+    dynhdsEnsureCap(d) catch return CURLE_OUT_OF_MEMORY;
 
     d.hds.?[d.hds_len] = entry;
     d.hds_len += 1;
@@ -943,7 +945,7 @@ pub export fn dynhds_count_name(
         if (d.hds) |hds_arr| {
             for (0..d.hds_len) |i| {
                 if (hds_arr[i]) |e| {
-                    if (namelen == e.namelen and primitives.curl_strnequal(@ptrCast(n), e.name, namelen) != 0) {
+                    if (namelen == e.namelen and std.ascii.eqlIgnoreCase(n[0..namelen], e.name[0..namelen])) {
                         count += 1;
                     }
                 }
@@ -983,7 +985,7 @@ pub export fn dynhds_remove(
             var i: usize = 0;
             while (i < d.hds_len) {
                 const e = hds_arr[i].?;
-                if (namelen == e.namelen and primitives.curl_strnequal(@ptrCast(name_ptr), e.name, namelen) != 0) {
+                if (namelen == e.namelen and std.ascii.eqlIgnoreCase(name_ptr[0..namelen], e.name[0..namelen])) {
                     n += 1;
                     d.hds_len -= 1;
                     d.strs_len -= (e.namelen + e.valuelen);
@@ -1086,11 +1088,10 @@ pub export fn Curl_dynhds_to_nva(h: ?*dynhds, pcount: *usize) callconv(.c) ?[*]n
         pcount.* = 0;
         return null;
     };
-    const raw = mem.calloc(1, @sizeOf(nghttp2_nv) * d.hds_len) orelse {
+    const nva = mem.callocMany(nghttp2_nv, d.hds_len) orelse {
         pcount.* = 0;
         return null;
     };
-    const nva: [*]nghttp2_nv = @ptrCast(@alignCast(raw));
     if (d.hds) |hds_arr| {
         for (0..d.hds_len) |i| {
             const e = hds_arr[i].?;
@@ -1250,7 +1251,7 @@ test "dynhds add, get, remove, set, contains, lowercase, h1_dprint, to_nva" {
 
     var nv_count: usize = 0;
     const nva = Curl_dynhds_to_nva(&hds, &nv_count).?;
-    defer mem.free(@ptrCast(nva));
+    defer mem.freeTyped(nva);
     try std.testing.expectEqual(@as(usize, 2), nv_count);
     try std.testing.expectEqualStrings("Content-Type", nva[0].name.?[0..nva[0].namelen]);
     try std.testing.expectEqualStrings("final", nva[1].value.?[0..nva[1].valuelen]);

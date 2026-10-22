@@ -35,6 +35,10 @@ pub const CurlWaitfds = headers_sock_mod.CurlWaitfds;
 pub const curl_waitfd = headers_sock_mod.CurlWaitfd;
 pub const pollfd = headers_sock_mod.Pollfd;
 
+inline fn fromOpaque(comptime T: type, raw: anytype) *T {
+    return @ptrCast(@alignCast(raw));
+}
+
 const mem = struct {
     pub const curl_calloc_fn = mem_mod.calloc;
     pub const curl_malloc_fn = mem_mod.malloc;
@@ -744,23 +748,23 @@ fn multi_timeouts_init(data: *CurlEasyPrefix) void {
     splaynode.setRegistered(false);
 }
 
-pub export fn Curl_multi_handle(
+fn multiHandleInit(
     xfer_table_size: u32,
     ev_hashsize: usize,
     chashsize: usize,
     dnssize: usize,
     sesssize: usize,
-) callconv(.c) ?*CurlMultiPrefix {
-    const raw = mem.curl_calloc_fn(1, Curl_zig_multi_sizeof()) orelse return null;
-    const multi: *CurlMultiPrefix = @ptrCast(@alignCast(raw));
+) error{InitFailed}!*CurlMultiPrefix {
+    const raw = mem.curl_calloc_fn(1, Curl_zig_multi_sizeof()) orelse return error.InitFailed;
+    const multi = fromOpaque(CurlMultiPrefix, raw);
 
     multi.magic = CURL_MULTI_HANDLE;
 
-    multi.admin = curl_easy_init();
-    if (multi.admin == null) {
-        mem.curl_free_fn(multi);
-        return null;
-    }
+    multi.admin = curl_easy_init() orelse {
+        mem_mod.freeTyped(multi);
+        return error.InitFailed;
+    };
+    errdefer _ = cleanupFailedMultiInit(multi);
     Curl_zig_multi_prepare_admin(multi);
 
     var created: curltime = .{ .tv_sec = 0, .tv_usec = 0 };
@@ -792,7 +796,7 @@ pub export fn Curl_multi_handle(
         containers.Curl_uint32_bset_resize(&multi.msgsent, xfer_table_size) != 0 or
         containers.Curl_uint32_tbl_resize(&multi.xfers, xfer_table_size) != 0)
     {
-        return cleanupFailedMultiInit(multi);
+        return error.InitFailed;
     }
 
     Curl_zig_multi_debug_env_init(multi);
@@ -803,10 +807,20 @@ pub export fn Curl_multi_handle(
     Curl_cpool_init(Curl_zig_multi_cpool(multi), null, chashsize);
 
     if (Curl_zig_multi_init_optional_fields(multi, sesssize, xfer_table_size) != 0) {
-        return cleanupFailedMultiInit(multi);
+        return error.InitFailed;
     }
 
     return multi;
+}
+
+pub export fn Curl_multi_handle(
+    xfer_table_size: u32,
+    ev_hashsize: usize,
+    chashsize: usize,
+    dnssize: usize,
+    sesssize: usize,
+) callconv(.c) ?*CurlMultiPrefix {
+    return multiHandleInit(xfer_table_size, ev_hashsize, chashsize, dnssize, sesssize) catch null;
 }
 
 fn cleanupFailedMultiInit(multi: *CurlMultiPrefix) ?*CurlMultiPrefix {
@@ -1001,7 +1015,7 @@ fn multi_done_locked(
     pnow: *const curltime,
 ) callconv(.c) c_int {
     _ = pnow;
-    const mdctx: *const MultiDoneCtx = @ptrCast(@alignCast(userdata.?));
+    const mdctx = fromOpaque(MultiDoneCtx, userdata.?);
     const premature = mdctx.premature != 0;
 
     if (Curl_zig_conn_attached_xfers(conn) != 0) {
@@ -1103,7 +1117,7 @@ pub export fn Curl_multi_remove_handle(
         return CURLM_INTERNAL_ERROR;
 
     const entry = containers.Curl_uint32_tbl_get(&multi.xfers, data.mid);
-    if (entry != @as(?*anyopaque, @ptrCast(data)))
+    if (entry != mem_mod.toRawPtr(data))
         return CURLM_INTERNAL_ERROR;
 
     const premature = data.mstate < MSTATE_COMPLETED;
@@ -2031,7 +2045,7 @@ fn multistate_performing(
         if (Curl_zig_easy_req_newurl(data) != null or retry) {
             var follow: c_int = FOLLOW_NONE;
             if (!retry) {
-                mem.curl_free_fn(@ptrCast(newurl));
+                mem_mod.freeTyped(newurl);
                 newurl = Curl_zig_easy_req_newurl(data);
                 Curl_zig_easy_clear_req_newurl(data);
                 follow = FOLLOW_REDIR;
@@ -2046,7 +2060,7 @@ fn multistate_performing(
             }
         } else {
             if (Curl_zig_easy_req_location(data)) |loc| {
-                mem.curl_free_fn(@ptrCast(newurl));
+                mem_mod.freeTyped(newurl);
                 newurl = loc;
                 Curl_zig_easy_clear_req_location(data);
                 result = multi_follow(data, handler, newurl, FOLLOW_FAKE);
@@ -2065,7 +2079,7 @@ fn multistate_performing(
         _ = mspeed_check(data);
     }
 
-    mem.curl_free_fn(@ptrCast(newurl));
+    mem_mod.freeTyped(newurl);
     resultp.* = result;
     return mresult;
 }
@@ -2145,7 +2159,7 @@ fn multistate_do(
             } else {
                 stream_errorp.* = true;
             }
-            mem.curl_free_fn(@ptrCast(newurl));
+            mem_mod.freeTyped(newurl);
         } else {
             multi_posttransfer(data);
             if (data.conn != null) {
@@ -2807,8 +2821,7 @@ pub export fn curl_multi_cleanup(m: ?*CurlMultiPrefix) callconv(.c) CURLMcode {
         containers.Curl_uint32_bset_destroy(&multi.msgsent);
         containers.Curl_uint32_tbl_destroy(&multi.xfers);
 
-        const multi_bytes: [*]u8 = @ptrCast(multi);
-        @memset(multi_bytes[0..Curl_zig_multi_sizeof()], 0);
+        mem_mod.secureZero(multi, Curl_zig_multi_sizeof());
         mem.curl_free_fn(multi);
 
         mresult = CURLM_OK;
@@ -3508,9 +3521,7 @@ pub export fn curl_multi_get_handles(m: ?*CurlMultiPrefix) callconv(.c) ?[*]?*Cu
     if (api_mod.Curl_mapi_enter(&guard, m, CURL_MAPI_FN_multi_get_handles, null)) {
         const multi = m.?;
         const count: usize = containers.Curl_uint32_tbl_count(&multi.xfers);
-        const raw = mem.curl_malloc_fn(@sizeOf(?*CurlEasyPrefix) * (count + 1));
-        if (raw) |r| {
-            const arr: [*]?*CurlEasyPrefix = @ptrCast(@alignCast(r));
+        if (mem_mod.allocMany(?*CurlEasyPrefix, count + 1)) |arr| {
             var i: usize = 0;
             var mid: u32 = 0;
             var entry: ?*anyopaque = null;
@@ -3518,7 +3529,7 @@ pub export fn curl_multi_get_handles(m: ?*CurlMultiPrefix) callconv(.c) ?[*]?*Cu
             if (containers.Curl_uint32_tbl_first(&multi.xfers, &mid, &entry)) {
                 while (true) {
                     if (entry) |e| {
-                        const data: *CurlEasyPrefix = @ptrCast(@alignCast(e));
+                        const data = fromOpaque(CurlEasyPrefix, e);
                         if (!Curl_zig_easy_state_internal(data)) {
                             arr[i] = data;
                             i += 1;
@@ -3588,10 +3599,10 @@ pub export fn curl_multi_get_offt(
 }
 
 fn fixed_buf_create(len: usize) ?*CurlFixedBuf {
-    if ((std.math.maxInt(usize) - @sizeOf(CurlFixedBuf)) < len)
-        return null;
-    const raw = mem.curl_malloc_fn(len + @sizeOf(CurlFixedBuf)) orelse return null;
-    const fbuf: *CurlFixedBuf = @ptrCast(@alignCast(raw));
+    const total_size = std.math.add(usize, len, @sizeOf(CurlFixedBuf)) catch return null;
+    const raw = mem.curl_malloc_fn(total_size) orelse return null;
+    const fbuf = fromOpaque(CurlFixedBuf, raw);
+    errdefer mem_mod.freeTyped(fbuf);
     fbuf.len = len;
     return fbuf;
 }
@@ -3620,7 +3631,7 @@ pub export fn Curl_multi_xfer_buf_borrow(
     const xfer_buf_ptr = Curl_zig_multi_xfer_buf_ptr(multi);
     if (xfer_buf_ptr.*) |fb| {
         if (@as(usize, buf_size) > fb.len) {
-            mem.curl_free_fn(fb);
+            mem_mod.freeTyped(fb);
             xfer_buf_ptr.* = null;
         }
     }
@@ -3634,7 +3645,7 @@ pub export fn Curl_multi_xfer_buf_borrow(
     }
 
     Curl_zig_multi_set_xfer_buf_borrowed(multi, true);
-    pbuf.* = @ptrCast(&xfer_buf_ptr.*.?.data);
+    pbuf.* = &xfer_buf_ptr.*.?.data;
     pbuflen.* = xfer_buf_ptr.*.?.len;
     return CURLE_OK;
 }
@@ -3669,7 +3680,7 @@ pub export fn Curl_multi_xfer_ulbuf_borrow(
     const xfer_ulbuf_ptr = Curl_zig_multi_xfer_ulbuf_ptr(multi);
     if (xfer_ulbuf_ptr.*) |fb| {
         if (@as(usize, ulbuf_size) > fb.len) {
-            mem.curl_free_fn(fb);
+            mem_mod.freeTyped(fb);
             xfer_ulbuf_ptr.* = null;
         }
     }
@@ -3683,7 +3694,7 @@ pub export fn Curl_multi_xfer_ulbuf_borrow(
     }
 
     Curl_zig_multi_set_xfer_ulbuf_borrowed(multi, true);
-    pbuf.* = @ptrCast(&xfer_ulbuf_ptr.*.?.data);
+    pbuf.* = &xfer_ulbuf_ptr.*.?.data;
     pbuflen.* = xfer_ulbuf_ptr.*.?.len;
     return CURLE_OK;
 }
@@ -3703,10 +3714,10 @@ pub export fn Curl_multi_xfer_sockbuf_borrow(
     blen: usize,
     pbuf: *?[*]u8,
 ) callconv(.c) CURLcode {
+    errdefer pbuf.* = null;
     pbuf.* = null;
     const multi = data.multi orelse {
-        const raw = mem.curl_malloc_fn(blen) orelse return CURLE_OUT_OF_MEMORY;
-        pbuf.* = @ptrCast(raw);
+        pbuf.* = mem_mod.allocMany(u8, blen) orelse return CURLE_OUT_OF_MEMORY;
         return CURLE_OK;
     };
     if (Curl_zig_multi_xfer_sockbuf_borrowed(multi)) {
@@ -3717,7 +3728,7 @@ pub export fn Curl_multi_xfer_sockbuf_borrow(
     const xfer_sockbuf_ptr = Curl_zig_multi_xfer_sockbuf_ptr(multi);
     if (xfer_sockbuf_ptr.*) |fb| {
         if (blen > fb.len) {
-            mem.curl_free_fn(fb);
+            mem_mod.freeTyped(fb);
             xfer_sockbuf_ptr.* = null;
         }
     }
@@ -3731,7 +3742,7 @@ pub export fn Curl_multi_xfer_sockbuf_borrow(
     }
 
     Curl_zig_multi_set_xfer_sockbuf_borrowed(multi, true);
-    pbuf.* = @ptrCast(&xfer_sockbuf_ptr.*.?.data);
+    pbuf.* = &xfer_sockbuf_ptr.*.?.data;
     return CURLE_OK;
 }
 
@@ -3742,28 +3753,28 @@ pub export fn Curl_multi_xfer_sockbuf_release(
     if (data.multi) |multi| {
         Curl_zig_multi_set_xfer_sockbuf_borrowed(multi, false);
     } else {
-        mem.curl_free_fn(@ptrCast(buf));
+        mem_mod.freeTyped(buf);
     }
 }
 
 fn multi_xfer_bufs_free(multi: *CurlMultiPrefix) void {
     const xfer_buf_ptr = Curl_zig_multi_xfer_buf_ptr(multi);
     if (xfer_buf_ptr.*) |fb| {
-        mem.curl_free_fn(fb);
+        mem_mod.freeTyped(fb);
         xfer_buf_ptr.* = null;
     }
     Curl_zig_multi_set_xfer_buf_borrowed(multi, false);
 
     const xfer_ulbuf_ptr = Curl_zig_multi_xfer_ulbuf_ptr(multi);
     if (xfer_ulbuf_ptr.*) |fb| {
-        mem.curl_free_fn(fb);
+        mem_mod.freeTyped(fb);
         xfer_ulbuf_ptr.* = null;
     }
     Curl_zig_multi_set_xfer_ulbuf_borrowed(multi, false);
 
     const xfer_sockbuf_ptr = Curl_zig_multi_xfer_sockbuf_ptr(multi);
     if (xfer_sockbuf_ptr.*) |fb| {
-        mem.curl_free_fn(fb);
+        mem_mod.freeTyped(fb);
         xfer_sockbuf_ptr.* = null;
     }
     Curl_zig_multi_set_xfer_sockbuf_borrowed(multi, false);
@@ -3776,7 +3787,7 @@ pub export fn Curl_multi_get_easy(
     if (!goodMultiHandle(multi))
         return null;
     const raw = containers.Curl_uint32_tbl_get(&multi.xfers, mid) orelse return null;
-    const data: *CurlEasyPrefix = @ptrCast(@alignCast(raw));
+    const data = fromOpaque(CurlEasyPrefix, raw);
     if (goodEasyHandle(data) and data.multi == multi and data.mid == mid)
         return data;
     containers.Curl_uint32_tbl_remove(&multi.xfers, mid);
@@ -3792,7 +3803,7 @@ pub export fn Curl_multi_knows_easy(
     if (data.multi != multi or data.mid == std.math.maxInt(u32))
         return false;
     const raw = containers.Curl_uint32_tbl_get(&multi.xfers, data.mid);
-    return raw == @as(?*anyopaque, @ptrCast(data));
+    return raw == mem_mod.toRawPtr(data);
 }
 
 fn multi_xfers_running(multi: ?*CurlMultiPrefix) u32 {

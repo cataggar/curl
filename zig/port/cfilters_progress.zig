@@ -1,7 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const mem = @import("mem.zig");
+const collections = @import("collections.zig");
 const headers_sock = @import("headers_sock.zig");
+
+inline fn fromOpaque(comptime T: type, raw: anytype) *T {
+    return @ptrCast(@alignCast(raw));
+}
 
 const CURLcode = c_uint;
 const CURLE_OK: CURLcode = 0;
@@ -54,15 +59,8 @@ pub const DynBuf = extern struct {
     toobig: usize,
 };
 
-pub const CurlHashDtor = ?*const fn (?*anyopaque) callconv(.c) void;
-
-pub const CurlHash = extern struct {
-    table: ?*?*anyopaque,
-    dtor: CurlHashDtor,
-    slots: usize,
-    size: usize,
-    type: u8,
-};
+pub const CurlHashDtor = ?collections.Curl_hash_dtor;
+pub const CurlHash = collections.Curl_hash;
 
 pub const Uint32Tbl = extern struct {
     rows: ?*?*anyopaque,
@@ -1097,8 +1095,8 @@ pub export const Curl_cwt_out: CurlCwtype = .{
 };
 
 fn cwOutBufCreate(otype: CwOutType) ?*CwOutBuf {
-    const raw = mem.calloc(1, @sizeOf(CwOutBuf)) orelse return null;
-    const cwbuf: *CwOutBuf = @ptrCast(@alignCast(raw));
+    const cwbuf = mem.create(CwOutBuf) orelse return null;
+    errdefer mem.destroy(cwbuf);
     cwbuf.otype = otype;
     curlx_dyn_init(&cwbuf.b, DYN_PAUSE_BUFFER);
     return cwbuf;
@@ -1107,13 +1105,17 @@ fn cwOutBufCreate(otype: CwOutType) ?*CwOutBuf {
 fn cwOutBufFree(cwbuf: ?*CwOutBuf) void {
     if (cwbuf) |b| {
         curlx_dyn_free(&b.b);
-        mem.free(@ptrCast(b));
+        mem.destroy(b);
     }
+}
+
+inline fn cwOutCtx(writer: *CurlCwriter) *CwOutCtx {
+    return fromOpaque(CwOutCtx, writer.ctx.?);
 }
 
 fn cwOutInit(data: ?*CurlEasy, writer: *CurlCwriter) callconv(.c) CURLcode {
     _ = data;
-    const ctx: *CwOutCtx = @ptrCast(@alignCast(writer.ctx));
+    const ctx = cwOutCtx(writer);
     ctx.buf = null;
     ctx.tail = null;
     ctx.buffered_len = 0;
@@ -1132,7 +1134,7 @@ fn cwOutBufsFree(ctx: *CwOutCtx) void {
 
 fn cwOutClose(data: ?*CurlEasy, writer: *CurlCwriter) callconv(.c) void {
     _ = data;
-    const ctx: *CwOutCtx = @ptrCast(@alignCast(writer.ctx));
+    const ctx = cwOutCtx(writer);
     cwOutBufsFree(ctx);
 }
 
@@ -1405,7 +1407,7 @@ fn cwOutWrite(
     buf: [*]const u8,
     blen: usize,
 ) callconv(.c) CURLcode {
-    const ctx: *CwOutCtx = @ptrCast(@alignCast(writer.ctx));
+    const ctx = cwOutCtx(writer);
     const flush_all: bool = (type_flags & CLIENTWRITE_EOS) != 0;
 
     if ((type_flags & CLIENTWRITE_BODY) != 0 or
@@ -1434,7 +1436,7 @@ fn cwOutDoFlush(
     cw_out: *CurlCwriter,
     flush_all: bool,
 ) CURLcode {
-    const ctx: *CwOutCtx = @ptrCast(@alignCast(cw_out));
+    const ctx = fromOpaque(CwOutCtx, cw_out);
     if (ctx.isErrored())
         return CURLE_WRITE_ERROR;
 
@@ -1731,7 +1733,7 @@ pub export fn Curl_conn_trc_filters_zig(
                 }
             }
             const suffix: [*:0]const u8 = if (blen != 0) "" else "...";
-            Curl_trc_multi(data, "%s%s", @as([*:0]const u8, @ptrCast(&msg)), suffix);
+            Curl_trc_multi(data, "%s%s", msg[0..].ptr, suffix);
         } else {
             Curl_trc_multi(data, "%s [%d][-]", info, @as(c_int, sockindex));
         }
@@ -1749,7 +1751,7 @@ pub export fn Curl_conn_cf_discard_chain(
             const cfn = cur.next;
             cur.next = null;
             cur.cft.destroy.?(cur, data);
-            mem.free(@ptrCast(cur));
+            mem.destroy(cur);
             cf = cfn;
         }
     }
@@ -1812,7 +1814,7 @@ fn cfBufqReader(
     blen: usize,
     pnread: *usize,
 ) callconv(.c) CURLcode {
-    const io: *CfIoCtx = @ptrCast(@alignCast(writer_ctx));
+    const io = fromOpaque(CfIoCtx, writer_ctx.?);
     return Curl_conn_cf_recv(io.cf, io.data, buf, blen, pnread);
 }
 
@@ -1837,7 +1839,7 @@ fn cfBufqWriter(
     buflen: usize,
     pnwritten: *usize,
 ) callconv(.c) CURLcode {
-    const io: *CfIoCtx = @ptrCast(@alignCast(writer_ctx));
+    const io = fromOpaque(CfIoCtx, writer_ctx.?);
     return Curl_conn_cf_send(io.cf, io.data, buf, buflen, false, pnwritten);
 }
 
@@ -1866,9 +1868,10 @@ pub export fn Curl_cf_create(
     cft: *const CurlCftype,
     ctx: ?*anyopaque,
 ) callconv(.c) CURLcode {
+    errdefer pcf.* = null;
     pcf.* = null;
-    const raw = mem.calloc(1, @sizeOf(CurlCfilter)) orelse return CURLE_OUT_OF_MEMORY;
-    const cf: *CurlCfilter = @ptrCast(@alignCast(raw));
+    const cf = mem.create(CurlCfilter) orelse return CURLE_OUT_OF_MEMORY;
+    errdefer mem.destroy(cf);
     cf.cft = cft;
     cf.ctx = ctx;
     pcf.* = cf;
@@ -2045,7 +2048,7 @@ pub export fn Curl_conn_remove_setup_filters_zig(
                 Curl_trc_cf_infof(data, cf, "removing connected setup filter");
             }
             cf.cft.destroy.?(cf, data);
-            mem.free(@ptrCast(cf));
+            mem.destroy(cf);
         } else {
             anchor = &cf.next;
         }
@@ -2341,7 +2344,7 @@ pub export fn Curl_conn_cf_poll(
     headers_sock.Curl_pollset_init(&ps);
     const result = Curl_conn_cf_adjust_pollset(cf, data, &ps);
     const rc: c_int = if (result == CURLE_OK)
-        headers_sock.Curl_pollset_poll(@ptrCast(data), &ps, timeout_ms)
+        headers_sock.Curl_pollset_poll(data, &ps, timeout_ms)
     else
         -1;
     headers_sock.Curl_pollset_cleanup(&ps);
@@ -2371,7 +2374,7 @@ pub export fn Curl_conn_get_current_host_zig(
         if ((cf.?.cft.flags & (CF_TYPE_IP_CONNECT | CF_TYPE_PROXY)) == (CF_TYPE_IP_CONNECT | CF_TYPE_PROXY))
             cf_proxy = cf;
     }
-    if (cf_proxy == null or cf_proxy.?.cft.query.?(cf_proxy.?, data, CF_QUERY_HOST_PORT, &portarg, @ptrCast(phost)) != CURLE_OK) {
+    if (cf_proxy == null or cf_proxy.?.cft.query.?(cf_proxy.?, data, CF_QUERY_HOST_PORT, &portarg, mem.toRawPtr(phost)) != CURLE_OK) {
         phost.* = origin_hostname;
         portarg = origin_port;
     }
@@ -2420,7 +2423,7 @@ pub export fn Curl_conn_cf_get_socket(
 ) callconv(.c) curl_socket_t {
     var sock: curl_socket_t = CURL_SOCKET_BAD;
     if (cf) |c| {
-        if (c.cft.query.?(c, data, CF_QUERY_SOCKET, null, @ptrCast(&sock)) == CURLE_OK)
+        if (c.cft.query.?(c, data, CF_QUERY_SOCKET, null, &sock) == CURLE_OK)
             return sock;
     }
     return CURL_SOCKET_BAD;
@@ -2448,7 +2451,7 @@ pub export fn Curl_conn_cf_get_alpn_negotiated(
         if (Curl_trc_is_verbose(data) and c.cft.log_level >= 1) {
             Curl_trc_cf_infof(data, c, "query ALPN");
         }
-        if (c.cft.query.?(c, data, CF_QUERY_ALPN_NEGOTIATED, null, @ptrCast(&alpn)) == CURLE_OK)
+        if (c.cft.query.?(c, data, CF_QUERY_ALPN_NEGOTIATED, null, mem.toRawPtr(&alpn)) == CURLE_OK)
             return alpn;
     }
     return null;
@@ -2457,7 +2460,7 @@ pub export fn Curl_conn_cf_get_alpn_negotiated(
 fn cfGetRemoteAddr(cf: ?*CurlCfilter, data: ?*CurlEasy) ?*const anyopaque {
     var remote_addr: ?*const anyopaque = null;
     if (cf) |c| {
-        if (c.cft.query.?(c, data, CF_QUERY_REMOTE_ADDR, null, @ptrCast(&remote_addr)) == CURLE_OK)
+        if (c.cft.query.?(c, data, CF_QUERY_REMOTE_ADDR, null, mem.toRawPtr(&remote_addr)) == CURLE_OK)
             return remote_addr;
     }
     return null;
@@ -2747,8 +2750,8 @@ extern fn Curl_uint32_tbl_count(tbl: *Uint32Tbl) callconv(.c) u32;
 extern fn Curl_uint32_tbl_get(tbl: *Uint32Tbl, key: u32) callconv(.c) ?*ConnectData;
 extern fn Curl_uint32_tbl_add(tbl: *Uint32Tbl, entry: ?*anyopaque, pkey: *u32) callconv(.c) bool;
 extern fn Curl_uint32_tbl_remove(tbl: *Uint32Tbl, key: u32) callconv(.c) void;
-extern fn Curl_uint32_tbl_first(tbl: *Uint32Tbl, pkey: *u32, pentry: *?*anyopaque) callconv(.c) bool;
-extern fn Curl_uint32_tbl_next(tbl: *Uint32Tbl, last_key: u32, pkey: *u32, pentry: *?*anyopaque) callconv(.c) bool;
+extern fn Curl_uint32_tbl_first(tbl: *Uint32Tbl, pkey: *u32, pentry: *?*ConnectData) callconv(.c) bool;
+extern fn Curl_uint32_tbl_next(tbl: *Uint32Tbl, last_key: u32, pkey: *u32, pentry: *?*ConnectData) callconv(.c) bool;
 
 extern fn Curl_uint32_bset_init(bset: *Uint32Bset) callconv(.c) void;
 extern fn Curl_uint32_bset_resize(bset: *Uint32Bset, nmax: u32) callconv(.c) CURLcode;
@@ -2862,7 +2865,7 @@ fn cpoolBundleUnlink(pbundle: *?*CpoolBundle) void {
             bundle.refcount -= 1;
         if (bundle.refcount == 0) {
             Curl_uint32_spbset_destroy(&bundle.ids);
-            mem.free(@ptrCast(bundle));
+            mem.destroy(bundle);
         }
     }
 }
@@ -2879,8 +2882,8 @@ fn cpoolBundleLink(pdest: *?*CpoolBundle, src: ?*CpoolBundle) void {
 }
 
 fn cpoolCreateBundle() ?*CpoolBundle {
-    const raw = mem.calloc(1, @sizeOf(CpoolBundle)) orelse return null;
-    const bundle: *CpoolBundle = @ptrCast(@alignCast(raw));
+    const bundle = mem.create(CpoolBundle) orelse return null;
+    errdefer mem.destroy(bundle);
     Curl_uint32_spbset_init(&bundle.ids);
     bundle.refcount = 1;
     return bundle;
@@ -2897,7 +2900,7 @@ fn cpoolBundleAddId(
     if (Curl_uint32_spbset_count(&bundle.ids) == 1) {
         var new_ref: ?*CpoolBundle = null;
         cpoolBundleLink(&new_ref, bundle);
-        if (Curl_hash_add(&cpool.dest2bundle, destination, std.mem.len(destination), new_ref) == null) {
+        if (collections.hashAddTyped(CpoolBundle, &cpool.dest2bundle, destination, std.mem.len(destination), new_ref.?) == null) {
             cpoolBundleUnlink(&new_ref);
             return false;
         }
@@ -2918,14 +2921,13 @@ fn cpoolBundleRemoveId(
 }
 
 fn cpoolBundleHashDtor(entry: ?*anyopaque) callconv(.c) void {
-    var bundle: ?*CpoolBundle = @ptrCast(@alignCast(entry));
+    var bundle: ?*CpoolBundle = if (entry) |e| fromOpaque(CpoolBundle, e) else null;
     cpoolBundleUnlink(&bundle);
 }
 
 fn cpoolGetBundle(cpool: *Cpool, destination: [*:0]const u8) ?*CpoolBundle {
     var bundle: ?*CpoolBundle = null;
-    const raw = Curl_hash_pick(&cpool.dest2bundle, destination, std.mem.len(destination));
-    cpoolBundleLink(&bundle, @ptrCast(@alignCast(raw)));
+    cpoolBundleLink(&bundle, collections.hashPickTyped(CpoolBundle, &cpool.dest2bundle, destination, std.mem.len(destination)));
     return bundle;
 }
 
@@ -3016,11 +3018,11 @@ pub export fn Curl_cpool_init(
 }
 
 fn cpoolDestroyAllConns(cpool: *Cpool, admin: ?*CurlEasy) callconv(.c) void {
-    var entry: ?*anyopaque = null;
+    var entry: ?*ConnectData = null;
     var cpid: u32 = 0;
     if (Curl_uint32_tbl_first(&cpool.conns, &cpid, &entry)) {
         while (true) {
-            const conn: *ConnectData = @ptrCast(@alignCast(entry.?));
+            const conn = entry.?;
             cpoolRemoveConn(cpool, conn);
             cpoolDiscardConn(cpool, admin, conn, false);
             if (!Curl_uint32_tbl_next(&cpool.conns, cpid, &cpid, &entry))
@@ -3045,7 +3047,7 @@ pub export fn Curl_cpool_destroy(
                 );
             }
             cpoolLock(cp, admin);
-            var entry: ?*anyopaque = null;
+            var entry: ?*ConnectData = null;
             var cpid: u32 = 0;
             if (Curl_uint32_tbl_first(&cp.conns, &cpid, &entry)) {
                 Curl_cpool_with_sigpipe(admin, cp, cpoolDestroyAllConns);
@@ -3316,6 +3318,27 @@ fn cpoolCheckLimits(
     return CPOOL_LIMIT_OK;
 }
 
+fn cpoolInsertConn(
+    cpool: *Cpool,
+    conn: *ConnectData,
+    bundle: *CpoolBundle,
+    dest: [*:0]const u8,
+) error{OutOfMemory}!void {
+    var cpid: u32 = 0;
+    if (!Curl_uint32_tbl_add(&cpool.conns, conn, &cpid)) {
+        return error.OutOfMemory;
+    }
+    Curl_conn_set_cpid(conn, cpid);
+    errdefer {
+        Curl_uint32_tbl_remove(&cpool.conns, cpid);
+        Curl_conn_set_cpid(conn, std.math.maxInt(u32));
+    }
+
+    if (!cpoolBundleAddId(cpool, bundle, dest, cpid)) {
+        return error.OutOfMemory;
+    }
+}
+
 pub export fn Curl_cpool_add_zig(
     data: ?*CurlEasy,
     conn: *ConnectData,
@@ -3381,17 +3404,7 @@ pub export fn Curl_cpool_add_zig(
         bundle = cpoolCreateBundle() orelse return CURLE_OUT_OF_MEMORY;
     }
 
-    var cpid: u32 = 0;
-    if (!Curl_uint32_tbl_add(&cpool.conns, conn, &cpid)) {
-        return CURLE_OUT_OF_MEMORY;
-    }
-    Curl_conn_set_cpid(conn, cpid);
-
-    if (!cpoolBundleAddId(cpool, bundle.?, dest, cpid)) {
-        Curl_uint32_tbl_remove(&cpool.conns, cpid);
-        Curl_conn_set_cpid(conn, std.math.maxInt(u32));
-        return CURLE_OUT_OF_MEMORY;
-    }
+    cpoolInsertConn(cpool, conn, bundle.?, dest) catch return CURLE_OUT_OF_MEMORY;
 
     Curl_conn_set_id(conn, cpool.next_connection_id);
     cpool.next_connection_id += 1;
@@ -3413,12 +3426,11 @@ fn cpoolForeach(
     func: *const fn (*Cpool, ?*CurlEasy, *ConnectData, ?*anyopaque) callconv(.c) c_int,
 ) bool {
     const cp = cpool orelse return false;
-    var entry: ?*anyopaque = null;
+    var entry: ?*ConnectData = null;
     var cpid: u32 = 0;
     if (Curl_uint32_tbl_first(&cp.conns, &cpid, &entry)) {
         while (true) {
-            if (entry) |e| {
-                const conn: *ConnectData = @ptrCast(@alignCast(e));
+            if (entry) |conn| {
                 if (func(cp, data, conn, param) == 1)
                     return true;
             }
@@ -3507,7 +3519,7 @@ fn cpoolReapDeadCb(
     conn: *ConnectData,
     param: ?*anyopaque,
 ) callconv(.c) c_int {
-    const reaper: *CpoolReaperCtx = @ptrCast(@alignCast(param));
+    const reaper = fromOpaque(CpoolReaperCtx, param.?);
     if (cpoolConnCanBeClosed(conn)) {
         if (Curl_conn_is_no_reuse_or_close(conn) or
             !Curl_cpool_conn_seems_healthy(conn, admin, reaper.pnow))

@@ -92,11 +92,19 @@ pub const CurlCwtype = extern struct {
     cwriter_size: usize,
 };
 
+inline fn fromOpaque(comptime T: type, raw: anytype) *T {
+    return @ptrCast(@alignCast(raw));
+}
+
 pub const CurlCwriter = extern struct {
     cwt: *const CurlCwtype,
     next: ?*CurlCwriter,
     ctx: ?*anyopaque,
     phase: CurlCwriterPhase,
+
+    pub inline fn ctxAs(self: *CurlCwriter, comptime T: type) *T {
+        return fromOpaque(T, self.ctx.?);
+    }
 };
 
 pub const CurlCrtype = extern struct {
@@ -118,6 +126,10 @@ pub const CurlCreader = extern struct {
     next: ?*CurlCreader,
     ctx: ?*anyopaque,
     phase: CurlCreaderPhase,
+
+    pub inline fn ctxAs(self: *CurlCreader, comptime T: type) *T {
+        return fromOpaque(T, self.ctx.?);
+    }
 };
 
 // External functions and globals
@@ -216,7 +228,7 @@ fn clResetWriter(data: ?*CurlEasy) void {
     while (writer) |w| {
         stack_ptr.* = w.next;
         w.cwt.do_close(data, w);
-        mem.free(@ptrCast(w));
+        mem.freeTyped(w);
         writer = stack_ptr.*;
     }
     Curl_cw_out_set_paused(data, false);
@@ -229,7 +241,7 @@ fn clResetReader(data: ?*CurlEasy) void {
     while (reader) |r| {
         stack_ptr.* = r.next;
         r.crt.do_close(data, r);
-        mem.free(@ptrCast(r));
+        mem.freeTyped(r);
         reader = stack_ptr.*;
     }
 }
@@ -357,7 +369,7 @@ fn cwDownloadWrite(
     buf: ?[*]const u8,
     nbytes: usize,
 ) callconv(.c) CURLcode {
-    const ctx: *CwDownloadCtx = @ptrCast(@alignCast(writer.ctx));
+    const ctx = writer.ctxAs(CwDownloadCtx);
     var result: CURLcode = CURLE_OK;
     var nwrite: usize = 0;
     var excess_len: usize = 0;
@@ -624,31 +636,43 @@ pub export fn Curl_client_flush(data: ?*CurlEasy) callconv(.c) CURLcode {
     return result;
 }
 
+fn cwriterCreateChecked(
+    data: ?*CurlEasy,
+    cwt: *const CurlCwtype,
+    phase: CurlCwriterPhase,
+    out_result: *CURLcode,
+) error{CurlFailed}!*CurlCwriter {
+    std.debug.assert(cwt.cwriter_size >= @sizeOf(CurlCwriter));
+    const raw = mem.calloc(1, cwt.cwriter_size) orelse {
+        out_result.* = CURLE_OUT_OF_MEMORY;
+        return error.CurlFailed;
+    };
+    const w = fromOpaque(CurlCwriter, raw);
+    errdefer mem.freeTyped(w);
+    w.cwt = cwt;
+    w.ctx = raw;
+    w.phase = phase;
+    const result = cwt.do_init(data, w);
+    out_result.* = result;
+    if (result != CURLE_OK)
+        return error.CurlFailed;
+    return w;
+}
+
 pub export fn Curl_cwriter_create(
     pwriter: *?*CurlCwriter,
     data: ?*CurlEasy,
     cwt: *const CurlCwtype,
     phase: CurlCwriterPhase,
 ) callconv(.c) CURLcode {
-    var writer: ?*CurlCwriter = null;
+    errdefer pwriter.* = null;
     var result: CURLcode = CURLE_OUT_OF_MEMORY;
-
-    std.debug.assert(cwt.cwriter_size >= @sizeOf(CurlCwriter));
-    const p = mem.calloc(1, cwt.cwriter_size);
-    if (p) |raw| {
-        const w: *CurlCwriter = @ptrCast(@alignCast(raw));
-        writer = w;
-        w.cwt = cwt;
-        w.ctx = raw;
-        w.phase = phase;
-        result = cwt.do_init(data, w);
-    }
-
-    pwriter.* = if (result != CURLE_OK) null else writer;
-    if (result != CURLE_OK) {
-        if (writer) |w| mem.free(@ptrCast(w));
-    }
-    return result;
+    const w = cwriterCreateChecked(data, cwt, phase, &result) catch {
+        pwriter.* = null;
+        return result;
+    };
+    pwriter.* = w;
+    return CURLE_OK;
 }
 
 pub export fn Curl_cwriter_free(
@@ -657,7 +681,7 @@ pub export fn Curl_cwriter_free(
 ) callconv(.c) void {
     if (writer) |w| {
         w.cwt.do_close(data, w);
-        mem.free(@ptrCast(w));
+        mem.freeTyped(w);
     }
 }
 
@@ -889,7 +913,7 @@ const CrInCtx = extern struct {
 };
 
 fn crInInit(data: ?*CurlEasy, reader: *CurlCreader) callconv(.c) CURLcode {
-    const ctx: *CrInCtx = @ptrCast(@alignCast(reader.ctx));
+    const ctx = reader.ctxAs(CrInCtx);
     Curl_sendf_get_fread_in(data, &ctx.read_cb, &ctx.cb_user_data);
     ctx.total_len = -1;
     ctx.read_len = 0;
@@ -904,7 +928,7 @@ fn crInRead(
     pnread: *usize,
     peos: *bool,
 ) callconv(.c) CURLcode {
-    const ctx: *CrInCtx = @ptrCast(@alignCast(reader.ctx));
+    const ctx = reader.ctxAs(CrInCtx);
     var result: CURLcode = CURLE_OK;
     var blen = blen_arg;
 
@@ -1009,13 +1033,13 @@ fn crInRead(
 
 fn crInNeedsRewind(data: ?*CurlEasy, reader: *CurlCreader) callconv(.c) bool {
     _ = data;
-    const ctx: *CrInCtx = @ptrCast(@alignCast(reader.ctx));
+    const ctx = reader.ctxAs(CrInCtx);
     return ctx.hasUsedCb();
 }
 
 fn crInTotalLength(data: ?*CurlEasy, reader: *CurlCreader) callconv(.c) curl_off_t {
     _ = data;
-    const ctx: *CrInCtx = @ptrCast(@alignCast(reader.ctx));
+    const ctx = reader.ctxAs(CrInCtx);
     return ctx.total_len;
 }
 
@@ -1024,7 +1048,7 @@ fn crInResumeFrom(
     reader: *CurlCreader,
     offset: curl_off_t,
 ) callconv(.c) CURLcode {
-    const ctx: *CrInCtx = @ptrCast(@alignCast(reader.ctx));
+    const ctx = reader.ctxAs(CrInCtx);
     var seekerr: c_int = CURL_SEEKFUNC_CANTSEEK;
 
     std.debug.assert(Curl_xfer_get_conn(data) != null);
@@ -1083,7 +1107,7 @@ fn crInResumeFrom(
 }
 
 fn crInRewind(data: ?*CurlEasy, reader: *CurlCreader) CURLcode {
-    const ctx: *CrInCtx = @ptrCast(@alignCast(reader.ctx));
+    const ctx = reader.ctxAs(CrInCtx);
 
     if (!ctx.hasUsedCb())
         return CURLE_OK;
@@ -1131,7 +1155,7 @@ fn crInCntrl(
     reader: *CurlCreader,
     opcode: CurlCreaderCntrl,
 ) callconv(.c) CURLcode {
-    const ctx: *CrInCtx = @ptrCast(@alignCast(reader.ctx));
+    const ctx = reader.ctxAs(CrInCtx);
 
     switch (opcode) {
         CURL_CRCNTRL_REWIND => return crInRewind(data, reader),
@@ -1144,7 +1168,7 @@ fn crInCntrl(
 
 fn crInIsPaused(data: ?*CurlEasy, reader: *CurlCreader) callconv(.c) bool {
     _ = data;
-    const ctx: *CrInCtx = @ptrCast(@alignCast(reader.ctx));
+    const ctx = reader.ctxAs(CrInCtx);
     return ctx.isPaused();
 }
 
@@ -1162,31 +1186,43 @@ const cr_in: CurlCrtype = .{
     .creader_size = @sizeOf(CrInCtx),
 };
 
+fn creaderCreateChecked(
+    data: ?*CurlEasy,
+    crt: *const CurlCrtype,
+    phase: CurlCreaderPhase,
+    out_result: *CURLcode,
+) error{CurlFailed}!*CurlCreader {
+    std.debug.assert(crt.creader_size >= @sizeOf(CurlCreader));
+    const raw = mem.calloc(1, crt.creader_size) orelse {
+        out_result.* = CURLE_OUT_OF_MEMORY;
+        return error.CurlFailed;
+    };
+    const r = fromOpaque(CurlCreader, raw);
+    errdefer mem.freeTyped(r);
+    r.crt = crt;
+    r.ctx = raw;
+    r.phase = phase;
+    const result = crt.do_init(data, r);
+    out_result.* = result;
+    if (result != CURLE_OK)
+        return error.CurlFailed;
+    return r;
+}
+
 pub export fn Curl_creader_create(
     preader: *?*CurlCreader,
     data: ?*CurlEasy,
     crt: *const CurlCrtype,
     phase: CurlCreaderPhase,
 ) callconv(.c) CURLcode {
-    var reader: ?*CurlCreader = null;
+    errdefer preader.* = null;
     var result: CURLcode = CURLE_OUT_OF_MEMORY;
-
-    std.debug.assert(crt.creader_size >= @sizeOf(CurlCreader));
-    const p = mem.calloc(1, crt.creader_size);
-    if (p) |raw| {
-        const r: *CurlCreader = @ptrCast(@alignCast(raw));
-        reader = r;
-        r.crt = crt;
-        r.ctx = raw;
-        r.phase = phase;
-        result = crt.do_init(data, r);
-    }
-
-    preader.* = if (result != CURLE_OK) null else reader;
-    if (result != CURLE_OK) {
-        if (reader) |r| mem.free(@ptrCast(r));
-    }
-    return result;
+    const r = creaderCreateChecked(data, crt, phase, &result) catch {
+        preader.* = null;
+        return result;
+    };
+    preader.* = r;
+    return CURLE_OK;
 }
 
 pub export fn Curl_creader_free(
@@ -1195,7 +1231,7 @@ pub export fn Curl_creader_free(
 ) callconv(.c) void {
     if (reader) |r| {
         r.crt.do_close(data, r);
-        mem.free(@ptrCast(r));
+        mem.freeTyped(r);
     }
 }
 
@@ -1226,14 +1262,14 @@ const CrLcCtx = extern struct {
 
 fn crLcInit(data: ?*CurlEasy, reader: *CurlCreader) callconv(.c) CURLcode {
     _ = data;
-    const ctx: *CrLcCtx = @ptrCast(@alignCast(reader.ctx));
+    const ctx = reader.ctxAs(CrLcCtx);
     io_buffers.Curl_bufq_init2(&ctx.buf, 16 * 1024, 1, io_buffers.BUFQ_OPT_SOFT_LIMIT);
     return CURLE_OK;
 }
 
 fn crLcClose(data: ?*CurlEasy, reader: *CurlCreader) callconv(.c) void {
     _ = data;
-    const ctx: *CrLcCtx = @ptrCast(@alignCast(reader.ctx));
+    const ctx = reader.ctxAs(CrLcCtx);
     io_buffers.Curl_bufq_free(&ctx.buf);
 }
 
@@ -1245,7 +1281,7 @@ fn crLcRead(
     pnread: *usize,
     peos: *bool,
 ) callconv(.c) CURLcode {
-    const ctx: *CrLcCtx = @ptrCast(@alignCast(reader.ctx));
+    const ctx = reader.ctxAs(CrLcCtx);
     const buf = buf_opt.?;
     var result: CURLcode = CURLE_OK;
     var nread: usize = 0;
@@ -1356,15 +1392,19 @@ const cr_lc: CurlCrtype = .{
     .creader_size = @sizeOf(CrLcCtx),
 };
 
-fn crLcAdd(data: ?*CurlEasy) CURLcode {
-    var reader: ?*CurlCreader = null;
-    var result = Curl_creader_create(&reader, data, &cr_lc, CURL_CR_CONTENT_ENCODE);
-    if (result == CURLE_OK)
-        result = Curl_creader_add(data, reader.?);
+fn crLcAddChecked(data: ?*CurlEasy, out_result: *CURLcode) error{CurlFailed}!void {
+    const r = try creaderCreateChecked(data, &cr_lc, CURL_CR_CONTENT_ENCODE, out_result);
+    errdefer Curl_creader_free(data, r);
+    const result = Curl_creader_add(data, r);
+    out_result.* = result;
+    if (result != CURLE_OK)
+        return error.CurlFailed;
+}
 
-    if (result != CURLE_OK and reader != null)
-        Curl_creader_free(data, reader);
-    return result;
+fn crLcAdd(data: ?*CurlEasy) CURLcode {
+    var result: CURLcode = CURLE_OK;
+    crLcAddChecked(data, &result) catch return result;
+    return CURLE_OK;
 }
 
 fn doInitReaderStack(data: ?*CurlEasy, r: *CurlCreader) CURLcode {
@@ -1392,7 +1432,7 @@ pub export fn Curl_creader_set_fread(
     var r: ?*CurlCreader = null;
     var result = Curl_creader_create(&r, data, &cr_in, CURL_CR_CLIENT);
     if (result == CURLE_OK and r != null) {
-        const ctx: *CrInCtx = @ptrCast(@alignCast(r.?.ctx));
+        const ctx = r.?.ctxAs(CrInCtx);
         ctx.total_len = len;
 
         clResetReader(data);
@@ -1431,6 +1471,14 @@ pub export fn Curl_creader_add(
     return CURLE_OK;
 }
 
+fn creaderSetChecked(data: ?*CurlEasy, r: *CurlCreader, out_result: *CURLcode) error{CurlFailed}!void {
+    errdefer Curl_creader_free(data, r);
+    const result = doInitReaderStack(data, r);
+    out_result.* = result;
+    if (result != CURLE_OK)
+        return error.CurlFailed;
+}
+
 pub export fn Curl_creader_set(
     data: ?*CurlEasy,
     r: *CurlCreader,
@@ -1438,10 +1486,9 @@ pub export fn Curl_creader_set(
     std.debug.assert(r.phase == CURL_CR_CLIENT);
 
     clResetReader(data);
-    const result = doInitReaderStack(data, r);
-    if (result != CURLE_OK)
-        Curl_creader_free(data, r);
-    return result;
+    var result: CURLcode = CURLE_OK;
+    creaderSetChecked(data, r, &result) catch return result;
+    return CURLE_OK;
 }
 
 pub export fn Curl_client_read(
@@ -1573,7 +1620,7 @@ fn crBufRead(
     pnread: *usize,
     peos: *bool,
 ) callconv(.c) CURLcode {
-    const ctx: *CrBufCtx = @ptrCast(@alignCast(reader.ctx));
+    const ctx = reader.ctxAs(CrBufCtx);
     var nread = ctx.blen - ctx.index;
 
     if (nread == 0 or ctx.buf == null) {
@@ -1603,7 +1650,7 @@ fn crBufRead(
 
 fn crBufNeedsRewind(data: ?*CurlEasy, reader: *CurlCreader) callconv(.c) bool {
     _ = data;
-    const ctx: *CrBufCtx = @ptrCast(@alignCast(reader.ctx));
+    const ctx = reader.ctxAs(CrBufCtx);
     return ctx.index > 0;
 }
 
@@ -1613,7 +1660,7 @@ fn crBufCntrl(
     opcode: CurlCreaderCntrl,
 ) callconv(.c) CURLcode {
     _ = data;
-    const ctx: *CrBufCtx = @ptrCast(@alignCast(reader.ctx));
+    const ctx = reader.ctxAs(CrBufCtx);
     switch (opcode) {
         CURL_CRCNTRL_REWIND => ctx.index = 0,
         else => {},
@@ -1623,7 +1670,7 @@ fn crBufCntrl(
 
 fn crBufTotalLength(data: ?*CurlEasy, reader: *CurlCreader) callconv(.c) curl_off_t {
     _ = data;
-    const ctx: *CrBufCtx = @ptrCast(@alignCast(reader.ctx));
+    const ctx = reader.ctxAs(CrBufCtx);
     return @intCast(ctx.blen);
 }
 
@@ -1632,7 +1679,7 @@ fn crBufResumeFrom(
     reader: *CurlCreader,
     offset: curl_off_t,
 ) callconv(.c) CURLcode {
-    const ctx: *CrBufCtx = @ptrCast(@alignCast(reader.ctx));
+    const ctx = reader.ctxAs(CrBufCtx);
     std.debug.assert(Curl_xfer_get_conn(data) != null);
     if (ctx.index != 0)
         return CURLE_READ_ERROR;
@@ -1669,7 +1716,7 @@ pub export fn Curl_creader_set_buf(
     var r: ?*CurlCreader = null;
     var result = Curl_creader_create(&r, data, &cr_buf, CURL_CR_CLIENT);
     if (result == CURLE_OK) {
-        const ctx: *CrBufCtx = @ptrCast(@alignCast(r.?.ctx));
+        const ctx = r.?.ctxAs(CrBufCtx);
         ctx.buf = buf;
         ctx.blen = blen;
         ctx.index = 0;
