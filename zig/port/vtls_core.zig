@@ -7,7 +7,6 @@ const containers = @import("containers.zig");
 const curlx_time_net = @import("curlx_time_net.zig");
 
 extern fn Curl_hexbyte(dest: [*]u8, val: u8) callconv(.c) void;
-extern fn curlx_memdup0(src: ?[*]const u8, length: usize) callconv(.c) ?*anyopaque;
 extern fn curlx_dyn_init(s: *containers.dynbuf, toobig: usize) callconv(.c) void;
 extern fn curlx_dyn_free(s: *containers.dynbuf) callconv(.c) void;
 extern fn curlx_dyn_addn(s: *containers.dynbuf, mem_ptr: ?*const anyopaque, len: usize) callconv(.c) c_uint;
@@ -46,7 +45,7 @@ fn pmatch(hostname: [*]const u8, hostlen: usize, pattern: [*]const u8, patternle
     {
         return false;
     }
-    return primitives.curl_strnequal(@ptrCast(hostname), @ptrCast(pattern), hostlen) != 0;
+    return std.ascii.eqlIgnoreCase(host_slice, pattern_slice);
 }
 
 fn hostIsIpnum(hostname: [*]const u8) bool {
@@ -187,9 +186,9 @@ pub export fn Curl_tls_keylog_write_line(line: ?[*:0]const u8) callconv(.c) bool
     const l = line orelse return false;
 
     var linelen = std.mem.len(l);
-    var buf: [256]u8 = undefined;
-    defer mem.secureZero(&buf, buf.len);
-    if (linelen == 0 or linelen > buf.len - 2) {
+    var buf: [255:0]u8 = undefined;
+    defer mem.secureZero(&buf, buf.len + 1);
+    if (linelen == 0 or linelen > buf.len - 1) {
         return false;
     }
 
@@ -200,7 +199,7 @@ pub export fn Curl_tls_keylog_write_line(line: ?[*:0]const u8) callconv(.c) bool
     }
     buf[linelen] = 0;
 
-    _ = keylog_c.fputs(@ptrCast(&buf), fp);
+    _ = keylog_c.fputs(&buf, fp);
     return true;
 }
 
@@ -223,15 +222,15 @@ pub export fn Curl_tls_keylog_write(
         return false;
     }
 
-    var line: [KEYLOG_LABEL_MAXLEN + 1 + (2 * CLIENT_RANDOM_SIZE) + 1 + (2 * SECRET_MAXLEN) + 1 + 1]u8 = undefined;
-    defer mem.secureZero(&line, line.len);
+    var line: [KEYLOG_LABEL_MAXLEN + 1 + (2 * CLIENT_RANDOM_SIZE) + 1 + (2 * SECRET_MAXLEN) + 1:0]u8 = undefined;
+    defer mem.secureZero(&line, line.len + 1);
     @memcpy(line[0..pos], lbl[0..pos]);
     line[pos] = ' ';
     pos += 1;
 
     var i: usize = 0;
     while (i < CLIENT_RANDOM_SIZE) : (i += 1) {
-        Curl_hexbyte(@ptrCast(line[pos..].ptr), crand[i]);
+        Curl_hexbyte(line[pos..][0..2], crand[i]);
         pos += 2;
     }
     line[pos] = ' ';
@@ -239,14 +238,14 @@ pub export fn Curl_tls_keylog_write(
 
     i = 0;
     while (i < secretlen) : (i += 1) {
-        Curl_hexbyte(@ptrCast(line[pos..].ptr), sec[i]);
+        Curl_hexbyte(line[pos..][0..2], sec[i]);
         pos += 2;
     }
     line[pos] = '\n';
     pos += 1;
     line[pos] = 0;
 
-    _ = keylog_c.fputs(@ptrCast(&line), fp);
+    _ = keylog_c.fputs(&line, fp);
     return true;
 }
 
@@ -393,8 +392,7 @@ fn spack_decstr16(val: *?[*:0]u8, src: *[*]const u8, end: [*]const u8) c_uint {
         return result;
     if (@intFromPtr(end) - @intFromPtr(src.*) < slen)
         return CURLE_READ_ERROR;
-    const dup = curlx_memdup0(src.*, slen);
-    val.* = if (dup) |p| @ptrCast(p) else null;
+    val.* = mem.memdup0(src.*, slen);
     src.* += slen;
     return if (val.* != null) CURLE_OK else CURLE_OUT_OF_MEMORY;
 }
@@ -417,8 +415,7 @@ fn spack_decdata16(val: *?[*]u8, val_len: *usize, src: *[*]const u8, end: [*]con
         return result;
     if (@intFromPtr(end) - @intFromPtr(src.*) < data_len)
         return CURLE_READ_ERROR;
-    const dup = curlx_memdup0(src.*, data_len);
-    val.* = if (dup) |p| @ptrCast(p) else null;
+    val.* = mem.memdup0(src.*, data_len);
     val_len.* = data_len;
     src.* += data_len;
     return if (val.* != null) CURLE_OK else CURLE_OUT_OF_MEMORY;
@@ -484,8 +481,116 @@ fn destroyUnpackedSession(s: ?*CurlSslSession) void {
         if (sess.quic_tp_len > 0) mem.secureZero(p, sess.quic_tp_len);
         mem.freeSized(p, sess.quic_tp_len);
     }
-    if (sess.alpn) |p| mem.free(@ptrCast(p));
-    mem.freeSized(sess, @sizeOf(CurlSslSession));
+    mem.free(sess.alpn);
+    mem.destroy(sess);
+}
+
+fn unpackSessionInner(
+    buf_in: [*]const u8,
+    end: [*]const u8,
+    out_rc: *c_uint,
+) error{UnpackFailed}!*CurlSslSession {
+    var buf = buf_in;
+    var val8: u8 = 0;
+    var pval8: ?[*]u8 = null;
+    var val16: u16 = 0;
+    var val32: u32 = 0;
+    var val64: u64 = 0;
+    var dlen: usize = 0;
+
+    var result = spack_dec8(&val8, &buf, end);
+    if (result != CURLE_OK) {
+        out_rc.* = result;
+        return error.UnpackFailed;
+    }
+    if (val8 != CURL_SPACK_VERSION) {
+        out_rc.* = CURLE_READ_ERROR;
+        return error.UnpackFailed;
+    }
+
+    const s = mem.create(CurlSslSession) orelse {
+        out_rc.* = CURLE_OUT_OF_MEMORY;
+        return error.UnpackFailed;
+    };
+    errdefer destroyUnpackedSession(s);
+
+    while (@intFromPtr(buf) < @intFromPtr(end)) {
+        result = spack_dec8(&val8, &buf, end);
+        if (result != CURLE_OK) {
+            out_rc.* = result;
+            return error.UnpackFailed;
+        }
+
+        switch (val8) {
+            CURL_SPACK_ALPN => {
+                mem.free(s.alpn);
+                result = spack_decstr16(&s.alpn, &buf, end);
+                if (result != CURLE_OK) {
+                    out_rc.* = result;
+                    return error.UnpackFailed;
+                }
+            },
+            CURL_SPACK_EARLYDATA => {
+                result = spack_dec32(&val32, &buf, end);
+                if (result != CURLE_OK) {
+                    out_rc.* = result;
+                    return error.UnpackFailed;
+                }
+                s.earlydata_max = val32;
+            },
+            CURL_SPACK_IETF_ID => {
+                result = spack_dec16(&val16, &buf, end);
+                if (result != CURLE_OK) {
+                    out_rc.* = result;
+                    return error.UnpackFailed;
+                }
+                s.ietf_tls_id = val16;
+            },
+            CURL_SPACK_QUICTP => {
+                result = spack_decdata16(&pval8, &dlen, &buf, end);
+                if (result != CURLE_OK) {
+                    out_rc.* = result;
+                    return error.UnpackFailed;
+                }
+                if (s.quic_tp) |p| {
+                    if (s.quic_tp_len > 0) mem.secureZero(p, s.quic_tp_len);
+                    mem.freeSized(p, s.quic_tp_len);
+                }
+                s.quic_tp = pval8;
+                s.quic_tp_len = dlen;
+            },
+            CURL_SPACK_TICKET => {
+                result = spack_decdata16(&pval8, &dlen, &buf, end);
+                if (result != CURLE_OK) {
+                    out_rc.* = result;
+                    return error.UnpackFailed;
+                }
+                if (s.sdata) |p| {
+                    if (s.sdata_len > 0) mem.secureZero(p, s.sdata_len);
+                    mem.freeSized(p, s.sdata_len);
+                }
+                s.sdata = pval8;
+                s.sdata_len = dlen;
+            },
+            CURL_SPACK_VALID_UNTIL => {
+                result = spack_dec64(&val64, &buf, end);
+                if (result != CURLE_OK) {
+                    out_rc.* = result;
+                    return error.UnpackFailed;
+                }
+                s.valid_until = @bitCast(val64);
+            },
+            CURL_SPACK_SECTRUST => {
+                s.setSectrustVerified(true);
+            },
+            else => {
+                out_rc.* = CURLE_READ_ERROR;
+                return error.UnpackFailed;
+            },
+        }
+    }
+
+    return s;
 }
 
 pub export fn Curl_ssl_session_unpack(
@@ -497,93 +602,12 @@ pub export fn Curl_ssl_session_unpack(
     _ = data;
     ps.* = null;
     const raw = bufv orelse return CURLE_BAD_FUNCTION_ARGUMENT;
-    var buf: [*]const u8 = @ptrCast(raw);
+    const buf: [*]const u8 = @ptrCast(raw);
     const end: [*]const u8 = buf + buflen;
 
-    var val8: u8 = 0;
-    var pval8: ?[*]u8 = null;
-    var val16: u16 = 0;
-    var val32: u32 = 0;
-    var val64: u64 = 0;
-    var dlen: usize = 0;
-
-    var result = spack_dec8(&val8, &buf, end);
-    if (result != CURLE_OK)
-        return result;
-    if (val8 != CURL_SPACK_VERSION)
-        return CURLE_READ_ERROR;
-
-    const raw_s = mem.calloc(1, @sizeOf(CurlSslSession)) orelse return CURLE_OUT_OF_MEMORY;
-    const s: *CurlSslSession = @ptrCast(@alignCast(raw_s));
-
-    while (@intFromPtr(buf) < @intFromPtr(end)) {
-        result = spack_dec8(&val8, &buf, end);
-        if (result != CURLE_OK)
-            break;
-
-        switch (val8) {
-            CURL_SPACK_ALPN => {
-                if (s.alpn) |p| mem.free(@ptrCast(p));
-                result = spack_decstr16(&s.alpn, &buf, end);
-                if (result != CURLE_OK)
-                    break;
-            },
-            CURL_SPACK_EARLYDATA => {
-                result = spack_dec32(&val32, &buf, end);
-                if (result != CURLE_OK)
-                    break;
-                s.earlydata_max = val32;
-            },
-            CURL_SPACK_IETF_ID => {
-                result = spack_dec16(&val16, &buf, end);
-                if (result != CURLE_OK)
-                    break;
-                s.ietf_tls_id = val16;
-            },
-            CURL_SPACK_QUICTP => {
-                result = spack_decdata16(&pval8, &dlen, &buf, end);
-                if (result != CURLE_OK)
-                    break;
-                if (s.quic_tp) |p| {
-                    if (s.quic_tp_len > 0) mem.secureZero(p, s.quic_tp_len);
-                    mem.freeSized(p, s.quic_tp_len);
-                }
-                s.quic_tp = pval8;
-                s.quic_tp_len = dlen;
-            },
-            CURL_SPACK_TICKET => {
-                result = spack_decdata16(&pval8, &dlen, &buf, end);
-                if (result != CURLE_OK)
-                    break;
-                if (s.sdata) |p| {
-                    if (s.sdata_len > 0) mem.secureZero(p, s.sdata_len);
-                    mem.freeSized(p, s.sdata_len);
-                }
-                s.sdata = pval8;
-                s.sdata_len = dlen;
-            },
-            CURL_SPACK_VALID_UNTIL => {
-                result = spack_dec64(&val64, &buf, end);
-                if (result != CURLE_OK)
-                    break;
-                s.valid_until = @bitCast(val64);
-            },
-            CURL_SPACK_SECTRUST => {
-                s.setSectrustVerified(true);
-            },
-            else => {
-                result = CURLE_READ_ERROR;
-                break;
-            },
-        }
-    }
-
-    if (result != CURLE_OK) {
-        destroyUnpackedSession(s);
-    } else {
-        ps.* = s;
-    }
-    return result;
+    var result: c_uint = CURLE_OK;
+    ps.* = unpackSessionInner(buf, end, &result) catch return result;
+    return CURLE_OK;
 }
 
 // ============================================================================
@@ -1080,7 +1104,7 @@ const cs_list = [_]CsEntry{
 fn cs_str_to_zip(cs_str: [*]const u8, cs_len: usize, zip: *[6]u8) c_int {
     var indexes: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 };
     var nxt: usize = 0;
-    const separator: u8 = if (cs_len >= 3 and primitives.curl_strnequal(@ptrCast(cs_str), "TLS", 3) != 0) '_' else '-';
+    const separator: u8 = if (cs_len >= 3 and std.ascii.eqlIgnoreCase(cs_str[0..3], "TLS")) '_' else '-';
     var i: usize = 0;
 
     while (true) {
@@ -1093,7 +1117,7 @@ fn cs_str_to_zip(cs_str: [*]const u8, cs_len: usize, zip: *[6]u8) c_int {
 
         var found_idx: usize = cs_parts.len;
         for (cs_parts[1..], 1..) |part, idx| {
-            if (part.len == len and primitives.curl_strnequal(@ptrCast(part.ptr), @ptrCast(cs_str + cur), len) != 0) {
+            if (part.len == len and std.ascii.eqlIgnoreCase(part, cs_str[cur .. cur + len])) {
                 found_idx = idx;
                 break;
             }
@@ -1467,7 +1491,7 @@ const apple = struct {
         var host_str: ?CFStringRef = null;
         var err: ?CFErrorRef = null;
         var error_ref: ?CFStringRef = null;
-        var err_desc: ?[*]u8 = null;
+        var err_desc: ?[*:0]u8 = null;
 
         defer {
             if (err_desc) |p| mem.free(p);
@@ -1575,18 +1599,18 @@ const apple = struct {
             if (error_ref) |eref| {
                 const size = api.CFStringGetMaximumSizeForEncoding(api.CFStringGetLength(eref), kCFStringEncodingUTF8);
                 if (size >= 0) {
-                    if (mem.malloc(@intCast(size + 1))) |raw_buf| {
-                        const buf_ptr: [*]u8 = @ptrCast(raw_buf);
+                    const usize_cap: usize = @intCast(size + 1);
+                    if (mem.allocMany(u8, usize_cap)) |buf_ptr| {
                         if (api.CFStringGetCString(eref, buf_ptr, size, kCFStringEncodingUTF8) != 0) {
-                            err_desc = buf_ptr;
+                            err_desc = buf_ptr[0..@intCast(size) :0].ptr;
                         } else {
-                            mem.free(raw_buf);
+                            mem.free(buf_ptr);
                         }
                     }
                 }
             }
             const sep: [*:0]const u8 = if (err_desc != null) ": " else "";
-            const desc: [*:0]const u8 = if (err_desc) |p| @ptrCast(p) else "";
+            const desc: [*:0]const u8 = err_desc orelse "";
             if (api.failf_hook) |hook| {
                 var msg_buf: [512]u8 = undefined;
                 const msg = std.fmt.bufPrint(&msg_buf, "Apple SecTrust failure {d}{s}{s}", .{ code, std.mem.span(sep), std.mem.span(desc) }) catch "Apple SecTrust failure";
@@ -1887,6 +1911,10 @@ const schannel_verify = struct {
         alpn: ?*const anyopaque,
         backend: *SchannelSslBackendData,
     };
+
+    inline fn cfConnssl(cf: *CurlCfilter) *SslConnectData {
+        return @ptrCast(@alignCast(cf.ctx.?));
+    }
 
     // On Windows (MS bitfields ABI), `uint8_t ssl_options; uint8_t version;` is followed by
     // 2 bytes of padding before the `unsigned int` bitfield storage unit `flags`.
@@ -2216,9 +2244,8 @@ const schannel_verify = struct {
         }
 
         var ca_file_bufsize: usize = @intCast(file_size);
-        const buf_alloc = mem.malloc(ca_file_bufsize + 1) orelse return CURLE_OUT_OF_MEMORY;
-        defer mem.free(buf_alloc);
-        const ca_file_buffer: [*]u8 = @ptrCast(buf_alloc);
+        const ca_file_buffer = mem.allocMany(u8, ca_file_bufsize + 1) orelse return CURLE_OUT_OF_MEMORY;
+        defer mem.free(ca_file_buffer);
 
         var total_bytes_read: usize = 0;
         while (total_bytes_read < ca_file_bufsize) {
@@ -2396,7 +2423,7 @@ const schannel_verify = struct {
 
     pub fn Curl_verify_host(cf: *CurlCfilter, data: ?*anyopaque) callconv(.c) c_uint {
         var result: c_uint = CURLE_PEER_FAILED_VERIFICATION;
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx.?));
+        const connssl = cfConnssl(cf);
         var pCertContextServer: ?*CERT_CONTEXT = null;
         var cert_hostname_buff: ?[*]u8 = null;
         var cert_hostname_buff_index: usize = 0;
@@ -2408,7 +2435,7 @@ const schannel_verify = struct {
         var ip_blob = NumIpData{};
 
         defer {
-            if (alt_name_info) |ani| _ = LocalFree(@ptrCast(ani));
+            if (alt_name_info) |ani| _ = LocalFree(ani);
             if (cert_hostname_buff) |b| mem.free(b);
             if (pCertContextServer) |c| _ = CertFreeCertificateContext(c);
         }
@@ -2416,7 +2443,7 @@ const schannel_verify = struct {
         const sspi_status = Curl_pSecFn.QueryContextAttributesA(
             &connssl.backend.ctxt.ctxt_handle,
             SECPKG_ATTR_REMOTE_CERT_CONTEXT,
-            @ptrCast(&pCertContextServer),
+            &pCertContextServer,
         );
 
         if (sspi_status != SEC_E_OK or pCertContextServer == null) {
@@ -2473,8 +2500,7 @@ const schannel_verify = struct {
                 return result;
             }
 
-            const raw_buf = mem.malloc(len) orelse return CURLE_OUT_OF_MEMORY;
-            cert_hostname_buff = @ptrCast(raw_buf);
+            cert_hostname_buff = mem.allocMany(u8, len) orelse return CURLE_OUT_OF_MEMORY;
             actual_len = cert_get_name_string(
                 data,
                 pCertContextServer.?,
@@ -2521,7 +2547,7 @@ const schannel_verify = struct {
                         cert_hostname_buff_index += std.mem.len(current_name) + 1;
                         result = CURLE_PEER_FAILED_VERIFICATION;
                     }
-                    mem.free(@ptrCast(chost));
+                    mem.free(chost);
                 }
             }
 
@@ -2540,7 +2566,7 @@ const schannel_verify = struct {
     }
 
     pub fn Curl_verify_certificate(cf: *CurlCfilter, data: ?*anyopaque) callconv(.c) c_uint {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx.?));
+        const connssl = cfConnssl(cf);
         const conn_config = Curl_ssl_cf_get_filter_config(cf);
         var result: c_uint = CURLE_OK;
         var pCertContextServer: ?*CERT_CONTEXT = null;
@@ -2559,7 +2585,7 @@ const schannel_verify = struct {
         const sspi_status = Curl_pSecFn.QueryContextAttributesA(
             &connssl.backend.ctxt.ctxt_handle,
             SECPKG_ATTR_REMOTE_CERT_CONTEXT,
-            @ptrCast(&pCertContextServer),
+            &pCertContextServer,
         );
 
         if (sspi_status != SEC_E_OK or pCertContextServer == null) {
@@ -3104,7 +3130,7 @@ const apple_test_harness = struct {
         const n = @min(slice.len, o.str_buf.len);
         @memcpy(o.str_buf[0..n], slice[0..n]);
         o.str_len = n;
-        return @ptrCast(o);
+        return o;
     }
 
     fn mockCFArrayCreateMutable(
@@ -3116,7 +3142,7 @@ const apple_test_harness = struct {
         _ = capacity;
         const o = allocObj(.array) orelse return null;
         o.retains_items = (callbacks != null);
-        return @ptrCast(o);
+        return o;
     }
 
     fn mockCFArrayAppendValue(arr_ref: apple.CFMutableArrayRef, val_ref: *const anyopaque) callconv(.c) void {
@@ -3149,7 +3175,7 @@ const apple_test_harness = struct {
             @memcpy(o.data_buf[0..n], b[0..n]);
         }
         o.data_len = n;
-        return @ptrCast(o);
+        return o;
     }
 
     fn mockCFErrorGetCode(err_ref: apple.CFErrorRef) callconv(.c) apple.CFIndex {
@@ -3162,7 +3188,7 @@ const apple_test_harness = struct {
         const n = @min(err_obj.err_desc.len, s.str_buf.len);
         @memcpy(s.str_buf[0..n], err_obj.err_desc[0..n]);
         s.str_len = n;
-        return @ptrCast(s);
+        return s;
     }
 
     fn mockCFStringGetLength(str_ref: apple.CFStringRef) callconv(.c) apple.CFIndex {
@@ -3208,7 +3234,7 @@ const apple_test_harness = struct {
             last_ssl_policy_has_host = false;
             last_ssl_policy_host_len = 0;
         }
-        return @ptrCast(o);
+        return o;
     }
 
     fn mockSecPolicyCreateRevocation(flags: apple.CFOptionFlags) callconv(.c) ?apple.SecPolicyRef {
@@ -3216,7 +3242,7 @@ const apple_test_harness = struct {
         o.rev_flags = flags;
         revocation_policy_count += 1;
         last_revocation_flags = flags;
-        return @ptrCast(o);
+        return o;
     }
 
     fn mockSecCertificateCreateWithData(
@@ -3234,7 +3260,7 @@ const apple_test_harness = struct {
         const c_obj = allocObj(.cert) orelse return null;
         @memcpy(c_obj.data_buf[0..d_obj.data_len], d_obj.data_buf[0..d_obj.data_len]);
         c_obj.data_len = d_obj.data_len;
-        return @ptrCast(c_obj);
+        return c_obj;
     }
 
     fn mockSecTrustCreateWithCertificates(
@@ -3254,7 +3280,7 @@ const apple_test_harness = struct {
             out_trust.* = null;
             return -1;
         };
-        out_trust.* = @ptrCast(t_obj);
+        out_trust.* = t_obj;
         return apple.noErr;
     }
 
@@ -3283,7 +3309,7 @@ const apple_test_harness = struct {
             if (allocObj(.err)) |e_obj| {
                 e_obj.err_code = code;
                 e_obj.err_desc = eval_error_desc orelse "mock SecTrust evaluation error";
-                out_err.* = @ptrCast(e_obj);
+                out_err.* = e_obj;
             } else {
                 out_err.* = null;
             }
@@ -3319,7 +3345,7 @@ const apple_test_harness = struct {
             .SecTrustCreateWithCertificates = &mockSecTrustCreateWithCertificates,
             .SecTrustSetOCSPResponse = &mockSecTrustSetOCSPResponse,
             .SecTrustEvaluateWithError = &mockSecTrustEvaluateWithError,
-            .kCFTypeArrayCallBacks = @ptrCast(&callbacks_sentinel),
+            .kCFTypeArrayCallBacks = &callbacks_sentinel,
             .failf_hook = &mockFailf,
         };
     }

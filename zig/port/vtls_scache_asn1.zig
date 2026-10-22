@@ -361,8 +361,7 @@ fn dupFieldBlob(dest: *?*CurlBlob, src: ?*CurlBlob) bool {
         const data_ptr: [*]u8 = raw + @sizeOf(CurlBlob);
         d.data = data_ptr;
         if (s.len > 0) {
-            if (s.data) |src_data| {
-                const src_bytes: [*]const u8 = @ptrCast(src_data);
+            if (s.data) |src_bytes| {
                 @memcpy(data_ptr[0..s.len], src_bytes[0..s.len]);
             }
         }
@@ -371,7 +370,7 @@ fn dupFieldBlob(dest: *?*CurlBlob, src: ?*CurlBlob) bool {
     return true;
 }
 
-fn cloneSslFilterConfig(source: *const SslFilterConfig, dest: *SslFilterConfig) bool {
+fn cloneSslFilterConfigInner(source: *const SslFilterConfig, dest: *SslFilterConfig) error{OutOfMemory}!void {
     std.debug.assert(!dest.getFlag(SslFilterConfig.BIT_DEEP_COPY));
     dest.* = source.*;
     dest.setFlag(SslFilterConfig.BIT_DEEP_COPY, true);
@@ -395,25 +394,13 @@ fn cloneSslFilterConfig(source: *const SslFilterConfig, dest: *SslFilterConfig) 
     dest.ca_info_blob = null;
     dest.issuercert_blob = null;
     dest.key_blob = null;
+    errdefer Curl_ssl_config_cleanup(dest);
 
-    if (!dupFieldBlob(&dest.cert_blob, source.cert_blob)) {
-        Curl_ssl_config_cleanup(dest);
-        return false;
-    }
-    if (!dupFieldBlob(&dest.ca_info_blob, source.ca_info_blob)) {
-        Curl_ssl_config_cleanup(dest);
-        return false;
-    }
-    if (!dupFieldBlob(&dest.issuercert_blob, source.issuercert_blob)) {
-        Curl_ssl_config_cleanup(dest);
-        return false;
-    }
-    if (!dupFieldBlob(&dest.key_blob, source.key_blob)) {
-        Curl_ssl_config_cleanup(dest);
-        return false;
-    }
-
-    if (!dupFieldStr(&dest.CAfile, source.CAfile) or
+    if (!dupFieldBlob(&dest.cert_blob, source.cert_blob) or
+        !dupFieldBlob(&dest.ca_info_blob, source.ca_info_blob) or
+        !dupFieldBlob(&dest.issuercert_blob, source.issuercert_blob) or
+        !dupFieldBlob(&dest.key_blob, source.key_blob) or
+        !dupFieldStr(&dest.CAfile, source.CAfile) or
         !dupFieldStr(&dest.CApath, source.CApath) or
         !dupFieldStr(&dest.cipher_list, source.cipher_list) or
         !dupFieldStr(&dest.cipher_list13, source.cipher_list13) or
@@ -428,10 +415,12 @@ fn cloneSslFilterConfig(source: *const SslFilterConfig, dest: *SslFilterConfig) 
         !dupFieldStr(&dest.curves, source.curves) or
         !dupFieldStr(&dest.signature_algorithms, source.signature_algorithms))
     {
-        Curl_ssl_config_cleanup(dest);
-        return false;
+        return error.OutOfMemory;
     }
+}
 
+fn cloneSslFilterConfig(source: *const SslFilterConfig, dest: *SslFilterConfig) bool {
+    cloneSslFilterConfigInner(source, dest) catch return false;
     return true;
 }
 
@@ -440,7 +429,7 @@ fn freeBlobScrubbed(blob_opt: ?*CurlBlob) void {
         const copy = (blob.flags & 1) != 0;
         if (copy and blob.len > 0) {
             if (blob.data) |bdata| {
-                mem.secureZero(@ptrCast(@constCast(bdata)), blob.len);
+                mem.secureZero(@constCast(bdata), blob.len);
             }
         }
         const total = @sizeOf(CurlBlob) +| (if (copy) blob.len else 0);
@@ -888,7 +877,7 @@ fn cfSslPeerKeyAddMtls(buf: *dynbuf, ssl: *const SslFilterConfig, is_local: *boo
             var i: usize = 0;
             while (result == CURLE_OK and ct[i] != 0) : (i += 1) {
                 var c = primitives.rawToupper(ct[i]);
-                result = containers.curlx_dyn_addn(buf, @ptrCast(&c), 1);
+                result = containers.curlx_dyn_addn(buf, (&c)[0..1].ptr, 1);
             }
             if (result != CURLE_OK) return result;
         }
@@ -900,7 +889,7 @@ fn cfSslPeerKeyAddMtls(buf: *dynbuf, ssl: *const SslFilterConfig, is_local: *boo
             var i: usize = 0;
             while (result == CURLE_OK and kt[i] != 0) : (i += 1) {
                 var c = primitives.rawToupper(kt[i]);
-                result = containers.curlx_dyn_addn(buf, @ptrCast(&c), 1);
+                result = containers.curlx_dyn_addn(buf, (&c)[0..1].ptr, 1);
             }
         }
     }
@@ -1068,9 +1057,7 @@ pub export fn Curl_ssl_peer_key_make(
     return CURLE_OK;
 }
 
-fn cfSslScacheSessionLdestroy(udata: ?*anyopaque, obj: ?*anyopaque) callconv(.c) void {
-    _ = udata;
-    const s: *CurlSslSession = @ptrCast(@alignCast(obj orelse return));
+fn destroySslSession(s: *CurlSslSession) void {
     if (s.sdata) |sd| {
         mem.secureZero(sd, s.sdata_len);
         mem.freeSized(sd, s.sdata_len);
@@ -1086,7 +1073,12 @@ fn cfSslScacheSessionLdestroy(udata: ?*anyopaque, obj: ?*anyopaque) callconv(.c)
     mem.free(s.alpn);
     s.alpn = null;
     mem.secureZero(s, @sizeOf(CurlSslSession));
-    mem.freeSized(s, @sizeOf(CurlSslSession));
+    mem.destroy(s);
+}
+
+fn cfSslScacheSessionLdestroy(udata: ?*anyopaque, obj: ?*anyopaque) callconv(.c) void {
+    _ = udata;
+    destroySslSession(@ptrCast(@alignCast(obj orelse return)));
 }
 
 pub export fn Curl_ssl_session_create(
@@ -1111,6 +1103,42 @@ pub export fn Curl_ssl_session_create(
     );
 }
 
+fn createSslSessionInner(
+    sdata: ?*anyopaque,
+    sdata_len: usize,
+    ietf_tls_id: c_int,
+    alpn: ?[*:0]const u8,
+    valid_until: curl_off_t,
+    earlydata_max: usize,
+    quic_tp: ?[*]u8,
+    quic_tp_len: usize,
+) error{OutOfMemory}!*CurlSslSession {
+    const s = mem.create(CurlSslSession) orelse {
+        if (sdata) |sd| {
+            mem.secureZero(sd, sdata_len);
+            mem.freeSized(sd, sdata_len);
+        }
+        if (quic_tp) |qtp| {
+            mem.secureZero(qtp, quic_tp_len);
+            mem.freeSized(qtp, quic_tp_len);
+        }
+        return error.OutOfMemory;
+    };
+    errdefer destroySslSession(s);
+
+    s.ietf_tls_id = ietf_tls_id;
+    s.valid_until = valid_until;
+    s.earlydata_max = earlydata_max;
+    s.sdata = @ptrCast(sdata);
+    s.sdata_len = sdata_len;
+    s.quic_tp = quic_tp;
+    s.quic_tp_len = quic_tp_len;
+    if (alpn) |a| {
+        s.alpn = mem.strdup(a) orelse return error.OutOfMemory;
+    }
+    return s;
+}
+
 pub export fn Curl_ssl_session_create2(
     sdata: ?*anyopaque,
     sdata_len: usize,
@@ -1131,33 +1159,16 @@ pub export fn Curl_ssl_session_create2(
     }
 
     psession.* = null;
-    const s_raw = mem.calloc(1, @sizeOf(CurlSslSession)) orelse {
-        if (sdata) |sd| {
-            mem.secureZero(sd, sdata_len);
-            mem.freeSized(sd, sdata_len);
-        }
-        if (quic_tp) |qtp| {
-            mem.secureZero(qtp, quic_tp_len);
-            mem.freeSized(qtp, quic_tp_len);
-        }
-        return CURLE_OUT_OF_MEMORY;
-    };
-    const s: *CurlSslSession = @ptrCast(@alignCast(s_raw));
-
-    s.ietf_tls_id = ietf_tls_id;
-    s.valid_until = valid_until;
-    s.earlydata_max = earlydata_max;
-    s.sdata = @ptrCast(sdata);
-    s.sdata_len = sdata_len;
-    s.quic_tp = quic_tp;
-    s.quic_tp_len = quic_tp_len;
-    if (alpn) |a| {
-        s.alpn = mem.strdup(a) orelse {
-            cfSslScacheSessionLdestroy(null, s);
-            return CURLE_OUT_OF_MEMORY;
-        };
-    }
-    psession.* = s;
+    psession.* = createSslSessionInner(
+        sdata,
+        sdata_len,
+        ietf_tls_id,
+        alpn,
+        valid_until,
+        earlydata_max,
+        quic_tp,
+        quic_tp_len,
+    ) catch return CURLE_OUT_OF_MEMORY;
     return CURLE_OK;
 }
 
@@ -1166,9 +1177,33 @@ pub export fn Curl_ssl_session_destroy(s_opt: ?*CurlSslSession) callconv(.c) voi
         if (containers.Curl_node_llist(&s.list) != null) {
             containers.Curl_node_remove(&s.list);
         } else {
-            cfSslScacheSessionLdestroy(null, s);
+            destroySslSession(s);
         }
     }
+}
+
+fn dupSslSessionInner(src: *CurlSslSession) error{OutOfMemory}!*CurlSslSession {
+    const dest = mem.create(CurlSslSession) orelse return error.OutOfMemory;
+    errdefer destroySslSession(dest);
+
+    dest.ietf_tls_id = src.ietf_tls_id;
+    dest.valid_until = src.valid_until;
+    dest.earlydata_max = src.earlydata_max;
+    dest.flags = src.flags;
+
+    if (src.sdata_len > 0) {
+        dest.sdata = memdup(src.sdata, src.sdata_len) orelse return error.OutOfMemory;
+        dest.sdata_len = src.sdata_len;
+    }
+    if (src.quic_tp_len > 0) {
+        dest.quic_tp = memdup(src.quic_tp, src.quic_tp_len) orelse return error.OutOfMemory;
+        dest.quic_tp_len = src.quic_tp_len;
+    }
+    if (src.alpn) |a| {
+        dest.alpn = mem.strdup(a) orelse return error.OutOfMemory;
+    }
+
+    return dest;
 }
 
 pub export fn Curl_ssl_session_dup(
@@ -1178,37 +1213,7 @@ pub export fn Curl_ssl_session_dup(
     const src = src_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     const pdest = pdest_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     pdest.* = null;
-
-    const dest_raw = mem.calloc(1, @sizeOf(CurlSslSession)) orelse return CURLE_OUT_OF_MEMORY;
-    const dest: *CurlSslSession = @ptrCast(@alignCast(dest_raw));
-
-    dest.ietf_tls_id = src.ietf_tls_id;
-    dest.valid_until = src.valid_until;
-    dest.earlydata_max = src.earlydata_max;
-    dest.flags = src.flags;
-
-    if (src.sdata_len > 0) {
-        dest.sdata = memdup(src.sdata, src.sdata_len) orelse {
-            Curl_ssl_session_destroy(dest);
-            return CURLE_OUT_OF_MEMORY;
-        };
-        dest.sdata_len = src.sdata_len;
-    }
-    if (src.quic_tp_len > 0) {
-        dest.quic_tp = memdup(src.quic_tp, src.quic_tp_len) orelse {
-            Curl_ssl_session_destroy(dest);
-            return CURLE_OUT_OF_MEMORY;
-        };
-        dest.quic_tp_len = src.quic_tp_len;
-    }
-    if (src.alpn) |a| {
-        dest.alpn = mem.strdup(a) orelse {
-            Curl_ssl_session_destroy(dest);
-            return CURLE_OUT_OF_MEMORY;
-        };
-    }
-
-    pdest.* = dest;
+    pdest.* = dupSslSessionInner(src) catch return CURLE_OUT_OF_MEMORY;
     return CURLE_OK;
 }
 
@@ -1253,6 +1258,46 @@ fn cfSslCachePeerUpdate(peer: *CurlSslScachePeer) void {
     );
 }
 
+fn initScachePeerInner(
+    peer: *CurlSslScachePeer,
+    ssl_peer_key: ?[*:0]const u8,
+    clientcert: ?[*:0]const u8,
+    key_passwd: ?[*:0]const u8,
+    salt: ?[*]const u8,
+    hmac: ?[*]const u8,
+    out_rc: *CURLcode,
+) error{PeerInitFailed}!void {
+    std.debug.assert(peer.ssl_peer_key == null);
+    errdefer cfSslScacheClearPeer(peer);
+    if (ssl_peer_key) |spk| {
+        peer.ssl_peer_key = mem.strdup(spk) orelse {
+            out_rc.* = CURLE_OUT_OF_MEMORY;
+            return error.PeerInitFailed;
+        };
+        peer.setHmacSet(false);
+    } else if (salt != null and hmac != null) {
+        @memcpy(&peer.key_salt, salt.?[0..CURL_SHA256_DIGEST_LENGTH]);
+        @memcpy(&peer.key_hmac, hmac.?[0..CURL_SHA256_DIGEST_LENGTH]);
+        peer.setHmacSet(true);
+    } else {
+        out_rc.* = CURLE_BAD_FUNCTION_ARGUMENT;
+        return error.PeerInitFailed;
+    }
+    if (clientcert) |cc| {
+        peer.clientcert = mem.strdup(cc) orelse {
+            out_rc.* = CURLE_OUT_OF_MEMORY;
+            return error.PeerInitFailed;
+        };
+    }
+    if (key_passwd) |kp| {
+        peer.key_passwd = mem.strdup(kp) orelse {
+            out_rc.* = CURLE_OUT_OF_MEMORY;
+            return error.PeerInitFailed;
+        };
+    }
+    cfSslCachePeerUpdate(peer);
+}
+
 fn cfSslScachePeerInit(
     peer: *CurlSslScachePeer,
     ssl_peer_key: ?[*:0]const u8,
@@ -1261,34 +1306,8 @@ fn cfSslScachePeerInit(
     salt: ?[*]const u8,
     hmac: ?[*]const u8,
 ) CURLcode {
-    std.debug.assert(peer.ssl_peer_key == null);
-    if (ssl_peer_key) |spk| {
-        peer.ssl_peer_key = mem.strdup(spk) orelse {
-            cfSslScacheClearPeer(peer);
-            return CURLE_OUT_OF_MEMORY;
-        };
-        peer.setHmacSet(false);
-    } else if (salt != null and hmac != null) {
-        @memcpy(&peer.key_salt, salt.?[0..CURL_SHA256_DIGEST_LENGTH]);
-        @memcpy(&peer.key_hmac, hmac.?[0..CURL_SHA256_DIGEST_LENGTH]);
-        peer.setHmacSet(true);
-    } else {
-        cfSslScacheClearPeer(peer);
-        return CURLE_BAD_FUNCTION_ARGUMENT;
-    }
-    if (clientcert) |cc| {
-        peer.clientcert = mem.strdup(cc) orelse {
-            cfSslScacheClearPeer(peer);
-            return CURLE_OUT_OF_MEMORY;
-        };
-    }
-    if (key_passwd) |kp| {
-        peer.key_passwd = mem.strdup(kp) orelse {
-            cfSslScacheClearPeer(peer);
-            return CURLE_OUT_OF_MEMORY;
-        };
-    }
-    cfSslCachePeerUpdate(peer);
+    var result: CURLcode = CURLE_OK;
+    initScachePeerInner(peer, ssl_peer_key, clientcert, key_passwd, salt, hmac, &result) catch return result;
     return CURLE_OK;
 }
 
@@ -1304,7 +1323,7 @@ inline fn cfScacheSessionExpired(s: *const CurlSslSession, now: curl_off_t) bool
 fn cfScachePeerRemoveExpired(peer: *CurlSslScachePeer, now: curl_off_t) void {
     var n = containers.Curl_llist_head(&peer.sessions);
     while (n) |node| {
-        const s: *CurlSslSession = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+        const s = collections.llistElemTyped(CurlSslSession, node).?;
         n = containers.Curl_node_next(node);
         if (cfScacheSessionExpired(s, now)) {
             cfScacheSessionRemove(peer, s);
@@ -1315,7 +1334,7 @@ fn cfScachePeerRemoveExpired(peer: *CurlSslScachePeer, now: curl_off_t) void {
 fn cfScachePeerRemoveNon13(peer: *CurlSslScachePeer) void {
     var n = containers.Curl_llist_head(&peer.sessions);
     while (n) |node| {
-        const s: *CurlSslSession = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+        const s = collections.llistElemTyped(CurlSslSession, node).?;
         n = containers.Curl_node_next(node);
         if (s.ietf_tls_id != CURL_IETF_PROTO_TLS1_3) {
             cfScacheSessionRemove(peer, s);
@@ -1323,20 +1342,14 @@ fn cfScachePeerRemoveNon13(peer: *CurlSslScachePeer) void {
     }
 }
 
-pub export fn Curl_ssl_scache_create(
+fn createSslScacheInner(
     max_peers: usize,
     max_sessions_per_peer: usize,
-    pscache: *?*CurlSslScache,
-) callconv(.c) CURLcode {
-    pscache.* = null;
-    const peers_raw = mem.calloc(max_peers, @sizeOf(CurlSslScachePeer)) orelse return CURLE_OUT_OF_MEMORY;
-    const peers: [*]CurlSslScachePeer = @ptrCast(@alignCast(peers_raw));
+) error{OutOfMemory}!*CurlSslScache {
+    const peers = mem.callocMany(CurlSslScachePeer, max_peers) orelse return error.OutOfMemory;
+    errdefer mem.freeSized(peers, max_peers *| @sizeOf(CurlSslScachePeer));
 
-    const scache_raw = mem.calloc(1, @sizeOf(CurlSslScache)) orelse {
-        mem.freeSized(peers_raw, max_peers *| @sizeOf(CurlSslScachePeer));
-        return CURLE_OUT_OF_MEMORY;
-    };
-    const scache: *CurlSslScache = @ptrCast(@alignCast(scache_raw));
+    const scache = mem.create(CurlSslScache) orelse return error.OutOfMemory;
 
     scache.magic = CURL_SCACHE_MAGIC;
     scache.default_lifetime_secs = 24 * 60 * 60;
@@ -1348,7 +1361,16 @@ pub export fn Curl_ssl_scache_create(
         containers.Curl_llist_init(&scache.peers[i].sessions, cfSslScacheSessionLdestroy);
     }
     threads_psl.mutexInit(&scache.mutex);
-    pscache.* = scache;
+    return scache;
+}
+
+pub export fn Curl_ssl_scache_create(
+    max_peers: usize,
+    max_sessions_per_peer: usize,
+    pscache: *?*CurlSslScache,
+) callconv(.c) CURLcode {
+    pscache.* = null;
+    pscache.* = createSslScacheInner(max_peers, max_sessions_per_peer) catch return CURLE_OUT_OF_MEMORY;
     return CURLE_OK;
 }
 
@@ -1365,7 +1387,7 @@ pub export fn Curl_ssl_scache_destroy(scache_opt: ?*CurlSslScache) callconv(.c) 
             mem.freeSized(scache.peers, peers_size);
             threads_psl.mutexDestroy(&scache.mutex);
             mem.secureZero(scache, @sizeOf(CurlSslScache));
-            mem.freeSized(scache, @sizeOf(CurlSslScache));
+            mem.destroy(scache);
         }
     }
 }
@@ -1373,7 +1395,7 @@ pub export fn Curl_ssl_scache_destroy(scache_opt: ?*CurlSslScache) callconv(.c) 
 pub export fn Curl_ssl_scache_use_zig(
     data: ?*anyopaque,
     raw_scache: ?*CurlSslScache,
-    conn_config: ?*SslFilterConfig,
+    conn_config: ?*const SslFilterConfig,
 ) callconv(.c) bool {
     if (cfSslScacheGet(data, raw_scache) != null) {
         if (conn_config) |cfg| {
@@ -1547,17 +1569,17 @@ fn cfSslAddPeer(
 
     peer = cfSslGetFreePeer(scache);
     if (peer) |p| {
-        var buffer: [64]u8 = undefined;
+        var buffer: [63:0]u8 = undefined;
         var ccert: ?[*:0]const u8 = if (conn_config) |cfg| cfg.clientcert else null;
         const kpasswd: ?[*:0]const u8 = if (conn_config) |cfg| cfg.key_passwd else null;
         if (ccert == null and conn_config != null and conn_config.?.cert_blob != null) {
             _ = curl_msnprintf(
                 &buffer,
-                buffer.len,
+                buffer.len + 1,
                 "cert-%p",
                 conn_config.?.cert_blob.?.data,
             );
-            ccert = @ptrCast(&buffer);
+            ccert = &buffer;
         }
         result = cfSslScachePeerInit(p, ssl_peer_key, ccert, kpasswd, null, null);
         if (result != CURLE_OK) {
@@ -1656,7 +1678,7 @@ pub export fn Curl_ssl_scache_put_zig(
     data: ?*anyopaque,
     raw_scache: ?*CurlSslScache,
     has_share_scache: bool,
-    conn_config_opt: ?*SslFilterConfig,
+    conn_config_opt: ?*const SslFilterConfig,
     trc_feat: ?*CurlTrcFeat,
     ssl_peer_key: [*:0]const u8,
     s: ?*CurlSslSession,
@@ -1685,7 +1707,7 @@ pub export fn Curl_ssl_scache_return_zig(
     data: ?*anyopaque,
     raw_scache: ?*CurlSslScache,
     has_share_scache: bool,
-    conn_config: ?*SslFilterConfig,
+    conn_config: ?*const SslFilterConfig,
     trc_feat: ?*CurlTrcFeat,
     ssl_peer_key: [*:0]const u8,
     s_opt: ?*CurlSslSession,
@@ -1704,7 +1726,7 @@ pub export fn Curl_ssl_scache_take_zig(
     data: ?*anyopaque,
     raw_scache: ?*CurlSslScache,
     has_share_scache: bool,
-    conn_config: ?*SslFilterConfig,
+    conn_config: ?*const SslFilterConfig,
     trc_feat: ?*CurlTrcFeat,
     ssl_peer_key: [*:0]const u8,
     ps: *?*CurlSslSession,
@@ -1722,7 +1744,8 @@ pub export fn Curl_ssl_scache_take_zig(
         const p = peer.?;
         cfScachePeerRemoveExpired(p, nowEpochSecs());
         if (containers.Curl_llist_head(&p.sessions)) |n| {
-            s = @ptrCast(@alignCast(containers.Curl_node_take_elem(n)));
+            s = collections.llistElemTyped(CurlSslSession, n);
+            _ = containers.Curl_node_take_elem(n);
             scache.age += 1;
             p.age = scache.age;
         }
@@ -1755,7 +1778,7 @@ pub export fn Curl_ssl_scache_add_obj_zig(
     cf: ?*anyopaque,
     data: ?*anyopaque,
     raw_scache: ?*CurlSslScache,
-    conn_config: ?*SslFilterConfig,
+    conn_config: ?*const SslFilterConfig,
     trc_feat: ?*CurlTrcFeat,
     ssl_peer_key: [*:0]const u8,
     sobj_in: ?*anyopaque,
@@ -1789,7 +1812,7 @@ pub export fn Curl_ssl_scache_get_obj_zig(
     cf: ?*anyopaque,
     data: ?*anyopaque,
     raw_scache: ?*CurlSslScache,
-    conn_config: ?*SslFilterConfig,
+    conn_config: ?*const SslFilterConfig,
     trc_feat: ?*CurlTrcFeat,
     ssl_peer_key: [*:0]const u8,
 ) callconv(.c) ?*anyopaque {
@@ -1811,7 +1834,7 @@ pub export fn Curl_ssl_scache_remove_all_zig(
     data: ?*anyopaque,
     raw_scache: ?*CurlSslScache,
     has_share_scache: bool,
-    conn_config: ?*SslFilterConfig,
+    conn_config: ?*const SslFilterConfig,
     trc_feat: ?*CurlTrcFeat,
     ssl_peer_key: [*:0]const u8,
 ) callconv(.c) void {
@@ -1888,9 +1911,9 @@ fn cfSslFindPeerByHmac(
     return CURLE_OK;
 }
 
-pub export fn Curl_ssl_session_import_zig(
+fn importSslSessionInner(
     data: ?*anyopaque,
-    raw_scache: ?*CurlSslScache,
+    scache: *CurlSslScache,
     has_share_scache: bool,
     trc_feat: ?*CurlTrcFeat,
     ssl_peer_key: ?[*:0]const u8,
@@ -1898,57 +1921,45 @@ pub export fn Curl_ssl_session_import_zig(
     shmac_len: usize,
     sdata: ?*const anyopaque,
     sdata_len: usize,
-) callconv(.c) CURLcode {
-    const scache = cfSslScacheGet(data, raw_scache);
+    out_rc: *CURLcode,
+) error{ImportFailed}!void {
     var peer: ?*CurlSslScachePeer = null;
     var s: ?*CurlSslSession = null;
-    var have_lock = false;
-    var result: CURLcode = CURLE_OK;
+    errdefer Curl_ssl_session_destroy(s);
 
-    if (scache == null or sdata == null or sdata_len == 0) {
-        return CURLE_BAD_FUNCTION_ARGUMENT;
-    }
-    if (ssl_peer_key == null and (shmac == null or shmac_len == 0)) {
-        return CURLE_BAD_FUNCTION_ARGUMENT;
-    }
-
-    result = vtls_core.Curl_ssl_session_unpack(data, sdata, sdata_len, &s);
+    var result = vtls_core.Curl_ssl_session_unpack(data, sdata, sdata_len, &s);
     if (result != CURLE_OK) {
-        Curl_ssl_session_destroy(s);
-        return result;
+        out_rc.* = result;
+        return error.ImportFailed;
     }
 
     Curl_ssl_scache_lock_zig(data, scache, has_share_scache);
-    have_lock = true;
+    defer Curl_ssl_scache_unlock_zig(data, scache, has_share_scache);
 
     if (ssl_peer_key != null) {
-        result = cfSslAddPeer(data, scache.?, trc_feat, ssl_peer_key, null, &peer);
+        result = cfSslAddPeer(data, scache, trc_feat, ssl_peer_key, null, &peer);
         if (result != CURLE_OK) {
-            if (have_lock) Curl_ssl_scache_unlock_zig(data, scache, has_share_scache);
-            Curl_ssl_session_destroy(s);
-            return result;
+            out_rc.* = result;
+            return error.ImportFailed;
         }
     } else if (shmac_len != (CURL_SHA256_DIGEST_LENGTH * 2)) {
-        if (have_lock) Curl_ssl_scache_unlock_zig(data, scache, has_share_scache);
-        Curl_ssl_session_destroy(s);
-        return CURLE_BAD_FUNCTION_ARGUMENT;
+        out_rc.* = CURLE_BAD_FUNCTION_ARGUMENT;
+        return error.ImportFailed;
     } else {
         const salt = shmac.?;
         const hmac = shmac.? + CURL_SHA256_DIGEST_LENGTH;
-        result = cfSslFindPeerByHmac(scache.?, salt, hmac, &peer);
+        result = cfSslFindPeerByHmac(scache, salt, hmac, &peer);
         if (result != CURLE_OK) {
-            if (have_lock) Curl_ssl_scache_unlock_zig(data, scache, has_share_scache);
-            Curl_ssl_session_destroy(s);
-            return result;
+            out_rc.* = result;
+            return error.ImportFailed;
         }
         if (peer == null) {
-            peer = cfSslGetFreePeer(scache.?);
+            peer = cfSslGetFreePeer(scache);
             if (peer) |p| {
                 result = cfSslScachePeerInit(p, ssl_peer_key, null, null, salt, hmac);
                 if (result != CURLE_OK) {
-                    if (have_lock) Curl_ssl_scache_unlock_zig(data, scache, has_share_scache);
-                    Curl_ssl_session_destroy(s);
-                    return result;
+                    out_rc.* = result;
+                    return error.ImportFailed;
                 }
             }
         }
@@ -1969,11 +1980,42 @@ pub export fn Curl_ssl_session_import_zig(
         );
     }
 
-    if (have_lock) {
-        Curl_ssl_scache_unlock_zig(data, scache, has_share_scache);
-    }
     Curl_ssl_session_destroy(s);
-    return result;
+}
+
+pub export fn Curl_ssl_session_import_zig(
+    data: ?*anyopaque,
+    raw_scache: ?*CurlSslScache,
+    has_share_scache: bool,
+    trc_feat: ?*CurlTrcFeat,
+    ssl_peer_key: ?[*:0]const u8,
+    shmac: ?[*]const u8,
+    shmac_len: usize,
+    sdata: ?*const anyopaque,
+    sdata_len: usize,
+) callconv(.c) CURLcode {
+    const scache = cfSslScacheGet(data, raw_scache);
+    if (scache == null or sdata == null or sdata_len == 0) {
+        return CURLE_BAD_FUNCTION_ARGUMENT;
+    }
+    if (ssl_peer_key == null and (shmac == null or shmac_len == 0)) {
+        return CURLE_BAD_FUNCTION_ARGUMENT;
+    }
+
+    var result: CURLcode = CURLE_OK;
+    importSslSessionInner(
+        data,
+        scache.?,
+        has_share_scache,
+        trc_feat,
+        ssl_peer_key,
+        shmac,
+        shmac_len,
+        sdata,
+        sdata_len,
+        &result,
+    ) catch return result;
+    return CURLE_OK;
 }
 
 pub const CurlSslsExportCb = *const fn (
@@ -2035,7 +2077,7 @@ pub export fn Curl_ssl_session_export_zig(
                 npeers += 1;
             }
             while (n) |node| {
-                const s: *CurlSslSession = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+                const s = collections.llistElemTyped(CurlSslSession, node).?;
                 if (!peer.getHmacSet()) {
                     result = cfSslScachePeerSetHmac(peer);
                     if (result != CURLE_OK) return result;
@@ -2676,7 +2718,7 @@ fn encodeDN(store: *dynbuf, dn: *CurlAsn1Element) CURLcode {
             result = ASN1tostr(&temp, &oid);
             if (result != CURLE_OK) return result;
 
-            const str = containers.curlx_dyn_uptr(&temp) orelse return CURLE_BAD_FUNCTION_ARGUMENT;
+            const str = containers.curlx_dyn_ptr(&temp) orelse return CURLE_BAD_FUNCTION_ARGUMENT;
 
             p3 = str;
             while (std.ascii.isUpper(p3[0])) : (p3 += 1) {}
@@ -2689,7 +2731,7 @@ fn encodeDN(store: *dynbuf, dn: *CurlAsn1Element) CURLcode {
                 if (result != CURLE_OK) return result;
             }
 
-            result = containers.curlx_dyn_add(store, @ptrCast(str));
+            result = containers.curlx_dyn_add(store, str);
             if (result != CURLE_OK) return result;
 
             result = containers.curlx_dyn_addn(store, "=", 1);
@@ -2899,9 +2941,9 @@ fn doPubkey(
             infof(data, "   ECC Public Key (%zu bits)", .{len});
         }
         if (certinfo) {
-            var q: [32]u8 = undefined;
-            _ = curl_msnprintf(&q, q.len, "%zu", len);
-            if (sslPushCertinfo(data, certnum, "ECC Public Key", @ptrCast(&q), push_fn) != CURLE_OK) {
+            var q: [31:0]u8 = undefined;
+            _ = curl_msnprintf(&q, q.len + 1, "%zu", len);
+            if (sslPushCertinfo(data, certnum, "ECC Public Key", &q, push_fn) != CURLE_OK) {
                 return 1;
             }
         }
@@ -2932,9 +2974,9 @@ fn doPubkey(
             infof(data, "   RSA Public Key (%zu bits)", .{len});
         }
         if (certinfo) {
-            var r: [32]u8 = undefined;
-            _ = curl_msnprintf(&r, r.len, "%zu", len);
-            if (sslPushCertinfo(data, certnum, "RSA Public Key", @ptrCast(&r), push_fn) != CURLE_OK) {
+            var r: [31:0]u8 = undefined;
+            _ = curl_msnprintf(&r, r.len + 1, "%zu", len);
+            if (sslPushCertinfo(data, certnum, "RSA Public Key", &r, push_fn) != CURLE_OK) {
                 return 1;
             }
         }
@@ -3260,7 +3302,7 @@ test "SslFilterConfig cloning, matching, and peer key generation (unit3303 & uni
     var ktype_buf = "PEM".*;
     const key_blob_bytes = "PRIVATE-KEY-MATERIAL";
     var key_blob = CurlBlob{
-        .data = @ptrCast(@constCast(key_blob_bytes.ptr)),
+        .data = key_blob_bytes.ptr,
         .len = key_blob_bytes.len,
         .flags = 1,
     };
