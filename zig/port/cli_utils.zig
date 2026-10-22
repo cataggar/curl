@@ -2321,6 +2321,23 @@ fn strcspnDelim(s: [*:0]const u8) usize {
     return i;
 }
 
+var mkdir_results: Dynbuf = .{ .bufr = null, .leng = 0, .allc = 0, .toobig = 0 };
+var mkdir_trace_enabled: bool = false;
+
+pub export fn create_dir_hierarchy_trace_dynres() callconv(.c) *Dynbuf {
+    mkdir_trace_enabled = true;
+    return &mkdir_results;
+}
+
+fn create_dir_hierarchy_trace_mkdir(dir: [*:0]const u8) c_int {
+    if (curlx_dyn_add(&mkdir_results, dir) != CURLE_OK or
+        curlx_dyn_add(&mkdir_results, "|") != CURLE_OK)
+    {
+        return -1;
+    }
+    return 0;
+}
+
 pub export fn create_dir_hierarchy(outfile_in: [*:0]const u8) callconv(.c) CURLcode {
     var outfile = outfile_in;
     var result: CURLcode = CURLE_OK;
@@ -2352,7 +2369,11 @@ pub export fn create_dir_hierarchy(outfile_in: [*:0]const u8) callconv(.c) CURLc
         }
 
         const dir_ptr = curlx_dyn_ptr(&dirbuf).?;
-        if (!skip and toolMkdir(dir_ptr) == -1 and !tool_zig_errno_is_acces_or_exist()) {
+        const mkdir_rc = if (mkdir_trace_enabled)
+            create_dir_hierarchy_trace_mkdir(dir_ptr)
+        else
+            toolMkdir(dir_ptr);
+        if (!skip and mkdir_rc == -1 and !tool_zig_errno_is_acces_or_exist()) {
             tool_zig_show_dir_errno(dir_ptr);
             result = CURLE_WRITE_ERROR;
             break;

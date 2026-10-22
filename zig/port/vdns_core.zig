@@ -655,32 +655,72 @@ pub const dnsc_key = extern struct {
     len: usize,
 };
 
-pub const Curl_dns_entry = if (builtin.os.tag == .windows) extern struct {
-    addr: ?*Curl_addrinfo,
-    hinfo: ?*Curl_https_rrinfo,
-    added: Curltime,
-    refcount: u32,
-    hostlen: u16,
-    port: u16,
-    type: u8,
-    dns_queries: u8,
-    dns_responses: u8,
-    _pad0: u8 = 0,
-    flags: u32,
-    hostname: [1]u8,
+pub const Curl_dns_entry = if (builtin.os.tag == .windows)
+    (if (use_httpsrr) extern struct {
+        addr: ?*Curl_addrinfo,
+        hinfo: ?*Curl_https_rrinfo,
+        added: Curltime,
+        refcount: u32,
+        hostlen: u16,
+        port: u16,
+        type: u8,
+        dns_queries: u8,
+        dns_responses: u8,
+        _pad0: u8 = 0,
+        flags: u32,
+        hostname: [1]u8,
 
-    pub inline fn permanent(self: *const Curl_dns_entry) bool {
-        return (self.flags & 1) != 0;
-    }
+        pub inline fn permanent(self: *const Curl_dns_entry) bool {
+            return (self.flags & 1) != 0;
+        }
 
-    pub inline fn setPermanent(self: *Curl_dns_entry, val: bool) void {
-        if (val) self.flags |= 1 else self.flags &= ~@as(u32, 1);
-    }
+        pub inline fn setPermanent(self: *Curl_dns_entry, val: bool) void {
+            if (val) self.flags |= 1 else self.flags &= ~@as(u32, 1);
+        }
 
-    pub inline fn hostnamePtr(self: anytype) [*:0]u8 {
-        return @ptrCast(@constCast(&self.hostname));
-    }
-} else extern struct {
+        pub inline fn getHinfo(self: *const Curl_dns_entry) ?*Curl_https_rrinfo {
+            return self.hinfo;
+        }
+
+        pub inline fn setHinfo(self: *Curl_dns_entry, val: ?*Curl_https_rrinfo) void {
+            self.hinfo = val;
+        }
+
+        pub inline fn hostnamePtr(self: anytype) [*:0]u8 {
+            return @ptrCast(@constCast(&self.hostname));
+        }
+    } else extern struct {
+        addr: ?*Curl_addrinfo,
+        added: Curltime,
+        refcount: u32,
+        hostlen: u16,
+        port: u16,
+        type: u8,
+        dns_queries: u8,
+        dns_responses: u8,
+        _pad0: u8 = 0,
+        flags: u32,
+        hostname: [1]u8,
+
+        pub inline fn permanent(self: *const Curl_dns_entry) bool {
+            return (self.flags & 1) != 0;
+        }
+
+        pub inline fn setPermanent(self: *Curl_dns_entry, val: bool) void {
+            if (val) self.flags |= 1 else self.flags &= ~@as(u32, 1);
+        }
+
+        pub inline fn getHinfo(_: *const Curl_dns_entry) ?*Curl_https_rrinfo {
+            return null;
+        }
+
+        pub inline fn setHinfo(_: *Curl_dns_entry, _: ?*Curl_https_rrinfo) void {}
+
+        pub inline fn hostnamePtr(self: anytype) [*:0]u8 {
+            return @ptrCast(@constCast(&self.hostname));
+        }
+    })
+else if (use_httpsrr) extern struct {
     addr: ?*Curl_addrinfo,
     hinfo: ?*Curl_https_rrinfo,
     added: Curltime,
@@ -700,6 +740,43 @@ pub const Curl_dns_entry = if (builtin.os.tag == .windows) extern struct {
     pub inline fn setPermanent(self: *Curl_dns_entry, val: bool) void {
         if (val) self.flags |= 1 else self.flags &= ~@as(u8, 1);
     }
+
+    pub inline fn getHinfo(self: *const Curl_dns_entry) ?*Curl_https_rrinfo {
+        return self.hinfo;
+    }
+
+    pub inline fn setHinfo(self: *Curl_dns_entry, val: ?*Curl_https_rrinfo) void {
+        self.hinfo = val;
+    }
+
+    pub inline fn hostnamePtr(self: anytype) [*:0]u8 {
+        return @ptrCast(@constCast(&self.hostname));
+    }
+} else extern struct {
+    addr: ?*Curl_addrinfo,
+    added: Curltime,
+    refcount: u32,
+    hostlen: u16,
+    port: u16,
+    type: u8,
+    dns_queries: u8,
+    dns_responses: u8,
+    flags: u8,
+    hostname: [1]u8,
+
+    pub inline fn permanent(self: *const Curl_dns_entry) bool {
+        return (self.flags & 1) != 0;
+    }
+
+    pub inline fn setPermanent(self: *Curl_dns_entry, val: bool) void {
+        if (val) self.flags |= 1 else self.flags &= ~@as(u8, 1);
+    }
+
+    pub inline fn getHinfo(_: *const Curl_dns_entry) ?*Curl_https_rrinfo {
+        return null;
+    }
+
+    pub inline fn setHinfo(_: *Curl_dns_entry, _: ?*Curl_https_rrinfo) void {}
 
     pub inline fn hostnamePtr(self: anytype) [*:0]u8 {
         return @ptrCast(@constCast(&self.hostname));
@@ -761,7 +838,7 @@ pub export fn dnsc_id_matches_entry(
 
 fn dnscache_entry_free(dns: *Curl_dns_entry) void {
     Curl_freeaddrinfo(dns.addr);
-    if (dns.hinfo) |hinfo| {
+    if (dns.getHinfo()) |hinfo| {
         Curl_httpsrr_destroy(hinfo);
     }
     mem.free(@ptrCast(dns));
@@ -786,7 +863,7 @@ fn dnscache_entry_is_stale(datap: ?*anyopaque, hc: ?*anyopaque) callconv(.c) c_i
                 }
             },
             CURL_DNST_HTTPS => {
-                if (dns.hinfo == null) {
+                if (dns.getHinfo() == null) {
                     age_ms *= 2;
                 }
             },
@@ -1155,15 +1232,15 @@ fn dnsc_entry_assign_https(
         return null;
     };
 
-    if (dns.hinfo) |old_hi| {
+    if (dns.getHinfo()) |old_hi| {
         Curl_httpsrr_destroy(old_hi);
-        dns.hinfo = null;
+        dns.setHinfo(null);
     }
     dns.type = CURL_DNST_HTTPS;
     dns.dns_queries = CURL_DNSQ_HTTPS;
     dns.dns_responses = CURL_DNSQ_HTTPS;
     if (phinfo) |ph| {
-        dns.hinfo = ph.*;
+        dns.setHinfo(ph.*);
         ph.* = null;
     }
     return dns;
@@ -1673,12 +1750,12 @@ fn cf_dns_report(
             }
             cf_dns_report_addr(data, &tmp, "IPv4: ", AF_INET, dns.addr);
         } else if (use_httpsrr and (ctx.dns_queries & CURL_DNSQ_HTTPS) != 0) {
-            if (dns.hinfo == null) {
+            if (dns.getHinfo() == null) {
                 Curl_infof(data, "HTTPS-RR %s:%u: -", host_str, @as(c_uint, dns.port));
-            } else if (!Curl_httpsrr_applicable(data, dns.hinfo)) {
+            } else if (!Curl_httpsrr_applicable(data, dns.getHinfo())) {
                 Curl_infof(data, "HTTPS-RR %s:%u: not applicable", host_str, @as(c_uint, dns.port));
             } else {
-                const result = Curl_httpsrr_print(&tmp, dns.hinfo.?);
+                const result = Curl_httpsrr_print(&tmp, dns.getHinfo().?);
                 if (result == CURLE_OK) {
                     Curl_infof(
                         data,
@@ -2184,7 +2261,7 @@ pub export fn Curl_conn_dns_get_https(
                 (ctx.dns_queries & CURL_DNSQ_HTTPS) != 0)
             {
                 if (ctx.dns) |dns| {
-                    return dns.hinfo;
+                    return dns.getHinfo();
                 }
                 return null;
             }

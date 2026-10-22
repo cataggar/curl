@@ -1819,7 +1819,7 @@ fn main_checkfds() void {
     }
 }
 
-pub export fn main(argc: c_int, argv: [*]?[*:0]u8) callconv(.c) c_int {
+pub fn main(argc: c_int, argv: [*]?[*:0]u8) callconv(.c) c_int {
     var result: CURLcode = CURLE_OK;
 
     tool_init_stderr();

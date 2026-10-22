@@ -191,6 +191,7 @@ extern "c" fn fclose(stream: ?*anyopaque) c_int;
 extern "c" fn fputs(s: [*:0]const u8, stream: ?*anyopaque) c_int;
 extern "c" fn rename(oldpath: [*:0]const u8, newpath: [*:0]const u8) c_int;
 extern "c" fn unlink(pathname: [*:0]const u8) c_int;
+extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 
 const posix_c = struct {
     extern "c" fn time(tloc: ?*time_t) time_t;
@@ -210,6 +211,28 @@ fn nowTime() time_t {
     } else {
         return posix_c.time(null);
     }
+}
+
+fn altsvcNowTime() time_t {
+    if (getenv("CURL_TIME")) |timestr_in| {
+        var timestr: ?[*:0]const u8 = timestr_in;
+        var val: i64 = 0;
+        _ = curlx_parse.curlx_str_number(&timestr, &val, TIME_T_MAX);
+        return @intCast(val);
+    }
+    return nowTime();
+}
+
+fn hstsNowTime() time_t {
+    if (getenv("CURL_TIME")) |timestr_in| {
+        var timestr: ?[*:0]const u8 = timestr_in;
+        var val: i64 = 0;
+        if (curlx_parse.curlx_str_number(&timestr, &val, TIME_T_MAX) == 0) {
+            val +%= @as(i64, deltatime);
+        }
+        return @intCast(val);
+    }
+    return nowTime();
 }
 
 fn curlxFopenReadText(file: [*:0]const u8) ?*anyopaque {
@@ -1036,7 +1059,7 @@ fn altsvcAdd(asi: *Altsvcinfo, line_in: [*:0]const u8) c_uint {
 
     var dbuf: [MAX_ALTSVC_DATELEN + 1]u8 = undefined;
     var expires: time_t = 0;
-    const now = nowTime();
+    const now = altsvcNowTime();
 
     if (date.str) |ds| {
         @memcpy(dbuf[0..date.len], ds[0..date.len]);
@@ -1384,7 +1407,7 @@ pub export fn Curl_altsvc_parse(
                 dstport,
             ) orelse return CURLE_OUT_OF_MEMORY;
 
-            const secs = nowTime();
+            const secs = altsvcNowTime();
             if (maxage > (TIME_T_MAX - secs)) {
                 as.expires = TIME_T_MAX;
             } else {
@@ -1420,7 +1443,7 @@ pub export fn Curl_altsvc_lookup(
 
     if (containers.Curl_llist_count(&asi.list) != 0) {
         var e = containers.Curl_llist_head(&asi.list);
-        const now = nowTime();
+        const now = altsvcNowTime();
 
         while (e) |node| {
             const as: *Altsvc = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
@@ -1551,7 +1574,7 @@ fn hstsCreate(h: *Hsts, hostname: [*]const u8, hlen_in: usize, subdomains: bool,
 }
 
 pub export fn Curl_hsts_copy(dst: *Hsts, src: *Hsts) callconv(.c) c_uint {
-    const now = nowTime();
+    const now = hstsNowTime();
     var e = containers.Curl_llist_head(&src.list);
     while (e) |node| {
         const sts: *StsEntry = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
@@ -1567,7 +1590,7 @@ pub export fn Curl_hsts_copy(dst: *Hsts, src: *Hsts) callconv(.c) c_uint {
 
 pub export fn hsts_check(h_opt: ?*Hsts, hostname: [*]const u8, hlen_in: usize, subdomain: bool) callconv(.c) ?*StsEntry {
     const h = h_opt orelse return null;
-    const now = nowTime();
+    const now = hstsNowTime();
     var bestsub: ?*StsEntry = null;
     var blen: usize = 0;
     var hlen = hlen_in;
@@ -1617,7 +1640,7 @@ pub export fn Curl_hsts_parse(h: *Hsts, hostname: [*:0]const u8, header: [*:0]co
     var gotma = false;
     var gotinc = false;
     var subdomains = false;
-    const now = nowTime();
+    const now = hstsNowTime();
     const hlen = std.mem.len(hostname);
 
     if (Curl_host_is_ipnum(hostname)) {
@@ -1830,7 +1853,7 @@ fn hstsAddHostExpire(
     var result: c_uint = CURLE_OK;
     var dbuf: [MAX_HSTS_DATELEN + 1]u8 = undefined;
     var expires: time_t = 0;
-    const now = nowTime();
+    const now = hstsNowTime();
     var host = host_in;
     var hostlen = hostlen_in;
     var subdomain = subdomain_in;

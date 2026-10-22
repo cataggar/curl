@@ -153,7 +153,6 @@ pub fn createConfigHeader(b: *std.Build, target: std.Build.ResolvedTarget) *std.
             .HAVE_SEND = 1,
             .HAVE_SENDMSG = 1,
             .HAVE_PIPE = 1,
-            .HAVE_FNMATCH = 1,
             .HAVE_BASENAME = 1,
             .HAVE_LIBGEN_H = 1,
             .HAVE_SIGNAL = 1,

@@ -269,13 +269,13 @@ fn find_host_sep(url: [*]const u8, len: usize) [*]const u8 {
 
 // urlencode_str() writes data into an output dynbuf and URL-encodes the
 // spaces in the source URL accordingly.
-pub fn urlencode_str(
+pub export fn urlencode_str(
     o: *Dynbuf,
     url: [*]const u8,
     len_in: usize,
     relative: bool,
     query_in: c_uint,
-) CURLUcode {
+) callconv(.c) CURLUcode {
     var len = len_in;
     var query = query_in;
     var host_sep: [*]const u8 = url;
@@ -428,13 +428,13 @@ fn clearLoginOut(
 
 // Parse the login details (username, password and options) from the URL and
 // strip them out of the hostname.
-pub fn parse_hostname_login(
+pub export fn parse_hostname_login(
     u: *Curl_URL,
     login: [*]const u8,
     len: usize,
     flags: c_uint,
     hostname_offset: *usize,
-) CURLUcode {
+) callconv(.c) CURLUcode {
     var ures: CURLUcode = .CURLUE_OK;
     var userp: ?[*:0]u8 = null;
     var passwdp: ?[*:0]u8 = null;
@@ -513,7 +513,7 @@ pub fn parse_hostname_login(
     return clearLoginOut(u, userp, passwdp, optionsp, ures);
 }
 
-pub fn parse_port(u: *Curl_URL, host: *Dynbuf, has_scheme: bool) CURLUcode {
+pub export fn parse_port(u: *Curl_URL, host: *Dynbuf, has_scheme: bool) callconv(.c) CURLUcode {
     const hostname = curlx_dyn_ptr(host) orelse return .CURLUE_OK;
     const hlen = curlx_dyn_len(host);
     var portptr: ?[*]const u8 = null;
@@ -589,7 +589,7 @@ const invalid_host_char: [256]bool = blk: {
 
 // This function assumes 'hostname' now starts with [. It trims 'hostname' in
 // place and it sets u->zoneid if present.
-pub fn ipv6_parse(u: *Curl_URL, hostname: [*:0]u8, hlen_in: usize) CURLUcode {
+pub export fn ipv6_parse(u: *Curl_URL, hostname: [*:0]u8, hlen_in: usize) callconv(.c) CURLUcode {
     var hlen = hlen_in;
     if (hlen < 4 or hostname[0] != '[' or hostname[hlen - 1] != ']') // '[::]' is the shortest possible valid string
         return .CURLUE_BAD_IPV6;
@@ -671,7 +671,7 @@ fn hostname_check6(u: *Curl_URL, hostname: [*:0]u8, hlen: usize) CURLUcode {
 
 // Handle partial IPv4 numerical addresses and different bases, like
 // '16843009', '0x7f', '0x7f.1', '0177.1.1.1' etc.
-pub fn ipv4_normalize(host: *Dynbuf) c_int {
+pub export fn ipv4_normalize(host: *Dynbuf) callconv(.c) c_int {
     var done = false;
     var n: usize = 0;
     var c: [*:0]const u8 = curlx_dyn_ptr(host) orelse return HOST_NAME;
@@ -908,7 +908,7 @@ fn needs_dedotdot(p_in: [*]const u8, pn_in: usize) bool {
     return false;
 }
 
-pub fn dedotdotify(input_in: [*]const u8, clen_in: usize, outp: *?[*:0]u8) c_int {
+pub export fn dedotdotify(input_in: [*]const u8, clen_in: usize, outp: *?[*:0]u8) callconv(.c) c_int {
     var out: Dynbuf = undefined;
     var result: c_uint = CURLE_OK;
     var input = input_in;
@@ -994,13 +994,13 @@ pub fn dedotdotify(input_in: [*]const u8, clen_in: usize, outp: *?[*:0]u8) c_int
     return if (result != CURLE_OK) 1 else 0;
 }
 
-pub fn parse_file(
+pub export fn parse_file(
     url: [*:0]const u8,
     urllen: usize,
     u: *Curl_URL,
     pathp: *?[*:0]const u8,
     pathlenp: *usize,
-) CURLUcode {
+) callconv(.c) CURLUcode {
     pathp.* = null;
     pathlenp.* = 0;
     if (urllen <= 6)
