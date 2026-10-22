@@ -58,6 +58,7 @@ pub const CURLE_SEND_FAIL_REWIND: CURLcode = 65;
 pub const CURLE_LOGIN_DENIED: CURLcode = 67;
 pub const CURLE_REMOTE_DISK_FULL: CURLcode = 70;
 pub const CURLE_REMOTE_FILE_EXISTS: CURLcode = 73;
+pub const CURLE_TOO_LARGE: CURLcode = 100;
 pub const CURLE_REMOTE_FILE_NOT_FOUND: CURLcode = 78;
 pub const CURLE_SSH: CURLcode = 79;
 pub const CURLE_AGAIN: CURLcode = 81;
@@ -178,9 +179,11 @@ extern fn Curl_socket_check(
 extern fn curl_maprintf(fmt: [*:0]const u8, ...) callconv(.c) ?[*:0]u8;
 extern fn curl_getdate(p: ?[*:0]const u8, unused: ?*const isize) callconv(.c) isize;
 extern fn curlx_str_number(linep: *[*:0]const u8, nump: *i64, max: i64) callconv(.c) c_int;
+extern fn curlx_str_numblanks(str: *[*:0]const u8, num: *i64) callconv(.c) c_int;
 extern fn curlx_str_octal(linep: *[*:0]const u8, nump: *i64, max: i64) callconv(.c) c_int;
 extern fn curlx_str_single(linep: *[*:0]const u8, byte: u8) callconv(.c) c_int;
 extern fn curlx_str_passblanks(linep: *[*:0]const u8) callconv(.c) void;
+extern fn curlx_str_word(linep: *[*:0]const u8, out: *curlx_parse.Curl_str, max: usize) callconv(.c) c_int;
 extern fn curlx_str_cspn(linep: *[*:0]const u8, out: *curlx_parse.Curl_str, reject: [*:0]const u8) callconv(.c) c_int;
 extern fn Curl_easy_strset_ptr(data: *Curl_easy) callconv(.c) *collections.u8_strset;
 extern fn Curl_setopt_get_bit(data: *Curl_easy, bit_id: c_int) callconv(.c) bool;
@@ -501,57 +504,59 @@ pub fn sftpErrorToCurle(err: c_ulong) CURLcode {
 // 2. lib/vssh/vssh.c — Shared SSH Utilities
 // ============================================================================
 
-/// Parse an SFTP/SCP range string (`from-to`) and configure resume/download limits.
+/// Parse an SFTP/SCP range string (`from-to`) and configure start/size limits.
 pub export fn Curl_ssh_range(
     data: *Curl_easy,
     range_opt: ?[*:0]const u8,
-    resume_from: *curl_off_t,
-    maxdownload: *curl_off_t,
+    filesize: curl_off_t,
+    startp: *curl_off_t,
+    sizep: *curl_off_t,
 ) callconv(.c) CURLcode {
+    var range: [*:0]const u8 = range_opt orelse return CURLE_RANGE_ERROR;
     var from: curl_off_t = 0;
     var to: curl_off_t = 0;
-    var r: [*:0]const u8 = range_opt orelse return CURLE_RANGE_ERROR;
-    const parse1 = curlx_str_number(&r, &from, std.math.maxInt(curl_off_t));
-    if (parse1 != curlx_parse.STRE_OK and parse1 != curlx_parse.STRE_NO_NUM) {
+    const from_t = curlx_str_number(&range, &from, std.math.maxInt(curl_off_t));
+    if (from_t == curlx_parse.STRE_OVERFLOW) {
         return CURLE_RANGE_ERROR;
     }
-    while (curlx_str_single(&r, '-') == curlx_parse.STRE_OK) {
-        continue;
-    }
-    const parse2 = curlx_str_number(&r, &to, std.math.maxInt(curl_off_t));
-    if ((parse2 == curlx_parse.STRE_NO_NUM) and (parse1 == curlx_parse.STRE_NO_NUM)) {
-        return CURLE_RANGE_ERROR;
-    }
-    if ((parse2 != curlx_parse.STRE_OK and parse2 != curlx_parse.STRE_NO_NUM) or
-        (r[0] != 0))
-    {
-        return CURLE_RANGE_ERROR;
-    }
-    if (parse2 == curlx_parse.STRE_NO_NUM) {
-        to = -1;
-    }
-    if ((parse1 == curlx_parse.STRE_NO_NUM) and (to >= 0)) {
-        from = -to;
-        to = -1;
-    } else if (from < 0) {
-        return CURLE_RANGE_ERROR;
-    } else if ((to >= 0) and (to < from)) {
+    curlx_str_passblanks(&range);
+    _ = curlx_str_single(&range, '-');
+
+    const to_t = curlx_str_numblanks(&range, &to);
+    if ((to_t == curlx_parse.STRE_OVERFLOW) or ((to_t != 0) and (from_t != 0)) or (range[0] != 0)) {
         return CURLE_RANGE_ERROR;
     }
 
-    resume_from.* = from;
-    if (to < 0) {
-        if (from < 0) {
-            maxdownload.* = -from;
-        }
-    } else {
-        if (from == std.math.maxInt(curl_off_t)) {
+    if (from_t != 0) {
+        if (to == 0) {
             return CURLE_RANGE_ERROR;
+        } else if (to > filesize) {
+            to = filesize;
         }
-        const maxsize: curl_off_t = (to - from) + 1;
-        maxdownload.* = maxsize;
-        Curl_pgrsSetDownloadSize(data, maxsize);
+        from = filesize - to;
+        to = filesize - 1;
+    } else if (from > filesize) {
+        Curl_failf(
+            data,
+            "Offset (%lld) was beyond file size (%lld)",
+            @as(c_longlong, from),
+            @as(c_longlong, filesize),
+        );
+        return CURLE_RANGE_ERROR;
+    } else if ((to_t == curlx_parse.STRE_NO_NUM) or (to >= filesize)) {
+        to = filesize - 1;
     }
+
+    if (from > to) {
+        Curl_failf(data, "Bad range: start offset larger than end offset");
+        return CURLE_RANGE_ERROR;
+    }
+    if ((to - from) == std.math.maxInt(curl_off_t)) {
+        return CURLE_RANGE_ERROR;
+    }
+
+    startp.* = from;
+    sizep.* = to - from + 1;
     return CURLE_OK;
 }
 
@@ -626,88 +631,91 @@ pub export fn Curl_quote_line(cp_in: [*:0]const u8) callconv(.c) [*:0]const u8 {
 }
 
 /// Parse the next quoted or unquoted path argument from `cpp.*`, expanding leading
-/// `/~/` or `~/` with `homedir`.
+/// `/~/` with `homedir`.
 pub export fn Curl_get_pathname(
     cpp: *?[*:0]const u8,
     path: *?[*:0]u8,
-    homedir: [*:0]const u8,
+    homedir_opt: ?[*:0]const u8,
 ) callconv(.c) CURLcode {
-    const LINK_TESCAPE = "\"\\";
-    const LINK_UNQUOTED_SEP = "\t \r\n";
+    const MAX_PATHLENGTH: usize = 65535;
 
     path.* = null;
-    const start = cpp.* orelse return CURLE_QUOTE_ERROR;
-    if (start[0] == 0) {
+    const start = cpp.*;
+    cpp.* = null;
+    const cp_init = start orelse return CURLE_QUOTE_ERROR;
+    const homedir = homedir_opt orelse return CURLE_QUOTE_ERROR;
+    if (cp_init[0] == 0) {
         return CURLE_QUOTE_ERROR;
     }
 
     var out: containers.dynbuf = undefined;
-    containers.curlx_dyn_init(&out, DYN_PATH_MAX);
+    containers.curlx_dyn_init(&out, MAX_PATHLENGTH);
 
-    var cp: [*:0]const u8 = start;
+    var cp: [*:0]const u8 = cp_init;
     curlx_str_passblanks(&cp);
-    var sub: curlx_parse.Curl_str = .{ .str = null, .len = 0 };
-    var result: CURLcode = CURLE_OK;
 
-    if (curlx_str_single(&cp, '"') == curlx_parse.STRE_OK) {
-        while (true) {
-            const c_ok = curlx_str_cspn(&cp, &sub, LINK_TESCAPE);
-            if (c_ok == curlx_parse.STRE_OK) {
-                result = containers.curlx_dyn_addn(&out, sub.str.?, sub.len);
-                if (result != CURLE_OK) break;
+    if (cp[0] == '"' or cp[0] == '\'') {
+        const quot = cp[0];
+        cp += 1;
+
+        while (cp[0] != quot) {
+            if (cp[0] == 0) {
+                containers.curlx_dyn_free(&out);
+                return CURLE_QUOTE_ERROR;
             }
-            if (curlx_str_single(&cp, '\\') == curlx_parse.STRE_OK) {
-                if ((cp[0] != '\\') and (cp[0] != '"')) {
-                    result = CURLE_QUOTE_ERROR;
-                    break;
-                }
-                result = containers.curlx_dyn_addn(&out, cp, 1);
-                if (result != CURLE_OK) break;
+            if (cp[0] == '\\') {
                 cp += 1;
-            } else if (curlx_str_single(&cp, '"') == curlx_parse.STRE_OK) {
-                break;
-            } else {
-                result = CURLE_QUOTE_ERROR;
-                break;
+                if (cp[0] != '\'' and cp[0] != '"' and cp[0] != '\\') {
+                    containers.curlx_dyn_free(&out);
+                    return CURLE_QUOTE_ERROR;
+                }
             }
+            const result = containers.curlx_dyn_addn(&out, cp, 1);
+            if (result != CURLE_OK) {
+                return result;
+            }
+            cp += 1;
         }
-        if (result == CURLE_OK and containers.curlx_dyn_len(&out) == 0) {
-            result = CURLE_QUOTE_ERROR;
+        cp += 1;
+
+        if (containers.curlx_dyn_len(&out) == 0) {
+            containers.curlx_dyn_free(&out);
+            return CURLE_QUOTE_ERROR;
         }
     } else {
-        if (curlx_str_cspn(&cp, &sub, LINK_UNQUOTED_SEP) != curlx_parse.STRE_OK or sub.len == 0) {
-            result = CURLE_QUOTE_ERROR;
-        } else {
-            result = containers.curlx_dyn_addn(&out, sub.str.?, sub.len);
+        var word: curlx_parse.Curl_str = .{ .str = null, .len = 0 };
+        var content = false;
+        if (cp[0] == '/' and cp[1] == '~' and cp[2] == '/') {
+            var result = containers.curlx_dyn_add(&out, homedir);
+            if (result == CURLE_OK) {
+                result = containers.curlx_dyn_addn(&out, "/", 1);
+            }
+            if (result != CURLE_OK) {
+                return result;
+            }
+            cp += 3;
+            content = true;
         }
-    }
-
-    if (result != CURLE_OK) {
-        containers.curlx_dyn_free(&out);
-        return result;
+        const rc = curlx_str_word(&cp, &word, MAX_PATHLENGTH);
+        if (rc != 0) {
+            if (rc == curlx_parse.STRE_BIG) {
+                containers.curlx_dyn_free(&out);
+                return CURLE_TOO_LARGE;
+            } else if (!content) {
+                containers.curlx_dyn_free(&out);
+                return CURLE_QUOTE_ERROR;
+            }
+        } else {
+            const result = containers.curlx_dyn_addn(&out, word.str.?, word.len);
+            if (result != CURLE_OK) {
+                return result;
+            }
+        }
     }
 
     curlx_str_passblanks(&cp);
     cpp.* = cp;
-
-    const ptr = containers.curlx_dyn_ptr(&out) orelse {
-        containers.curlx_dyn_free(&out);
-        return CURLE_OUT_OF_MEMORY;
-    };
-    const len = containers.curlx_dyn_len(&out);
-    if ((len >= 3 and std.mem.eql(u8, ptr[0..3], "/~/")) or
-        (len >= 2 and std.mem.eql(u8, ptr[0..2], "~/")))
-    {
-        const skip: usize = if (ptr[0] == '/') 3 else 2;
-        const p2 = ptr + skip;
-        path.* = curl_maprintf("%s/%s", homedir, p2);
-        containers.curlx_dyn_free(&out);
-        if (path.* == null) {
-            return CURLE_OUT_OF_MEMORY;
-        }
-    } else {
-        path.* = ptr;
-    }
+    path.* = containers.curlx_dyn_ptr(&out);
     return CURLE_OK;
 }
 
@@ -2841,29 +2849,22 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                 }
 
                 if (easyStrGet(data, setopt.STRING_SET_RANGE)) |range_str| {
+                    if (size < 0) {
+                        sshc.actualcode = CURLE_RANGE_ERROR;
+                        ssh_state(data, sshc, .SSH_SFTP_CLOSE);
+                        break;
+                    }
                     var from: curl_off_t = 0;
-                    var maxdl: curl_off_t = -1;
-                    result = Curl_ssh_range(data, range_str, &from, &maxdl);
+                    result = Curl_ssh_range(data, range_str, size, &from, &size);
                     if (result != CURLE_OK) {
                         sshc.actualcode = result;
                         ssh_state(data, sshc, .SSH_SFTP_CLOSE);
                         break;
                     }
-                    if (from < 0) {
-                        if (size < 0) {
-                            sshc.actualcode = CURLE_RANGE_ERROR;
-                            ssh_state(data, sshc, .SSH_SFTP_CLOSE);
-                            break;
-                        }
-                        from += size;
-                        if (from < 0) {
-                            sshc.actualcode = CURLE_RANGE_ERROR;
-                            ssh_state(data, sshc, .SSH_SFTP_CLOSE);
-                            break;
-                        }
-                    }
-                    Curl_ftp_acc_set_resume_from(data, from);
-                    Curl_http_acc_req_set_maxdownload(data, maxdl);
+                    libssh2_sftp_seek64(sshc.sftp_handle.?, @intCast(from));
+                    Curl_ftp_acc_set_req_size(data, size);
+                    Curl_http_acc_req_set_maxdownload(data, size);
+                    Curl_pgrsSetDownloadSize(data, size);
                 }
 
                 const rf = Curl_ftp_acc_get_resume_from(data);
@@ -3766,10 +3767,10 @@ test "Curl_get_pathname parses unquoted, quoted, escaped, and homedir-relative p
     mem.free(path);
     path = null;
 
-    var cmd2: ?[*:0]const u8 = "\"~/my docs/file\\\"1\\\\a.txt\"  rest";
+    var cmd2: ?[*:0]const u8 = "\"/home/alice/my docs/file\\\"1\\\\\\'a.txt\"  rest";
     try std.testing.expectEqual(CURLE_OK, Curl_get_pathname(&cmd2, &path, "/home/alice"));
     try std.testing.expect(path != null);
-    try std.testing.expectEqualStrings("/home/alice/my docs/file\"1\\a.txt", std.mem.span(path.?));
+    try std.testing.expectEqualStrings("/home/alice/my docs/file\"1\\'a.txt", std.mem.span(path.?));
     try std.testing.expectEqualStrings("rest", std.mem.span(cmd2.?));
     mem.free(path);
     path = null;
@@ -3789,28 +3790,28 @@ test "Curl_ssh_range parses valid and invalid byte ranges" {
     const easy = curl_easy_init() orelse return error.OutOfMemory;
     defer curl_easy_cleanup(easy);
 
-    var resume_from: curl_off_t = 0;
-    var maxdl: curl_off_t = -1;
+    var start: curl_off_t = 0;
+    var size: curl_off_t = -1;
 
-    try std.testing.expectEqual(CURLE_OK, Curl_ssh_range(easy, "100-199", &resume_from, &maxdl));
-    try std.testing.expectEqual(@as(curl_off_t, 100), resume_from);
-    try std.testing.expectEqual(@as(curl_off_t, 100), maxdl);
+    try std.testing.expectEqual(CURLE_OK, Curl_ssh_range(easy, "100-199", 1000, &start, &size));
+    try std.testing.expectEqual(@as(curl_off_t, 100), start);
+    try std.testing.expectEqual(@as(curl_off_t, 100), size);
 
-    resume_from = 0;
-    maxdl = -1;
-    try std.testing.expectEqual(CURLE_OK, Curl_ssh_range(easy, "500-", &resume_from, &maxdl));
-    try std.testing.expectEqual(@as(curl_off_t, 500), resume_from);
-    try std.testing.expectEqual(@as(curl_off_t, -1), maxdl);
+    start = 0;
+    size = -1;
+    try std.testing.expectEqual(CURLE_OK, Curl_ssh_range(easy, "500-", 1000, &start, &size));
+    try std.testing.expectEqual(@as(curl_off_t, 500), start);
+    try std.testing.expectEqual(@as(curl_off_t, 500), size);
 
-    resume_from = 0;
-    maxdl = -1;
-    try std.testing.expectEqual(CURLE_OK, Curl_ssh_range(easy, "-250", &resume_from, &maxdl));
-    try std.testing.expectEqual(@as(curl_off_t, -250), resume_from);
-    try std.testing.expectEqual(@as(curl_off_t, 250), maxdl);
+    start = 0;
+    size = -1;
+    try std.testing.expectEqual(CURLE_OK, Curl_ssh_range(easy, "-250", 1000, &start, &size));
+    try std.testing.expectEqual(@as(curl_off_t, 750), start);
+    try std.testing.expectEqual(@as(curl_off_t, 250), size);
 
-    try std.testing.expectEqual(CURLE_RANGE_ERROR, Curl_ssh_range(easy, "200-100", &resume_from, &maxdl));
-    try std.testing.expectEqual(CURLE_RANGE_ERROR, Curl_ssh_range(easy, "-", &resume_from, &maxdl));
-    try std.testing.expectEqual(CURLE_RANGE_ERROR, Curl_ssh_range(easy, "10-20extra", &resume_from, &maxdl));
+    try std.testing.expectEqual(CURLE_RANGE_ERROR, Curl_ssh_range(easy, "200-100", 1000, &start, &size));
+    try std.testing.expectEqual(CURLE_RANGE_ERROR, Curl_ssh_range(easy, "-", 1000, &start, &size));
+    try std.testing.expectEqual(CURLE_RANGE_ERROR, Curl_ssh_range(easy, "10-20extra", 1000, &start, &size));
 }
 
 test "CURLOPT_SSH_* options and version info with libssh2" {
@@ -3854,7 +3855,7 @@ test "ssh_conn and SSHPROTO teardown poisoning, key scrubbing, and errdefer quot
     try std.testing.expect(p2 == null);
 
     // Valid two-path allocation succeeds
-    var ok_two: ?[*:0]const u8 = "~/src_file /remote/dst_file";
+    var ok_two: ?[*:0]const u8 = "/~/src_file /remote/dst_file";
     try allocSftpQuotePaths(&ok_two, "/home/user", true, &p1, &p2);
     try std.testing.expect(p1 != null);
     try std.testing.expect(p2 != null);

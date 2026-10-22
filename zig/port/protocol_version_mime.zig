@@ -1399,11 +1399,18 @@ fn mimesetstate(state: *mime_state, tok: c_uint, ptr: ?*anyopaque) void {
 }
 
 fn escape_string(mime_formescape: bool, src: [*:0]const u8, strategy: c_uint) ?[*:0]u8 {
+    const use_backslash = (strategy == MIMESTRATEGY_MAIL) or mime_formescape;
     var s: [*:0]const u8 = src;
     var bytecount: usize = 0;
     while (s[0] != 0) : (s += 1) {
-        if (s[0] == '"' or (s[0] == '\\' and (strategy == MIMESTRATEGY_MAIL or !mime_formescape))) {
-            bytecount += 1;
+        if (use_backslash) {
+            if (s[0] == '"' or s[0] == '\\') {
+                bytecount += 1;
+            }
+        } else {
+            if (s[0] == '"' or s[0] == '\r' or s[0] == '\n') {
+                bytecount += 2;
+            }
         }
     }
     bytecount += @intFromPtr(s) - @intFromPtr(src);
@@ -1414,12 +1421,33 @@ fn escape_string(mime_formescape: bool, src: [*:0]const u8, strategy: c_uint) ?[
     var i: usize = 0;
     while (src[i] != 0) : (i += 1) {
         const c = src[i];
-        if (c == '"' or (c == '\\' and (strategy == MIMESTRATEGY_MAIL or !mime_formescape))) {
-            dst[d] = '\\';
+        if (use_backslash) {
+            if (c == '"' or c == '\\') {
+                dst[d] = '\\';
+                d += 1;
+            }
+            dst[d] = c;
             d += 1;
+        } else {
+            switch (c) {
+                '"' => {
+                    @memcpy(dst[d .. d + 3], "%22");
+                    d += 3;
+                },
+                '\r' => {
+                    @memcpy(dst[d .. d + 3], "%0D");
+                    d += 3;
+                },
+                '\n' => {
+                    @memcpy(dst[d .. d + 3], "%0A");
+                    d += 3;
+                },
+                else => {
+                    dst[d] = c;
+                    d += 1;
+                },
+            }
         }
-        dst[d] = c;
-        d += 1;
     }
     dst[d] = 0;
     return @ptrCast(dst);
@@ -2786,39 +2814,63 @@ pub export fn Curl_mime_prepare_headers_ex(
         }
         boundary = @ptrCast(&@as(*curl_mime, @ptrCast(@alignCast(part.arg.?))).boundary);
     } else if (contenttype != null and customct == null and
-        search_header(part.userheaders, "Content-Disposition", 19) == null)
+        content_type_match(contenttype, "text/plain", 10) and
+        (strategy == MIMESTRATEGY_MAIL or part.filename == null))
     {
-        if (disposition == null and part.filename != null)
-            disposition = "attachment";
+        contenttype = null;
     }
 
-    if (disposition != null and search_header(part.userheaders, "Content-Disposition", 19) == null) {
-        var name: ?[*:0]u8 = null;
-        var filename: ?[*:0]u8 = null;
-        if (part.name) |pname| {
-            name = escape_string(mime_formescape, pname, strategy) orelse return CURLE_OUT_OF_MEMORY;
+    if (search_header(part.userheaders, "Content-Disposition", 19) == null) {
+        if (disposition == null and
+            (part.filename != null or part.name != null or
+                (contenttype != null and curl_strnequal(contenttype.?, "multipart/", 10) == 0)))
+        {
+            disposition = "attachment";
         }
-        if (part.filename) |pfn| {
-            filename = escape_string(mime_formescape, pfn, strategy) orelse {
-                if (name) |n| mem.free(@ptrCast(n));
-                return CURLE_OUT_OF_MEMORY;
-            };
+        if (disposition != null and curl_strequal(disposition.?, "attachment") != 0 and
+            part.name == null and part.filename == null)
+        {
+            disposition = null;
         }
-        const name_pre: [*:0]const u8 = if (name != null) "; name=\"" else "";
-        const name_val: [*:0]const u8 = name orelse "";
-        const name_suf: [*:0]const u8 = if (name != null) "\"" else "";
-        const fn_pre: [*:0]const u8 = if (filename != null) "; filename=\"" else "";
-        const fn_val: [*:0]const u8 = filename orelse "";
-        const fn_suf: [*:0]const u8 = if (filename != null) "\"" else "";
+        if (disposition != null) {
+            const backslash = (strategy == MIMESTRATEGY_MAIL) or mime_formescape;
+            if (backslash) {
+                if (part.name) |pname| {
+                    if (std.mem.indexOfAny(u8, std.mem.span(pname), "\r\n") != null)
+                        return CURLE_BAD_FUNCTION_ARGUMENT;
+                }
+                if (part.filename) |pfn| {
+                    if (std.mem.indexOfAny(u8, std.mem.span(pfn), "\r\n") != null)
+                        return CURLE_BAD_FUNCTION_ARGUMENT;
+                }
+            }
+            var name: ?[*:0]u8 = null;
+            var filename: ?[*:0]u8 = null;
+            if (part.name) |pname| {
+                name = escape_string(mime_formescape, pname, strategy) orelse return CURLE_OUT_OF_MEMORY;
+            }
+            if (part.filename) |pfn| {
+                filename = escape_string(mime_formescape, pfn, strategy) orelse {
+                    if (name) |n| mem.free(@ptrCast(n));
+                    return CURLE_OUT_OF_MEMORY;
+                };
+            }
+            const name_pre: [*:0]const u8 = if (name != null) "; name=\"" else "";
+            const name_val: [*:0]const u8 = name orelse "";
+            const name_suf: [*:0]const u8 = if (name != null) "\"" else "";
+            const fn_pre: [*:0]const u8 = if (filename != null) "; filename=\"" else "";
+            const fn_val: [*:0]const u8 = filename orelse "";
+            const fn_suf: [*:0]const u8 = if (filename != null) "\"" else "";
 
-        result = mime_add_header_str(
-            &part.curlheaders,
-            curl_maprintf("Content-Disposition: %s%s%s%s%s%s%s", disposition.?, name_pre, name_val, name_suf, fn_pre, fn_val, fn_suf),
-        );
-        if (name) |n| mem.free(@ptrCast(n));
-        if (filename) |f| mem.free(@ptrCast(f));
-        if (result != CURLE_OK)
-            return result;
+            result = mime_add_header_str(
+                &part.curlheaders,
+                curl_maprintf("Content-Disposition: %s%s%s%s%s%s%s", disposition.?, name_pre, name_val, name_suf, fn_pre, fn_val, fn_suf),
+            );
+            if (name) |n| mem.free(@ptrCast(n));
+            if (filename) |f| mem.free(@ptrCast(f));
+            if (result != CURLE_OK)
+                return result;
+        }
     }
 
     if (contenttype) |ct| {

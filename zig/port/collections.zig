@@ -144,7 +144,7 @@ export fn Curl_uint32_bset_destroy(bset: *uint32_bset) callconv(.c) void {
     bset.first_slot_used = 0;
 }
 
-pub fn uint32_bset_capacity(bset: *const uint32_bset) u32 {
+pub export fn uint32_bset_capacity(bset: *const uint32_bset) callconv(.c) u32 {
     return bset.nslots * 64;
 }
 
@@ -268,7 +268,7 @@ export fn Curl_uint32_spbset_init(bset: *uint32_spbset) callconv(.c) void {
     };
 }
 
-pub fn uint32_spbset_clear(bset: *uint32_spbset) void {
+pub export fn uint32_spbset_clear(bset: *uint32_spbset) callconv(.c) void {
     var chunk_opt = bset.head.next;
     while (chunk_opt) |chunk| {
         const next = chunk.next;
@@ -545,7 +545,7 @@ export fn Curl_uint32_tbl_resize(tbl: *uint32_tbl, nrows: u32) callconv(.c) CURL
     return CURLE_OK;
 }
 
-pub fn uint32_tbl_clear(tbl: *uint32_tbl) void {
+pub export fn uint32_tbl_clear(tbl: *uint32_tbl) callconv(.c) void {
     uint32_tbl_clear_rows(tbl, 0, tbl.nrows);
     tbl.last_key_added = std.math.maxInt(u32);
 }
@@ -831,7 +831,7 @@ pub export fn Curl_u8_strset_setx(set: *u8_strset, id: u8, str: ?[*]const u8, sl
     return Curl_u8_strset_setn(set, id, val);
 }
 
-pub fn u8_strset_set(set: *u8_strset, id: u8, str: ?[*:0]const u8) CURLcode {
+pub export fn u8_strset_set(set: *u8_strset, id: u8, str: ?[*:0]const u8) callconv(.c) CURLcode {
     if (str) |s| {
         return Curl_u8_strset_setx(set, id, s, std.mem.len(s));
     }
@@ -1173,7 +1173,7 @@ export fn Curl_hash_global_init() callconv(.c) CURLcode {
     return CURLE_OK;
 }
 
-pub fn hash_str_seeded(key: ?*const anyopaque, key_length: usize, slots_num: usize, seed: usize) usize {
+pub export fn hash_str_seeded(key: ?*const anyopaque, key_length: usize, slots_num: usize, seed: usize) callconv(.c) usize {
     var h: usize = 5381 ^ seed;
     if (key_length > 0) {
         if (key) |k| {
@@ -1191,7 +1191,7 @@ pub fn hash_str_seeded(key: ?*const anyopaque, key_length: usize, slots_num: usi
     return h % slots_num;
 }
 
-pub fn hash_str(key: ?*const anyopaque, key_length: usize, slots_num: usize) usize {
+pub export fn hash_str(key: ?*const anyopaque, key_length: usize, slots_num: usize) callconv(.c) usize {
     return hash_str_seeded(key, key_length, slots_num, hash_seed);
 }
 

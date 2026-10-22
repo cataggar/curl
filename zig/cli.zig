@@ -81,3 +81,24 @@ pub fn addCurlExe(
 
     return exe;
 }
+
+pub fn addCurlToolLib(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Step.Compile {
+    const lib = b.addLibrary(.{
+        .name = "curltool",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("zig/port/cli_root.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    if (target.result.os.tag != .windows) {
+        lib.root_module.pic = true;
+    }
+    return lib;
+}

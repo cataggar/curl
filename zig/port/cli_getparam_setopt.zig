@@ -2328,15 +2328,13 @@ pub export fn parse_cert_parameter(
     certname: *?[*:0]u8,
     passphrase: *?[*:0]u8,
 ) callconv(.c) ParameterError {
-    var param_length = std.mem.len(cert_parameter);
-    var offset: usize = 0;
-    var almost_passphrase: ?[*:0]u8 = null;
+    const param_length = std.mem.len(cert_parameter);
 
     certname.* = null;
     passphrase.* = null;
 
     if (param_length == 0)
-        return PARAM_OK;
+        return PARAM_BLANK_STRING;
 
     if (curl_strnequal(cert_parameter, "pkcs11:", 7) != 0 or
         std.mem.indexOfAny(u8, cert_parameter[0..param_length], ":\\") == null)
@@ -2350,60 +2348,60 @@ pub export fn parse_cert_parameter(
     const certname_raw = c.malloc(param_length + 1) orelse return PARAM_NO_MEM;
     const actual_certname: [*:0]u8 = @ptrCast(certname_raw);
 
-    if (param_length >= 2 and
-        ((cert_parameter[0] >= 'a' and cert_parameter[0] <= 'z') or
-            (cert_parameter[0] >= 'A' and cert_parameter[0] <= 'Z')) and
-        cert_parameter[1] == ':')
-    {
-        actual_certname[0] = cert_parameter[0];
-        actual_certname[1] = cert_parameter[1];
-        offset = 2;
-    }
-
-    var i: usize = offset;
-    var j: usize = offset;
-    while (i < param_length) : (i += 1) {
-        if (cert_parameter[i] == '\\') {
-            i += 1;
-            if (i == param_length) {
-                actual_certname[j] = '\\';
-                j += 1;
+    var i: usize = 0;
+    var j: usize = 0;
+    while (i < param_length) {
+        switch (cert_parameter[i]) {
+            '\\' => {
+                i += 1;
+                if (i == param_length) {
+                    actual_certname[j] = '\\';
+                    j += 1;
+                } else switch (cert_parameter[i]) {
+                    '\\', ':' => {
+                        actual_certname[j] = cert_parameter[i];
+                        j += 1;
+                        i += 1;
+                    },
+                    else => {
+                        actual_certname[j] = '\\';
+                        actual_certname[j + 1] = cert_parameter[i];
+                        j += 2;
+                        i += 1;
+                    },
+                }
+            },
+            ':' => {
+                if (builtin.os.tag == .windows and
+                    i == 1 and
+                    param_length > 2 and
+                    (cert_parameter[2] == '\\' or cert_parameter[2] == '/') and
+                    ((cert_parameter[0] >= 'a' and cert_parameter[0] <= 'z') or
+                        (cert_parameter[0] >= 'A' and cert_parameter[0] <= 'Z')))
+                {
+                    actual_certname[j] = ':';
+                    j += 1;
+                    i += 1;
+                    continue;
+                }
+                i += 1;
+                if (i < param_length) {
+                    passphrase.* = cStrdup(cert_parameter + i);
+                    if (passphrase.* == null) {
+                        c.free(actual_certname);
+                        return PARAM_NO_MEM;
+                    }
+                }
                 break;
-            }
-            actual_certname[j] = cert_parameter[i];
-            j += 1;
-        } else if (cert_parameter[i] == ':') {
-            i += 1;
-            almost_passphrase = @constCast(cert_parameter + i);
-            break;
-        } else {
-            actual_certname[j] = cert_parameter[i];
-            j += 1;
+            },
+            else => {
+                actual_certname[j] = cert_parameter[i];
+                j += 1;
+                i += 1;
+            },
         }
     }
     actual_certname[j] = 0;
-
-    if (almost_passphrase) |ap| {
-        param_length = std.mem.len(ap);
-        const pass_raw = c.malloc(param_length + 1);
-        if (pass_raw == null) {
-            c.free(actual_certname);
-            return PARAM_NO_MEM;
-        }
-        const actual_passphrase: [*:0]u8 = @ptrCast(pass_raw.?);
-        i = 0;
-        j = 0;
-        while (i < param_length) : (i += 1) {
-            if (ap[i] == '\\' and (i + 1) < param_length and ap[i + 1] == '\\') {
-                i += 1;
-            }
-            actual_passphrase[j] = ap[i];
-            j += 1;
-        }
-        actual_passphrase[j] = 0;
-        passphrase.* = actual_passphrase;
-    }
-
     certname.* = actual_certname;
     return PARAM_OK;
 }

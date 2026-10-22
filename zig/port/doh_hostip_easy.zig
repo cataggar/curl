@@ -1328,7 +1328,7 @@ fn junkscan(name_opt: ?[*:0]const u8) CURLcode {
     return CURLE_OK;
 }
 
-pub fn doh_resp_decode_httpsrr(
+pub export fn doh_resp_decode_httpsrr(
     data: ?*Curl_easy,
     cp_opt: ?[*]const u8,
     len_in: usize,
@@ -1384,12 +1384,6 @@ fn doh_resp_decode_httpsrr_inner(
     if (rem_slice.len != 0)
         return dohFail(rc_out, CURLE_WEIRD_SERVER_REPLY);
     hrr.* = lhrr;
-}
-
-comptime {
-    if (use_httpsrr) {
-        @export(&doh_resp_decode_httpsrr, .{ .name = "doh_resp_decode_httpsrr" });
-    }
 }
 
 fn doh_probe_done(doh: *Curl_easy, master: *Curl_easy, result_in: CURLcode) callconv(.c) void {

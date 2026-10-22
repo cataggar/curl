@@ -788,7 +788,7 @@ inline fn lowercase(x: u8) u8 {
     return x | 0x20;
 }
 
-fn checkday(check: [*]const u8, len: usize) i32 {
+pub export fn checkday(check: [*]const u8, len: usize) callconv(.c) i32 {
     var day: i32 = -1;
     if (len < 3) return -1;
 
@@ -839,7 +839,7 @@ fn checkday(check: [*]const u8, len: usize) i32 {
     return day;
 }
 
-fn checkmonth(check: [*]const u8, len: usize) i32 {
+pub export fn checkmonth(check: [*]const u8, len: usize) callconv(.c) i32 {
     if (len != 3) return -1;
 
     switch (lowercase(check[2])) {
@@ -886,7 +886,7 @@ fn checkmonth(check: [*]const u8, len: usize) i32 {
     return -1;
 }
 
-fn checktz(check: [*]const u8, len: usize) i32 {
+pub export fn checktz(check: [*]const u8, len: usize) callconv(.c) i32 {
     if (len == 0 or len > 4) return -1;
     const first = check[0];
     if (first < 'A') return -1;

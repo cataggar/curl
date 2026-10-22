@@ -182,7 +182,7 @@ static inline CURLcode curl_share_easy_link_wrap(struct Curl_easy *data,
   );
 }
 
-#ifdef HEADER_CURL_VSSH_VSSH_H
+#if defined(HEADER_CURL_VSSH_VSSH_H) && !defined(UNITTESTS)
 #include "vtls/vtls_scache.h"
 #include "hsts.h"
 

@@ -62,16 +62,18 @@ CURLcode Curl_hsts_save(struct Curl_easy *data, struct hsts *h,
                         curl_hstswrite_callback hsts_write,
                         void *hsts_write_userp);
 #define Curl_hsts_save(data, h, file) \
-  Curl_hsts_save((data), (h), (file), (data)->set.hsts_write, \
-                 (data)->set.hsts_write_userp)
+  Curl_hsts_save((struct Curl_easy *)(data), (h), (file), \
+                 ((const struct Curl_easy *)(data))->set.hsts_write, \
+                 ((const struct Curl_easy *)(data))->set.hsts_write_userp)
 CURLcode Curl_hsts_loadfile(struct Curl_easy *data,
                             struct hsts *h, const char *file);
 CURLcode Curl_hsts_loadcb(struct Curl_easy *data, struct hsts *h,
                           curl_hstsread_callback hsts_read,
                           void *hsts_read_userp);
 #define Curl_hsts_loadcb(data, h) \
-  Curl_hsts_loadcb((data), (h), (data)->set.hsts_read, \
-                   (data)->set.hsts_read_userp)
+  Curl_hsts_loadcb((struct Curl_easy *)(data), (h), \
+                   ((const struct Curl_easy *)(data))->set.hsts_read, \
+                   ((const struct Curl_easy *)(data))->set.hsts_read_userp)
 CURLcode Curl_hsts_loadfiles(struct Curl_easy *data, struct hsts *h,
                              struct curl_slist *hstslist);
 #define Curl_hsts_loadfiles(data) \

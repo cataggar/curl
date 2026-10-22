@@ -1334,26 +1334,10 @@ fn myssh_in_SFTP_DOWNLOAD_STAT(data: *Curl_easy, sshc: *ssh_conn_libssh) c_int {
         }
         if (Curl_vssh_get_state_use_range(data)) {
             var from: curl_off_t = 0;
-            var maxdl: curl_off_t = -1;
             const range_str = Curl_vssh_get_state_range(data) orelse "";
-            const result = vssh.Curl_ssh_range(data, range_str, &from, &maxdl);
+            const result = vssh.Curl_ssh_range(data, range_str, size, &from, &size);
             if (result != CURLE_OK) {
                 return myssh_to_ERROR(data, sshc, result);
-            }
-            if (from < 0) {
-                if (-from > size) {
-                    from = 0;
-                } else {
-                    from = size + from;
-                    size = maxdl;
-                }
-            } else if (from > size) {
-                Curl_failf(data, "Offset (%lld) was beyond file size (%lld)", @as(c_longlong, from), @as(c_longlong, size));
-                return myssh_to_ERROR(data, sshc, CURLE_RANGE_ERROR);
-            } else if (maxdl < 0 or from + maxdl > size) {
-                size = size - from;
-            } else {
-                size = maxdl;
             }
             if (sftp_seek64(sshc.sftp_file.?, @intCast(from)) != 0) {
                 return myssh_to_SFTP_CLOSE(data, sshc);
