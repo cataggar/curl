@@ -13,6 +13,7 @@ const vtls_scache_asn1 = @import("vtls_scache_asn1.zig");
 const altsvc_hsts_peer = @import("altsvc_hsts_peer.zig");
 const http1_options = @import("http1_options.zig");
 const netrc_addr_idn = @import("netrc_addr_idn.zig");
+const doh_hostip_easy = @import("doh_hostip_easy.zig");
 const setopt = @import("setopt.zig");
 const ftp = @import("ftp.zig");
 
@@ -759,8 +760,80 @@ inline fn connInUse(conn: *const connectdata) bool {
     return Curl_zig_url_conn_get_i64(conn, CONN_I64_ATTACHED_XFERS) > 0;
 }
 
+inline fn connGetPtr(comptime T: type, conn: *const connectdata, ptr_id: c_int) ?*T {
+    const raw = Curl_zig_url_conn_get_ptr(@constCast(conn), ptr_id) orelse return null;
+    return @ptrCast(@alignCast(raw));
+}
+
+inline fn connGetCStr(conn: *const connectdata, ptr_id: c_int) ?[*:0]const u8 {
+    const raw = Curl_zig_url_conn_get_ptr(@constCast(conn), ptr_id) orelse return null;
+    return @ptrCast(raw);
+}
+
+inline fn connSetPtr(conn: *connectdata, ptr_id: c_int, val: anytype) void {
+    Curl_zig_url_conn_set_ptr(conn, ptr_id, mem.toRawPtr(val));
+}
+
+inline fn dataGetPtr(comptime T: type, data: *const Curl_easy, ptr_id: c_int) ?*T {
+    const raw = Curl_zig_url_data_get_ptr(@constCast(data), ptr_id) orelse return null;
+    return @ptrCast(@alignCast(raw));
+}
+
+inline fn dataSetPtr(data: *Curl_easy, ptr_id: c_int, val: anytype) void {
+    Curl_zig_url_data_set_ptr(data, ptr_id, mem.toRawPtr(val));
+}
+
+inline fn setoptGetPtr(comptime T: type, data: *Curl_easy, ptr_id: c_int) ?*T {
+    const raw = Curl_setopt_get_ptr(data, ptr_id) orelse return null;
+    return @ptrCast(@alignCast(raw));
+}
+
+inline fn setoptGetPtrRef(comptime T: type, data: *Curl_easy, ref_id: c_int) ?*T {
+    const raw = Curl_setopt_get_ptr_ref(data, ref_id) orelse return null;
+    return @ptrCast(@alignCast(raw));
+}
+
+inline fn peerScheme(peer: *const CurlPeer) ?*const Curl_scheme {
+    const s = peer.scheme orelse return null;
+    return @ptrCast(@alignCast(s));
+}
+
+inline fn peerUserHostname(peer: *const CurlPeer) [*:0]const u8 {
+    return @ptrCast(&peer.user_hostname);
+}
+
+inline fn asFtpEasy(data: *Curl_easy) *ftp.Curl_easy {
+    return @ptrCast(data);
+}
+
+inline fn castMatch(userdata: ?*anyopaque) *url_conn_match {
+    return @ptrCast(@alignCast(userdata.?));
+}
+
+inline fn allocEasy() ?*Curl_easy {
+    const bytes = mem.callocMany(u8, Curl_zig_url_easy_sizeof()) orelse return null;
+    return @ptrCast(bytes);
+}
+
+inline fn freeEasy(data: *Curl_easy) void {
+    const easy_size = Curl_zig_url_easy_sizeof();
+    mem.secureZero(data, easy_size);
+    mem.freeSized(data, easy_size);
+}
+
+inline fn allocConn() ?*connectdata {
+    const bytes = mem.callocMany(u8, Curl_zig_url_conn_sizeof()) orelse return null;
+    return @ptrCast(bytes);
+}
+
+inline fn freeConnRaw(conn: *connectdata) void {
+    const conn_size = Curl_zig_url_conn_sizeof();
+    mem.secureZero(conn, conn_size);
+    mem.freeSized(conn, conn_size);
+}
+
 inline fn connScheme(conn: *connectdata) ?*const Curl_scheme {
-    return @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(conn, CONN_PTR_SCHEME)));
+    return connGetPtr(Curl_scheme, conn, CONN_PTR_SCHEME);
 }
 
 inline fn schemeRun(scheme: *const Curl_scheme) ?*const CurlProtocol {
@@ -768,39 +841,39 @@ inline fn schemeRun(scheme: *const Curl_scheme) ?*const CurlProtocol {
 }
 
 inline fn connOrigin(conn: *connectdata) ?*CurlPeer {
-    return @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(conn, CONN_PTR_ORIGIN)));
+    return connGetPtr(CurlPeer, conn, CONN_PTR_ORIGIN);
 }
 
 inline fn connViaPeer(conn: *connectdata) ?*CurlPeer {
-    return @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(conn, CONN_PTR_VIA_PEER)));
+    return connGetPtr(CurlPeer, conn, CONN_PTR_VIA_PEER);
 }
 
 inline fn connCreds(conn: *connectdata) ?*Curl_creds {
-    return @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(conn, CONN_PTR_CREDS)));
+    return connGetPtr(Curl_creds, conn, CONN_PTR_CREDS);
 }
 
 inline fn connCredsOrigin(conn: *connectdata) ?*CurlPeer {
-    return @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(conn, CONN_PTR_CREDS_ORIGIN)));
+    return connGetPtr(CurlPeer, conn, CONN_PTR_CREDS_ORIGIN);
 }
 
 inline fn connHttpProxy(conn: *connectdata) ?*proxy_info {
-    return @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(conn, CONN_PTR_REF_HTTP_PROXY)));
+    return connGetPtr(proxy_info, conn, CONN_PTR_REF_HTTP_PROXY);
 }
 
 inline fn connSocksProxy(conn: *connectdata) ?*proxy_info {
-    return @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(conn, CONN_PTR_REF_SOCKS_PROXY)));
+    return connGetPtr(proxy_info, conn, CONN_PTR_REF_SOCKS_PROXY);
 }
 
 inline fn dataOrigin(data: *Curl_easy) ?*CurlPeer {
-    return @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_STATE_ORIGIN)));
+    return dataGetPtr(CurlPeer, data, DATA_PTR_STATE_ORIGIN);
 }
 
 inline fn dataInitialOrigin(data: *Curl_easy) ?*CurlPeer {
-    return @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_STATE_INITIAL_ORIGIN)));
+    return dataGetPtr(CurlPeer, data, DATA_PTR_STATE_INITIAL_ORIGIN);
 }
 
 inline fn dataCreds(data: *Curl_easy) ?*Curl_creds {
-    return @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_STATE_CREDS)));
+    return dataGetPtr(Curl_creds, data, DATA_PTR_STATE_CREDS);
 }
 
 inline fn authAllowedToOrigin(data: *Curl_easy, origin: ?*CurlPeer) bool {
@@ -867,7 +940,7 @@ pub export fn Curl_freeset(data: *Curl_easy) callconv(.c) void {
             strset.data[i] = null;
         }
     }
-    mem.secureZero(@ptrCast(strset.data), slot_cnt * @sizeOf(?[*:0]u8));
+    mem.secureZero(mem.toRawPtr(strset.data), slot_cnt * @sizeOf(?[*:0]u8));
     Curl_u8_strset_clear(strset);
 
     if (Curl_setopt_get_ptr(data, PTR_SET_STR_COPYPOSTFIELDS)) |p| {
@@ -889,8 +962,8 @@ pub export fn Curl_freeset(data: *Curl_easy) callconv(.c) void {
                 }
             }
             const blob_total = @sizeOf(curl_blob) +| (if (copy) b.len else 0);
-            mem.secureZero(@ptrCast(b), blob_total);
-            mem.freeSized(@ptrCast(b), blob_total);
+            mem.secureZero(b, blob_total);
+            mem.freeSized(b, blob_total);
             bptr.* = null;
         }
     }
@@ -903,23 +976,23 @@ pub export fn Curl_freeset(data: *Curl_easy) callconv(.c) void {
     }
 
     if (!hasFlag(FLAG_DISABLE_MIME) or !hasFlag(FLAG_DISABLE_FORM_API)) {
-        const mimepostp: ?*curl_mimepart = @ptrCast(@alignCast(Curl_setopt_get_ptr(data, PTR_SET_MIMEPOSTP)));
+        const mimepostp = setoptGetPtr(curl_mimepart, data, PTR_SET_MIMEPOSTP);
         Curl_mime_cleanpart(mimepostp);
         if (mimepostp) |mp| {
-            mem.freeSized(@ptrCast(mp), @sizeOf(curl_mimepart));
+            mem.freeTyped(mp);
             Curl_setopt_set_ptr(data, PTR_SET_MIMEPOSTP, null);
         }
     }
 
     if (!hasFlag(FLAG_DISABLE_COOKIES)) {
-        const clist: ?*curl_slist = @ptrCast(@alignCast(Curl_setopt_get_ptr(data, PTR_STATE_COOKIELIST)));
+        const clist = setoptGetPtr(curl_slist, data, PTR_STATE_COOKIELIST);
         curl_slist_free_all(clist);
         Curl_setopt_set_ptr(data, PTR_STATE_COOKIELIST, null);
     }
 }
 
 fn up_free(data: *Curl_easy) void {
-    const up: *urlpieces = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_REF_STATE_UP).?));
+    const up = dataGetPtr(urlpieces, data, DATA_PTR_REF_STATE_UP).?;
     if (up.options) |p| {
         mem.free(p);
         up.options = null;
@@ -932,7 +1005,7 @@ fn up_free(data: *Curl_easy) void {
         mem.free(p);
         up.query = null;
     }
-    const uh: ?*CURLU = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_STATE_UH)));
+    const uh = dataGetPtr(CURLU, data, DATA_PTR_STATE_UH);
     curl_url_cleanup(uh);
     Curl_zig_url_data_set_ptr(data, DATA_PTR_STATE_UH, null);
 }
@@ -946,12 +1019,12 @@ pub export fn Curl_close(datap: ?*?*Curl_easy) callconv(.c) CURLcode {
     }
 
     const is_internal = Curl_zig_url_data_get_bit(data, DATA_BIT_INTERNAL);
-    const multi: ?*Curl_multi = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_MULTI)));
+    const multi = dataGetPtr(Curl_multi, data, DATA_PTR_MULTI);
     if (!is_internal and multi != null) {
         _ = Curl_multi_remove_handle(multi.?, data);
     } else {
         Curl_detach_connection(data);
-        const multi_easy: ?*Curl_multi = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_MULTI_EASY)));
+        const multi_easy = dataGetPtr(Curl_multi, data, DATA_PTR_MULTI_EASY);
         if (!is_internal and multi_easy != null) {
             Curl_zig_url_data_set_ptr(data, DATA_PTR_MULTI_EASY, null);
             _ = curl_multi_cleanup(multi_easy.?);
@@ -980,15 +1053,15 @@ pub export fn Curl_close(datap: ?*?*Curl_easy) callconv(.c) CURLcode {
     if (comptime has_ssl_backend) {
         Curl_ssl_close_all(data);
     }
-    if (Curl_zig_url_data_get_ptr(data, DATA_PTR_REF_STATE_ORIGIN)) |p| {
-        altsvc_hsts_peer.Curl_peer_unlink(@ptrCast(@alignCast(p)));
+    if (dataGetPtr(?*CurlPeer, data, DATA_PTR_REF_STATE_ORIGIN)) |p| {
+        altsvc_hsts_peer.Curl_peer_unlink(p);
     }
-    if (Curl_zig_url_data_get_ptr(data, DATA_PTR_REF_STATE_INITIAL_ORIGIN)) |p| {
-        altsvc_hsts_peer.Curl_peer_unlink(@ptrCast(@alignCast(p)));
+    if (dataGetPtr(?*CurlPeer, data, DATA_PTR_REF_STATE_INITIAL_ORIGIN)) |p| {
+        altsvc_hsts_peer.Curl_peer_unlink(p);
     }
     if (!hasFlag(FLAG_DISABLE_RTSP)) {
-        if (Curl_zig_url_data_get_ptr(data, DATA_PTR_REF_STATE_RTSP_SESSION_ORIGIN)) |p| {
-            altsvc_hsts_peer.Curl_peer_unlink(@ptrCast(@alignCast(p)));
+        if (dataGetPtr(?*CurlPeer, data, DATA_PTR_REF_STATE_RTSP_SESSION_ORIGIN)) |p| {
+            altsvc_hsts_peer.Curl_peer_unlink(p);
         }
     }
     if (comptime has_ssl_backend) {
@@ -1000,38 +1073,38 @@ pub export fn Curl_close(datap: ?*?*Curl_easy) callconv(.c) CURLcode {
     }
 
     up_free(data);
-    if (Curl_zig_url_data_get_ptr(data, DATA_PTR_REF_STATE_HEADERB)) |hb| {
-        containers.curlx_dyn_free(@ptrCast(@alignCast(hb)));
+    if (dataGetPtr(containers.dynbuf, data, DATA_PTR_REF_STATE_HEADERB)) |hb| {
+        containers.curlx_dyn_free(hb);
     }
     if (!hasFlag(FLAG_DISABLE_HTTP) and !hasFlag(FLAG_DISABLE_COOKIES)) {
-        if (Curl_setopt_get_ptr_ref(data, PTR_REF_DATA_COOKIES)) |pcookies| {
+        if (setoptGetPtrRef(?*anyopaque, data, PTR_REF_DATA_COOKIES)) |pcookies| {
             Curl_flush_cookies(
                 data,
                 true,
-                @ptrCast(@alignCast(pcookies)),
+                pcookies,
                 easyStr(data, STRING_COOKIEJAR),
                 Curl_setopt_get_ptr(data, PTR_SHARE_COOKIES),
             );
         }
     }
     if (!hasFlag(FLAG_DISABLE_ALTSVC)) {
-        const asi: ?*Altsvcinfo = @ptrCast(@alignCast(Curl_setopt_get_ptr(data, PTR_DATA_ASI)));
+        const asi = setoptGetPtr(Altsvcinfo, data, PTR_DATA_ASI);
         _ = altsvc_hsts_peer.Curl_altsvc_save(data, asi, easyStr(data, STRING_ALTSVC));
-        if (Curl_setopt_get_ptr_ref(data, PTR_REF_DATA_ASI)) |asip| {
-            altsvc_hsts_peer.Curl_altsvc_cleanup(@ptrCast(@alignCast(asip)));
+        if (setoptGetPtrRef(?*Altsvcinfo, data, PTR_REF_DATA_ASI)) |asip| {
+            altsvc_hsts_peer.Curl_altsvc_cleanup(asip);
         }
     }
     if (!hasFlag(FLAG_DISABLE_HTTP) and !hasFlag(FLAG_DISABLE_HSTS)) {
-        const hsts: ?*altsvc_hsts_peer.Hsts = @ptrCast(@alignCast(Curl_setopt_get_ptr(data, PTR_DATA_HSTS)));
-        const hsts_write: ?altsvc_hsts_peer.HstsWriteCallback = @ptrCast(@alignCast(Curl_setopt_get_ptr(data, PTR_SET_HSTS_WRITE)));
+        const hsts = setoptGetPtr(altsvc_hsts_peer.Hsts, data, PTR_DATA_HSTS);
+        const hsts_write: ?altsvc_hsts_peer.HstsWriteCallback = @ptrCast(Curl_setopt_get_ptr(data, PTR_SET_HSTS_WRITE));
         const hsts_write_userp = Curl_setopt_get_ptr(data, PTR_SET_HSTS_WRITE_USERP);
         _ = altsvc_hsts_peer.Curl_hsts_save(data, hsts, easyStr(data, STRING_HSTS), hsts_write, hsts_write_userp);
         if (Curl_setopt_get_ptr(data, PTR_DATA_SHARE) == null or Curl_setopt_get_ptr(data, PTR_SHARE_HSTS) == null) {
-            if (Curl_setopt_get_ptr_ref(data, PTR_REF_DATA_HSTS)) |hp| {
-                altsvc_hsts_peer.Curl_hsts_cleanup(@ptrCast(@alignCast(hp)));
+            if (setoptGetPtrRef(?*altsvc_hsts_peer.Hsts, data, PTR_REF_DATA_HSTS)) |hp| {
+                altsvc_hsts_peer.Curl_hsts_cleanup(hp);
             }
         }
-        const hstslist: ?*curl_slist = @ptrCast(@alignCast(Curl_setopt_get_ptr(data, PTR_STATE_HSTSLIST)));
+        const hstslist = setoptGetPtr(curl_slist, data, PTR_STATE_HSTSLIST);
         curl_slist_free_all(hstslist);
         Curl_setopt_set_ptr(data, PTR_STATE_HSTSLIST, null);
     }
@@ -1057,11 +1130,11 @@ pub export fn Curl_close(datap: ?*?*Curl_easy) callconv(.c) CURLcode {
 
     _ = Curl_share_easy_unlink(data);
 
-    if (Curl_zig_url_data_get_ptr(data, DATA_PTR_REF_META_HASH)) |mh| {
-        Curl_hash_destroy(@ptrCast(@alignCast(mh)));
+    if (dataGetPtr(Curl_hash, data, DATA_PTR_REF_META_HASH)) |mh| {
+        Curl_hash_destroy(mh);
     }
-    if (Curl_zig_url_data_get_ptr(data, DATA_PTR_REF_STATE_CREDS)) |cp| {
-        http1_options.Curl_creds_unlink(@ptrCast(@alignCast(cp)));
+    if (dataGetPtr(?*Curl_creds, data, DATA_PTR_REF_STATE_CREDS)) |cp| {
+        http1_options.Curl_creds_unlink(cp);
     }
     if (!hasFlag(FLAG_DISABLE_HTTP)) {
         inline for (.{ DATA_PTR_STATE_RANGELINE, DATA_PTR_STATE_HTTP_HOST }) |pid| {
@@ -1078,10 +1151,10 @@ pub export fn Curl_close(datap: ?*?*Curl_easy) callconv(.c) CURLcode {
         }
     }
     if (!hasFlag(FLAG_DISABLE_HTTP) and !hasFlag(FLAG_DISABLE_FORM_API)) {
-        const formp: ?*curl_mimepart = @ptrCast(@alignCast(Curl_setopt_get_ptr(data, PTR_STATE_FORMP)));
+        const formp = setoptGetPtr(curl_mimepart, data, PTR_STATE_FORMP);
         Curl_mime_cleanpart(formp);
         if (formp) |fp| {
-            mem.freeSized(@ptrCast(fp), @sizeOf(curl_mimepart));
+            mem.freeTyped(fp);
             Curl_setopt_set_ptr(data, PTR_STATE_FORMP, null);
         }
     }
@@ -1091,8 +1164,8 @@ pub export fn Curl_close(datap: ?*?*Curl_easy) callconv(.c) CURLcode {
     }
     Curl_freeset(data);
     _ = Curl_headers_cleanup(data);
-    if (Curl_zig_url_data_get_ptr(data, DATA_PTR_REF_STATE_NETRC)) |nr| {
-        netrc_addr_idn.Curl_netrc_cleanup(@ptrCast(@alignCast(nr)));
+    if (dataGetPtr(netrc_addr_idn.StoreNetrc, data, DATA_PTR_REF_STATE_NETRC)) |nr| {
+        netrc_addr_idn.Curl_netrc_cleanup(nr);
     }
     if (!hasFlag(FLAG_DISABLE_DIGEST_AUTH)) {
         if (Curl_zig_url_data_get_ptr(data, DATA_PTR_STATE_ENVPROXY)) |ep| {
@@ -1101,9 +1174,7 @@ pub export fn Curl_close(datap: ?*?*Curl_easy) callconv(.c) CURLcode {
         }
     }
 
-    const easy_size = Curl_zig_url_easy_sizeof();
-    mem.secureZero(@ptrCast(data), easy_size);
-    mem.freeSized(@ptrCast(data), easy_size);
+    freeEasy(data);
     return CURLE_OK;
 }
 
@@ -1139,12 +1210,12 @@ pub export fn Curl_init_userdefined(data: *Curl_easy) callconv(.c) void {
     Curl_setopt_set_i64(data, FIELD_SSL_CA_CACHE_TIMEOUT, 24 * 60 * 60);
     Curl_setopt_set_i64(data, FIELD_HTTPAUTH, @intCast(CURLAUTH_BASIC));
 
-    if (Curl_setopt_get_ptr_ref(data, PTR_REF_SET_SSL)) |sslc| {
-        vtls_scache_asn1.Curl_ssl_config_init(@ptrCast(@alignCast(sslc)));
+    if (setoptGetPtrRef(SslEasyConfig, data, PTR_REF_SET_SSL)) |sslc| {
+        vtls_scache_asn1.Curl_ssl_config_init(sslc);
     }
     if (!hasFlag(FLAG_DISABLE_PROXY)) {
-        if (Curl_setopt_get_ptr_ref(data, PTR_REF_SET_PROXY_SSL)) |psslc| {
-            vtls_scache_asn1.Curl_ssl_config_init(@ptrCast(@alignCast(psslc)));
+        if (setoptGetPtrRef(SslEasyConfig, data, PTR_REF_SET_PROXY_SSL)) |psslc| {
+            vtls_scache_asn1.Curl_ssl_config_init(psslc);
         }
         Curl_setopt_set_i64(data, FIELD_PROXYPORT, 0);
         Curl_setopt_set_i64(data, FIELD_PROXYTYPE, CURLPROXY_HTTP);
@@ -1217,13 +1288,13 @@ fn easy_meta_freeentry(p: ?*anyopaque) callconv(.c) void {
 }
 
 pub export fn Curl_open(curl: *?*Curl_easy) callconv(.c) CURLcode {
-    const raw = mem.calloc(1, Curl_zig_url_easy_sizeof()) orelse {
+    const data = allocEasy() orelse {
         if (hasFlag(FLAG_DEBUGBUILD)) {
             _ = curl_mfprintf(Curl_setopt_default_stderr(), "Error: calloc of Curl_easy failed\n");
         }
         return CURLE_OUT_OF_MEMORY;
     };
-    const data: *Curl_easy = @ptrCast(raw);
+    errdefer freeEasy(data);
 
     Curl_zig_url_data_set_i64(data, DATA_I64_MAGIC, CURLEASY_MAGIC_NUMBER);
     Curl_zig_url_data_set_i64(data, DATA_I64_LAST_CONN_ID, -1);
@@ -1233,12 +1304,12 @@ pub export fn Curl_open(curl: *?*Curl_easy) callconv(.c) CURLcode {
     Curl_zig_url_data_set_i64(data, DATA_I64_MASTER_MID, std.math.maxInt(u32));
     Curl_zig_url_data_set_bit(data, DATA_BIT_PROGRESS_HIDE, true);
 
-    if (Curl_zig_url_data_get_ptr(data, DATA_PTR_REF_META_HASH)) |mh| {
-        Curl_hash_init(@ptrCast(@alignCast(mh)), 23, collections.CURL_HASH_TYPE_BYTES, easy_meta_freeentry);
+    if (dataGetPtr(Curl_hash, data, DATA_PTR_REF_META_HASH)) |mh| {
+        Curl_hash_init(mh, 23, collections.CURL_HASH_TYPE_BYTES, easy_meta_freeentry);
     }
     Curl_u8_strset_init(Curl_easy_strset_ptr(data));
-    if (Curl_zig_url_data_get_ptr(data, DATA_PTR_REF_STATE_HEADERB)) |hb| {
-        containers.curlx_dyn_init(@ptrCast(@alignCast(hb)), CURL_MAX_HTTP_HEADER);
+    if (dataGetPtr(containers.dynbuf, data, DATA_PTR_REF_STATE_HEADERB)) |hb| {
+        containers.curlx_dyn_init(hb, CURL_MAX_HTTP_HEADER);
     }
     if (Curl_setopt_get_ptr_ref(data, PTR_REF_STATE_URL)) |url_br| {
         Curl_bufref_init(url_br);
@@ -1251,12 +1322,12 @@ pub export fn Curl_open(curl: *?*Curl_easy) callconv(.c) CURLcode {
     }
     _ = Curl_initinfo(data);
     if (!hasFlag(FLAG_DISABLE_HTTP)) {
-        if (Curl_zig_url_data_get_ptr(data, DATA_PTR_REF_STATE_HTTPHDRS)) |hdrs| {
-            containers.Curl_llist_init(@ptrCast(@alignCast(hdrs)), null);
+        if (dataGetPtr(containers.Curl_llist, data, DATA_PTR_REF_STATE_HTTPHDRS)) |hdrs| {
+            containers.Curl_llist_init(hdrs, null);
         }
     }
-    if (Curl_zig_url_data_get_ptr(data, DATA_PTR_REF_STATE_NETRC)) |nr| {
-        netrc_addr_idn.Curl_netrc_init(@ptrCast(@alignCast(nr)));
+    if (dataGetPtr(netrc_addr_idn.StoreNetrc, data, DATA_PTR_REF_STATE_NETRC)) |nr| {
+        netrc_addr_idn.Curl_netrc_init(nr);
     }
     Curl_init_userdefined(data);
 
@@ -1293,11 +1364,11 @@ pub export fn Curl_conn_free(data: ?*Curl_easy, conn: *connectdata) callconv(.c)
         }
     }
 
-    if (Curl_zig_url_conn_get_ptr(conn, CONN_PTR_REF_CREDS)) |cp| {
-        http1_options.Curl_creds_unlink(@ptrCast(@alignCast(cp)));
+    if (connGetPtr(?*Curl_creds, conn, CONN_PTR_REF_CREDS)) |cp| {
+        http1_options.Curl_creds_unlink(cp);
     }
-    if (Curl_zig_url_conn_get_ptr(conn, CONN_PTR_REF_CREDS_ORIGIN)) |cop| {
-        altsvc_hsts_peer.Curl_peer_unlink(@ptrCast(@alignCast(cop)));
+    if (connGetPtr(?*CurlPeer, conn, CONN_PTR_REF_CREDS_ORIGIN)) |cop| {
+        altsvc_hsts_peer.Curl_peer_unlink(cop);
     }
 
     inline for (.{ CONN_PTR_OPTIONS, CONN_PTR_INTERFACE_OPTS }) |pid| {
@@ -1307,9 +1378,9 @@ pub export fn Curl_conn_free(data: ?*Curl_easy, conn: *connectdata) callconv(.c)
         }
     }
 
-    const conn_ssl: *SslFilterConfig = @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(conn, CONN_PTR_REF_SSL_CONFIG).?));
+    const conn_ssl = connGetPtr(SslFilterConfig, conn, CONN_PTR_REF_SSL_CONFIG).?;
     const conn_proxy_ssl: ?*SslFilterConfig = if (!hasFlag(FLAG_DISABLE_PROXY))
-        @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(conn, CONN_PTR_REF_PROXY_SSL_CONFIG)))
+        connGetPtr(SslFilterConfig, conn, CONN_PTR_REF_PROXY_SSL_CONFIG)
     else
         null;
     vtls_scache_asn1.Curl_ssl_conn_config_cleanup_zig(conn_ssl, conn_proxy_ssl);
@@ -1318,8 +1389,8 @@ pub export fn Curl_conn_free(data: ?*Curl_easy, conn: *connectdata) callconv(.c)
         mem.free(dest);
         Curl_zig_url_conn_set_ptr(conn, CONN_PTR_DESTINATION, null);
     }
-    if (Curl_zig_url_conn_get_ptr(conn, CONN_PTR_REF_META_HASH)) |mh| {
-        Curl_hash_destroy(@ptrCast(@alignCast(mh)));
+    if (connGetPtr(Curl_hash, conn, CONN_PTR_REF_META_HASH)) |mh| {
+        Curl_hash_destroy(mh);
     }
 
     inline for (.{
@@ -1328,26 +1399,23 @@ pub export fn Curl_conn_free(data: ?*Curl_easy, conn: *connectdata) callconv(.c)
         CONN_PTR_REF_ORIGIN2,
         CONN_PTR_REF_VIA_PEER2,
     }) |pid| {
-        if (Curl_zig_url_conn_get_ptr(conn, pid)) |pp| {
-            altsvc_hsts_peer.Curl_peer_unlink(@ptrCast(@alignCast(pp)));
+        if (connGetPtr(?*CurlPeer, conn, pid)) |pp| {
+            altsvc_hsts_peer.Curl_peer_unlink(pp);
         }
     }
 
-    const conn_size = Curl_zig_url_conn_sizeof();
-    mem.secureZero(@ptrCast(conn), conn_size);
-    mem.freeSized(@ptrCast(conn), conn_size);
+    freeConnRaw(conn);
 }
 
 fn xfer_may_multiplex(data: *const Curl_easy, conn: *const connectdata) bool {
     if (!hasFlag(FLAG_DISABLE_HTTP)) {
         const c_mut: *connectdata = @constCast(conn);
-        const d_mut: *Curl_easy = @constCast(data);
         if (connScheme(c_mut)) |scheme| {
             if ((scheme.protocol & PROTO_FAMILY_HTTP) != 0 and
                 (!Curl_zig_url_conn_get_bit(conn, CONN_BIT_PROTOCONNSTART) or
                     !Curl_zig_url_conn_get_bit(conn, CONN_BIT_CLOSE)))
             {
-                const multi: ?*const Curl_multi = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(d_mut, DATA_PTR_MULTI)));
+                const multi = dataGetPtr(Curl_multi, data, DATA_PTR_MULTI);
                 const allowed: u8 = @intCast(Curl_zig_url_data_get_i64(data, DATA_I64_HTTP_NEG_ALLOWED));
                 if (Curl_multiplex_wanted(multi) and (allowed & (CURL_HTTP_V2x | CURL_HTTP_V3x)) != 0) {
                     return true;
@@ -1369,8 +1437,8 @@ fn proxy_info_matches(data: *const proxy_info, needle: *const proxy_info) bool {
 }
 
 fn ssh_config_matches(one: *connectdata, two: *connectdata) bool {
-    const sshc1 = Curl_conn_meta_get(one, CURL_META_SSH_CONN);
-    const sshc2 = Curl_conn_meta_get(two, CURL_META_SSH_CONN);
+    const sshc1 = doh_hostip_easy.connMetaGetTyped(u8, one, CURL_META_SSH_CONN);
+    const sshc2 = doh_hostip_easy.connMetaGetTyped(u8, two, CURL_META_SSH_CONN);
     if (sshc1 != null and sshc2 != null) {
         var priv1: ?[*:0]const u8 = null;
         var pub1: ?[*:0]const u8 = null;
@@ -1410,8 +1478,8 @@ fn url_match_connect_config(conn: *connectdata, m: *url_conn_match) bool {
         return false;
     }
 
-    const needle_if: ?[*:0]const u8 = @ptrCast(Curl_zig_url_conn_get_ptr(m.needle, CONN_PTR_INTERFACE_OPTS));
-    const conn_if: ?[*:0]const u8 = @ptrCast(Curl_zig_url_conn_get_ptr(conn, CONN_PTR_INTERFACE_OPTS));
+    const needle_if = connGetCStr(m.needle, CONN_PTR_INTERFACE_OPTS);
+    const conn_if = connGetCStr(conn, CONN_PTR_INTERFACE_OPTS);
 
     if (needle_if != conn_if and
         (needle_if == null or conn_if == null or std.mem.orderZ(u8, conn_if.?, needle_if.?) != .eq))
@@ -1475,7 +1543,7 @@ fn url_match_multiplex_needs(conn: *connectdata, m: *url_conn_match) bool {
 fn url_match_multiplex_limits(conn: *connectdata, m: *url_conn_match) bool {
     if (connInUse(conn) and m.may_multiplex) {
         const attached_xfers: u32 = @intCast(Curl_zig_url_conn_get_i64(conn, CONN_I64_ATTACHED_XFERS));
-        const multi: ?*const Curl_multi = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(m.data, DATA_PTR_MULTI)));
+        const multi = dataGetPtr(Curl_multi, m.data, DATA_PTR_MULTI);
         const conn_id: c_longlong = Curl_zig_url_conn_get_i64(conn, CONN_I64_CONNECTION_ID);
         if (attached_xfers >= Curl_multi_max_concurrent_streams(multi)) {
             infof(m.data, "connection #%lld reached MAX_CONCURRENT_STREAMS(%u), skip", .{
@@ -1498,9 +1566,9 @@ fn url_match_multiplex_limits(conn: *connectdata, m: *url_conn_match) bool {
 
 fn connSslConfigMatch(m: *url_conn_match, cfg: *SslFilterConfig, conn: *connectdata, proxy: bool) bool {
     _ = m;
-    const cand_ssl: *SslFilterConfig = @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(conn, CONN_PTR_REF_SSL_CONFIG).?));
+    const cand_ssl = connGetPtr(SslFilterConfig, conn, CONN_PTR_REF_SSL_CONFIG).?;
     const cand_proxy_ssl: ?*SslFilterConfig = if (!hasFlag(FLAG_DISABLE_PROXY))
-        @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(conn, CONN_PTR_REF_PROXY_SSL_CONFIG)))
+        connGetPtr(SslFilterConfig, conn, CONN_PTR_REF_PROXY_SSL_CONFIG)
     else
         null;
     return vtls_scache_asn1.Curl_ssl_conn_config_match_zig(cfg, cand_ssl, cand_proxy_ssl, proxy);
@@ -1657,7 +1725,7 @@ fn url_match_destination(conn: *connectdata, m: *url_conn_match) bool {
     const n_scheme = connScheme(m.needle) orelse return false;
 
     if (n_origin.scheme != c_origin.scheme and
-        get_protocol_family(@ptrCast(@alignCast(c_origin.scheme.?))) != n_scheme.protocol)
+        get_protocol_family(peerScheme(c_origin).?) != n_scheme.protocol)
     {
         return false;
     }
@@ -1753,7 +1821,7 @@ fn url_match_auth_nego(conn: *connectdata, m: *url_conn_match) bool {
 }
 
 fn url_match_conn(conn: *connectdata, userdata: ?*anyopaque) callconv(.c) cpool_match_result {
-    const m: *url_conn_match = @ptrCast(@alignCast(userdata.?));
+    const m = castMatch(userdata);
     var wait_pipe = false;
 
     if (!url_match_connect_config(conn, m)) return CPOOL_MATCH_CONT;
@@ -1795,7 +1863,7 @@ fn url_match_conn(conn: *connectdata, userdata: ?*anyopaque) callconv(.c) cpool_
 }
 
 fn url_match_result(userdata: ?*anyopaque) callconv(.c) bool {
-    const match: *url_conn_match = @ptrCast(@alignCast(userdata.?));
+    const match = castMatch(userdata);
     if (match.found) |found| {
         Curl_attach_connection(match.data, found, true);
         return true;
@@ -1814,13 +1882,13 @@ fn url_attach_existing(
     m: *url_conn_match,
     pnow: *const Curltime,
 ) bool {
-    const dest: ?[*:0]const u8 = @ptrCast(Curl_zig_url_conn_get_ptr(needle, CONN_PTR_DESTINATION));
+    const dest = connGetCStr(needle, CONN_PTR_DESTINATION);
     return Curl_cpool_find(data, dest, true, pnow, url_match_conn, url_match_result, m);
 }
 
-fn allocate_conn(data: *Curl_easy) ?*connectdata {
-    const raw = mem.calloc(1, Curl_zig_url_conn_sizeof()) orelse return null;
-    const conn: *connectdata = @ptrCast(raw);
+fn allocateConnInner(data: *Curl_easy) error{OutOfMemory}!*connectdata {
+    const conn = allocConn() orelse return error.OutOfMemory;
+    errdefer freeConnRaw(conn);
 
     Curl_zig_url_conn_set_i64(conn, CONN_I64_SOCK_FIRST, -1);
     Curl_zig_url_conn_set_i64(conn, CONN_I64_SOCK_SECOND, -1);
@@ -1841,13 +1909,8 @@ fn allocate_conn(data: *Curl_easy) ?*connectdata {
     Curl_zig_url_conn_set_i64(conn, CONN_I64_TRANSPORT_WANTED, TRNSPRT_TCP);
 
     if (easyStr(data, STRING_INTERFACE_OPT)) |if_opt| {
-        const dup = mem.strdup(if_opt) orelse {
-            const conn_size = Curl_zig_url_conn_sizeof();
-            mem.secureZero(@ptrCast(conn), conn_size);
-            mem.freeSized(@ptrCast(conn), conn_size);
-            return null;
-        };
-        Curl_zig_url_conn_set_ptr(conn, CONN_PTR_INTERFACE_OPTS, dup);
+        const dup = mem.strdup(if_opt) orelse return error.OutOfMemory;
+        connSetPtr(conn, CONN_PTR_INTERFACE_OPTS, dup);
     }
 
     if (!hasFlag(FLAG_DISABLE_BINDLOCAL)) {
@@ -1865,9 +1928,13 @@ fn allocate_conn(data: *Curl_easy) ?*connectdata {
     return conn;
 }
 
+fn allocate_conn(data: *Curl_easy) ?*connectdata {
+    return allocateConnInner(data) catch null;
+}
+
 fn url_set_conn_scheme(data: *Curl_easy, conn: *connectdata) CURLcode {
     const origin = connOrigin(conn) orelse return CURLE_UNSUPPORTED_PROTOCOL;
-    const scheme: *const Curl_scheme = @ptrCast(@alignCast(origin.scheme orelse return CURLE_UNSUPPORTED_PROTOCOL));
+    const scheme = peerScheme(origin) orelse return CURLE_UNSUPPORTED_PROTOCOL;
     const allowed_protocols = Curl_setopt_get_i64(data, FIELD_ALLOWED_PROTOCOLS);
     const redir_protocols = Curl_setopt_get_i64(data, FIELD_REDIR_PROTOCOLS);
     const is_follow = Curl_zig_url_data_get_bit(data, DATA_BIT_THIS_IS_A_FOLLOW);
@@ -1876,7 +1943,7 @@ fn url_set_conn_scheme(data: *Curl_easy, conn: *connectdata) CURLcode {
         (allowed_protocols & scheme.protocol) != 0 and
         (!is_follow or (redir_protocols & scheme.protocol) != 0))
     {
-        Curl_zig_url_conn_set_ptr(conn, CONN_PTR_SCHEME, @constCast(scheme));
+        connSetPtr(conn, CONN_PTR_SCHEME, scheme);
         return CURLE_OK;
     }
 
@@ -1906,10 +1973,10 @@ fn hsts_upgrade(
 ) CURLcode {
     if (hasFlag(FLAG_DISABLE_HTTP) or hasFlag(FLAG_DISABLE_HSTS)) return CURLE_OK;
 
-    const hsts: ?*altsvc_hsts_peer.Hsts = @ptrCast(@alignCast(Curl_setopt_get_ptr(data, PTR_DATA_HSTS)));
+    const hsts = setoptGetPtr(altsvc_hsts_peer.Hsts, data, PTR_DATA_HSTS);
     const origin = dataOrigin(data);
     if (hsts != null and origin != null and
-        origin.?.scheme == @as(?*const altsvc_hsts_peer.CurlScheme, @ptrCast(&Curl_scheme_http)) and
+        peerScheme(origin.?) == &Curl_scheme_http and
         altsvc_hsts_peer.Curl_hsts_applies(hsts, origin.?))
     {
         var url: ?[*:0]u8 = null;
@@ -1924,7 +1991,7 @@ fn hsts_upgrade(
 
         Curl_bufref_set(url_br, url, 0, &curl_free);
 
-        const p_origin: *?*CurlPeer = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_REF_STATE_ORIGIN).?));
+        const p_origin = dataGetPtr(?*CurlPeer, data, DATA_PTR_REF_STATE_ORIGIN).?;
         const result = altsvc_hsts_peer.Curl_peer_from_url(
             uh,
             data,
@@ -1979,7 +2046,7 @@ fn url_set_data_creds_netrc(data: *Curl_easy, pcreds: *?*Curl_creds) CURLcode {
 
         if (scan_netrc) {
             const origin = dataOrigin(data).?;
-            const store: *netrc_addr_idn.StoreNetrc = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_REF_STATE_NETRC).?));
+            const store = dataGetPtr(netrc_addr_idn.StoreNetrc, data, DATA_PTR_REF_STATE_NETRC).?;
             const netrc_file = easyStr(data, STRING_NETRC_FILE);
             const ret = netrc_addr_idn.Curl_netrc_scan(
                 data,
@@ -2002,7 +2069,7 @@ fn url_set_data_creds_netrc(data: *Curl_easy, pcreds: *?*Curl_creds) CURLcode {
                 failf(data, ".netrc error: %s", .{m});
                 result = CURLE_READ_ERROR;
             } else if (ncreds_out) |nc| {
-                const scheme: *const Curl_scheme = @ptrCast(@alignCast(origin.scheme.?));
+                const scheme = peerScheme(origin).?;
                 if ((scheme.flags & PROTOPT_USERPWDCTRL) == 0 and
                     (str_has_ctrl(nc.user) or str_has_ctrl(nc.passwd)))
                 {
@@ -2020,7 +2087,7 @@ fn url_set_data_creds_netrc(data: *Curl_easy, pcreds: *?*Curl_creds) CURLcode {
                         pcreds,
                     );
                     if (result == CURLE_OK) {
-                        const uh: *CURLU = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_STATE_UH).?));
+                        const uh = dataGetPtr(CURLU, data, DATA_PTR_STATE_UH).?;
                         var uc = curl_url_set(uh, CURLUPART_USER, credsUser(pcreds.*), CURLU_URLENCODE);
                         if (uc == CURLUE_OK) {
                             uc = curl_url_set(uh, CURLUPART_PASSWORD, credsPasswd(pcreds.*), CURLU_URLENCODE);
@@ -2057,8 +2124,9 @@ inline fn scan_netrc_trace_applicable(use_netrc: i64, creds_opt: ?*Curl_creds) b
     return true;
 }
 
-fn url_set_data_creds(data: *Curl_easy, uh: *CURLU) CURLcode {
+fn setDataCredsInner(data: *Curl_easy, uh: *CURLU, result_out: *CURLcode) error{CredsFailed}!void {
     var newcreds: ?*Curl_creds = null;
+    defer http1_options.Curl_creds_unlink(&newcreds);
     var result: CURLcode = CURLE_OK;
 
     const u_str = easyStr(data, STRING_USERNAME);
@@ -2080,27 +2148,31 @@ fn url_set_data_creds(data: *Curl_easy, uh: *CURLU) CURLcode {
             &newcreds,
         );
         if (result != CURLE_OK) {
-            http1_options.Curl_creds_unlink(&newcreds);
-            return result;
+            result_out.* = result;
+            return error.CredsFailed;
         }
         if (newcreds) |nc| {
             const origin = dataOrigin(data).?;
-            const scheme: *const Curl_scheme = @ptrCast(@alignCast(origin.scheme.?));
+            const scheme = peerScheme(origin).?;
             if ((scheme.flags & PROTOPT_USERPWDCTRL) == 0 and
                 (str_has_ctrl(credsUser(nc)) or str_has_ctrl(credsPasswd(nc))))
             {
                 failf(data, "control code detected in credentials", .{});
-                http1_options.Curl_creds_unlink(&newcreds);
-                return CURLE_BAD_FUNCTION_ARGUMENT;
+                result_out.* = CURLE_BAD_FUNCTION_ARGUMENT;
+                return error.CredsFailed;
             }
         }
     }
 
     if (newcreds == null or !credsHasUser(newcreds)) {
         var user: ?[*:0]u8 = null;
+        defer if (user) |p| mem.free(p);
         var passwd: ?[*:0]u8 = null;
+        defer mem.freeSecretZ(passwd);
         var udecoded: ?[*:0]u8 = null;
+        defer if (udecoded) |p| mem.free(p);
         var pdecoded: ?[*:0]u8 = null;
+        defer mem.freeSecretZ(pdecoded);
 
         var uc = curl_url_get(uh, CURLUPART_USER, &user, 0);
         if (uc != CURLUE_OK and uc != CURLUE_NO_USER) {
@@ -2114,7 +2186,7 @@ fn url_set_data_creds(data: *Curl_easy, uh: *CURLU) CURLcode {
         }
 
         const origin = dataOrigin(data).?;
-        const scheme: *const Curl_scheme = @ptrCast(@alignCast(origin.scheme.?));
+        const scheme = peerScheme(origin).?;
         const ctrl_mode: c_uint = if ((scheme.flags & PROTOPT_USERPWDCTRL) != 0) REJECT_ZERO else REJECT_CTRL;
 
         if (result == CURLE_OK and user != null) {
@@ -2127,15 +2199,10 @@ fn url_set_data_creds(data: *Curl_easy, uh: *CURLU) CURLcode {
             result = http1_options.Curl_creds_merge(udecoded, pdecoded, newcreds, CREDS_URL, &newcreds);
         }
 
-        if (udecoded) |p| mem.free(p);
-        mem.freeSecretZ(pdecoded);
-        mem.freeSecretZ(passwd);
-        if (user) |p| mem.free(p);
-
         if (result != CURLE_OK) {
             failf(data, "error extracting credentials from URL", .{});
-            http1_options.Curl_creds_unlink(&newcreds);
-            return result;
+            result_out.* = result;
+            return error.CredsFailed;
         }
     }
 
@@ -2143,28 +2210,37 @@ fn url_set_data_creds(data: *Curl_easy, uh: *CURLU) CURLcode {
         result = url_set_data_creds_netrc(data, &newcreds);
     }
 
-    if (result == CURLE_OK and !http1_options.Curl_creds_equal(dataCreds(data), newcreds)) {
-        const p_data_creds: *?*Curl_creds = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_REF_STATE_CREDS).?));
+    if (result != CURLE_OK) {
+        result_out.* = result;
+        return error.CredsFailed;
+    }
+
+    if (!http1_options.Curl_creds_equal(dataCreds(data), newcreds)) {
+        const p_data_creds = dataGetPtr(?*Curl_creds, data, DATA_PTR_REF_STATE_CREDS).?;
         http1_options.Curl_creds_link(p_data_creds, newcreds);
     }
-    http1_options.Curl_creds_unlink(&newcreds);
-    return result;
+}
+
+fn url_set_data_creds(data: *Curl_easy, uh: *CURLU) CURLcode {
+    var result: CURLcode = CURLE_OK;
+    setDataCredsInner(data, uh, &result) catch return result;
+    return CURLE_OK;
 }
 
 fn url_set_conn_origin_etc(data: *Curl_easy, conn: *connectdata) CURLcode {
-    const p_conn_origin: *?*CurlPeer = @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(conn, CONN_PTR_REF_ORIGIN).?));
+    const p_conn_origin = connGetPtr(?*CurlPeer, conn, CONN_PTR_REF_ORIGIN).?;
     altsvc_hsts_peer.Curl_peer_link(p_conn_origin, dataOrigin(data));
 
     const result = url_set_conn_scheme(data, conn);
     if (result != CURLE_OK) return result;
 
-    const up: *urlpieces = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_REF_STATE_UP).?));
+    const up = dataGetPtr(urlpieces, data, DATA_PTR_REF_STATE_UP).?;
     if (easyStr(data, STRING_OPTIONS)) |opt_str| {
         const dup = mem.strdup(opt_str) orelse return CURLE_OUT_OF_MEMORY;
-        Curl_zig_url_conn_set_ptr(conn, CONN_PTR_OPTIONS, dup);
+        connSetPtr(conn, CONN_PTR_OPTIONS, dup);
     } else if (up.options) |up_opt| {
         const dup = mem.strdup(up_opt) orelse return CURLE_OUT_OF_MEMORY;
-        Curl_zig_url_conn_set_ptr(conn, CONN_PTR_OPTIONS, dup);
+        connSetPtr(conn, CONN_PTR_OPTIONS, dup);
     }
 
     return CURLE_OK;
@@ -2191,7 +2267,7 @@ fn setup_range(data: *Curl_easy) CURLcode {
             Curl_zig_url_data_set_ptr(data, DATA_PTR_STATE_RANGE, null);
             return CURLE_OUT_OF_MEMORY;
         }
-        Curl_zig_url_data_set_ptr(data, DATA_PTR_STATE_RANGE, new_range);
+        connOrDataSetRange(data, new_range);
         Curl_zig_url_data_set_bit(data, DATA_BIT_RANGESTRINGALLOC, true);
         Curl_zig_url_data_set_bit(data, DATA_BIT_USE_RANGE, true);
     } else {
@@ -2201,11 +2277,15 @@ fn setup_range(data: *Curl_easy) CURLcode {
     return CURLE_OK;
 }
 
+inline fn connOrDataSetRange(data: *Curl_easy, new_range: ?[*:0]u8) void {
+    dataSetPtr(data, DATA_PTR_STATE_RANGE, new_range);
+}
+
 fn setup_connection_internals(data: *Curl_easy, conn: *connectdata) CURLcode {
     const scheme = connScheme(conn) orelse return CURLE_FAILED_INIT;
     if (schemeRun(scheme)) |run| {
         if (run.setup_connection) |setup_fn| {
-            const result = setup_fn(@ptrCast(data), conn);
+            const result = setup_fn(asFtpEasy(data), conn);
             if (result != CURLE_OK) return result;
         }
     }
@@ -2223,7 +2303,7 @@ fn setup_connection_internals(data: *Curl_easy, conn: *connectdata) CURLcode {
         curl_maprintf("%s:%u", hostname, port);
 
     const dest_ptr = dest orelse return CURLE_OUT_OF_MEMORY;
-    Curl_zig_url_conn_set_ptr(conn, CONN_PTR_DESTINATION, dest_ptr);
+    connSetPtr(conn, CONN_PTR_DESTINATION, dest_ptr);
     primitives.Curl_strntolower(dest_ptr, dest_ptr, std.mem.len(dest_ptr));
 
     if (hasFlag(FLAG_USE_IPV6)) {
@@ -2239,13 +2319,13 @@ fn setup_connection_internals(data: *Curl_easy, conn: *connectdata) CURLcode {
     return CURLE_OK;
 }
 
-pub export fn Curl_parse_login_details(
+fn parseLoginDetailsInner(
     login: [*]const u8,
     len: usize,
     userp: ?*?[*:0]u8,
     passwdp: ?*?[*:0]u8,
     optionsp: ?*?[*:0]u8,
-) callconv(.c) CURLcode {
+) error{OutOfMemory}!void {
     const psep_idx = std.mem.indexOfScalar(u8, login[0..len], ':');
     const osep_idx = if (optionsp != null) std.mem.indexOfScalar(u8, login[0..len], ';') else null;
 
@@ -2266,38 +2346,43 @@ pub export fn Curl_parse_login_details(
     else
         0;
 
-    const ubuf = curlx_memdup0(login, ulen) orelse return CURLE_OUT_OF_MEMORY;
+    const ubuf = mem.memdup0(login, ulen) orelse return error.OutOfMemory;
+    errdefer mem.free(ubuf);
 
     var pbuf: ?[*:0]u8 = null;
+    errdefer mem.freeSecretZ(pbuf);
     if (psep_idx) |pidx| {
-        pbuf = curlx_memdup0(login + pidx + 1, plen) orelse {
-            mem.free(ubuf);
-            return CURLE_OUT_OF_MEMORY;
-        };
+        pbuf = mem.memdup0(login + pidx + 1, plen) orelse return error.OutOfMemory;
     }
 
     if (optionsp) |opt_out| {
         var obuf: ?[*:0]u8 = null;
         if (olen != 0) {
             const oidx = osep_idx.?;
-            obuf = curlx_memdup0(login + oidx + 1, olen) orelse {
-                mem.free(ubuf);
-                mem.freeSecretZ(pbuf);
-                return CURLE_OUT_OF_MEMORY;
-            };
+            obuf = mem.memdup0(login + oidx + 1, olen) orelse return error.OutOfMemory;
         }
         opt_out.* = obuf;
     }
 
     if (userp) |up| up.* = ubuf else mem.free(ubuf);
     if (passwdp) |pp| pp.* = pbuf else mem.freeSecretZ(pbuf);
+}
+
+pub export fn Curl_parse_login_details(
+    login: [*]const u8,
+    len: usize,
+    userp: ?*?[*:0]u8,
+    passwdp: ?*?[*:0]u8,
+    optionsp: ?*?[*:0]u8,
+) callconv(.c) CURLcode {
+    parseLoginDetailsInner(login, len, userp, passwdp, optionsp) catch return CURLE_OUT_OF_MEMORY;
     return CURLE_OK;
 }
 
 fn url_set_conn_login(data: *Curl_easy, conn: *connectdata) CURLcode {
     const scheme = connScheme(conn).?;
-    const p_creds_origin: *?*CurlPeer = @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(conn, CONN_PTR_REF_CREDS_ORIGIN).?));
-    const p_creds: *?*Curl_creds = @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(conn, CONN_PTR_REF_CREDS).?));
+    const p_creds_origin = connGetPtr(?*CurlPeer, conn, CONN_PTR_REF_CREDS_ORIGIN).?;
+    const p_creds = connGetPtr(?*Curl_creds, conn, CONN_PTR_REF_CREDS).?;
 
     if ((scheme.flags & PROTOPT_NEEDSPWD) != 0 and connCreds(conn) == null) {
         altsvc_hsts_peer.Curl_peer_link(p_creds_origin, dataOrigin(data));
@@ -2341,7 +2426,7 @@ fn parse_connect_to_string(
         const hostname = dest.hostname;
         var hlen = std.mem.len(hostname);
         host_match = primitives.curl_strnequal(ptr, hostname, hlen) != 0;
-        const user_hostname: [*:0]const u8 = @ptrCast(&dest.user_hostname);
+        const user_hostname = peerUserHostname(dest);
         if (!host_match and user_hostname != hostname) {
             hlen = std.mem.len(user_hostname);
             host_match = primitives.curl_strnequal(ptr, user_hostname, hlen) != 0;
@@ -2382,9 +2467,9 @@ fn url_set_conn_peer(data: *Curl_easy, conn: *connectdata) CURLcode {
     var result: CURLcode = CURLE_OK;
     const origin = connOrigin(conn) orelse return CURLE_FAILED_INIT;
     var via_peer: ?*CurlPeer = null;
-    var conn_to_entry: ?*curl_slist = @ptrCast(@alignCast(Curl_setopt_get_ptr(data, PTR_SET_CONNECT_TO)));
+    var conn_to_entry = setoptGetPtr(curl_slist, data, PTR_SET_CONNECT_TO);
 
-    const p_via_peer: *?*CurlPeer = @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(conn, CONN_PTR_REF_VIA_PEER).?));
+    const p_via_peer = connGetPtr(?*CurlPeer, conn, CONN_PTR_REF_VIA_PEER).?;
     altsvc_hsts_peer.Curl_peer_unlink(p_via_peer);
 
     while (conn_to_entry != null and via_peer == null) {
@@ -2395,7 +2480,7 @@ fn url_set_conn_peer(data: *Curl_easy, conn: *connectdata) CURLcode {
     }
 
     if (!hasFlag(FLAG_DISABLE_ALTSVC)) {
-        const asi: ?*Altsvcinfo = @ptrCast(@alignCast(Curl_setopt_get_ptr(data, PTR_DATA_ASI)));
+        const asi = setoptGetPtr(Altsvcinfo, data, PTR_DATA_ASI);
         const scheme = connScheme(conn).?;
         const altsvc_http = hasFlag(FLAG_DEBUGBUILD) and getenv("CURL_ALTSVC_HTTP") != null;
         if (asi != null and via_peer == null and (scheme.protocol == CURLPROTO_HTTPS or altsvc_http)) {
@@ -2514,10 +2599,10 @@ fn url_set_conn_peer(data: *Curl_easy, conn: *connectdata) CURLcode {
 }
 
 fn url_conn_reuse_adjust(data: *Curl_easy, needle: *connectdata) void {
-    const conn: *connectdata = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_CONN).?));
+    const conn = dataGetPtr(connectdata, data, DATA_PTR_CONN).?;
 
     if (connCreds(needle)) |ncreds| {
-        const p_conn_creds: *?*Curl_creds = @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(conn, CONN_PTR_REF_CREDS).?));
+        const p_conn_creds = connGetPtr(?*Curl_creds, conn, CONN_PTR_REF_CREDS).?;
         http1_options.Curl_creds_link(p_conn_creds, ncreds);
     }
 
@@ -2537,8 +2622,8 @@ fn url_conn_reuse_adjust(data: *Curl_easy, needle: *connectdata) void {
         .{ CONN_PTR_REF_ORIGIN2, CONN_PTR_ORIGIN2 },
         .{ CONN_PTR_REF_VIA_PEER2, CONN_PTR_VIA_PEER2 },
     }) |pair| {
-        const dst_ref: *?*CurlPeer = @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(conn, pair[0]).?));
-        const src_peer: ?*CurlPeer = @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(needle, pair[1])));
+        const dst_ref = connGetPtr(?*CurlPeer, conn, pair[0]).?;
+        const src_peer = connGetPtr(CurlPeer, needle, pair[1]);
         altsvc_hsts_peer.Curl_peer_link(dst_ref, src_peer);
     }
 }
@@ -2547,34 +2632,31 @@ fn conn_meta_freeentry(p: ?*anyopaque) callconv(.c) void {
     _ = p;
 }
 
-fn url_create_needle(data: *Curl_easy, pneedle: *?*connectdata) CURLcode {
-    var result: CURLcode = CURLE_OK;
-    var network_scheme = true;
-
+fn createNeedleInner(data: *Curl_easy, result_out: *CURLcode) error{CreateFailed}!*connectdata {
     const needle = allocate_conn(data) orelse {
-        pneedle.* = null;
-        return CURLE_OUT_OF_MEMORY;
+        result_out.* = CURLE_OUT_OF_MEMORY;
+        return error.CreateFailed;
     };
+    errdefer Curl_conn_free(data, needle);
 
-    if (Curl_zig_url_conn_get_ptr(needle, CONN_PTR_REF_META_HASH)) |mh| {
-        Curl_hash_init(@ptrCast(@alignCast(mh)), 23, collections.CURL_HASH_TYPE_BYTES, conn_meta_freeentry);
+    if (connGetPtr(Curl_hash, needle, CONN_PTR_REF_META_HASH)) |mh| {
+        Curl_hash_init(mh, 23, collections.CURL_HASH_TYPE_BYTES, conn_meta_freeentry);
     }
 
-    result = url_set_conn_origin_etc(data, needle);
+    var result = url_set_conn_origin_etc(data, needle);
     if (result != CURLE_OK) {
-        pneedle.* = null;
-        Curl_conn_free(data, needle);
-        return result;
+        result_out.* = result;
+        return error.CreateFailed;
     }
 
     const origin = connOrigin(needle).?;
-    const origin_scheme: *const Curl_scheme = @ptrCast(@alignCast(origin.scheme.?));
-    network_scheme = (origin_scheme.flags & PROTOPT_NONETWORK) == 0;
+    const origin_scheme = peerScheme(origin).?;
+    const network_scheme = (origin_scheme.flags & PROTOPT_NONETWORK) == 0;
 
     if (hasFlag(FLAG_USE_UNIX_SOCKETS)) {
         if (network_scheme) {
             if (easyStr(data, STRING_UNIX_SOCKET_PATH)) |uds_path| {
-                const p_via_peer: *?*CurlPeer = @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(needle, CONN_PTR_REF_VIA_PEER).?));
+                const p_via_peer = connGetPtr(?*CurlPeer, needle, CONN_PTR_REF_VIA_PEER).?;
                 result = altsvc_hsts_peer.Curl_peer_uds_create(
                     origin.scheme,
                     uds_path,
@@ -2582,9 +2664,8 @@ fn url_create_needle(data: *Curl_easy, pneedle: *?*connectdata) CURLcode {
                     p_via_peer,
                 );
                 if (result != CURLE_OK) {
-                    pneedle.* = null;
-                    Curl_conn_free(data, needle);
-                    return result;
+                    result_out.* = result;
+                    return error.CreateFailed;
                 }
             }
         }
@@ -2593,14 +2674,13 @@ fn url_create_needle(data: *Curl_easy, pneedle: *?*connectdata) CURLcode {
     if (network_scheme and connViaPeer(needle) == null) {
         result = url_set_conn_peer(data, needle);
         if (result != CURLE_OK) {
-            pneedle.* = null;
-            Curl_conn_free(data, needle);
-            return result;
+            result_out.* = result;
+            return error.CreateFailed;
         }
     }
 
     if (altsvc_hsts_peer.Curl_peer_equal(connOrigin(needle), connViaPeer(needle))) {
-        const p_via_peer: *?*CurlPeer = @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(needle, CONN_PTR_REF_VIA_PEER).?));
+        const p_via_peer = connGetPtr(?*CurlPeer, needle, CONN_PTR_REF_VIA_PEER).?;
         altsvc_hsts_peer.Curl_peer_unlink(p_via_peer);
     }
 
@@ -2609,25 +2689,22 @@ fn url_create_needle(data: *Curl_easy, pneedle: *?*connectdata) CURLcode {
         if (network_scheme and (vp == null or !vp.?.unixSocket())) {
             result = Curl_proxy_init_conn(data, needle);
             if (result != CURLE_OK) {
-                pneedle.* = null;
-                Curl_conn_free(data, needle);
-                return result;
+                result_out.* = result;
+                return error.CreateFailed;
             }
         }
     }
 
     result = url_set_conn_login(data, needle);
     if (result != CURLE_OK) {
-        pneedle.* = null;
-        Curl_conn_free(data, needle);
-        return result;
+        result_out.* = result;
+        return error.CreateFailed;
     }
 
     result = setup_connection_internals(data, needle);
     if (result != CURLE_OK) {
-        pneedle.* = null;
-        Curl_conn_free(data, needle);
-        return result;
+        result_out.* = result;
+        return error.CreateFailed;
     }
 
     const scheme = connScheme(needle).?;
@@ -2638,10 +2715,10 @@ fn url_create_needle(data: *Curl_easy, pneedle: *?*connectdata) CURLcode {
     }
 
     if (network_scheme) {
-        Curl_zig_url_conn_set_ptr(needle, CONN_PTR_RECV_FIRST, @ptrCast(@constCast(&Curl_cf_recv)));
-        Curl_zig_url_conn_set_ptr(needle, CONN_PTR_SEND_FIRST, @ptrCast(@constCast(&Curl_cf_send)));
-        Curl_zig_url_conn_set_ptr(needle, CONN_PTR_RECV_SECOND, @ptrCast(@constCast(&Curl_cf_recv)));
-        Curl_zig_url_conn_set_ptr(needle, CONN_PTR_SEND_SECOND, @ptrCast(@constCast(&Curl_cf_send)));
+        connSetPtr(needle, CONN_PTR_RECV_FIRST, &Curl_cf_recv);
+        connSetPtr(needle, CONN_PTR_SEND_FIRST, &Curl_cf_send);
+        connSetPtr(needle, CONN_PTR_RECV_SECOND, &Curl_cf_recv);
+        connSetPtr(needle, CONN_PTR_SEND_SECOND, &Curl_cf_send);
         Curl_zig_url_conn_set_bit(needle, CONN_BIT_TCP_FASTOPEN, Curl_setopt_get_bit(data, BIT_TCP_FASTOPEN));
         if (hasFlag(FLAG_USE_UNIX_SOCKETS)) {
             if (Curl_conn_get_first_peer(needle, FIRSTSOCKET)) |fp| {
@@ -2652,14 +2729,22 @@ fn url_create_needle(data: *Curl_easy, pneedle: *?*connectdata) CURLcode {
         }
     }
 
-    pneedle.* = needle;
+    return needle;
+}
+
+fn url_create_needle(data: *Curl_easy, pneedle: *?*connectdata) CURLcode {
+    var result: CURLcode = CURLE_OK;
+    pneedle.* = createNeedleInner(data, &result) catch {
+        pneedle.* = null;
+        return result;
+    };
     return CURLE_OK;
 }
 
 fn url_set_data_origin_and_creds(data: *Curl_easy) CURLcode {
     var result: CURLcode = CURLE_OK;
     var uc: CURLUcode = CURLUE_OK;
-    const set_uh: ?*CURLU = @ptrCast(@alignCast(Curl_setopt_get_ptr(data, PTR_SET_UH)));
+    const set_uh = setoptGetPtr(CURLU, data, PTR_SET_UH);
     const is_follow = Curl_zig_url_data_get_bit(data, DATA_BIT_THIS_IS_A_FOLLOW);
     const use_set_uh = (set_uh != null and !is_follow);
     const port_override: u16 = if (Curl_zig_url_data_get_bit(data, DATA_BIT_ALLOW_PORT))
@@ -2674,7 +2759,7 @@ fn url_set_data_origin_and_creds(data: *Curl_easy) CURLcode {
     up_free(data);
 
     const uh_opt: ?*CURLU = if (use_set_uh) curl_url_dup(set_uh.?) else curl_url();
-    Curl_zig_url_data_set_ptr(data, DATA_PTR_STATE_UH, uh_opt);
+    dataSetPtr(data, DATA_PTR_STATE_UH, uh_opt);
     const uh = uh_opt orelse return CURLE_OUT_OF_MEMORY;
 
     if (!use_set_uh) {
@@ -2712,8 +2797,8 @@ fn url_set_data_origin_and_creds(data: *Curl_easy) CURLcode {
 
         if (prepend_scheme) {
             const url = curl_maprintf("%s://%s", def_proto.?, Curl_bufref_ptr(url_br).?) orelse return CURLE_OUT_OF_MEMORY;
+            defer mem.free(url);
             uc = curl_url_set(uh, CURLUPART_URL, url, url_flags);
-            mem.free(url);
             if (uc != CURLUE_OK) {
                 failf(data, "URL rejected: %s", .{curl_url_strerror(uc)});
                 return Curl_uc_to_curlcode(uc);
@@ -2735,7 +2820,7 @@ fn url_set_data_origin_and_creds(data: *Curl_easy) CURLcode {
         scope_id = @intCast(Curl_setopt_get_i64(data, FIELD_SCOPE_ID));
     }
 
-    const p_origin: *?*CurlPeer = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_REF_STATE_ORIGIN).?));
+    const p_origin = dataGetPtr(?*CurlPeer, data, DATA_PTR_REF_STATE_ORIGIN).?;
     result = altsvc_hsts_peer.Curl_peer_from_url(
         uh,
         data,
@@ -2750,11 +2835,11 @@ fn url_set_data_origin_and_creds(data: *Curl_easy) CURLcode {
     if (result != CURLE_OK) return result;
 
     if (dataInitialOrigin(data) == null) {
-        const p_init_origin: *?*CurlPeer = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_REF_STATE_INITIAL_ORIGIN).?));
+        const p_init_origin = dataGetPtr(?*CurlPeer, data, DATA_PTR_REF_STATE_INITIAL_ORIGIN).?;
         altsvc_hsts_peer.Curl_peer_link(p_init_origin, dataOrigin(data));
     }
 
-    const up: *urlpieces = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_REF_STATE_UP).?));
+    const up = dataGetPtr(urlpieces, data, DATA_PTR_REF_STATE_UP).?;
     uc = curl_url_get(uh, CURLUPART_PATH, &up.path, CURLU_URLENCODE);
     if (uc != CURLUE_OK) return Curl_uc_to_curlcode(uc);
 
@@ -2807,12 +2892,12 @@ fn url_match_init(data: *Curl_easy, needle: *connectdata, m: *url_conn_match) CU
     m.require_tls = use_ssl >= CURLUSESSL_CONTROL;
     m.may_tls = use_ssl > CURLUSESSL_NONE;
 
-    const sslc: *SslEasyConfig = @ptrCast(@alignCast(Curl_setopt_get_ptr_ref(data, PTR_REF_SET_SSL).?));
+    const sslc = setoptGetPtrRef(SslEasyConfig, data, PTR_REF_SET_SSL).?;
     const proxy_sslc: ?*SslEasyConfig = if (!hasFlag(FLAG_DISABLE_PROXY))
-        @ptrCast(@alignCast(Curl_setopt_get_ptr_ref(data, PTR_REF_SET_PROXY_SSL)))
+        setoptGetPtrRef(SslEasyConfig, data, PTR_REF_SET_PROXY_SSL)
     else
         null;
-    const blobs: [*]?*vtls_core.CurlBlob = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_SET_BLOBS).?));
+    const blobs: [*]?*vtls_core.CurlBlob = @ptrCast(dataGetPtr(?*vtls_core.CurlBlob, data, DATA_PTR_SET_BLOBS).?);
     const proxy_ssl_cfg: ?*SslFilterConfig = if (!hasFlag(FLAG_DISABLE_PROXY)) &m.proxy_ssl_config else null;
 
     return vtls_scache_asn1.Curl_ssl_filter_config_tmp_init_zig(
@@ -2821,7 +2906,7 @@ fn url_match_init(data: *Curl_easy, needle: *connectdata, m: *url_conn_match) CU
         dataInitialOrigin(data),
         sslc,
         proxy_sslc,
-        @ptrCast(Curl_easy_strset_ptr(data)),
+        Curl_easy_strset_ptr(data),
         blobs,
         &m.ssl_config,
         proxy_ssl_cfg,
@@ -2862,10 +2947,10 @@ fn url_find_or_create_conn(data: *Curl_easy, pnow: *const Curltime) CURLcode {
     const n_scheme = connScheme(n_conn).?;
     if (!hasFlag(FLAG_DISABLE_FILE) and (n_scheme.flags & PROTOPT_NONETWORK) != 0) {
         var done = false;
-        Curl_zig_url_data_set_ptr(data, DATA_PTR_INFO_CONN_SCHEME, @ptrCast(@constCast(n_scheme.name)));
+        dataSetPtr(data, DATA_PTR_INFO_CONN_SCHEME, n_scheme.name);
         Curl_zig_url_data_set_i64(data, DATA_I64_INFO_CONN_PROTOCOL, n_scheme.protocol & CURLPROTO_MASK);
         const run = schemeRun(n_scheme).?;
-        result = run.connect_it.?(@ptrCast(data), &done);
+        result = run.connect_it.?(asFtpEasy(data), &done);
         if (result != CURLE_OK) return result;
 
         result = Curl_cpool_add(data, n_conn, 0, 0, pnow);
@@ -2875,17 +2960,17 @@ fn url_find_or_create_conn(data: *Curl_easy, pnow: *const Curltime) CURLcode {
             result = setup_range(data);
             if (result == CURLE_OK) {
                 Curl_xfer_setup_nop(data);
-                const d_conn: ?*connectdata = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_CONN)));
+                const d_conn = dataGetPtr(connectdata, data, DATA_PTR_CONN);
                 result = Curl_init_transfer(data, d_conn);
             }
         }
 
         if (result != CURLE_OK) {
-            const d_conn: *connectdata = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_CONN).?));
+            const d_conn = dataGetPtr(connectdata, data, DATA_PTR_CONN).?;
             const d_scheme = connScheme(d_conn).?;
             if (schemeRun(d_scheme)) |d_run| {
                 if (d_run.done) |done_fn| {
-                    _ = done_fn(@ptrCast(data), result, false);
+                    _ = done_fn(asFtpEasy(data), result, false);
                 }
             }
         }
@@ -2896,16 +2981,16 @@ fn url_find_or_create_conn(data: *Curl_easy, pnow: *const Curltime) CURLcode {
         !Curl_setopt_get_bit(data, BIT_CONNECT_ONLY))
     {
         if (url_attach_existing(data, n_conn, &match, pnow)) {
-            const conn: *connectdata = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_CONN).?));
+            const conn = dataGetPtr(connectdata, data, DATA_PTR_CONN).?;
             const n_origin = connOrigin(n_conn).?;
-            const n_origin_scheme: *const Curl_scheme = @ptrCast(@alignCast(n_origin.scheme.?));
+            const n_origin_scheme = peerScheme(n_origin).?;
             const tls_upgraded = (n_origin_scheme.flags & PROTOPT_SSL) == 0 and Curl_conn_is_ssl(conn, FIRSTSOCKET);
 
             Curl_zig_url_conn_set_bit(conn, CONN_BIT_REUSE, true);
             url_conn_reuse_adjust(data, n_conn);
 
             const c_origin = connOrigin(conn).?;
-            const c_origin_scheme: *const Curl_scheme = @ptrCast(@alignCast(c_origin.scheme.?));
+            const c_origin_scheme = peerScheme(c_origin).?;
             const upg_str: [*:0]const u8 = if (tls_upgraded) " (upgraded to SSL)" else "";
 
             if (!hasFlag(FLAG_DISABLE_PROXY)) {
@@ -2913,9 +2998,9 @@ fn url_find_or_create_conn(data: *Curl_easy, pnow: *const Curltime) CURLcode {
                 const c_hp = connHttpProxy(conn).?;
                 const kind_str: [*:0]const u8 = if (c_sp.peer != null or c_hp.peer != null) "proxy" else "host";
                 const host_str: [*:0]const u8 = if (c_sp.peer) |sp_peer|
-                    @ptrCast(&sp_peer.user_hostname)
+                    peerUserHostname(sp_peer)
                 else if (c_hp.peer) |hp_peer|
-                    @ptrCast(&hp_peer.user_hostname)
+                    peerUserHostname(hp_peer)
                 else
                     c_origin.hostname;
                 infof(data, "Reusing existing %s: connection%s with %s %s", .{
@@ -2940,7 +3025,7 @@ fn url_find_or_create_conn(data: *Curl_easy, pnow: *const Curltime) CURLcode {
             return CURLE_NO_CONNECTION_AVAILABLE;
         }
 
-        const multi: ?*const Curl_multi = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_MULTI)));
+        const multi = dataGetPtr(Curl_multi, data, DATA_PTR_MULTI);
         result = Curl_cpool_add(
             data,
             n_conn,
@@ -2953,10 +3038,10 @@ fn url_find_or_create_conn(data: *Curl_easy, pnow: *const Curltime) CURLcode {
         Curl_attach_connection(data, n_conn, true);
         needle = null;
 
-        const d_conn: *connectdata = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_CONN).?));
-        const conn_ssl: *SslFilterConfig = @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(d_conn, CONN_PTR_REF_SSL_CONFIG).?));
+        const d_conn = dataGetPtr(connectdata, data, DATA_PTR_CONN).?;
+        const conn_ssl = connGetPtr(SslFilterConfig, d_conn, CONN_PTR_REF_SSL_CONFIG).?;
         const conn_proxy_ssl: ?*SslFilterConfig = if (!hasFlag(FLAG_DISABLE_PROXY))
-            @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(d_conn, CONN_PTR_REF_PROXY_SSL_CONFIG)))
+            connGetPtr(SslFilterConfig, d_conn, CONN_PTR_REF_PROXY_SSL_CONFIG)
         else
             null;
         const match_proxy_ssl: ?*SslFilterConfig = if (!hasFlag(FLAG_DISABLE_PROXY)) &match.proxy_ssl_config else null;
@@ -2989,7 +3074,7 @@ fn url_find_or_create_conn(data: *Curl_easy, pnow: *const Curltime) CURLcode {
         }
     }
 
-    const d_conn: *connectdata = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_CONN).?));
+    const d_conn = dataGetPtr(connectdata, data, DATA_PTR_CONN).?;
     result = Curl_init_transfer(data, d_conn);
     if (result != CURLE_OK) return result;
 
@@ -2997,7 +3082,7 @@ fn url_find_or_create_conn(data: *Curl_easy, pnow: *const Curltime) CURLcode {
     if (result != CURLE_OK) return result;
 
     const d_scheme = connScheme(d_conn).?;
-    Curl_zig_url_data_set_ptr(data, DATA_PTR_INFO_CONN_SCHEME, @ptrCast(@constCast(d_scheme.name)));
+    dataSetPtr(data, DATA_PTR_INFO_CONN_SCHEME, d_scheme.name);
     Curl_zig_url_data_set_i64(data, DATA_I64_INFO_CONN_PROTOCOL, d_scheme.protocol & CURLPROTO_MASK);
 
     const used_proxy: i64 = if (hasFlag(FLAG_DISABLE_PROXY))
@@ -3030,7 +3115,7 @@ pub export fn Curl_connect(data: *Curl_easy, pconnected: *bool) callconv(.c) CUR
         const pnow = Curl_pgrs_now(data);
         Curl_pgrsTimeWas(data, TIMER_POSTQUEUE, pnow.*);
         result = url_find_or_create_conn(data, pnow);
-        conn = @ptrCast(@alignCast(Curl_zig_url_data_get_ptr(data, DATA_PTR_CONN)));
+        conn = dataGetPtr(connectdata, data, DATA_PTR_CONN);
         if (result == CURLE_OK and conn == null) {
             result = CURLE_FAILED_INIT;
         }
@@ -3101,28 +3186,37 @@ pub export fn Curl_data_priority_clear_state(data: *Curl_easy) callconv(.c) void
     }
 }
 
+fn connMetaSetInner(
+    conn: *connectdata,
+    key: [*:0]const u8,
+    meta_data: ?*anyopaque,
+    meta_dtor: Curl_meta_dtor,
+) error{OutOfMemory}!void {
+    const klen = std.mem.len(key) + 1;
+    errdefer meta_dtor(key, klen, meta_data);
+    const mh = connGetPtr(Curl_hash, conn, CONN_PTR_REF_META_HASH).?;
+    if (Curl_hash_add2(mh, key, klen, meta_data, meta_dtor) == null) {
+        return error.OutOfMemory;
+    }
+}
+
 pub export fn Curl_conn_meta_set(
     conn: *connectdata,
     key: [*:0]const u8,
     meta_data: ?*anyopaque,
     meta_dtor: Curl_meta_dtor,
 ) callconv(.c) CURLcode {
-    const mh: *Curl_hash = @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(conn, CONN_PTR_REF_META_HASH).?));
-    const klen = std.mem.len(key) + 1;
-    if (Curl_hash_add2(mh, key, klen, meta_data, meta_dtor) == null) {
-        meta_dtor(key, klen, meta_data);
-        return CURLE_OUT_OF_MEMORY;
-    }
+    connMetaSetInner(conn, key, meta_data, meta_dtor) catch return CURLE_OUT_OF_MEMORY;
     return CURLE_OK;
 }
 
 pub export fn Curl_conn_meta_remove(conn: *connectdata, key: [*:0]const u8) callconv(.c) void {
-    const mh: *Curl_hash = @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(conn, CONN_PTR_REF_META_HASH).?));
+    const mh = connGetPtr(Curl_hash, conn, CONN_PTR_REF_META_HASH).?;
     _ = Curl_hash_delete(mh, key, std.mem.len(key) + 1);
 }
 
 pub export fn Curl_conn_meta_get(conn: *connectdata, key: [*:0]const u8) callconv(.c) ?*anyopaque {
-    const mh: *Curl_hash = @ptrCast(@alignCast(Curl_zig_url_conn_get_ptr(conn, CONN_PTR_REF_META_HASH).?));
+    const mh = connGetPtr(Curl_hash, conn, CONN_PTR_REF_META_HASH).?;
     return Curl_hash_pick(mh, key, std.mem.len(key) + 1);
 }
 
@@ -3131,10 +3225,10 @@ pub export fn Curl_get_admin(data: *Curl_easy) callconv(.c) *Curl_easy {
 
     if (Curl_zig_url_data_get_i64(data, DATA_I64_MID) == 0) {
         admin = data;
-    } else if (Curl_zig_url_data_get_ptr(data, DATA_PTR_MULTI)) |m| {
-        admin = Curl_zig_url_multi_admin(@ptrCast(@alignCast(m))) orelse data;
-    } else if (Curl_zig_url_data_get_ptr(data, DATA_PTR_MULTI_EASY)) |me| {
-        admin = Curl_zig_url_multi_admin(@ptrCast(@alignCast(me))) orelse data;
+    } else if (dataGetPtr(Curl_multi, data, DATA_PTR_MULTI)) |m| {
+        admin = Curl_zig_url_multi_admin(m) orelse data;
+    } else if (dataGetPtr(Curl_multi, data, DATA_PTR_MULTI_EASY)) |me| {
+        admin = Curl_zig_url_multi_admin(me) orelse data;
     }
 
     if (admin != data) {
@@ -3224,13 +3318,13 @@ test "Curl_open, Curl_close, and connection metadata lifecycle" {
     const conn = allocate_conn(data) orelse return error.OutOfMemory;
     defer Curl_conn_free(data, conn);
 
-    if (Curl_zig_url_conn_get_ptr(conn, CONN_PTR_REF_META_HASH)) |mh| {
-        Curl_hash_init(@ptrCast(@alignCast(mh)), 23, collections.CURL_HASH_TYPE_BYTES, conn_meta_freeentry);
+    if (connGetPtr(Curl_hash, conn, CONN_PTR_REF_META_HASH)) |mh| {
+        Curl_hash_init(mh, 23, collections.CURL_HASH_TYPE_BYTES, conn_meta_freeentry);
     }
 
     var destroyed = false;
     try std.testing.expectEqual(CURLE_OK, Curl_conn_meta_set(conn, "test:meta:key", &destroyed, testMetaDtor));
-    try std.testing.expectEqual(@as(?*anyopaque, &destroyed), Curl_conn_meta_get(conn, "test:meta:key"));
+    try std.testing.expectEqual(&destroyed, doh_hostip_easy.connMetaGetTyped(bool, conn, "test:meta:key"));
     Curl_conn_meta_remove(conn, "test:meta:key");
     try std.testing.expect(destroyed);
     try std.testing.expectEqual(@as(?*anyopaque, null), Curl_conn_meta_get(conn, "test:meta:key"));

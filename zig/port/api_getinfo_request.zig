@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const backend_options = @import("backend_options");
 const mem = @import("mem.zig");
 const collections = @import("collections.zig");
+const doh_hostip_easy = @import("doh_hostip_easy.zig");
 const curlx_time_net = @import("curlx_time_net.zig");
 const headers_sock = @import("headers_sock.zig");
 const io_buffers = @import("io_buffers.zig");
@@ -297,12 +298,11 @@ fn eapiInEventCb(data: *const CurlEasyPrefix) bool {
 
 pub export fn Curl_eapi_enter_zig(
     guard: *CurlEapiGuard,
-    curl: ?*anyopaque,
+    data: ?*CurlEasyPrefix,
     is_internal: bool,
     fn_id: c_uint,
     presult: ?*CURLcode,
 ) callconv(.c) bool {
-    const data: ?*CurlEasyPrefix = @ptrCast(@alignCast(curl));
     var result: CURLcode = CURLE_OK;
 
     guard.depth = 0;
@@ -409,11 +409,10 @@ fn mapiInNtfyCb(multi: *const CurlMultiPrefix) bool {
 
 pub export fn Curl_mapi_enter(
     guard: *CurlMapiGuard,
-    m: ?*anyopaque,
+    multi: ?*CurlMultiPrefix,
     fn_id: c_uint,
     pmresult: ?*CURLMcode,
 ) callconv(.c) bool {
-    const multi: ?*CurlMultiPrefix = @ptrCast(@alignCast(m));
     var mresult: CURLMcode = CURLM_OK;
 
     guard.depth = 0;
@@ -603,8 +602,8 @@ const CF_QUERY_SSL_INFO: c_int = 12;
 const CF_QUERY_SSL_CTX_INFO: c_int = 13;
 
 pub const IpQuadruple = extern struct {
-    remote_ip: [46]u8,
-    local_ip: [46]u8,
+    remote_ip: [45:0]u8,
+    local_ip: [45:0]u8,
     remote_port: u16,
     local_port: u16,
     transport: u8,
@@ -653,7 +652,7 @@ pub const CurlGetinfoCtx = extern struct {
     rtsp_session_id: ?[*:0]const u8,
     cainfo_default: ?[*:0]const u8,
     capath_default: ?[*:0]const u8,
-    private_data: ?*anyopaque,
+    private_data: ?[*:0]const u8,
     xfer_id: i64,
     last_conn_id: i64,
     deliver: i64,
@@ -716,17 +715,15 @@ extern fn Curl_ssl_free_certinfo(data: ?*anyopaque) callconv(.c) void;
 
 pub export fn Curl_initinfo_zig(
     data: ?*anyopaque,
-    pro_delta: ?*anyopaque,
-    pro_total: ?*anyopaque,
+    pro_delta: ?*[5]i64,
+    pro_total: ?*[8]i64,
     info_opt: ?*PureInfoPrefix,
 ) callconv(.c) void {
     if (pro_delta) |pd| {
-        const bytes: [*]u8 = @ptrCast(pd);
-        @memset(bytes[0 .. 5 * @sizeOf(i64)], 0);
+        pd.* = @splat(0);
     }
     if (pro_total) |pt| {
-        const bytes: [*]u8 = @ptrCast(pt);
-        @memset(bytes[0 .. 8 * @sizeOf(i64)], 0);
+        pt.* = @splat(0);
     }
     if (info_opt) |info| {
         info.httpcode = 0;
@@ -743,15 +740,15 @@ pub export fn Curl_initinfo_zig(
         info.numconnects = 0;
 
         if (info.contenttype) |p| {
-            mem.free(@ptrCast(p));
+            mem.free(p);
             info.contenttype = null;
         }
         if (info.wouldredirect) |p| {
-            mem.free(@ptrCast(p));
+            mem.free(p);
             info.wouldredirect = null;
         }
         if (info.effective_url) |p| {
-            mem.free(@ptrCast(p));
+            mem.free(p);
             info.effective_url = null;
         }
 
@@ -768,15 +765,15 @@ pub export fn Curl_initinfo_zig(
     }
 }
 
-fn effectiveUrl(ctx: *const CurlGetinfoCtx, url_in: ?[*:0]const u8, outp: *?[*:0]const u8) CURLcode {
-    const s = url_in orelse {
-        outp.* = "";
-        return CURLE_OK;
+fn effectiveUrlInner(ctx: *const CurlGetinfoCtx, s: [*:0]const u8, outp: *?[*:0]const u8, out_err: *CURLcode) error{UrlError}!void {
+    const u = curl_url() orelse {
+        out_err.* = CURLE_OUT_OF_MEMORY;
+        return error.UrlError;
     };
-    outp.* = null;
-    const u = curl_url() orelse return CURLE_OUT_OF_MEMORY;
+    defer curl_url_cleanup(u);
 
     var url: ?[*:0]u8 = null;
+    errdefer mem.free(url);
     var uc = curl_url_set(
         u,
         CURLUPART_URL,
@@ -792,22 +789,32 @@ fn effectiveUrl(ctx: *const CurlGetinfoCtx, url_in: ?[*:0]const u8, outp: *?[*:0
     if (uc == 0) {
         uc = curl_url_get(u, CURLUPART_URL, &url, CURLU_GET_EMPTY);
     }
-    curl_url_cleanup(u);
 
     if (uc != 0 or url == null) {
-        return if (uc != 0) Curl_uc_to_curlcode(uc) else CURLE_OUT_OF_MEMORY;
+        out_err.* = if (uc != 0) Curl_uc_to_curlcode(uc) else CURLE_OUT_OF_MEMORY;
+        return error.UrlError;
     }
     const u_str = url.?;
     if (!std.mem.eql(u8, std.mem.span(u_str), std.mem.span(s))) {
         if (ctx.info.effective_url) |old| {
-            mem.free(@ptrCast(old));
+            mem.free(old);
         }
         ctx.info.effective_url = u_str;
         outp.* = u_str;
     } else {
-        mem.free(@ptrCast(u_str));
+        mem.free(u_str);
         outp.* = s;
     }
+}
+
+fn effectiveUrl(ctx: *const CurlGetinfoCtx, url_in: ?[*:0]const u8, outp: *?[*:0]const u8) CURLcode {
+    const s = url_in orelse {
+        outp.* = "";
+        return CURLE_OK;
+    };
+    outp.* = null;
+    var err: CURLcode = CURLE_OK;
+    effectiveUrlInner(ctx, s, outp, &err) catch return err;
     return CURLE_OK;
 }
 
@@ -837,7 +844,7 @@ fn getinfoChar(ctx: *const CurlGetinfoCtx, info: c_uint, param_charp: *?[*:0]con
             param_charp.* = ctx.info.contenttype;
         },
         CURLINFO_PRIVATE => {
-            param_charp.* = @ptrCast(ctx.private_data);
+            param_charp.* = ctx.private_data;
         },
         CURLINFO_FTP_ENTRY_PATH => {
             param_charp.* = ctx.ftp_entrypath;
@@ -849,10 +856,10 @@ fn getinfoChar(ctx: *const CurlGetinfoCtx, info: c_uint, param_charp: *?[*:0]con
             param_charp.* = ctx.referer_str;
         },
         CURLINFO_PRIMARY_IP => {
-            param_charp.* = @ptrCast(&ctx.info.primary.remote_ip);
+            param_charp.* = &ctx.info.primary.remote_ip;
         },
         CURLINFO_LOCAL_IP => {
-            param_charp.* = @ptrCast(&ctx.info.primary.local_ip);
+            param_charp.* = &ctx.info.primary.local_ip;
         },
         CURLINFO_RTSP_SESSION_ID => {
             param_charp.* = ctx.rtsp_session_id;
@@ -1083,11 +1090,11 @@ fn getinfoSlist(
             param_slistp.* = Curl_getinfo_cookie_list(data);
         },
         CURLINFO_CERTINFO => {
-            param_slistp.* = @ptrCast(&ctx.info.certs);
+            param_slistp.* = &ctx.info.certs;
         },
         CURLINFO_TLS_SESSION, CURLINFO_TLS_SSL_PTR => {
             const tsi = ctx.tsi;
-            param_slistp.* = @ptrCast(tsi);
+            param_slistp.* = tsi;
             const query: c_int = if (info == CURLINFO_TLS_SSL_PTR)
                 CF_QUERY_SSL_INFO
             else
@@ -1112,6 +1119,10 @@ fn getinfoSocket(data: *CurlEasyPrefix, info: c_uint, param_socketp: *curl_socke
     return CURLE_OK;
 }
 
+inline fn castParam(comptime T: type, param: *anyopaque) *T {
+    return @ptrCast(@alignCast(param));
+}
+
 pub export fn Curl_getinfo_zig(
     data_opt: ?*CurlEasyPrefix,
     ctx_opt: ?*const CurlGetinfoCtx,
@@ -1124,30 +1135,12 @@ pub export fn Curl_getinfo_zig(
 
     const typ = info & CURLINFO_TYPEMASK;
     switch (typ) {
-        CURLINFO_STRING => {
-            const param_charp: *?[*:0]const u8 = @ptrCast(@alignCast(param));
-            return getinfoChar(ctx, info, param_charp);
-        },
-        CURLINFO_LONG => {
-            const param_longp: *c_long = @ptrCast(@alignCast(param));
-            return getinfoLong(data, ctx, info, param_longp);
-        },
-        CURLINFO_DOUBLE => {
-            const param_doublep: *f64 = @ptrCast(@alignCast(param));
-            return getinfoDouble(ctx, info, param_doublep);
-        },
-        CURLINFO_OFF_T => {
-            const param_offt: *i64 = @ptrCast(@alignCast(param));
-            return getinfoOfft(ctx, info, param_offt);
-        },
-        CURLINFO_SLIST => {
-            const param_slistp: *?*anyopaque = @ptrCast(@alignCast(param));
-            return getinfoSlist(data, ctx, info, param_slistp);
-        },
-        CURLINFO_SOCKET => {
-            const param_socketp: *curl_socket_t = @ptrCast(@alignCast(param));
-            return getinfoSocket(data, info, param_socketp);
-        },
+        CURLINFO_STRING => return getinfoChar(ctx, info, castParam(?[*:0]const u8, param)),
+        CURLINFO_LONG => return getinfoLong(data, ctx, info, castParam(c_long, param)),
+        CURLINFO_DOUBLE => return getinfoDouble(ctx, info, castParam(f64, param)),
+        CURLINFO_OFF_T => return getinfoOfft(ctx, info, castParam(i64, param)),
+        CURLINFO_SLIST => return getinfoSlist(data, ctx, info, castParam(?*anyopaque, param)),
+        CURLINFO_SOCKET => return getinfoSocket(data, info, castParam(curl_socket_t, param)),
         else => return CURLE_UNKNOWN_OPTION,
     }
 }
@@ -1342,11 +1335,11 @@ pub export fn Curl_req_soft_reset_zig(
     req.sendbuf_hds_len = 0;
 
     if (req.hd_auth) |p| {
-        mem.free(@ptrCast(p));
+        mem.free(p);
         req.hd_auth = null;
     }
     if (req.hd_proxy_auth) |p| {
-        mem.free(@ptrCast(p));
+        mem.free(p);
         req.hd_proxy_auth = null;
     }
 
@@ -1400,19 +1393,19 @@ pub export fn Curl_req_hard_reset_zig(
     const t0 = Curltime{ .tv_sec = 0, .tv_usec = 0 };
 
     if (req.newurl) |p| {
-        mem.free(@ptrCast(p));
+        mem.free(p);
         req.newurl = null;
     }
     if (req.hd_auth) |p| {
-        mem.free(@ptrCast(p));
+        mem.free(p);
         req.hd_auth = null;
     }
     if (req.hd_proxy_auth) |p| {
-        mem.free(@ptrCast(p));
+        mem.free(p);
         req.hd_proxy_auth = null;
     }
     if (req.cookiehost) |p| {
-        mem.free(@ptrCast(p));
+        mem.free(p);
         req.cookiehost = null;
     }
 
@@ -1467,15 +1460,15 @@ pub export fn Curl_req_hard_reset_zig(
 
 pub export fn Curl_req_free(req: *SingleRequest, data: ?*CurlEasyPrefix) callconv(.c) void {
     if (req.newurl) |p| {
-        mem.free(@ptrCast(p));
+        mem.free(p);
         req.newurl = null;
     }
     if (req.hd_auth) |p| {
-        mem.free(@ptrCast(p));
+        mem.free(p);
         req.hd_auth = null;
     }
     if (req.hd_proxy_auth) |p| {
-        mem.free(@ptrCast(p));
+        mem.free(p);
         req.hd_proxy_auth = null;
     }
     if (req.tail.word.flags.sendbuf_init) {
@@ -1646,7 +1639,7 @@ fn addFromClient(
     buflen: usize,
     pnread: *usize,
 ) callconv(.c) CURLcode {
-    const ctx: *AddFromClientCtx = @ptrCast(@alignCast(reader_ctx.?));
+    const ctx = castParam(AddFromClientCtx, reader_ctx.?);
     var eos: bool = false;
     const result = Curl_client_read(ctx.data, buf, buflen, pnread, &eos);
     if (result == CURLE_OK and eos) {
@@ -1682,7 +1675,7 @@ pub export fn Curl_req_send_zig(
     const ptr_opt = curlx_dyn_ptr(req);
     var blen = curlx_dyn_len(req);
     const empty: [1]u8 = .{0};
-    var buf: [*]const u8 = if (ptr_opt) |p| @ptrCast(p) else &empty;
+    var buf: [*]const u8 = if (ptr_opt) |p| p else &empty;
 
     if (Curl_bufq_is_empty(&sreq.sendbuf) and
         Curl_creader_total_length(data) == 0 and
@@ -1880,7 +1873,7 @@ extern fn Curl_pollset_remove(ps: *EasyPollset, sock: curl_socket_t) callconv(.c
 
 fn mevShEntryDtor(freethis: ?*anyopaque) callconv(.c) void {
     const raw = freethis orelse return;
-    const entry: *MevShEntry = @ptrCast(@alignCast(raw));
+    const entry = castParam(MevShEntry, raw);
     Curl_uint32_spbset_destroy(&entry.xfers);
     mem.freeTyped(entry);
 }
@@ -1888,27 +1881,28 @@ fn mevShEntryDtor(freethis: ?*anyopaque) callconv(.c) void {
 fn mevShEntryGet(sh: *CurlHash, s: curl_socket_t) ?*MevShEntry {
     if (s != CURL_SOCKET_BAD) {
         var sock = s;
-        if (Curl_hash_pick(sh, &sock, @sizeOf(curl_socket_t))) |ptr| {
-            return @ptrCast(@alignCast(ptr));
-        }
+        return collections.hashPickTyped(MevShEntry, sh, &sock, @sizeOf(curl_socket_t));
     }
     return null;
+}
+
+fn mevShEntryCreate(sh: *CurlHash, s: curl_socket_t) error{OutOfMemory}!*MevShEntry {
+    const check = mem.create(MevShEntry) orelse return error.OutOfMemory;
+    errdefer mevShEntryDtor(check);
+    Curl_uint32_spbset_init(&check.xfers);
+
+    var sock = s;
+    if (collections.hashAddTyped(MevShEntry, sh, &sock, @sizeOf(curl_socket_t), check) == null) {
+        return error.OutOfMemory;
+    }
+    return check;
 }
 
 fn mevShEntryAdd(sh: *CurlHash, s: curl_socket_t) ?*MevShEntry {
     if (mevShEntryGet(sh, s)) |there| {
         return there;
     }
-    const raw = mem.calloc(1, @sizeOf(MevShEntry)) orelse return null;
-    const check: *MevShEntry = @ptrCast(@alignCast(raw));
-    Curl_uint32_spbset_init(&check.xfers);
-
-    var sock = s;
-    if (Curl_hash_add(sh, &sock, @sizeOf(curl_socket_t), check) == null) {
-        mevShEntryDtor(check);
-        return null;
-    }
-    return check;
+    return mevShEntryCreate(sh, s) catch null;
 }
 
 fn mevShEntryKill(ev: *CurlMultiEv, s: curl_socket_t) void {
@@ -1932,7 +1926,7 @@ fn mevPollsetDtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callc
     _ = key;
     _ = klen;
     if (entry) |raw| {
-        const ps: *EasyPollset = @ptrCast(@alignCast(raw));
+        const ps = castParam(EasyPollset, raw);
         Curl_pollset_cleanup(ps);
         mem.freeTyped(ps);
     }
@@ -1956,13 +1950,10 @@ fn mevAddNewXferPollset(data: ?*CurlEasyPrefix) ?*EasyPollset {
 
 fn mevGetLastPollset(data: ?*CurlEasyPrefix, conn: ?*anyopaque) ?*EasyPollset {
     if (data != null) {
-        const raw = if (conn != null)
-            Curl_conn_meta_get(conn, CURL_META_MEV_POLLSET)
+        return if (conn != null)
+            doh_hostip_easy.connMetaGetTyped(EasyPollset, conn, CURL_META_MEV_POLLSET)
         else
-            Curl_meta_get(data, CURL_META_MEV_POLLSET);
-        if (raw) |p| {
-            return @ptrCast(@alignCast(p));
-        }
+            doh_hostip_easy.metaGetTyped(EasyPollset, data, CURL_META_MEV_POLLSET);
     }
     return null;
 }
@@ -2431,42 +2422,42 @@ test "Curl_getinfo string, long, double, and off_t queries" {
     var method_ptr: ?[*:0]const u8 = null;
     try std.testing.expectEqual(
         CURLE_OK,
-        Curl_getinfo_zig(&easy, &ctx, CURLINFO_EFFECTIVE_METHOD, @ptrCast(&method_ptr)),
+        Curl_getinfo_zig(&easy, &ctx, CURLINFO_EFFECTIVE_METHOD, mem.toRawPtr(&method_ptr)),
     );
     try std.testing.expectEqualStrings("POST", std.mem.span(method_ptr.?));
 
     var code: c_long = 0;
     try std.testing.expectEqual(
         CURLE_OK,
-        Curl_getinfo_zig(&easy, &ctx, CURLINFO_RESPONSE_CODE, @ptrCast(&code)),
+        Curl_getinfo_zig(&easy, &ctx, CURLINFO_RESPONSE_CODE, &code),
     );
     try std.testing.expectEqual(@as(c_long, 200), code);
 
     var http_ver: c_long = 0;
     try std.testing.expectEqual(
         CURLE_OK,
-        Curl_getinfo_zig(&easy, &ctx, CURLINFO_HTTP_VERSION, @ptrCast(&http_ver)),
+        Curl_getinfo_zig(&easy, &ctx, CURLINFO_HTTP_VERSION, &http_ver),
     );
     try std.testing.expectEqual(@as(c_long, 3), http_ver);
 
     var port: c_long = 0;
     try std.testing.expectEqual(
         CURLE_OK,
-        Curl_getinfo_zig(&easy, &ctx, CURLINFO_PRIMARY_PORT, @ptrCast(&port)),
+        Curl_getinfo_zig(&easy, &ctx, CURLINFO_PRIMARY_PORT, &port),
     );
     try std.testing.expectEqual(@as(c_long, 443), port);
 
     var total_sec: f64 = 0.0;
     try std.testing.expectEqual(
         CURLE_OK,
-        Curl_getinfo_zig(&easy, &ctx, CURLINFO_TOTAL_TIME, @ptrCast(&total_sec)),
+        Curl_getinfo_zig(&easy, &ctx, CURLINFO_TOTAL_TIME, &total_sec),
     );
     try std.testing.expectApproxEqAbs(@as(f64, 2.5), total_sec, 1e-6);
 
     var cl_dl: i64 = 0;
     try std.testing.expectEqual(
         CURLE_OK,
-        Curl_getinfo_zig(&easy, &ctx, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, @ptrCast(&cl_dl)),
+        Curl_getinfo_zig(&easy, &ctx, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &cl_dl),
     );
     try std.testing.expectEqual(@as(i64, 8192), cl_dl);
 }

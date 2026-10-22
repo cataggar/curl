@@ -540,7 +540,7 @@ pub export fn parse_port(u: *Curl_URL, host: *Dynbuf, has_scheme: bool) callconv
         const keep: usize = @intFromPtr(pp) - @intFromPtr(hostname);
 
         _ = curlx_dyn_setlen(host, keep);
-        var p: [*:0]const u8 = @ptrCast(pp + 1);
+        var p: [*:0]const u8 = hostname + (keep + 1);
         if (p[0] == 0)
             return if (has_scheme) .CURLUE_OK else .CURLUE_BAD_PORT_NUMBER;
         if (p[0] == '\\')
@@ -604,7 +604,7 @@ pub export fn ipv6_parse(u: *Curl_URL, hostname: [*:0]u8, hlen_in: usize) callco
         hlen = len;
         if (host_inner[len] == '%') {
             // this could now be '%[zone id]'
-            var zoneid: [MAX_ZONEID_LEN]u8 = undefined;
+            var zoneid: [MAX_ZONEID_LEN:0]u8 = undefined;
             var i: usize = 0;
             var h: [*:0]const u8 = host_inner + len + 1;
             // pass '25' if present and is a URL encoded percent sign
@@ -619,7 +619,7 @@ pub export fn ipv6_parse(u: *Curl_URL, hostname: [*:0]u8, hlen_in: usize) callco
             if (i == 0 or h[0] != ']' or h[1] != 0)
                 return .CURLUE_BAD_IPV6;
             zoneid[i] = 0;
-            const zdup = mem.strdup(@ptrCast(&zoneid)) orelse return .CURLUE_OUT_OF_MEMORY;
+            const zdup = mem.strdup(&zoneid) orelse return .CURLUE_OUT_OF_MEMORY;
             mem.free(u.zoneid);
             u.zoneid = zdup;
             host_inner[len] = ']'; // insert end bracket
@@ -849,26 +849,35 @@ fn parse_authority(
     return uc;
 }
 
-// Used for HTTP/2 server push
-pub export fn Curl_url_set_authority(u: *Curl_URL, authority: [*:0]const u8) callconv(.c) CURLUcode {
+fn checkUres(ures: CURLUcode, out_ures: *CURLUcode) error{UrlError}!void {
+    if (ures != .CURLUE_OK) {
+        out_ures.* = ures;
+        return error.UrlError;
+    }
+}
+
+fn setAuthorityInner(u: *Curl_URL, authority: [*:0]const u8, out_ures: *CURLUcode) error{UrlError}!void {
     var host: Dynbuf = undefined;
     curlx_dyn_init(&host, CURL_MAX_INPUT_LENGTH);
+    errdefer curlx_dyn_free(&host);
 
-    const ures = parse_authority(
+    try checkUres(parse_authority(
         u,
         authority,
         cStrLen(authority),
         CURLU_DISALLOW_USER,
         &host,
         u.scheme != null,
-    );
-    if (ures != .CURLUE_OK) {
-        curlx_dyn_free(&host);
-    } else {
-        mem.free(u.host);
-        u.host = curlx_dyn_ptr(&host);
-    }
-    return ures;
+    ), out_ures);
+    mem.free(u.host);
+    u.host = curlx_dyn_ptr(&host);
+}
+
+// Used for HTTP/2 server push
+pub export fn Curl_url_set_authority(u: *Curl_URL, authority: [*:0]const u8) callconv(.c) CURLUcode {
+    var ures: CURLUcode = .CURLUE_OK;
+    setAuthorityInner(u, authority, &ures) catch return ures;
+    return .CURLUE_OK;
 }
 
 // "Remove Dot Segments"
@@ -908,9 +917,8 @@ fn needs_dedotdot(p_in: [*]const u8, pn_in: usize) bool {
     return false;
 }
 
-pub export fn dedotdotify(input_in: [*]const u8, clen_in: usize, outp: *?[*:0]u8) callconv(.c) c_int {
+fn dedotdotifyInner(input_in: [*]const u8, clen_in: usize, outp: *?[*:0]u8) error{OutOfMemory}!void {
     var out: Dynbuf = undefined;
-    var result: c_uint = CURLE_OK;
     var input = input_in;
     var clen = clen_in;
     var dinput = input;
@@ -918,9 +926,10 @@ pub export fn dedotdotify(input_in: [*]const u8, clen_in: usize, outp: *?[*:0]u8
 
     outp.* = null;
     if (!needs_dedotdot(input, clen))
-        return 0;
+        return;
 
     curlx_dyn_init(&out, clen + 1);
+    errdefer curlx_dyn_free(&out);
 
     // If the input buffer begins with a prefix of "../" or "./", then remove
     // that prefix from the input buffer; otherwise,
@@ -940,13 +949,14 @@ pub export fn dedotdotify(input_in: [*]const u8, clen_in: usize, outp: *?[*:0]u8
     }
 
     if (!skip_loop) {
-        while (clen != 0 and result == CURLE_OK) {
+        while (clen != 0) {
             if (input[0] == '/') {
                 var p: [*]const u8 = input + 1;
                 var blen: usize = clen - 1;
                 if (is_dot(&p, &blen)) {
                     if (blen == 0) { // /.
-                        result = curlx_dyn_addn(&out, "/", 1);
+                        if (curlx_dyn_addn(&out, "/", 1) != CURLE_OK)
+                            return error.OutOfMemory;
                         break;
                     } else if (p[0] == '/') { // /./
                         input = p;
@@ -957,9 +967,8 @@ pub export fn dedotdotify(input_in: [*]const u8, clen_in: usize, outp: *?[*:0]u8
                         const len = curlx_dyn_len(&out);
                         if (len != 0) {
                             if (curlx_dyn_ptr(&out)) |ptr| {
-                                if (primitives.Curl_memrchr(ptr, '/', len)) |last_void| {
-                                    const last: [*]const u8 = @ptrCast(last_void);
-                                    _ = curlx_dyn_setlen(&out, @intFromPtr(last) - @intFromPtr(ptr));
+                                if (std.mem.lastIndexOfScalar(u8, ptr[0..len], '/')) |last_idx| {
+                                    _ = curlx_dyn_setlen(&out, last_idx);
                                 }
                             }
                         }
@@ -969,29 +978,31 @@ pub export fn dedotdotify(input_in: [*]const u8, clen_in: usize, outp: *?[*:0]u8
                             clen = blen;
                             continue;
                         }
-                        result = curlx_dyn_addn(&out, "/", 1);
+                        if (curlx_dyn_addn(&out, "/", 1) != CURLE_OK)
+                            return error.OutOfMemory;
                         break;
                     }
                 }
             }
 
-            result = curlx_dyn_addn(&out, input, 1);
+            if (curlx_dyn_addn(&out, input, 1) != CURLE_OK)
+                return error.OutOfMemory;
             input += 1;
             clen -= 1;
         }
     }
 
-    if (result == CURLE_OK) {
-        if (curlx_dyn_len(&out) != 0) {
-            outp.* = curlx_dyn_ptr(&out);
-        } else {
-            curlx_dyn_free(&out);
-            outp.* = mem.strdup("");
-            if (outp.* == null)
-                return 1;
-        }
+    if (curlx_dyn_len(&out) != 0) {
+        outp.* = curlx_dyn_ptr(&out);
+    } else {
+        curlx_dyn_free(&out);
+        outp.* = mem.strdup("") orelse return error.OutOfMemory;
     }
-    return if (result != CURLE_OK) 1 else 0;
+}
+
+pub export fn dedotdotify(input_in: [*]const u8, clen_in: usize, outp: *?[*:0]u8) callconv(.c) c_int {
+    dedotdotifyInner(input_in, clen_in, outp) catch return 1;
+    return 0;
 }
 
 pub export fn parse_file(
@@ -1205,19 +1216,22 @@ fn handle_path(u: *Curl_URL, path_in: [*]const u8, pathlen_in: usize, flags: c_u
     return .CURLUE_OK;
 }
 
-fn parseurl(url: [*:0]const u8, u: *Curl_URL, flags: c_uint) CURLUcode {
+fn parseurlInner(url: [*:0]const u8, u: *Curl_URL, flags: c_uint, out_ures: *CURLUcode) error{UrlError}!void {
     var path: [*:0]const u8 = url;
     var pathlen: usize = 0;
-    var schemebuf: [MAX_SCHEME_LEN + 1]u8 = undefined;
-    var ures: CURLUcode = .CURLUE_OK;
+    var schemebuf: [MAX_SCHEME_LEN + 1:0]u8 = undefined;
     var host: Dynbuf = undefined;
     var is_file = false;
 
     const urllen = cStrLen(url);
-    if (urllen > CURL_MAX_INPUT_LENGTH)
-        return .CURLUE_MALFORMED_INPUT;
+    if (urllen > CURL_MAX_INPUT_LENGTH) {
+        out_ures.* = .CURLUE_MALFORMED_INPUT;
+        return error.UrlError;
+    }
 
     curlx_dyn_init(&host, CURL_MAX_INPUT_LENGTH);
+    errdefer curlx_dyn_free(&host);
+    errdefer free_urlhandle(u);
 
     const schemelen = Curl_is_absolute_url(
         url,
@@ -1229,18 +1243,13 @@ fn parseurl(url: [*:0]const u8, u: *Curl_URL, flags: c_uint) CURLUcode {
     if (schemelen == 4 and std.mem.eql(u8, schemebuf[0..4], "file")) {
         is_file = true;
         var file_path: ?[*:0]const u8 = null;
-        ures = parse_file(url, urllen, u, &file_path, &pathlen);
+        try checkUres(parse_file(url, urllen, u, &file_path, &pathlen), out_ures);
         if (file_path) |fp| {
             path = fp;
         }
     } else {
         var hostp_opt: ?[*:0]const u8 = null;
-        ures = parse_scheme(url, u, @ptrCast(&schemebuf), schemelen, flags, &hostp_opt);
-        if (ures != .CURLUE_OK) {
-            curlx_dyn_free(&host);
-            free_urlhandle(u);
-            return ures;
-        }
+        try checkUres(parse_scheme(url, u, &schemebuf, schemelen, flags, &hostp_opt), out_ures);
         const hostp = hostp_opt.?;
 
         var p = hostp;
@@ -1250,42 +1259,35 @@ fn parseurl(url: [*:0]const u8, u: *Curl_URL, flags: c_uint) CURLUcode {
 
         pathlen = urllen - (@intFromPtr(path) - @intFromPtr(url));
         if (hostlen != 0) {
-            ures = parse_authority(u, hostp, hostlen, flags, &host, u.scheme != null);
-            if (ures == .CURLUE_OK and (flags & CURLU_GUESS_SCHEME) != 0 and u.scheme == null)
-                ures = guess_scheme(u, &host);
+            try checkUres(parse_authority(u, hostp, hostlen, flags, &host, u.scheme != null), out_ures);
+            if ((flags & CURLU_GUESS_SCHEME) != 0 and u.scheme == null)
+                try checkUres(guess_scheme(u, &host), out_ures);
         } else if ((flags & CURLU_NO_AUTHORITY) != 0) {
             if (curlx_dyn_add(&host, "") != CURLE_OK)
-                ures = .CURLUE_OUT_OF_MEMORY;
+                try checkUres(.CURLUE_OUT_OF_MEMORY, out_ures);
         } else {
-            ures = .CURLUE_NO_HOST;
+            try checkUres(.CURLUE_NO_HOST, out_ures);
         }
     }
 
-    if (ures == .CURLUE_OK) {
-        if (cMemChr(path, '#', pathlen)) |fragment| {
-            const fraglen: usize = pathlen - (@intFromPtr(fragment) - @intFromPtr(path));
-            ures = handle_fragment(u, fragment, fraglen, flags);
-            pathlen -= fraglen;
-        }
+    if (cMemChr(path, '#', pathlen)) |fragment| {
+        const fraglen: usize = pathlen - (@intFromPtr(fragment) - @intFromPtr(path));
+        try checkUres(handle_fragment(u, fragment, fraglen, flags), out_ures);
+        pathlen -= fraglen;
     }
-    if (ures == .CURLUE_OK) {
-        if (cMemChr(path, '?', pathlen)) |query| {
-            const qlen: usize = pathlen - (@intFromPtr(query) - @intFromPtr(path));
-            ures = handle_query(u, query, qlen, flags);
-            pathlen -= qlen;
-        }
+    if (cMemChr(path, '?', pathlen)) |query| {
+        const qlen: usize = pathlen - (@intFromPtr(query) - @intFromPtr(path));
+        try checkUres(handle_query(u, query, qlen, flags), out_ures);
+        pathlen -= qlen;
     }
-    if (ures == .CURLUE_OK) {
-        ures = handle_path(u, path, pathlen, flags, is_file);
-    }
-    if (ures == .CURLUE_OK) {
-        u.host = curlx_dyn_ptr(&host);
-        return .CURLUE_OK;
-    }
+    try checkUres(handle_path(u, path, pathlen, flags, is_file), out_ures);
+    u.host = curlx_dyn_ptr(&host);
+}
 
-    curlx_dyn_free(&host);
-    free_urlhandle(u);
-    return ures;
+fn parseurl(url: [*:0]const u8, u: *Curl_URL, flags: c_uint) CURLUcode {
+    var ures: CURLUcode = .CURLUE_OK;
+    parseurlInner(url, u, flags, &ures) catch return ures;
+    return .CURLUE_OK;
 }
 
 fn parseurl_and_replace(url: [*:0]const u8, u: *Curl_URL, flags: c_uint) CURLUcode {
@@ -1337,8 +1339,8 @@ fn redirect_url(base: [*:0]const u8, relurl: [*:0]const u8, u: *Curl_URL, flags:
                     @intFromPtr(co) - @intFromPtr(protsep)
                 else
                     cStrLen(protsep);
-                if (primitives.Curl_memrchr(protsep, '/', search_len)) |last_slash| {
-                    cutoff = @as([*]const u8, @ptrCast(last_slash)) + 1;
+                if (std.mem.lastIndexOfScalar(u8, protsep[0..search_len], '/')) |last_idx| {
+                    cutoff = protsep + last_idx + 1;
                 } else {
                     cutoff = null;
                 }
@@ -1352,6 +1354,7 @@ fn redirect_url(base: [*:0]const u8, relurl: [*:0]const u8, u: *Curl_URL, flags:
         cStrLen(base);
 
     curlx_dyn_init(&urlbuf, CURL_MAX_INPUT_LENGTH);
+    defer curlx_dyn_free(&urlbuf);
 
     var uc: CURLUcode = undefined;
     if (curlx_dyn_addn(&urlbuf, base, prelen) == CURLE_OK and
@@ -1363,19 +1366,17 @@ fn redirect_url(base: [*:0]const u8, relurl: [*:0]const u8, u: *Curl_URL, flags:
         uc = .CURLUE_OUT_OF_MEMORY;
     }
 
-    curlx_dyn_free(&urlbuf);
     return uc;
 }
 
 pub export fn curl_url() callconv(.c) ?*Curl_URL {
-    const raw = mem.calloc(1, @sizeOf(Curl_URL)) orelse return null;
-    return @ptrCast(@alignCast(raw));
+    return mem.create(Curl_URL);
 }
 
 pub export fn curl_url_cleanup(u: ?*Curl_URL) callconv(.c) void {
     if (u) |handle| {
         free_urlhandle(handle);
-        mem.free(handle);
+        mem.destroy(handle);
     }
 }
 
@@ -1387,9 +1388,9 @@ fn dupField(src: ?[*:0]u8, dest: *?[*:0]u8) bool {
     return true;
 }
 
-pub export fn curl_url_dup(in_u: ?*const Curl_URL) callconv(.c) ?*Curl_URL {
-    const in = in_u orelse return null;
-    const u = curl_url() orelse return null;
+fn dupUrl(in: *const Curl_URL) error{OutOfMemory}!*Curl_URL {
+    const u = mem.create(Curl_URL) orelse return error.OutOfMemory;
+    errdefer curl_url_cleanup(u);
 
     if (!dupField(in.scheme, &u.scheme) or
         !dupField(in.user, &u.user) or
@@ -1401,8 +1402,7 @@ pub export fn curl_url_dup(in_u: ?*const Curl_URL) callconv(.c) ?*Curl_URL {
         !dupField(in.fragment, &u.fragment) or
         !dupField(in.zoneid, &u.zoneid))
     {
-        curl_url_cleanup(u);
-        return null;
+        return error.OutOfMemory;
     }
 
     u.portnum = in.portnum;
@@ -1411,6 +1411,11 @@ pub export fn curl_url_dup(in_u: ?*const Curl_URL) callconv(.c) ?*Curl_URL {
     u.query_present = in.query_present;
     u.guessed_scheme = in.guessed_scheme;
     return u;
+}
+
+pub export fn curl_url_dup(in_u: ?*const Curl_URL) callconv(.c) ?*Curl_URL {
+    const in = in_u orelse return null;
+    return dupUrl(in) catch null;
 }
 
 fn host_decode(host: [*:0]const u8, allochost: *?[*:0]u8) CURLUcode {
@@ -1439,25 +1444,26 @@ fn host_encode(host: [*:0]const u8, allochost: *?[*:0]u8) CURLUcode {
     }
 }
 
-fn urlget_format(
+fn urlgetFormatInner(
     u: *const Curl_URL,
     what: CURLUPart,
     ptr: [*:0]const u8,
     partp: *?[*:0]u8,
     plusdecode: bool,
     flags: c_uint,
-) CURLUcode {
-    var uc: CURLUcode = .CURLUE_OK;
+    out_ures: *CURLUcode,
+) error{UrlError}!void {
     var partlen = cStrLen(ptr);
     const urldecode = (flags & CURLU_URLDECODE) != 0;
     const urlencode = (flags & CURLU_URLENCODE) != 0;
     const punycode = (flags & CURLU_PUNYCODE) != 0 and what == .CURLUPART_HOST;
     const depunyfy = (flags & CURLU_PUNY2IDN) != 0 and what == .CURLUPART_HOST;
 
-    var part: ?[*:0]u8 = curlx_memdup0(ptr, partlen);
     partp.* = null;
+    var part: ?[*:0]u8 = curlx_memdup0(ptr, partlen);
     if (part == null)
-        return .CURLUE_OUT_OF_MEMORY;
+        try checkUres(.CURLUE_OUT_OF_MEMORY, out_ures);
+    errdefer mem.free(part);
 
     if (plusdecode) {
         const p = part.?;
@@ -1472,15 +1478,16 @@ fn urlget_format(
         var dlen: usize = 0;
         const result = Curl_urldecode(part.?, partlen, &decoded, &dlen, REJECT_CTRL);
         mem.free(part);
+        part = null;
         if (result != CURLE_OK)
-            return .CURLUE_URLDECODE;
+            try checkUres(.CURLUE_URLDECODE, out_ures);
         part = decoded;
         partlen = dlen;
     }
     if (urlencode) {
         var enc: Dynbuf = undefined;
         curlx_dyn_init(&enc, CURL_MAX_INPUT_LENGTH);
-        uc = urlencode_str(
+        const uc = urlencode_str(
             &enc,
             part.?,
             partlen,
@@ -1488,27 +1495,39 @@ fn urlget_format(
             if (what == .CURLUPART_QUERY) QUERY_YES else QUERY_NO,
         );
         mem.free(part);
-        if (uc != .CURLUE_OK)
-            return uc;
+        part = null;
+        try checkUres(uc, out_ures);
         part = curlx_dyn_ptr(&enc);
     } else if (punycode) {
         if (!Curl_is_ASCII_name(u.host)) {
             var punyversion: ?[*:0]u8 = null;
-            uc = host_decode(part.?, &punyversion);
+            const uc = host_decode(part.?, &punyversion);
             mem.free(part);
-            if (uc != .CURLUE_OK)
-                return uc;
+            part = null;
+            try checkUres(uc, out_ures);
             part = punyversion;
         }
     } else if (depunyfy and Curl_is_ASCII_name(u.host)) {
         var unpunified: ?[*:0]u8 = null;
-        uc = host_encode(part.?, &unpunified);
+        const uc = host_encode(part.?, &unpunified);
         mem.free(part);
-        if (uc != .CURLUE_OK)
-            return uc;
+        part = null;
+        try checkUres(uc, out_ures);
         part = unpunified;
     }
     partp.* = part;
+}
+
+fn urlget_format(
+    u: *const Curl_URL,
+    what: CURLUPart,
+    ptr: [*:0]const u8,
+    partp: *?[*:0]u8,
+    plusdecode: bool,
+    flags: c_uint,
+) CURLUcode {
+    var ures: CURLUcode = .CURLUE_OK;
+    urlgetFormatInner(u, what, ptr, partp, plusdecode, flags, &ures) catch return ures;
     return .CURLUE_OK;
 }
 
@@ -1534,6 +1553,7 @@ fn file_url(
 
 fn urlget_url(u: *const Curl_URL, part: *?[*:0]u8, flags: c_uint) CURLUcode {
     var allochost: ?[*:0]u8 = null;
+    defer mem.free(allochost);
     const empty: [*:0]const u8 = "";
     const fragmentsep: [*:0]const u8 = if (u.fragment != null or (u.fragment_present and (flags & CURLU_GET_EMPTY) != 0))
         "#"
@@ -1544,7 +1564,7 @@ fn urlget_url(u: *const Curl_URL, part: *?[*:0]u8, flags: c_uint) CURLUcode {
         "?"
     else
         "";
-    var portbuf: [7]u8 = undefined;
+    var portbuf: [7:0]u8 = undefined;
 
     if (primitives.curl_strequal("file", u.scheme) != 0) {
         return file_url(u, part, fragmentsep, querysep);
@@ -1561,17 +1581,17 @@ fn urlget_url(u: *const Curl_URL, part: *?[*:0]u8, flags: c_uint) CURLUcode {
 
         var options: ?[*:0]u8 = u.options;
         var port: ?[*:0]const u8 = null;
-        var schemebuf: [MAX_SCHEME_LEN + 5]u8 = undefined;
+        var schemebuf: [MAX_SCHEME_LEN + 5:0]u8 = undefined;
 
         if (u.port_present) {
             _ = curl_msnprintf(&portbuf, portbuf.len, "%u", @as(c_uint, u.portnum));
-            port = @ptrCast(&portbuf);
+            port = &portbuf;
         }
 
         if (Curl_get_scheme(scheme)) |h| {
             if (!u.port_present and (flags & CURLU_DEFAULT_PORT) != 0) {
                 _ = curl_msnprintf(&portbuf, portbuf.len, "%u", @as(c_uint, h.defport));
-                port = @ptrCast(&portbuf);
+                port = &portbuf;
             } else if (u.port_present and h.defport == u.portnum and (flags & CURLU_NO_DEFAULT_PORT) != 0) {
                 port = null;
             }
@@ -1619,7 +1639,7 @@ fn urlget_url(u: *const Curl_URL, part: *?[*:0]u8, flags: c_uint) CURLUcode {
 
         const url = curl_maprintf(
             "%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
-            @as([*:0]const u8, @ptrCast(&schemebuf)),
+            @as([*:0]const u8, &schemebuf),
             u.user orelse empty,
             if (u.password != null) colon else empty,
             u.password orelse empty,
@@ -1635,7 +1655,6 @@ fn urlget_url(u: *const Curl_URL, part: *?[*:0]u8, flags: c_uint) CURLUcode {
             fragmentsep,
             u.fragment orelse empty,
         );
-        mem.free(allochost);
         if (url == null)
             return .CURLUE_OUT_OF_MEMORY;
         part.* = url;
@@ -1654,7 +1673,7 @@ pub export fn curl_url_get(
     var flags = flags_in;
     var ptr: ?[*:0]const u8 = null;
     var ifmissing: CURLUcode = .CURLUE_UNKNOWN_PART;
-    var portbuf: [7]u8 = undefined;
+    var portbuf: [7:0]u8 = undefined;
     var plusdecode = false;
 
     part.* = null;
@@ -1697,12 +1716,12 @@ pub export fn curl_url_get(
                     ptr = null;
                 } else {
                     _ = curl_msnprintf(&portbuf, portbuf.len, "%u", @as(c_uint, u.portnum));
-                    ptr = @ptrCast(&portbuf);
+                    ptr = &portbuf;
                 }
             } else if ((flags & CURLU_DEFAULT_PORT) != 0 and u.scheme != null) {
                 if (Curl_get_scheme(u.scheme.?)) |h| {
                     _ = curl_msnprintf(&portbuf, portbuf.len, "%u", @as(c_uint, h.defport));
-                    ptr = @ptrCast(&portbuf);
+                    ptr = &portbuf;
                 }
             }
         },
@@ -2350,14 +2369,14 @@ test "ipv4_normalize and ipv6_parse (unit1675)" {
     for (v6_cases) |tc| {
         var u: Curl_URL = .{};
         defer free_urlhandle(&u);
-        var buf: [128]u8 = undefined;
+        var buf: [128:0]u8 = undefined;
         @memcpy(buf[0..tc.input.len], tc.input);
         buf[tc.input.len] = 0;
 
-        const rc = ipv6_parse(&u, @ptrCast(&buf), tc.input.len);
+        const rc = ipv6_parse(&u, &buf, tc.input.len);
         try std.testing.expectEqual(tc.exp_code, rc);
         if (tc.exp_host) |eh| {
-            try std.testing.expectEqualStrings(eh, std.mem.span(@as([*:0]const u8, @ptrCast(&buf))));
+            try std.testing.expectEqualStrings(eh, std.mem.span(@as([*:0]const u8, &buf)));
         }
         if (tc.exp_zone) |ez| {
             try std.testing.expect(u.zoneid != null);

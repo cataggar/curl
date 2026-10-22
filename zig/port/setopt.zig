@@ -34,7 +34,7 @@ pub const CURL_BLOB_NOCOPY: c_uint = 0;
 pub const CURL_BLOB_COPY: c_uint = 1;
 
 pub const curl_blob = extern struct {
-    data: ?*anyopaque,
+    data: ?[*]u8,
     len: usize,
     flags: c_uint,
 };
@@ -934,9 +934,28 @@ extern fn Curl_urldecode(
 ) callconv(.c) CURLcode;
 extern fn Curl_get_content_encodings() callconv(.c) ?[*:0]u8;
 extern fn Curl_peer_unlink(peer: *anyopaque) callconv(.c) void;
-extern fn Curl_pgrs_now(data: *Curl_easy) callconv(.c) *const curlx_time_net.Curltime;
+extern fn Curl_pgrs_now(data: *Curl_easy) callconv(.c) *const headers_sock.Curltime;
 extern fn curlx_strzero(buf: ?[*:0]u8) callconv(.c) void;
 extern fn curlx_memdup0(src: ?[*]const u8, length: usize) callconv(.c) ?[*:0]u8;
+
+inline fn setoptGetPtr(comptime T: type, data: *Curl_easy, ptr_id: c_int) ?*T {
+    const raw = Curl_setopt_get_ptr(data, ptr_id) orelse return null;
+    return @ptrCast(@alignCast(raw));
+}
+
+inline fn setoptGetPtrRef(comptime T: type, data: *Curl_easy, ref_id: c_int) ?*T {
+    const raw = Curl_setopt_get_ptr_ref(data, ref_id) orelse return null;
+    return @ptrCast(@alignCast(raw));
+}
+
+inline fn setoptSetPtr(data: *Curl_easy, ptr_id: c_int, val: anytype) void {
+    Curl_setopt_set_ptr(data, ptr_id, mem.toRawPtr(val));
+}
+
+inline fn castOptPtr(comptime T: type, raw: ?*anyopaque) ?*T {
+    const p = raw orelse return null;
+    return @ptrCast(@alignCast(p));
+}
 
 inline fn easyStrGet(data: *Curl_easy, id: c_uint) ?[*:0]const u8 {
     return collections.Curl_u8_strset_get(Curl_easy_strset_ptr(data), @intCast(id));
@@ -955,9 +974,9 @@ inline fn easyStrClear(data: *Curl_easy, id: c_uint) void {
 }
 
 fn sslConnConfigUpdate(data: *Curl_easy, for_proxy: bool) void {
-    const src = Curl_setopt_get_ptr_ref(data, if (for_proxy) PTR_REF_SET_PROXY_SSL else PTR_REF_SET_SSL) orelse return;
-    const dst = Curl_setopt_get_ptr_ref(data, if (for_proxy) PTR_REF_CONN_PROXY_SSL_CONFIG else PTR_REF_CONN_SSL_CONFIG);
-    vtls_scache_asn1.Curl_ssl_conn_config_update_zig(@ptrCast(@alignCast(src)), @ptrCast(@alignCast(dst)));
+    const src = setoptGetPtrRef(vtls_scache_asn1.SslEasyConfig, data, if (for_proxy) PTR_REF_SET_PROXY_SSL else PTR_REF_SET_SSL) orelse return;
+    const dst = setoptGetPtrRef(vtls_scache_asn1.SslFilterConfig, data, if (for_proxy) PTR_REF_CONN_PROXY_SSL_CONFIG else PTR_REF_CONN_SSL_CONFIG);
+    vtls_scache_asn1.Curl_ssl_conn_config_update_zig(src, dst);
 }
 
 fn sslCertStatusRequest() bool {
@@ -1006,7 +1025,7 @@ pub export fn Curl_setstropt(data_opt: ?*Curl_easy, id: c_uint, s: ?[*:0]const u
 
 pub export fn Curl_setblobopt(blobp: *?*curl_blob, blob: ?*const curl_blob) callconv(.c) CURLcode {
     if (blobp.*) |prev| {
-        mem.free(@ptrCast(prev));
+        mem.freeTyped(prev);
         blobp.* = null;
     }
 
@@ -1021,9 +1040,9 @@ pub export fn Curl_setblobopt(blobp: *?*curl_blob, blob: ?*const curl_blob) call
         nblob.* = b.*;
         if (copy) {
             const dst = raw + @sizeOf(curl_blob);
-            const src: [*]const u8 = @ptrCast(b.data.?);
+            const src = b.data.?;
             @memcpy(dst[0..b.len], src[0..b.len]);
-            nblob.data = @ptrCast(dst);
+            nblob.data = dst;
         }
         blobp.* = nblob;
     }
@@ -1045,13 +1064,10 @@ fn setstroptUserpwd(option: ?[*:0]const u8, userp: *?[*:0]u8, passwdp: *?[*:0]u8
         }
     }
 
-    mem.free(@ptrCast(userp.*));
+    mem.free(userp.*);
     userp.* = user;
 
-    if (passwdp.*) |old_p| {
-        curlx_strzero(old_p);
-        mem.free(@ptrCast(old_p));
-    }
+    mem.freeSecretZ(passwdp.*);
     passwdp.* = passwd;
 
     return CURLE_OK;
@@ -1085,7 +1101,7 @@ fn protocol2num(str_in: ?[*:0]const u8, val: *curl_prot_t) CURLcode {
     }
 
     while (true) {
-        const token: [*]const u8 = str;
+        const token: [*:0]const u8 = str;
         var tlen: usize = 0;
         while (token[tlen] != 0 and token[tlen] != ',') : (tlen += 1) {}
         const has_comma = token[tlen] == ',';
@@ -1099,7 +1115,7 @@ fn protocol2num(str_in: ?[*:0]const u8, val: *curl_prot_t) CURLcode {
         }
 
         if (!has_comma) break;
-        str = @ptrCast(token + tlen + 1);
+        str = token + (tlen + 1);
     }
 
     if (val.* == 0) {
@@ -1527,9 +1543,8 @@ fn setoptLongSsl(data: *Curl_easy, option: CURLoption, arg_in: c_long) CURLcode 
 
 fn changeproxy(data: *Curl_easy) void {
     Curl_auth_digest_cleanup(Curl_setopt_get_ptr_ref(data, PTR_REF_STATE_PROXYDIGEST));
-    if (Curl_setopt_get_ptr_ref(data, PTR_REF_STATE_AUTHPROXY)) |authproxy_ptr| {
-        const bytes: [*]u8 = @ptrCast(authproxy_ptr);
-        @memset(bytes[0..16], 0);
+    if (setoptGetPtrRef([16]u8, data, PTR_REF_STATE_AUTHPROXY)) |authproxy_ptr| {
+        authproxy_ptr.* = @splat(0);
     }
 }
 
@@ -1744,11 +1759,11 @@ fn setoptLongMisc(data: *Curl_easy, option: CURLoption, arg: c_long) CURLcode {
                     Curl_setopt_set_ptr(data, PTR_DATA_HSTS, hsts);
                 }
             } else if (Curl_setopt_get_ptr(data, PTR_DATA_SHARE) == null or Curl_setopt_get_ptr(data, PTR_SHARE_HSTS) == null) {
-                if (Curl_setopt_get_ptr_ref(data, PTR_REF_DATA_HSTS)) |hsts_ref| {
-                    Curl_hsts_cleanup(@ptrCast(@alignCast(hsts_ref)));
+                if (setoptGetPtrRef(?*anyopaque, data, PTR_REF_DATA_HSTS)) |hsts_ref| {
+                    Curl_hsts_cleanup(hsts_ref);
                 }
-                if (Curl_setopt_get_ptr(data, PTR_STATE_HSTSLIST)) |list| {
-                    curl_slist_free_all(@ptrCast(@alignCast(list)));
+                if (setoptGetPtr(curl_slist, data, PTR_STATE_HSTSLIST)) |list| {
+                    curl_slist_free_all(list);
                     Curl_setopt_set_ptr(data, PTR_STATE_HSTSLIST, null);
                 }
             } else {
@@ -1756,8 +1771,8 @@ fn setoptLongMisc(data: *Curl_easy, option: CURLoption, arg: c_long) CURLcode {
             }
         },
         CURLOPT_ALTSVC_CTRL => {
-            const asi_ref = Curl_setopt_get_ptr_ref(data, PTR_REF_DATA_ASI) orelse return CURLE_BAD_FUNCTION_ARGUMENT;
-            return Curl_altsvc_ctrl(@ptrCast(@alignCast(asi_ref)), arg);
+            const asi_ref = setoptGetPtrRef(?*anyopaque, data, PTR_REF_DATA_ASI) orelse return CURLE_BAD_FUNCTION_ARGUMENT;
+            return Curl_altsvc_ctrl(asi_ref, arg);
         },
         CURLOPT_GSSAPI_DELEGATION => {
             if (!use_windows_sspi and !use_gssapi) return CURLE_UNKNOWN_OPTION;
@@ -1810,11 +1825,8 @@ fn setoptSlist(data: *Curl_easy, option: CURLoption, slist: ?*curl_slist) CURLco
 }
 
 fn setoptMimepost(data: *Curl_easy, mimep: ?*curl_mime) CURLcode {
-    const mimepostp: *curl_mimepart = if (Curl_setopt_get_ptr(data, PTR_SET_MIMEPOSTP)) |p|
-        @ptrCast(@alignCast(p))
-    else blk: {
-        const raw = mem.malloc(@sizeOf(curl_mimepart)) orelse return CURLE_OUT_OF_MEMORY;
-        const part: *curl_mimepart = @ptrCast(@alignCast(raw));
+    const mimepostp: *curl_mimepart = setoptGetPtr(curl_mimepart, data, PTR_SET_MIMEPOSTP) orelse blk: {
+        const part = mem.alloc(curl_mimepart) orelse return CURLE_OUT_OF_MEMORY;
         Curl_mime_initpart(part);
         Curl_setopt_set_ptr(data, PTR_SET_MIMEPOSTP, part);
         break :blk part;
@@ -1824,9 +1836,9 @@ fn setoptMimepost(data: *Curl_easy, mimep: ?*curl_mime) CURLcode {
     if (result == CURLE_OK) {
         Curl_setopt_set_i64(data, FIELD_METHOD, HTTPREQ_POST_MIME);
         Curl_setopt_set_bit(data, BIT_OPT_NO_BODY, false);
-        if (Curl_setopt_get_ptr(data, PTR_STATE_FORMP)) |formp| {
-            Curl_mime_cleanpart(@ptrCast(@alignCast(formp)));
-            mem.free(formp);
+        if (setoptGetPtr(curl_mimepart, data, PTR_STATE_FORMP)) |formp| {
+            Curl_mime_cleanpart(formp);
+            mem.freeTyped(formp);
             Curl_setopt_set_ptr(data, PTR_STATE_FORMP, null);
         }
         Curl_setopt_set_ptr(data, PTR_STATE_MIMEPOST, null);
@@ -1865,18 +1877,18 @@ fn setoptPointers(data: *Curl_easy, option: CURLoption, parg: ?*anyopaque) CURLc
             Curl_setopt_set_ptr(data, PTR_SET_HTTPPOST, parg);
             Curl_setopt_set_i64(data, FIELD_METHOD, HTTPREQ_POST_FORM);
             Curl_setopt_set_bit(data, BIT_OPT_NO_BODY, false);
-            if (Curl_setopt_get_ptr(data, PTR_STATE_FORMP)) |formp| {
-                Curl_mime_cleanpart(@ptrCast(@alignCast(formp)));
-                mem.free(formp);
+            if (setoptGetPtr(curl_mimepart, data, PTR_STATE_FORMP)) |formp| {
+                Curl_mime_cleanpart(formp);
+                mem.freeTyped(formp);
                 Curl_setopt_set_ptr(data, PTR_STATE_FORMP, null);
             }
             Curl_setopt_set_ptr(data, PTR_STATE_MIMEPOST, null);
         },
-        CURLOPT_MIMEPOST => return setoptMimepost(data, @ptrCast(parg)),
+        CURLOPT_MIMEPOST => return setoptMimepost(data, castOptPtr(curl_mime, parg)),
         CURLOPT_STDERR => {
             Curl_setopt_set_ptr(data, PTR_SET_ERR, parg orelse Curl_setopt_default_stderr());
         },
-        CURLOPT_SHARE => return setoptShare(data, @ptrCast(@alignCast(parg))),
+        CURLOPT_SHARE => return setoptShare(data, castOptPtr(Curl_share, parg)),
         else => return CURLE_UNKNOWN_OPTION,
     }
     return CURLE_OK;
@@ -1895,7 +1907,7 @@ fn cookielist(data: *Curl_easy, ptr_opt: ?[*:0]const u8) CURLcode {
         Curl_cookie_clearsess(Curl_setopt_get_ptr(data, PTR_DATA_COOKIES));
         _ = Curl_share_unlock(data, CURL_LOCK_DATA_COOKIE);
     } else if (primitives.curl_strequal(ptr, "FLUSH") != 0) {
-        const pcookies: *?*anyopaque = @ptrCast(@alignCast(Curl_setopt_get_ptr_ref(data, PTR_REF_DATA_COOKIES).?));
+        const pcookies = setoptGetPtrRef(?*anyopaque, data, PTR_REF_DATA_COOKIES).?;
         Curl_flush_cookies(
             data,
             false,
@@ -1904,12 +1916,12 @@ fn cookielist(data: *Curl_easy, ptr_opt: ?[*:0]const u8) CURLcode {
             Curl_setopt_get_ptr(data, PTR_SHARE_COOKIES),
         );
     } else if (primitives.curl_strequal(ptr, "RELOAD") != 0) {
-        const cl = Curl_setopt_get_ptr(data, PTR_STATE_COOKIELIST) orelse return CURLE_OK;
+        const cl = setoptGetPtr(curl_slist, data, PTR_STATE_COOKIELIST) orelse return CURLE_OK;
         Curl_setopt_set_bit(data, BIT_STATE_COOKIE_ENGINE, true);
         const flags: c_int = COOKIE_NOPSL | (if (Curl_setopt_get_bit(data, BIT_COOKIESESSION)) COOKIE_NOSESSION else 0);
-        const pcookies: *?*anyopaque = @ptrCast(@alignCast(Curl_setopt_get_ptr_ref(data, PTR_REF_DATA_COOKIES).?));
-        const psetcookies: ?*u8 = @ptrCast(Curl_setopt_get_ptr_ref(data, PTR_REF_REQ_SETCOOKIES));
-        return Curl_cookie_loadfiles(data, flags, @ptrCast(@alignCast(cl)), pcookies, psetcookies);
+        const pcookies = setoptGetPtrRef(?*anyopaque, data, PTR_REF_DATA_COOKIES).?;
+        const psetcookies = setoptGetPtrRef(u8, data, PTR_REF_REQ_SETCOOKIES);
+        return Curl_cookie_loadfiles(data, flags, cl, pcookies, psetcookies);
     } else {
         if (Curl_setopt_get_ptr(data, PTR_DATA_COOKIES) == null) {
             const ci = Curl_cookie_init() orelse return CURLE_OUT_OF_MEMORY;
@@ -1922,7 +1934,7 @@ fn cookielist(data: *Curl_easy, ptr_opt: ?[*:0]const u8) CURLcode {
         }
 
         const ci = Curl_setopt_get_ptr(data, PTR_DATA_COOKIES);
-        const psetcookies: ?*u8 = @ptrCast(Curl_setopt_get_ptr_ref(data, PTR_REF_REQ_SETCOOKIES));
+        const psetcookies = setoptGetPtrRef(u8, data, PTR_REF_REQ_SETCOOKIES);
         _ = Curl_share_lock(data, CURL_LOCK_DATA_COOKIE, CURL_LOCK_ACCESS_SINGLE);
         if (primitives.curl_strnequal(ptr, "Set-Cookie:", 11) != 0) {
             result = Curl_cookie_add(
@@ -1950,21 +1962,25 @@ fn cookielist(data: *Curl_easy, ptr_opt: ?[*:0]const u8) CURLcode {
     return result;
 }
 
+fn appendCookielist(data: *Curl_easy, ptr: [*:0]const u8) error{OutOfMemory}!void {
+    const old_cl = setoptGetPtr(curl_slist, data, PTR_STATE_COOKIELIST);
+    errdefer {
+        curl_slist_free_all(old_cl);
+        Curl_setopt_set_ptr(data, PTR_STATE_COOKIELIST, null);
+    }
+    const cl = curl_slist_append(old_cl, ptr) orelse return error.OutOfMemory;
+    Curl_setopt_set_ptr(data, PTR_STATE_COOKIELIST, cl);
+}
+
 fn cookiefile(data: *Curl_easy, ptr_opt: ?[*:0]const u8) CURLcode {
     if (ptr_opt) |ptr| {
         if (std.mem.len(ptr) > CURL_MAX_INPUT_LENGTH) {
             return CURLE_BAD_FUNCTION_ARGUMENT;
         }
-        const old_cl: ?*curl_slist = @ptrCast(@alignCast(Curl_setopt_get_ptr(data, PTR_STATE_COOKIELIST)));
-        const cl = curl_slist_append(old_cl, ptr) orelse {
-            curl_slist_free_all(old_cl);
-            Curl_setopt_set_ptr(data, PTR_STATE_COOKIELIST, null);
-            return CURLE_OUT_OF_MEMORY;
-        };
-        Curl_setopt_set_ptr(data, PTR_STATE_COOKIELIST, cl);
+        appendCookielist(data, ptr) catch return CURLE_OUT_OF_MEMORY;
     } else {
-        if (Curl_setopt_get_ptr(data, PTR_STATE_COOKIELIST)) |old_cl| {
-            curl_slist_free_all(@ptrCast(@alignCast(old_cl)));
+        if (setoptGetPtr(curl_slist, data, PTR_STATE_COOKIELIST)) |old_cl| {
+            curl_slist_free_all(old_cl);
             Curl_setopt_set_ptr(data, PTR_STATE_COOKIELIST, null);
         }
         if (Curl_setopt_get_ptr(data, PTR_DATA_SHARE) == null or Curl_setopt_get_ptr(data, PTR_SHARE_COOKIES) == null) {
@@ -1989,38 +2005,52 @@ fn setproxy(data: *Curl_easy, proxy: ?[*:0]const u8) CURLcode {
     return Curl_setstropt(data, STRING_PROXY, proxy);
 }
 
+fn setProxyUserpwdInner(data: *Curl_easy, ptr: ?[*:0]const u8, out_err: *CURLcode) error{SetoptError}!void {
+    var u: ?[*:0]u8 = null;
+    var p: ?[*:0]u8 = null;
+    const rc = setstroptUserpwd(ptr, &u, &p);
+    if (rc != CURLE_OK) {
+        out_err.* = rc;
+        return error.SetoptError;
+    }
+    defer mem.free(u);
+    defer mem.freeSecretZ(p);
+
+    easyStrClear(data, STRING_PROXYUSERNAME);
+    easyStrClear(data, STRING_PROXYPASSWORD);
+    if (u) |u_ptr| {
+        var str: ?[*:0]u8 = null;
+        errdefer mem.free(str);
+        var urc = Curl_urldecode(u_ptr, 0, &str, null, REJECT_ZERO);
+        if (urc == CURLE_OK) {
+            urc = easyStrSetn(data, STRING_PROXYUSERNAME, str);
+            str = null;
+        }
+        if (urc != CURLE_OK) {
+            out_err.* = urc;
+            return error.SetoptError;
+        }
+    }
+    if (p) |p_ptr| {
+        var str: ?[*:0]u8 = null;
+        errdefer mem.freeSecretZ(str);
+        var prc = Curl_urldecode(p_ptr, 0, &str, null, REJECT_ZERO);
+        if (prc == CURLE_OK) {
+            prc = easyStrSetn(data, STRING_PROXYPASSWORD, str);
+            str = null;
+        }
+        if (prc != CURLE_OK) {
+            out_err.* = prc;
+            return error.SetoptError;
+        }
+    }
+}
+
 fn setoptCptrProxy(data: *Curl_easy, option: CURLoption, ptr: ?[*:0]const u8) CURLcode {
     var result: CURLcode = CURLE_OK;
     switch (option) {
         CURLOPT_PROXYUSERPWD => {
-            var u: ?[*:0]u8 = null;
-            var p: ?[*:0]u8 = null;
-            result = setstroptUserpwd(ptr, &u, &p);
-            if (result == CURLE_OK) {
-                easyStrClear(data, STRING_PROXYUSERNAME);
-                easyStrClear(data, STRING_PROXYPASSWORD);
-                if (u) |u_ptr| {
-                    var str: ?[*:0]u8 = null;
-                    result = Curl_urldecode(u_ptr, 0, &str, null, REJECT_ZERO);
-                    if (result == CURLE_OK) {
-                        result = easyStrSetn(data, STRING_PROXYUSERNAME, str);
-                    }
-                }
-                if (result == CURLE_OK) {
-                    if (p) |p_ptr| {
-                        var str: ?[*:0]u8 = null;
-                        result = Curl_urldecode(p_ptr, 0, &str, null, REJECT_ZERO);
-                        if (result == CURLE_OK) {
-                            result = easyStrSetn(data, STRING_PROXYPASSWORD, str);
-                        }
-                    }
-                }
-            }
-            mem.free(@ptrCast(u));
-            if (p) |p_ptr| {
-                curlx_strzero(p_ptr);
-                mem.free(@ptrCast(p_ptr));
-            }
+            setProxyUserpwdInner(data, ptr, &result) catch return result;
         },
         CURLOPT_PROXYUSERNAME => return Curl_setstropt(data, STRING_PROXYUSERNAME, ptr),
         CURLOPT_PROXYPASSWORD => return Curl_setstropt(data, STRING_PROXYPASSWORD, ptr),
@@ -2108,7 +2138,7 @@ fn setoptCopypostfields(data: *Curl_easy, ptr: ?[*:0]const u8) CURLcode {
         }
         if (ptr) |p| {
             const dup = mem.strdup(p) orelse return CURLE_OUT_OF_MEMORY;
-            Curl_setopt_set_ptr(data, PTR_SET_STR_COPYPOSTFIELDS, @ptrCast(dup));
+            setoptSetPtr(data, PTR_SET_STR_COPYPOSTFIELDS, dup);
         }
     } else {
         if (postfieldsize < 0 or @as(u64, @intCast(postfieldsize)) >= std.math.maxInt(usize)) {
@@ -2119,7 +2149,7 @@ fn setoptCopypostfields(data: *Curl_easy, ptr: ?[*:0]const u8) CURLcode {
         if (Curl_setopt_get_ptr(data, PTR_SET_STR_COPYPOSTFIELDS)) |old_copy| {
             mem.free(old_copy);
         }
-        Curl_setopt_set_ptr(data, PTR_SET_STR_COPYPOSTFIELDS, @ptrCast(dup));
+        setoptSetPtr(data, PTR_SET_STR_COPYPOSTFIELDS, dup);
     }
 
     Curl_setopt_set_ptr(data, PTR_SET_POSTFIELDS, Curl_setopt_get_ptr(data, PTR_SET_STR_COPYPOSTFIELDS));
@@ -2189,7 +2219,7 @@ fn setoptCptrSsl(data: *Curl_easy, option: CURLoption, ptr: ?[*:0]const u8) CURL
         CURLOPT_SSL_CTX_DATA => {
             if (!use_ssl) return CURLE_UNKNOWN_OPTION;
             if (sslSupports(data, SSLSUPP_SSL_CTX)) {
-                Curl_setopt_set_ptr(data, PTR_SET_SSL_FSSLCTXP, @ptrCast(@constCast(ptr)));
+                setoptSetPtr(data, PTR_SET_SSL_FSSLCTXP, ptr);
             } else {
                 return CURLE_NOT_BUILT_IN;
             }
@@ -2257,14 +2287,14 @@ fn setoptCptrHttpMqtt(data: *Curl_easy, option: CURLoption, ptr: ?[*:0]const u8)
     switch (option) {
         CURLOPT_COPYPOSTFIELDS => return setoptCopypostfields(data, ptr),
         CURLOPT_POSTFIELDS => {
-            Curl_setopt_set_ptr(data, PTR_SET_POSTFIELDS, @ptrCast(@constCast(ptr)));
+            setoptSetPtr(data, PTR_SET_POSTFIELDS, ptr);
             if (Curl_setopt_get_ptr(data, PTR_SET_STR_COPYPOSTFIELDS)) |old_copy| {
                 mem.free(old_copy);
                 Curl_setopt_set_ptr(data, PTR_SET_STR_COPYPOSTFIELDS, null);
             }
             Curl_setopt_set_i64(data, FIELD_METHOD, HTTPREQ_POST);
         },
-        CURLOPT_TRAILERDATA => Curl_setopt_set_ptr(data, PTR_SET_TRAILER_DATA, @ptrCast(@constCast(ptr))),
+        CURLOPT_TRAILERDATA => setoptSetPtr(data, PTR_SET_TRAILER_DATA, ptr),
         CURLOPT_ACCEPT_ENCODING => {
             if (ptr) |p| {
                 if (p[0] == 0) {
@@ -2325,8 +2355,8 @@ fn setoptCptrFtp(data: *Curl_easy, option: CURLoption, ptr: ?[*:0]const u8) CURL
         CURLOPT_FTP_ACCOUNT => return Curl_setstropt(data, STRING_FTP_ACCOUNT, ptr),
         CURLOPT_FTP_ALTERNATIVE_TO_USER => return Curl_setstropt(data, STRING_FTP_ALTERNATIVE_TO_USER, ptr),
         CURLOPT_KRBLEVEL => return CURLE_NOT_BUILT_IN,
-        CURLOPT_CHUNK_DATA => Curl_setopt_set_ptr(data, PTR_SET_WILDCARDPTR, @ptrCast(@constCast(ptr))),
-        CURLOPT_FNMATCH_DATA => Curl_setopt_set_ptr(data, PTR_SET_FNMATCH_DATA, @ptrCast(@constCast(ptr))),
+        CURLOPT_CHUNK_DATA => setoptSetPtr(data, PTR_SET_WILDCARDPTR, ptr),
+        CURLOPT_FNMATCH_DATA => setoptSetPtr(data, PTR_SET_FNMATCH_DATA, ptr),
         CURLOPT_SSH_PUBLIC_KEYFILE => {
             if (!use_ssh) return CURLE_UNKNOWN_OPTION;
             return Curl_setstropt(data, STRING_SSH_PUBLIC_KEY, ptr);
@@ -2345,7 +2375,7 @@ fn setoptCptrFtp(data: *Curl_easy, option: CURLoption, ptr: ?[*:0]const u8) CURL
         },
         CURLOPT_SSH_KEYDATA => {
             if (!use_ssh) return CURLE_UNKNOWN_OPTION;
-            Curl_setopt_set_ptr(data, PTR_SET_SSH_KEYFUNC_USERP, @ptrCast(@constCast(ptr)));
+            setoptSetPtr(data, PTR_SET_SSH_KEYFUNC_USERP, ptr);
         },
         CURLOPT_SSH_HOST_PUBLIC_KEY_SHA256 => {
             if (!use_ssh) return CURLE_UNKNOWN_OPTION;
@@ -2353,7 +2383,7 @@ fn setoptCptrFtp(data: *Curl_easy, option: CURLoption, ptr: ?[*:0]const u8) CURL
         },
         CURLOPT_SSH_HOSTKEYDATA => {
             if (!use_libssh2) return CURLE_UNKNOWN_OPTION;
-            Curl_setopt_set_ptr(data, PTR_SET_SSH_HOSTKEYFUNC_USERP, @ptrCast(@constCast(ptr)));
+            setoptSetPtr(data, PTR_SET_SSH_HOSTKEYFUNC_USERP, ptr);
         },
         else => return CURLE_UNKNOWN_OPTION,
     }
@@ -2396,6 +2426,41 @@ fn setoptCptrNet(data: *Curl_easy, option: CURLoption, ptr: ?[*:0]const u8) CURL
     }
 }
 
+fn setUserpwdInner(data: *Curl_easy, ptr: ?[*:0]const u8, out_err: *CURLcode) error{SetoptError}!void {
+    var u: ?[*:0]u8 = null;
+    var p: ?[*:0]u8 = null;
+    const rc = setstroptUserpwd(ptr, &u, &p);
+    if (rc != CURLE_OK) {
+        out_err.* = rc;
+        return error.SetoptError;
+    }
+    errdefer mem.free(u);
+    errdefer mem.freeSecretZ(p);
+
+    var urc = easyStrSetn(data, STRING_USERNAME, u);
+    u = null;
+    if (urc != CURLE_OK) {
+        out_err.* = urc;
+        return error.SetoptError;
+    }
+    urc = easyStrSetn(data, STRING_PASSWORD, p);
+    p = null;
+    if (urc != CURLE_OK) {
+        out_err.* = urc;
+        return error.SetoptError;
+    }
+}
+
+fn appendHstslist(data: *Curl_easy, p: [*:0]const u8) error{OutOfMemory}!void {
+    const old_h = setoptGetPtr(curl_slist, data, PTR_STATE_HSTSLIST);
+    errdefer {
+        curl_slist_free_all(old_h);
+        Curl_setopt_set_ptr(data, PTR_STATE_HSTSLIST, null);
+    }
+    const h = curl_slist_append(old_h, p) orelse return error.OutOfMemory;
+    Curl_setopt_set_ptr(data, PTR_STATE_HSTSLIST, h);
+}
+
 fn setoptCptrMisc(data: *Curl_easy, option: CURLoption, ptr: ?[*:0]const u8) CURLcode {
     var result: CURLcode = CURLE_OK;
     switch (option) {
@@ -2403,19 +2468,19 @@ fn setoptCptrMisc(data: *Curl_easy, option: CURLoption, ptr: ?[*:0]const u8) CUR
         CURLOPT_NETRC_FILE => return Curl_setstropt(data, STRING_NETRC_FILE, ptr),
         CURLOPT_CUSTOMREQUEST => return Curl_setstropt(data, STRING_CUSTOMREQUEST, ptr),
         CURLOPT_SERVICE_NAME => return Curl_setstropt(data, STRING_SERVICE_NAME, ptr),
-        CURLOPT_HEADERDATA => Curl_setopt_set_ptr(data, PTR_SET_WRITEHEADER, @ptrCast(@constCast(ptr))),
-        CURLOPT_READDATA => Curl_setopt_set_ptr(data, PTR_SET_IN_SET, @ptrCast(@constCast(ptr))),
-        CURLOPT_WRITEDATA => Curl_setopt_set_ptr(data, PTR_SET_OUT, @ptrCast(@constCast(ptr))),
-        CURLOPT_DEBUGDATA => Curl_setopt_set_ptr(data, PTR_SET_DEBUGDATA, @ptrCast(@constCast(ptr))),
-        CURLOPT_PROGRESSDATA => Curl_setopt_set_ptr(data, PTR_SET_PROGRESS_CLIENT, @ptrCast(@constCast(ptr))),
-        CURLOPT_SEEKDATA => Curl_setopt_set_ptr(data, PTR_SET_SEEK_CLIENT, @ptrCast(@constCast(ptr))),
-        CURLOPT_IOCTLDATA => Curl_setopt_set_ptr(data, PTR_SET_IOCTL_CLIENT, @ptrCast(@constCast(ptr))),
-        CURLOPT_SOCKOPTDATA => Curl_setopt_set_ptr(data, PTR_SET_SOCKOPT_CLIENT, @ptrCast(@constCast(ptr))),
-        CURLOPT_OPENSOCKETDATA => Curl_setopt_set_ptr(data, PTR_SET_OPENSOCKET_CLIENT, @ptrCast(@constCast(ptr))),
-        CURLOPT_RESOLVER_START_DATA => Curl_setopt_set_ptr(data, PTR_SET_RESOLVER_START_CLIENT, @ptrCast(@constCast(ptr))),
-        CURLOPT_CLOSESOCKETDATA => Curl_setopt_set_ptr(data, PTR_SET_CLOSESOCKET_CLIENT, @ptrCast(@constCast(ptr))),
-        CURLOPT_PREREQDATA => Curl_setopt_set_ptr(data, PTR_SET_PREREQ_USERP, @ptrCast(@constCast(ptr))),
-        CURLOPT_ERRORBUFFER => Curl_setopt_set_ptr(data, PTR_SET_ERRORBUFFER, @ptrCast(@constCast(ptr))),
+        CURLOPT_HEADERDATA => setoptSetPtr(data, PTR_SET_WRITEHEADER, ptr),
+        CURLOPT_READDATA => setoptSetPtr(data, PTR_SET_IN_SET, ptr),
+        CURLOPT_WRITEDATA => setoptSetPtr(data, PTR_SET_OUT, ptr),
+        CURLOPT_DEBUGDATA => setoptSetPtr(data, PTR_SET_DEBUGDATA, ptr),
+        CURLOPT_PROGRESSDATA => setoptSetPtr(data, PTR_SET_PROGRESS_CLIENT, ptr),
+        CURLOPT_SEEKDATA => setoptSetPtr(data, PTR_SET_SEEK_CLIENT, ptr),
+        CURLOPT_IOCTLDATA => setoptSetPtr(data, PTR_SET_IOCTL_CLIENT, ptr),
+        CURLOPT_SOCKOPTDATA => setoptSetPtr(data, PTR_SET_SOCKOPT_CLIENT, ptr),
+        CURLOPT_OPENSOCKETDATA => setoptSetPtr(data, PTR_SET_OPENSOCKET_CLIENT, ptr),
+        CURLOPT_RESOLVER_START_DATA => setoptSetPtr(data, PTR_SET_RESOLVER_START_CLIENT, ptr),
+        CURLOPT_CLOSESOCKETDATA => setoptSetPtr(data, PTR_SET_CLOSESOCKET_CLIENT, ptr),
+        CURLOPT_PREREQDATA => setoptSetPtr(data, PTR_SET_PREREQ_USERP, ptr),
+        CURLOPT_ERRORBUFFER => setoptSetPtr(data, PTR_SET_ERRORBUFFER, ptr),
         CURLOPT_URL => {
             result = Curl_setstropt(data, STRING_SET_URL, ptr);
             if (Curl_setopt_get_ptr_ref(data, PTR_REF_STATE_URL)) |url_ref| {
@@ -2424,27 +2489,15 @@ fn setoptCptrMisc(data: *Curl_easy, option: CURLoption, ptr: ?[*:0]const u8) CUR
             }
         },
         CURLOPT_USERPWD => {
-            var u: ?[*:0]u8 = null;
-            var p: ?[*:0]u8 = null;
-            result = setstroptUserpwd(ptr, &u, &p);
-            if (result == CURLE_OK) {
-                result = easyStrSetn(data, STRING_USERNAME, u);
-                u = null;
-            }
-            if (result == CURLE_OK) {
-                result = easyStrSetn(data, STRING_PASSWORD, p);
-                p = null;
-            }
-            mem.free(@ptrCast(u));
-            mem.free(@ptrCast(p));
-            return result;
+            setUserpwdInner(data, ptr, &result) catch return result;
+            return CURLE_OK;
         },
         CURLOPT_USERNAME => return Curl_setstropt(data, STRING_USERNAME, ptr),
         CURLOPT_PASSWORD => return Curl_setstropt(data, STRING_PASSWORD, ptr),
         CURLOPT_LOGIN_OPTIONS => return Curl_setstropt(data, STRING_OPTIONS, ptr),
         CURLOPT_XOAUTH2_BEARER => return Curl_setstropt(data, STRING_BEARER, ptr),
         CURLOPT_RANGE => return Curl_setstropt(data, STRING_SET_RANGE, ptr),
-        CURLOPT_PRIVATE => Curl_setopt_set_ptr(data, PTR_SET_PRIVATE_DATA, @ptrCast(@constCast(ptr))),
+        CURLOPT_PRIVATE => setoptSetPtr(data, PTR_SET_PRIVATE_DATA, ptr),
         CURLOPT_PROTOCOLS_STR => {
             if (ptr) |p| {
                 var protos: curl_prot_t = 0;
@@ -2479,7 +2532,7 @@ fn setoptCptrMisc(data: *Curl_easy, option: CURLoption, ptr: ?[*:0]const u8) CUR
         },
         CURLOPT_RTSP_STREAM_URI => return Curl_setstropt(data, STRING_RTSP_STREAM_URI, ptr),
         CURLOPT_RTSP_TRANSPORT => return Curl_setstropt(data, STRING_RTSP_TRANSPORT, ptr),
-        CURLOPT_INTERLEAVEDATA => Curl_setopt_set_ptr(data, PTR_SET_RTP_OUT, @ptrCast(@constCast(ptr))),
+        CURLOPT_INTERLEAVEDATA => setoptSetPtr(data, PTR_SET_RTP_OUT, ptr),
         CURLOPT_TLSAUTH_USERNAME,
         CURLOPT_TLSAUTH_PASSWORD,
         CURLOPT_TLSAUTH_TYPE,
@@ -2489,11 +2542,11 @@ fn setoptCptrMisc(data: *Curl_easy, option: CURLoption, ptr: ?[*:0]const u8) CUR
         => return CURLE_NOT_BUILT_IN,
         CURLOPT_HSTSREADDATA => {
             if (!enable_hsts) return CURLE_UNKNOWN_OPTION;
-            Curl_setopt_set_ptr(data, PTR_SET_HSTS_READ_USERP, @ptrCast(@constCast(ptr)));
+            setoptSetPtr(data, PTR_SET_HSTS_READ_USERP, ptr);
         },
         CURLOPT_HSTSWRITEDATA => {
             if (!enable_hsts) return CURLE_UNKNOWN_OPTION;
-            Curl_setopt_set_ptr(data, PTR_SET_HSTS_WRITE_USERP, @ptrCast(@constCast(ptr)));
+            setoptSetPtr(data, PTR_SET_HSTS_WRITE_USERP, ptr);
         },
         CURLOPT_HSTS => {
             if (!enable_hsts) return CURLE_UNKNOWN_OPTION;
@@ -2504,21 +2557,15 @@ fn setoptCptrMisc(data: *Curl_easy, option: CURLoption, ptr: ?[*:0]const u8) CUR
             if (ptr) |p| {
                 result = Curl_setstropt(data, STRING_HSTS, p);
                 if (result != CURLE_OK) return result;
-                const old_h: ?*curl_slist = @ptrCast(@alignCast(Curl_setopt_get_ptr(data, PTR_STATE_HSTSLIST)));
-                const h = curl_slist_append(old_h, p) orelse {
-                    curl_slist_free_all(old_h);
-                    Curl_setopt_set_ptr(data, PTR_STATE_HSTSLIST, null);
-                    return CURLE_OUT_OF_MEMORY;
-                };
-                Curl_setopt_set_ptr(data, PTR_STATE_HSTSLIST, h);
+                appendHstslist(data, p) catch return CURLE_OUT_OF_MEMORY;
             } else {
-                if (Curl_setopt_get_ptr(data, PTR_STATE_HSTSLIST)) |old_h| {
-                    curl_slist_free_all(@ptrCast(@alignCast(old_h)));
+                if (setoptGetPtr(curl_slist, data, PTR_STATE_HSTSLIST)) |old_h| {
+                    curl_slist_free_all(old_h);
                     Curl_setopt_set_ptr(data, PTR_STATE_HSTSLIST, null);
                 }
                 if (Curl_setopt_get_ptr(data, PTR_DATA_SHARE) == null or Curl_setopt_get_ptr(data, PTR_SHARE_HSTS) == null) {
-                    if (Curl_setopt_get_ptr_ref(data, PTR_REF_DATA_HSTS)) |hsts_ref| {
-                        Curl_hsts_cleanup(@ptrCast(@alignCast(hsts_ref)));
+                    if (setoptGetPtrRef(?*anyopaque, data, PTR_REF_DATA_HSTS)) |hsts_ref| {
+                        Curl_hsts_cleanup(hsts_ref);
                     }
                 }
             }
@@ -2642,26 +2689,26 @@ fn setoptOfft(data: *Curl_easy, option: CURLoption, offt: curl_off_t) CURLcode {
         CURLOPT_MAX_SEND_SPEED_LARGE => {
             if (offt < 0) return CURLE_BAD_FUNCTION_ARGUMENT;
             Curl_setopt_set_i64(data, FIELD_MAX_SEND_SPEED, offt);
-            if (Curl_setopt_get_ptr_ref(data, PTR_REF_PROGRESS_UL_RLIMIT)) |rlimit_ptr| {
+            if (setoptGetPtrRef(headers_sock.CurlRlimit, data, PTR_REF_PROGRESS_UL_RLIMIT)) |rlimit_ptr| {
                 const now = Curl_pgrs_now(data);
                 headers_sock.Curl_rlimit_init(
-                    @ptrCast(@alignCast(rlimit_ptr)),
+                    rlimit_ptr,
                     offt,
                     @max(offt, 32 * 1024),
-                    @ptrCast(now),
+                    now,
                 );
             }
         },
         CURLOPT_MAX_RECV_SPEED_LARGE => {
             if (offt < 0) return CURLE_BAD_FUNCTION_ARGUMENT;
             Curl_setopt_set_i64(data, FIELD_MAX_RECV_SPEED, offt);
-            if (Curl_setopt_get_ptr_ref(data, PTR_REF_PROGRESS_DL_RLIMIT)) |rlimit_ptr| {
+            if (setoptGetPtrRef(headers_sock.CurlRlimit, data, PTR_REF_PROGRESS_DL_RLIMIT)) |rlimit_ptr| {
                 const now = Curl_pgrs_now(data);
                 headers_sock.Curl_rlimit_init(
-                    @ptrCast(@alignCast(rlimit_ptr)),
+                    rlimit_ptr,
                     offt,
                     @max(offt, 32 * 1024),
-                    @ptrCast(now),
+                    now,
                 );
             }
         },
@@ -2741,7 +2788,7 @@ pub export fn Curl_vsetopt_zig(
             CURLOPT_RESOLVE,
             CURLOPT_PROXYHEADER,
             CURLOPT_CONNECT_TO,
-            => return setoptSlist(data, option, @ptrCast(@alignCast(parg))),
+            => return setoptSlist(data, option, castOptPtr(curl_slist, parg)),
             CURLOPT_HTTPPOST,
             CURLOPT_MIMEPOST,
             CURLOPT_STDERR,
@@ -2759,7 +2806,7 @@ pub export fn Curl_vsetopt_zig(
     } else if (option < CURLOPTTYPE_BLOB) {
         return setoptOfft(data, option, oarg);
     }
-    return setoptBlob(data, option, @ptrCast(@alignCast(parg)));
+    return setoptBlob(data, option, castOptPtr(curl_blob, parg));
 }
 
 test "Curl_setblobopt copy and nocopy" {
@@ -2774,9 +2821,8 @@ test "Curl_setblobopt copy and nocopy" {
     };
     try std.testing.expectEqual(CURLE_OK, Curl_setblobopt(&blob_slot, &in_copy));
     try std.testing.expect(blob_slot != null);
-    try std.testing.expect(blob_slot.?.data.? != @as(*anyopaque, @ptrCast(&sample)));
-    const copied_bytes: [*]const u8 = @ptrCast(blob_slot.?.data.?);
-    try std.testing.expectEqualSlices(u8, &sample, copied_bytes[0..sample.len]);
+    try std.testing.expect(blob_slot.?.data.? != @as([*]u8, &sample));
+    try std.testing.expectEqualSlices(u8, &sample, blob_slot.?.data.?[0..sample.len]);
 
     const in_nocopy = curl_blob{
         .data = &sample,
@@ -2785,7 +2831,7 @@ test "Curl_setblobopt copy and nocopy" {
     };
     try std.testing.expectEqual(CURLE_OK, Curl_setblobopt(&blob_slot, &in_nocopy));
     try std.testing.expect(blob_slot != null);
-    try std.testing.expectEqual(@as(*anyopaque, @ptrCast(&sample)), blob_slot.?.data.?);
+    try std.testing.expectEqual(@as(?[*]u8, &sample), blob_slot.?.data);
 
     const invalid = curl_blob{
         .data = null,
