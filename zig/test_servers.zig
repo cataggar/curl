@@ -260,6 +260,30 @@ pub fn addTestServersStep(
     stage_files.addCopyFileToSource(servers_exe.getEmittedBin(), b.fmt("tests/server/servers{s}", .{exe_ext}));
     stage_files.addBytesToSource(tests_config_contents, "tests/config");
     stage_files.addBytesToSource(configurehelp_pm_contents, "tests/configurehelp.pm");
+    stage_files.addBytesToSource(
+        \\#!/bin/sh
+        \\DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+        \\CURL_BIN="$DIR/src/curl"
+        \\case "$1" in
+        \\  --protocols)
+        \\    "$CURL_BIN" --version | sed -n 's/^Protocols: //p' | tr ' ' '\n' | tr '[:lower:]' '[:upper:]'
+        \\    ;;
+        \\  --features)
+        \\    "$CURL_BIN" --version | sed -n 's/^Features: //p' | tr ' ' '\n'
+        \\    ;;
+        \\  --version)
+        \\    "$CURL_BIN" --version | head -n 1 | sed -n 's/.*\(libcurl\/[^ ]*\).*/\1/p' | sed 's/\// /'
+        \\    ;;
+        \\  --vernum)
+        \\    ver=$("$CURL_BIN" --version | head -n 1 | sed -n 's/.*libcurl\/\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p')
+        \\    IFS=. read -r maj min pat <<EOF
+        \\$ver
+        \\EOF
+        \\    printf "%02x%02x%02x\n" "$maj" "$min" "$pat"
+        \\    ;;
+        \\esac
+        \\
+    , "curl-config");
 
     const test_servers_step = b.step(
         "test-servers",
