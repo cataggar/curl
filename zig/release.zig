@@ -2109,32 +2109,11 @@ pub fn renderReleaseNotes(
         \\- **Native Windows OS integration on Windows x64 and Arm64.** Windows archives enable Schannel TLS (`-Dssl=schannel`), WinIDN (`-Didn=winidn`), WinLDAP (`-Dldap=winldap`), and Windows SSPI (`-Dsspi=true`) alongside bundled compression, HTTP/2, HTTP/3, SSH, PSL, and c-ares backends.
         \\- **Zero external third-party shared library dependencies.** Linux musl binaries are statically linked; macOS binaries link only system `libSystem.B.dylib` and Apple `Security`/`CoreFoundation` frameworks.
         \\
-        \\## Platform Coverage & Runtime Requirements
-        \\
-        \\| Archive | Zig target | Binary | Runtime dependencies |
-        \\|---|---|---|---|
-        \\| `curl-{s}-linux-musl-x64.tar.gz` | `x86_64-linux-musl` | `curl` | Static musl binary (none) |
-        \\| `curl-{s}-linux-musl-arm64.tar.gz` | `aarch64-linux-musl` | `curl` | Static musl binary (none) |
-        \\| `curl-{s}-macos-x64.tar.gz` | `x86_64-macos` | `curl` | macOS `libSystem.B.dylib` + `Security`/`CoreFoundation` frameworks |
-        \\| `curl-{s}-macos-arm64.tar.gz` | `aarch64-macos` | `curl` | macOS `libSystem.B.dylib` + `Security`/`CoreFoundation` frameworks |
-        \\| `curl-{s}-windows-x64.tar.gz` | `x86_64-windows-gnu` | `curl.exe` | Windows system DLLs (`ws2_32`, `secur32`, `crypt32`, `advapi32`, `bcrypt`, `normaliz`, `wldap32`) |
-        \\| `curl-{s}-windows-arm64.tar.gz` | `aarch64-windows-gnu` | `curl.exe` | Windows system DLLs (`ws2_32`, `secur32`, `crypt32`, `advapi32`, `bcrypt`, `normaliz`, `wldap32`) |
-        \\
-        \\## Known Limitations
-        \\
-        \\- **CLI-only binary packages:** `libcurl` C development headers and static/shared libraries are outside the scope of these release archives.
-        \\
         \\{s}
     ,
         .{
             repository_name,
             tag,
-            version,
-            version,
-            version,
-            version,
-            version,
-            version,
             version,
             comparison_line,
         },
@@ -2989,7 +2968,7 @@ pub fn publish(
 
     const title = std.fmt.allocPrint(
         allocator,
-        "curl {s} (Zig port)",
+        "curl {s}",
         .{options.version},
     ) catch return error.OutOfMemory;
     defer allocator.free(title);
@@ -3786,9 +3765,9 @@ test "end-to-end packaging, allowlist verification, and SBOM/sidecar rejection" 
     defer allocator.free(notes);
     try std.testing.expect(std.mem.indexOf(u8, notes, "ghr install cataggar/curl@v8.23.0-zig.1") != null);
     try std.testing.expect(std.mem.indexOf(u8, notes, "Distribution Identity") == null);
-    try std.testing.expect(std.mem.indexOf(u8, notes, "curl-8.23.0-zig.1-windows-arm64.tar.gz") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notes, "| `curl-8.23.0-zig.1-linux-musl-x64.tar.gz` | `x86_64-linux-musl` | `curl` |") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notes, "| `curl-8.23.0-zig.1-windows-x64.tar.gz` | `x86_64-windows-gnu` | `curl.exe` |") != null);
+    try std.testing.expect(std.mem.indexOf(u8, notes, "Platform Coverage & Runtime Requirements") == null);
+    try std.testing.expect(std.mem.indexOf(u8, notes, "Known Limitations") == null);
+    try std.testing.expect(std.mem.indexOf(u8, notes, "curl-8.23.0-zig.1-<platform>.tar.gz") != null);
 }
 
 test "Publisher.parseRelease and validateRemoteAssets enforce draft-first publication contract" {
