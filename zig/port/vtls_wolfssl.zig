@@ -585,7 +585,7 @@ fn do_file_type(type_opt: ?[*:0]const u8) c_int {
 fn peerDispname(peer: *const SslPeer) [*:0]const u8 {
     if (peer.origin) |orig| {
         if (orig.user_hostname[0] != 0) {
-            return (&orig.user_hostname)[0 .. orig.user_hostname.len - 1 :0].ptr;
+            return @ptrCast(&orig.user_hostname);
         }
         return orig.hostname;
     }
@@ -602,7 +602,7 @@ fn peerHostname(peer: *const SslPeer) [*:0]const u8 {
 fn wsslStrerror(err: c_ulong, buf: *[WOLFSSL_MAX_ERROR_SZ]u8) [*:0]const u8 {
     if (comptime !use_wolfssl) {
         buf[0] = 0;
-        return buf[0 .. buf.len - 1 :0].ptr;
+        return "";
     }
     buf.* = @splat(0);
     if (err != 0) {
@@ -1344,7 +1344,7 @@ fn wssl_init_step1(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
                     c_ext.Curl_failf(data, "SSL: failed setting ALPN protocols");
                     return CURLE_SSL_CONNECT_ERROR;
                 }
-                c_ext.Curl_infof(data, "ALPN: curl offers %s", (&proto.data)[0 .. proto.data.len - 1 :0].ptr);
+                c_ext.Curl_infof(data, "ALPN: curl offers %s", (&proto.data)[0..@intCast(proto.len) :0].ptr);
             }
         }
     }

@@ -2532,12 +2532,15 @@ test "rustls loopback TLS handshake and HTTPS GET via curl_easy_perform" {
             const easy = curl_c.curl_easy_init() orelse return error.EasyInitFailed;
             defer curl_c.curl_easy_cleanup(easy);
 
-            var url_buf: [128]u8 = undefined;
-            const url = try std.fmt.bufPrintZ(&url_buf, "https://{s}:{d}/test", .{ opts.hostname, port });
+            var url_buf: [128:0]u8 = undefined;
+            const url_s = try std.fmt.bufPrint(&url_buf, "https://{s}:{d}/test", .{ opts.hostname, port });
+            url_buf[url_s.len] = 0;
+            const url: [*:0]const u8 = &url_buf;
 
-            var resolve_buf: [128]u8 = undefined;
-            const resolve_entry = try std.fmt.bufPrintZ(&resolve_buf, "{s}:{d}:127.0.0.1", .{ opts.hostname, port });
-            const resolve_list = curl_c.curl_slist_append(null, resolve_entry.ptr) orelse return error.SlistFailed;
+            var resolve_buf: [128:0]u8 = undefined;
+            const resolve_s = try std.fmt.bufPrint(&resolve_buf, "{s}:{d}:127.0.0.1", .{ opts.hostname, port });
+            resolve_buf[resolve_s.len] = 0;
+            const resolve_list = curl_c.curl_slist_append(null, &resolve_buf) orelse return error.SlistFailed;
             defer curl_c.curl_slist_free_all(resolve_list);
 
             var resp_buf = ResponseBuf{};

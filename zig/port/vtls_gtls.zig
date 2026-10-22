@@ -3221,15 +3221,17 @@ test "gnutls loopback TLS handshake, ALPN, HTTPS GET, CA verification, and pinne
             const easy = curl_easy_init() orelse return error.EasyInitFailed;
             defer curl_easy_cleanup(easy);
 
-            var url_buf: [128]u8 = undefined;
-            const url_s = try std.fmt.bufPrintZ(&url_buf, "https://{s}:{d}/test", .{ opts.hostname, port });
-            const url_z: [*:0]const u8 = url_s.ptr;
+            var url_buf: [128:0]u8 = undefined;
+            const url_s = try std.fmt.bufPrint(&url_buf, "https://{s}:{d}/test", .{ opts.hostname, port });
+            url_buf[url_s.len] = 0;
+            const url_z: [*:0]const u8 = &url_buf;
 
             var resolve_list: ?*curl_slist = null;
             defer if (resolve_list) |l| curl_slist_free_all(l);
-            var resolve_buf: [128]u8 = undefined;
-            const resolve_s = try std.fmt.bufPrintZ(&resolve_buf, "{s}:{d}:127.0.0.1", .{ opts.hostname, port });
-            const resolve_entry: [*:0]const u8 = resolve_s.ptr;
+            var resolve_buf: [128:0]u8 = undefined;
+            const resolve_s = try std.fmt.bufPrint(&resolve_buf, "{s}:{d}:127.0.0.1", .{ opts.hostname, port });
+            resolve_buf[resolve_s.len] = 0;
+            const resolve_entry: [*:0]const u8 = &resolve_buf;
             resolve_list = curl_slist_append(null, resolve_entry);
 
             var rbuf = ResponseBuf{};
