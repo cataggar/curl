@@ -2551,6 +2551,9 @@ pub export fn Curl_mime_read(buffer: [*]u8, size: usize, nitems: usize, instream
     var ret: usize = 0;
     _ = size;
 
+    if (nitems <= 4)
+        return READ_ERROR;
+
     while (true) {
         hasread = false;
         ret = readback_part(part, buffer, nitems, &hasread);
