@@ -2105,6 +2105,22 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                     break;
                 };
 
+                if (is_stat_cmd or is_symlink_cmd or is_mkdir_cmd or is_rename_cmd or is_rmdir_cmd or is_rm_cmd or is_statvfs_cmd) {
+                    if (arg_ptr) |ap| {
+                        if (ap[0] != 0) {
+                            Curl_failf(data, "Suspicious data after the command line");
+                            if (sshc.quote_path1) |p1| mem.free(p1);
+                            if (sshc.quote_path2) |p2| mem.free(p2);
+                            sshc.quote_path1 = null;
+                            sshc.quote_path2 = null;
+                            sshc.nextstate = .SSH_NO_STATE;
+                            sshc.actualcode = CURLE_QUOTE_ERROR;
+                            ssh_state(data, sshc, .SSH_SFTP_SHUTDOWN);
+                            break;
+                        }
+                    }
+                }
+
                 if (is_stat_cmd) {
                     sshc.quote_attrs = std.mem.zeroes(LIBSSH2_SFTP_ATTRIBUTES);
                     ssh_state(data, sshc, .SSH_SFTP_QUOTE_STAT);

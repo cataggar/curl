@@ -54,7 +54,7 @@ pub const CURLE_BAD_FUNCTION_ARGUMENT: CURLcode = 43;
 pub const CURLE_ABORTED_BY_CALLBACK: CURLcode = 42;
 pub const CURLE_BAD_CONTENT_ENCODING: CURLcode = 61;
 pub const CURLE_AGAIN: CURLcode = 81;
-pub const CURLE_SETOPT_OPTION_SYNTAX: CURLcode = 98;
+pub const CURLE_SETOPT_OPTION_SYNTAX: CURLcode = 49;
 pub const CURLE_UNRECOVERABLE_POLL: CURLcode = 99;
 
 pub const timediff_t = i64;

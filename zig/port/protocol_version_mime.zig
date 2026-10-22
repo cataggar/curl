@@ -2226,8 +2226,29 @@ pub export fn curl_mime_free(mime_opt: ?*curl_mime) callconv(.c) void {
     }
 }
 
-pub export fn Curl_mime_duppart(data: ?*anyopaque, dst: *curl_mimepart, src: *const curl_mimepart) callconv(.c) CURLcode {
+fn mime_is_too_deep(part: *const curl_mimepart, call_depth_in: usize) bool {
+    const call_depth = call_depth_in + 1;
+    if (call_depth > MAX_MIME_LEVELS)
+        return true;
+
+    if (part.kind == MIMEKIND_MULTIPART) {
+        if (part.arg) |a| {
+            const mime: *const curl_mime = @ptrCast(@alignCast(a));
+            var s = mime.firstpart;
+            while (s) |sub| : (s = sub.nextpart) {
+                if (mime_is_too_deep(sub, call_depth))
+                    return true;
+            }
+        }
+    }
+    return false;
+}
+
+fn mime_duppart(data: ?*anyopaque, dst: *curl_mimepart, src: *const curl_mimepart, call_depth_in: usize) CURLcode {
     var res: CURLcode = CURLE_OK;
+    const call_depth = call_depth_in + 1;
+    if (call_depth > MAX_MIME_LEVELS)
+        return CURLE_TOO_LARGE;
 
     switch (src.kind) {
         MIMEKIND_NONE => {},
@@ -2249,7 +2270,7 @@ pub export fn Curl_mime_duppart(data: ?*anyopaque, dst: *curl_mimepart, src: *co
             var s = if (src.arg) |a| @as(*curl_mime, @ptrCast(@alignCast(a))).firstpart else null;
             while (res == CURLE_OK and s != null) : (s = s.?.nextpart) {
                 const d = curl_mime_addpart(m);
-                res = if (d != null) Curl_mime_duppart(data, d.?, s.?) else CURLE_OUT_OF_MEMORY;
+                res = if (d != null) mime_duppart(data, d.?, s.?, call_depth) else CURLE_OUT_OF_MEMORY;
             }
         },
         else => {
@@ -2281,6 +2302,16 @@ pub export fn Curl_mime_duppart(data: ?*anyopaque, dst: *curl_mimepart, src: *co
         Curl_mime_cleanpart(dst);
 
     return res;
+}
+
+pub export fn Curl_mime_duppart(data: ?*anyopaque, dst_opt: ?*curl_mimepart, src_opt: ?*const curl_mimepart) callconv(.c) CURLcode {
+    const dst = dst_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
+    const src = src_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
+
+    if (mime_is_too_deep(src, 0))
+        return CURLE_TOO_LARGE;
+
+    return mime_duppart(data, dst, src, 0);
 }
 
 pub export fn curl_mime_init(easy: ?*anyopaque) callconv(.c) ?*curl_mime {

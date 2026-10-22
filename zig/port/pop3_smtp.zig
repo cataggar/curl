@@ -17,6 +17,7 @@ const CURLE_WEIRD_SERVER_REPLY: CURLcode = 8;
 const CURLE_REMOTE_ACCESS_DENIED: CURLcode = 9;
 const CURLE_OUT_OF_MEMORY: CURLcode = 27;
 const CURLE_OPERATION_TIMEDOUT: CURLcode = 28;
+const CURLE_BAD_FUNCTION_ARGUMENT: CURLcode = 43;
 const CURLE_SEND_ERROR: CURLcode = 55;
 const CURLE_RECV_ERROR: CURLcode = 56;
 const CURLE_USE_SSL_FAILED: CURLcode = 64;
@@ -2514,6 +2515,11 @@ fn smtp_parse_address(
     var result: CURLcode = CURLE_OK;
     var length: usize = 0;
 
+    if (std.mem.indexOfAny(u8, std.mem.span(fqma), "\r\n") != null) {
+        Curl_pop3_smtp_failf_msg(data, "Refusing to send email address with a CR or LF");
+        return CURLE_BAD_FUNCTION_ARGUMENT;
+    }
+
     const start: [*:0]const u8 = if (fqma[0] == '<') fqma + 1 else fqma;
     var dup: ?[*:0]u8 = null;
     result = Curl_urldecode(start, 0, &dup, &length, 0);
@@ -2543,7 +2549,6 @@ fn smtp_parse_address(
         _ = netrc_addr_idn.Curl_idnconvert_hostname(host);
     }
 
-    _ = data;
     address.* = d;
     return result;
 }
