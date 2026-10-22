@@ -8,6 +8,7 @@ const curlx_parse_mod = @import("curlx_parse.zig");
 const curlx_time_net = @import("curlx_time_net.zig");
 const headers_sock = @import("headers_sock.zig");
 const vdns_cfilters = @import("vdns_cfilters.zig");
+const doh_hostip_easy = @import("doh_hostip_easy.zig");
 
 const curlx_parse = struct {
     pub const STRE_OVERFLOW = curlx_parse_mod.STRE_OVERFLOW;
@@ -197,6 +198,38 @@ extern fn Curl_conn_meta_get(conn: *connectdata, key: [*:0]const u8) callconv(.c
 extern fn Curl_meta_set(data: *Curl_easy, key: [*:0]const u8, entry: ?*anyopaque, dtor: HashDtor) callconv(.c) CURLcode;
 extern fn Curl_meta_get(data: *Curl_easy, key: [*:0]const u8) callconv(.c) ?*anyopaque;
 extern fn Curl_meta_remove(data: *Curl_easy, key: [*:0]const u8) callconv(.c) void;
+
+inline fn fromOpaque(comptime Ptr: type, ptr: anytype) Ptr {
+    return @ptrCast(@alignCast(ptr));
+}
+
+inline fn getTftpConn(conn: ?*connectdata) ?*TftpConn {
+    return doh_hostip_easy.connMetaGetTyped(TftpConn, conn, CURL_META_TFTP_CONN);
+}
+
+inline fn getSocksCtx(cf: *const Curl_cfilter) ?*SocksCtx {
+    return if (cf.ctx) |p| fromOpaque(*SocksCtx, p) else null;
+}
+
+inline fn getTelnetEasy(data: ?*Curl_easy) ?*TELNET {
+    return doh_hostip_easy.metaGetTyped(TELNET, data, CURL_META_TELNET_EASY);
+}
+
+inline fn pollsetChange(
+    data: ?*Curl_easy,
+    ps: *easy_pollset,
+    sock: curl_socket_t,
+    add_flags: c_int,
+    remove_flags: c_int,
+) CURLcode {
+    return headers_sock.Curl_pollset_change(
+        data,
+        fromOpaque(*headers_sock.EasyPollset, ps),
+        sock,
+        add_flags,
+        remove_flags,
+    );
+}
 
 inline fn infof(data: ?*Curl_easy, fmt: [*:0]const u8, args: anytype) void {
     if (data) |d| {
@@ -429,8 +462,7 @@ const CurlSockaddrStorage = extern struct {
             self.buffer[1] = @intCast(family);
         } else {
             const fam_u16: u16 = @intCast(family);
-            const ptr: *u16 = @ptrCast(@alignCast(&self.buffer[0]));
-            ptr.* = fam_u16;
+            std.mem.writeInt(u16, self.buffer[0..2], fam_u16, builtin.cpu.arch.endian());
         }
     }
 };
@@ -514,8 +546,8 @@ fn tftp_option_get(
     if (after_key >= slice.len) return null;
     const val_rel = std.mem.indexOfScalar(u8, slice[after_key..], 0) orelse return null;
     const next_idx = after_key + val_rel + 1;
-    option.* = @ptrCast(slice.ptr);
-    value.* = @ptrCast(slice[after_key..].ptr);
+    option.* = slice[0..key_nul :0].ptr;
+    value.* = slice[after_key .. after_key + val_rel :0].ptr;
     return slice.ptr + next_idx;
 }
 
@@ -535,8 +567,8 @@ fn tftp_parse_option_ack(state: *TftpConn, ptr: [*]const u8, len: c_int) CURLcod
             failf(data, "Malformed ACK packet, rejecting", .{});
             return CURLE_TFTP_ILLEGAL;
         };
-        const key_slice = rem[0..key_nul];
-        const opt_str: [*:0]const u8 = @ptrCast(rem.ptr);
+        const key_slice = rem[0..key_nul :0];
+        const opt_str: [*:0]const u8 = key_slice.ptr;
         const after_key = key_nul + 1;
         if (after_key >= rem.len) {
             failf(data, "Malformed ACK packet, rejecting", .{});
@@ -547,7 +579,7 @@ fn tftp_parse_option_ack(state: *TftpConn, ptr: [*]const u8, len: c_int) CURLcod
             failf(data, "Malformed ACK packet, rejecting", .{});
             return CURLE_TFTP_ILLEGAL;
         };
-        const val_str: [*:0]const u8 = @ptrCast(val_rem.ptr);
+        const val_str: [*:0]const u8 = val_rem[0..val_nul :0].ptr;
         rem = val_rem[val_nul + 1 ..];
         const olen = key_slice.len;
 
@@ -923,10 +955,10 @@ fn tftp_send_first(state: *TftpConn, event: TftpEvent) CURLcode {
             result = Curl_urldecode(up_path + 1, 0, &filename, null, REJECT_ZERO);
             if (result != CURLE_OK) return result;
             const fn_ptr = filename.?;
+            defer mem.freeTyped(fn_ptr);
 
             if (std.mem.len(fn_ptr) + std.mem.len(mode) + 4 > state.blksize) {
                 failf(data, "TFTP filename too long", .{});
-                mem.free(fn_ptr);
                 return CURLE_TFTP_ILLEGAL;
             }
 
@@ -940,13 +972,12 @@ fn tftp_send_first(state: *TftpConn, event: TftpEvent) CURLcode {
                 @as(c_int, 0),
             );
             var sbytes: usize = 2 + @as(usize, @intCast(@max(0, n_printed)));
-            mem.free(fn_ptr);
 
             if (!Curl_tftp_no_options(data)) {
-                var buf: [64]u8 = undefined;
+                var buf: [64:0]u8 = undefined;
                 const tsize_val: i64 = if (is_upload and infilesize != -1) infilesize else 0;
                 _ = curl_msnprintf(&buf, buf.len, "%lld", @as(c_longlong, tsize_val));
-                const buf_cstr: [*:0]const u8 = @ptrCast(&buf);
+                const buf_cstr: [*:0]const u8 = &buf;
 
                 result = tftp_option_add(state, &sbytes, sbytes, TFTP_OPTION_TSIZE);
                 if (result == CURLE_OK) {
@@ -1058,23 +1089,36 @@ fn tftp_conn_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callc
     _ = key;
     _ = klen;
     if (entry) |ptr| {
-        const state: *TftpConn = @ptrCast(@alignCast(ptr));
-        mem.free(state.rpacket.data);
+        const state = fromOpaque(*TftpConn, ptr);
+        mem.freeTyped(state.rpacket.data);
         state.rpacket.data = null;
-        mem.free(state.spacket.data);
+        mem.freeTyped(state.spacket.data);
         state.spacket.data = null;
-        mem.freeSized(state, @sizeOf(TftpConn));
+        mem.freeTyped(state);
     }
+}
+
+fn tftpCreateConnState(conn: *connectdata, need_blksize: usize) !*TftpConn {
+    const state = mem.create(TftpConn) orelse return error.OutOfMemory;
+    var state_owned = true;
+    errdefer if (state_owned) {
+        mem.freeTyped(state.rpacket.data);
+        mem.freeTyped(state.spacket.data);
+        mem.freeTyped(state);
+    };
+
+    state.rpacket.data = mem.callocMany(u8, need_blksize + 2 + 2) orelse return error.OutOfMemory;
+    state.spacket.data = mem.callocMany(u8, need_blksize + 2 + 2) orelse return error.OutOfMemory;
+
+    state_owned = false;
+    if (Curl_conn_meta_set(conn, CURL_META_TFTP_CONN, state, tftp_conn_dtor) != CURLE_OK) {
+        return error.OutOfMemory;
+    }
+    return state;
 }
 
 fn tftp_connect(data: *Curl_easy, done: *bool) callconv(.c) CURLcode {
     const conn = Curl_easy_get_conn(data) orelse return CURLE_FAILED_INIT;
-
-    const raw = mem.calloc(1, @sizeOf(TftpConn)) orelse return CURLE_OUT_OF_MEMORY;
-    const state: *TftpConn = @ptrCast(@alignCast(raw));
-    if (Curl_conn_meta_set(conn, CURL_META_TFTP_CONN, state, tftp_conn_dtor) != CURLE_OK) {
-        return CURLE_OUT_OF_MEMORY;
-    }
 
     var blksize: u32 = TFTP_BLKSIZE_DEFAULT;
     const opt_blksize = Curl_tftp_blksize(data);
@@ -1087,14 +1131,7 @@ fn tftp_connect(data: *Curl_easy, done: *bool) callconv(.c) CURLcode {
         need_blksize = TFTP_BLKSIZE_DEFAULT;
     }
 
-    if (state.rpacket.data == null) {
-        const rbuf = mem.calloc(1, need_blksize + 2 + 2) orelse return CURLE_OUT_OF_MEMORY;
-        state.rpacket.data = @ptrCast(rbuf);
-    }
-    if (state.spacket.data == null) {
-        const sbuf = mem.calloc(1, need_blksize + 2 + 2) orelse return CURLE_OUT_OF_MEMORY;
-        state.spacket.data = @ptrCast(sbuf);
-    }
+    const state = tftpCreateConnState(conn, need_blksize) catch return CURLE_OUT_OF_MEMORY;
 
     Curl_conncontrol(conn, CONNCTRL_CONN_CLOSE);
 
@@ -1129,14 +1166,13 @@ fn tftp_done(data: *Curl_easy, status: CURLcode, premature: bool) callconv(.c) C
     _ = status;
     _ = premature;
     const conn = Curl_easy_get_conn(data) orelse return CURLE_OK;
-    const state_raw = Curl_conn_meta_get(conn, CURL_META_TFTP_CONN);
+    const state_opt = getTftpConn(conn);
 
     if (Curl_pgrsDone(data, Curl_pgrs_now(data)) != 0) {
         return CURLE_ABORTED_BY_CALLBACK;
     }
 
-    if (state_raw) |ptr| {
-        const state: *TftpConn = @ptrCast(@alignCast(ptr));
+    if (state_opt) |state| {
         return tftp_translate_code(state.err);
     }
     return CURLE_OK;
@@ -1144,9 +1180,9 @@ fn tftp_done(data: *Curl_easy, status: CURLcode, premature: bool) callconv(.c) C
 
 fn tftp_pollset(data: *Curl_easy, ps: *easy_pollset) callconv(.c) CURLcode {
     const conn = Curl_easy_get_conn(data) orelse return CURLE_FAILED_INIT;
-    return headers_sock.Curl_pollset_change(
+    return pollsetChange(
         data,
-        @ptrCast(@alignCast(ps)),
+        ps,
         Curl_conn_get_sock(conn, FIRSTSOCKET),
         headers_sock.CURL_POLL_IN,
         0,
@@ -1209,8 +1245,9 @@ fn tftp_receive_packet(data: *Curl_easy, state: *TftpConn) CURLcode {
                 const str: [*]const u8 = state.rpacket.data.? + 4;
                 const strn: usize = @intCast(state.rbytes - 4);
                 state.err = @fromBackingInt(@intCast(@as(c_int, err_u16)));
-                if (tftp_strnlen(str, strn) < strn) {
-                    const cstr: [*:0]const u8 = @ptrCast(str);
+                const nul_idx = tftp_strnlen(str, strn);
+                if (nul_idx < strn) {
+                    const cstr: [*:0]const u8 = str[0..nul_idx :0].ptr;
                     infof(data, "TFTP error: %s", .{cstr});
                 }
             },
@@ -1252,11 +1289,10 @@ fn tftp_state_timeout(state: *TftpConn, event: ?*TftpEvent) timediff_t {
 
 fn tftp_multi_statemach(data: *Curl_easy, done: *bool) callconv(.c) CURLcode {
     const conn = Curl_easy_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const state_raw = Curl_conn_meta_get(conn, CURL_META_TFTP_CONN) orelse {
+    const state = getTftpConn(conn) orelse {
         done.* = false;
         return CURLE_FAILED_INIT;
     };
-    const state: *TftpConn = @ptrCast(@alignCast(state_raw));
 
     done.* = false;
 
@@ -1315,11 +1351,10 @@ fn tftp_perform(data: *Curl_easy, dophase_done: *bool) CURLcode {
         dophase_done.* = false;
         return CURLE_FAILED_INIT;
     };
-    const state_raw = Curl_conn_meta_get(conn, CURL_META_TFTP_CONN) orelse {
+    const state = getTftpConn(conn) orelse {
         dophase_done.* = false;
         return CURLE_FAILED_INIT;
     };
-    const state: *TftpConn = @ptrCast(@alignCast(state_raw));
 
     dophase_done.* = false;
     const result = tftp_state_machine(state, .TFTP_EVENT_INIT);
@@ -1334,16 +1369,16 @@ fn tftp_do(data: *Curl_easy, done: *bool) callconv(.c) CURLcode {
         done.* = false;
         return CURLE_FAILED_INIT;
     };
-    var state_raw = Curl_conn_meta_get(conn, CURL_META_TFTP_CONN);
+    var state_opt = getTftpConn(conn);
     done.* = false;
 
-    if (state_raw == null) {
+    if (state_opt == null) {
         const c_res = tftp_connect(data, done);
         if (c_res != CURLE_OK) return c_res;
-        state_raw = Curl_conn_meta_get(conn, CURL_META_TFTP_CONN);
-        if (state_raw == null) return CURLE_TFTP_ILLEGAL;
+        state_opt = getTftpConn(conn);
+        if (state_opt == null) return CURLE_TFTP_ILLEGAL;
     }
-    const state: *TftpConn = @ptrCast(@alignCast(state_raw.?));
+    const state = state_opt.?;
 
     var result = tftp_perform(data, done);
     if (result == CURLE_OK) {
@@ -1635,14 +1670,14 @@ fn socks4_resolving(sx: *SocksCtx, cf: *Curl_cfilter, data: ?*Curl_easy, done: *
 
     const ai = Curl_conn_dns_get_ai(data, dest, cf.sockindex, AF_INET, 0);
     if (ai) |addrinfo| {
-        var ipbuf: [64]u8 = undefined;
+        var ipbuf: [64:0]u8 = undefined;
         Curl_printable_address(addrinfo, &ipbuf, ipbuf.len);
-        const ip_cstr: [*:0]const u8 = @ptrCast(&ipbuf);
+        const ip_cstr: [*:0]const u8 = &ipbuf;
         trcCf(data, cf, "SOCKS4 connect to IPv4 %s (locally resolved)", .{ip_cstr});
 
-        const addr_bytes: [*]const u8 = @ptrCast(addrinfo.ai_addr.?);
+        const addr_bytes = fromOpaque(*const [8]u8, addrinfo.ai_addr.?);
         var nwritten: usize = 0;
-        const wres = io_buffers.Curl_bufq_write(&sx.iobuf, addr_bytes + 4, 4, &nwritten);
+        const wres = io_buffers.Curl_bufq_write(&sx.iobuf, addr_bytes[4..8].ptr, 4, &nwritten);
         if (wres != CURLE_OK or nwritten != 4) return CURLPX_SEND_REQUEST;
     } else {
         failf(data, "SOCKS4 connection to %s not supported", .{dest.hostname.?});
@@ -2047,9 +2082,9 @@ fn socks5_resolving(sx: *SocksCtx, cf: *Curl_cfilter, data: ?*Curl_easy, done: *
         return CURLPX_RESOLVE_HOST;
     };
 
-    var dest_ip: [vdns_cfilters.MAX_IPADR_LEN]u8 = undefined;
+    var dest_ip: [vdns_cfilters.MAX_IPADR_LEN:0]u8 = undefined;
     Curl_printable_address(addrinfo, &dest_ip, dest_ip.len);
-    const dest_ip_cstr: [*:0]const u8 = @ptrCast(&dest_ip);
+    const dest_ip_cstr: [*:0]const u8 = &dest_ip;
 
     var destination: ?[*]const u8 = null;
     var desttype: u8 = 1;
@@ -2058,14 +2093,14 @@ fn socks5_resolving(sx: *SocksCtx, cf: *Curl_cfilter, data: ?*Curl_easy, done: *
     if (addrinfo.ai_family == AF_INET) {
         desttype = 1;
         destlen = 4;
-        const addr_bytes: [*]const u8 = @ptrCast(addrinfo.ai_addr.?);
-        destination = addr_bytes + 4;
+        const addr_bytes = fromOpaque(*const [8]u8, addrinfo.ai_addr.?);
+        destination = addr_bytes[4..8].ptr;
         trcCf(data, cf, "SOCKS5 connect to %s:%u (locally resolved)", .{ dest_ip_cstr, @as(c_uint, dest_peer.port) });
     } else if (addrinfo.ai_family == AF_INET6) {
         desttype = 4;
         destlen = 16;
-        const addr_bytes: [*]const u8 = @ptrCast(addrinfo.ai_addr.?);
-        destination = addr_bytes + 8;
+        const addr_bytes = fromOpaque(*const [24]u8, addrinfo.ai_addr.?);
+        destination = addr_bytes[8..24].ptr;
         trcCf(data, cf, "SOCKS5 connect to [%s]:%u (locally resolved)", .{ dest_ip_cstr, @as(c_uint, dest_peer.port) });
     }
 
@@ -2279,12 +2314,12 @@ fn socks_proxy_ctx_free(ctx: ?*SocksCtx) void {
         Curl_peer_unlink(&c.dest);
         Curl_creds_unlink(&c.creds);
         io_buffers.Curl_bufq_free(&c.iobuf);
-        mem.freeSized(c, @sizeOf(SocksCtx));
+        mem.freeTyped(c);
     }
 }
 
 fn socks_proxy_cf_connect(cf: *Curl_cfilter, data: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
-    const ctx: *SocksCtx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = getSocksCtx(cf).?;
     var pxresult: CURLproxycode = CURLPX_OK;
 
     if (cf.isConnected()) {
@@ -2320,8 +2355,8 @@ fn socks_proxy_cf_connect(cf: *Curl_cfilter, data: ?*Curl_easy, done: *bool) cal
                 var is_ipv6: bool = false;
                 const second_str: [*:0]const u8 = if (cf.sockindex == SECONDARYSOCKET) "2nd " else "";
                 if (Curl_conn_cf_get_ip_info(cf.next, data, &is_ipv6, &ipquad) == CURLE_OK) {
-                    const local_ip: [*:0]const u8 = @ptrCast(&ipquad.local_ip);
-                    const remote_ip: [*:0]const u8 = @ptrCast(&ipquad.remote_ip);
+                    const local_ip: [*]const u8 = &ipquad.local_ip;
+                    const remote_ip: [*]const u8 = &ipquad.remote_ip;
                     infof(
                         data,
                         "Opened %sSOCKS connection from %s port %d to %s port %d (via %s port %u)",
@@ -2352,16 +2387,14 @@ fn socks_proxy_cf_connect(cf: *Curl_cfilter, data: ?*Curl_easy, done: *bool) cal
 
 fn socks_cf_adjust_pollset(cf: *Curl_cfilter, data: ?*Curl_easy, ps: *easy_pollset) callconv(.c) CURLcode {
     if (!cf.isConnected()) {
-        if (cf.ctx) |ctx_raw| {
-            const sx: *SocksCtx = @ptrCast(@alignCast(ctx_raw));
+        if (getSocksCtx(cf)) |sx| {
             const sock = Curl_conn_cf_get_socket(cf, data);
-            const hps: *headers_sock.EasyPollset = @ptrCast(@alignCast(ps));
             switch (sx.state) {
                 .SOCKS4_ST_SEND, .SOCKS5_ST_REQ0_SEND, .SOCKS5_ST_AUTH_SEND, .SOCKS5_ST_REQ1_SEND => {
                     trcCf(data, cf, "adjust pollset out (%d)", .{@backingInt(sx.state)});
-                    return headers_sock.Curl_pollset_change(
+                    return pollsetChange(
                         data,
-                        hps,
+                        ps,
                         sock,
                         headers_sock.CURL_POLL_OUT,
                         headers_sock.CURL_POLL_IN,
@@ -2369,9 +2402,9 @@ fn socks_cf_adjust_pollset(cf: *Curl_cfilter, data: ?*Curl_easy, ps: *easy_polls
                 },
                 else => {
                     trcCf(data, cf, "adjust pollset in (%d)", .{@backingInt(sx.state)});
-                    return headers_sock.Curl_pollset_change(
+                    return pollsetChange(
                         data,
-                        hps,
+                        ps,
                         sock,
                         headers_sock.CURL_POLL_IN,
                         headers_sock.CURL_POLL_OUT,
@@ -2385,8 +2418,7 @@ fn socks_cf_adjust_pollset(cf: *Curl_cfilter, data: ?*Curl_easy, ps: *easy_polls
 
 fn socks_proxy_cf_destroy(cf: *Curl_cfilter, data: ?*Curl_easy) callconv(.c) void {
     _ = data;
-    if (cf.ctx) |ctx_raw| {
-        const ctx: *SocksCtx = @ptrCast(@alignCast(ctx_raw));
+    if (getSocksCtx(cf)) |ctx| {
         socks_proxy_ctx_free(ctx);
         cf.ctx = null;
     }
@@ -2400,19 +2432,16 @@ fn socks_cf_query(
     pres2: ?*anyopaque,
 ) callconv(.c) CURLcode {
     if (query == CF_QUERY_HOST_PORT) {
-        if (cf.ctx) |ctx_raw| {
-            const sx: *SocksCtx = @ptrCast(@alignCast(ctx_raw));
+        if (getSocksCtx(cf)) |sx| {
             if (pres1) |p1| p1.* = @intCast(sx.dest.?.port);
             if (pres2) |p2| {
-                const p_host: *?[*:0]const u8 = @ptrCast(@alignCast(p2));
-                p_host.* = sx.dest.?.hostname;
+                fromOpaque(*?[*:0]const u8, p2).* = sx.dest.?.hostname;
             }
             return CURLE_OK;
         }
     } else if (query == CF_QUERY_ALPN_NEGOTIATED) {
         if (pres2) |p2| {
-            const palpn: *?[*:0]const u8 = @ptrCast(@alignCast(p2));
-            palpn.* = null;
+            fromOpaque(*?[*:0]const u8, p2).* = null;
         }
         return CURLE_OK;
     }
@@ -2466,8 +2495,9 @@ pub export fn Curl_cf_socks_proxy_insert_after(
         },
     }
 
-    const raw = mem.calloc(1, @sizeOf(SocksCtx)) orelse return CURLE_OUT_OF_MEMORY;
-    const ctx: *SocksCtx = @ptrCast(@alignCast(raw));
+    const ctx = mem.create(SocksCtx) orelse return CURLE_OUT_OF_MEMORY;
+    var ctx_owned = true;
+    errdefer if (ctx_owned) socks_proxy_ctx_free(ctx);
 
     Curl_peer_link(&ctx.dest, dest);
     ctx.ip_version = ip_version;
@@ -2476,24 +2506,36 @@ pub export fn Curl_cf_socks_proxy_insert_after(
     Curl_creds_link(&ctx.creds, creds);
     io_buffers.Curl_bufq_init2(&ctx.iobuf, SOCKS_CHUNK_SIZE, SOCKS_CHUNKS, BUFQ_OPT_SOFT_LIMIT);
 
+    return cfSocksAttachAndResolve(cf_at, data, ctx, &ctx_owned, dns_queries) catch |err| switch (err) {
+        error.CfCreateFailed => CURLE_OUT_OF_MEMORY,
+    };
+}
+
+fn cfSocksAttachAndResolve(
+    cf_at: *Curl_cfilter,
+    data: ?*Curl_easy,
+    ctx: *SocksCtx,
+    ctx_owned: *bool,
+    dns_queries: u8,
+) !CURLcode {
+    errdefer if (ctx_owned.*) socks_proxy_ctx_free(ctx);
     var cf: ?*Curl_cfilter = null;
-    var result = Curl_cf_create(&cf, &Curl_cft_socks_proxy, ctx);
-    if (result == CURLE_OK) {
-        Curl_conn_cf_insert_after(cf_at, cf.?);
-        if (ctx.resolve_local) {
-            result = Curl_conn_dns_add_addr_resolve(
-                data,
-                cf_at.conn,
-                cf_at.sockindex,
-                ctx.dest.?,
-                dns_queries,
-                TRNSPRT_TCP,
-            );
-        }
-    } else {
-        socks_proxy_ctx_free(ctx);
+    const result = Curl_cf_create(&cf, &Curl_cft_socks_proxy, ctx);
+    if (result != CURLE_OK) return error.CfCreateFailed;
+
+    ctx_owned.* = false;
+    Curl_conn_cf_insert_after(cf_at, cf.?);
+    if (ctx.resolve_local) {
+        return Curl_conn_dns_add_addr_resolve(
+            data,
+            cf_at.conn,
+            cf_at.sockindex,
+            ctx.dest.?,
+            dns_queries,
+            TRNSPRT_TCP,
+        );
     }
-    return result;
+    return CURLE_OK;
 }
 
 // ============================================================================
@@ -2694,16 +2736,24 @@ fn telnet_easy_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) cal
     _ = key;
     _ = klen;
     if (entry) |ptr| {
-        const tn: *TELNET = @ptrCast(@alignCast(ptr));
+        const tn = fromOpaque(*TELNET, ptr);
         curl_slist_free_all(tn.telnet_vars);
         containers.curlx_dyn_free(&tn.out);
-        mem.freeSized(tn, @sizeOf(TELNET));
+        mem.freeTyped(tn);
     }
 }
 
 fn init_telnet(data: *Curl_easy) CURLcode {
-    const raw = mem.calloc(1, @sizeOf(TELNET)) orelse return CURLE_OUT_OF_MEMORY;
-    const tn: *TELNET = @ptrCast(@alignCast(raw));
+    return initTelnetInner(data) catch CURLE_OUT_OF_MEMORY;
+}
+
+fn initTelnetInner(data: *Curl_easy) !CURLcode {
+    const tn = mem.create(TELNET) orelse return error.OutOfMemory;
+    var tn_owned = true;
+    errdefer if (tn_owned) {
+        containers.curlx_dyn_free(&tn.out);
+        mem.freeTyped(tn);
+    };
 
     containers.curlx_dyn_init(&tn.out, 0xffff);
     tn.telrcv_state = .CURL_TS_DATA;
@@ -2716,7 +2766,11 @@ fn init_telnet(data: *Curl_easy) CURLcode {
     tn.him_preferred[CURL_TELOPT_ECHO] = CURL_YES;
     tn.subnegotiation[CURL_TELOPT_NAWS] = CURL_YES;
 
-    return Curl_meta_set(data, CURL_META_TELNET_EASY, tn, telnet_easy_dtor);
+    tn_owned = false;
+    if (Curl_meta_set(data, CURL_META_TELNET_EASY, tn, telnet_easy_dtor) != CURLE_OK) {
+        return error.OutOfMemory;
+    }
+    return CURLE_OK;
 }
 
 fn send_negotiation(data: *Curl_easy, cmd: c_int, option: c_int) void {
@@ -3064,14 +3118,10 @@ fn sendsuboption(data: *Curl_easy, tn: *TELNET, option: usize) void {
         tn.sbAccum(CURL_SB);
         tn.sbAccum(@intCast(CURL_TELOPT_NAWS));
 
-        const x = std.mem.nativeToBig(u16, tn.subopt_wsx);
-        const y = std.mem.nativeToBig(u16, tn.subopt_wsy);
-        const uc1: *const [2]u8 = @ptrCast(&x);
-        const uc2: *const [2]u8 = @ptrCast(&y);
-        tn.sbAccum(uc1[0]);
-        tn.sbAccum(uc1[1]);
-        tn.sbAccum(uc2[0]);
-        tn.sbAccum(uc2[1]);
+        tn.sbAccum(@intCast((tn.subopt_wsx >> 8) & 0xff));
+        tn.sbAccum(@intCast(tn.subopt_wsx & 0xff));
+        tn.sbAccum(@intCast((tn.subopt_wsy >> 8) & 0xff));
+        tn.sbAccum(@intCast(tn.subopt_wsy & 0xff));
 
         tn.sbAccum(CURL_IAC);
         tn.sbAccum(CURL_SE);
@@ -3183,26 +3233,36 @@ fn str_is_nonascii(str: [*:0]const u8) bool {
 }
 
 fn check_telnet_options(data: *Curl_easy, tn: *TELNET) CURLcode {
-    var result: CURLcode = CURLE_OK;
+    return checkTelnetOptionsInner(data, tn) catch |err| switch (err) {
+        error.BadFunctionArgument => CURLE_BAD_FUNCTION_ARGUMENT,
+        error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+        error.UnknownOption => CURLE_UNKNOWN_OPTION,
+        error.SetoptOptionSyntax => CURLE_SETOPT_OPTION_SYNTAX,
+    };
+}
+
+fn checkTelnetOptionsInner(data: *Curl_easy, tn: *TELNET) !CURLcode {
+    errdefer {
+        curl_slist_free_all(tn.telnet_vars);
+        tn.telnet_vars = null;
+    }
 
     if (Curl_telnet_has_creds(data)) {
-        var buffer: [256]u8 = undefined;
+        var buffer: [256:0]u8 = undefined;
         const user = Curl_telnet_creds_user(data);
         if (str_is_nonascii(user)) {
-            return CURLE_BAD_FUNCTION_ARGUMENT;
+            return error.BadFunctionArgument;
         }
         _ = curl_msnprintf(&buffer, buffer.len, "USER,%s", user);
-        const beg = curl_slist_append(tn.telnet_vars, @ptrCast(&buffer)) orelse {
-            curl_slist_free_all(tn.telnet_vars);
-            tn.telnet_vars = null;
-            return CURLE_OUT_OF_MEMORY;
+        const beg = curl_slist_append(tn.telnet_vars, &buffer) orelse {
+            return error.OutOfMemory;
         };
         tn.telnet_vars = beg;
         tn.us_preferred[CURL_TELOPT_NEW_ENVIRON] = CURL_YES;
     }
 
     var head = Curl_telnet_get_options(data);
-    while (head != null and result == CURLE_OK) : (head = head.?.next) {
+    while (head != null) : (head = head.?.next) {
         const option = head.?.data orelse continue;
         const opt_slice = std.mem.span(option);
         if (std.mem.indexOfScalar(u8, opt_slice, '=')) |eq_idx| {
@@ -3216,7 +3276,7 @@ fn check_telnet_options(data: *Curl_easy, tn: *TELNET) CURLcode {
                         tn.subopt_ttype = arg;
                         tn.us_preferred[CURL_TELOPT_TTYPE] = CURL_YES;
                     } else {
-                        result = CURLE_UNKNOWN_OPTION;
+                        return error.UnknownOption;
                     }
                 },
                 8 => {
@@ -3224,19 +3284,18 @@ fn check_telnet_options(data: *Curl_easy, tn: *TELNET) CURLcode {
                         tn.subopt_xdisploc = arg;
                         tn.us_preferred[CURL_TELOPT_XDISPLOC] = CURL_YES;
                     } else {
-                        result = CURLE_UNKNOWN_OPTION;
+                        return error.UnknownOption;
                     }
                 },
                 7 => {
                     if (primitives.curl_strnequal(option, "NEW_ENV", 7) != 0) {
                         const beg = curl_slist_append(tn.telnet_vars, arg) orelse {
-                            result = CURLE_OUT_OF_MEMORY;
-                            break;
+                            return error.OutOfMemory;
                         };
                         tn.telnet_vars = beg;
                         tn.us_preferred[CURL_TELOPT_NEW_ENVIRON] = CURL_YES;
                     } else {
-                        result = CURLE_UNKNOWN_OPTION;
+                        return error.UnknownOption;
                     }
                 },
                 2 => {
@@ -3249,14 +3308,14 @@ fn check_telnet_options(data: *Curl_easy, tn: *TELNET) CURLcode {
                             curlx_parse.curlx_str_number(&p, &y, 0xffff) != 0)
                         {
                             failf(data, "Syntax error in telnet option: %s", .{option});
-                            result = CURLE_SETOPT_OPTION_SYNTAX;
+                            return error.SetoptOptionSyntax;
                         } else {
                             tn.subopt_wsx = @intCast(x);
                             tn.subopt_wsy = @intCast(y);
                             tn.us_preferred[CURL_TELOPT_NAWS] = CURL_YES;
                         }
                     } else {
-                        result = CURLE_UNKNOWN_OPTION;
+                        return error.UnknownOption;
                     }
                 },
                 6 => {
@@ -3268,26 +3327,21 @@ fn check_telnet_options(data: *Curl_easy, tn: *TELNET) CURLcode {
                             tn.him_preferred[CURL_TELOPT_BINARY] = CURL_NO;
                         }
                     } else {
-                        result = CURLE_UNKNOWN_OPTION;
+                        return error.UnknownOption;
                     }
                 },
                 else => {
                     failf(data, "Unknown telnet option %s", .{option});
-                    result = CURLE_UNKNOWN_OPTION;
+                    return error.UnknownOption;
                 },
             }
         } else {
             failf(data, "Syntax error in telnet option: %s", .{option});
-            result = CURLE_SETOPT_OPTION_SYNTAX;
+            return error.SetoptOptionSyntax;
         }
     }
 
-    if (result != CURLE_OK) {
-        curl_slist_free_all(tn.telnet_vars);
-        tn.telnet_vars = null;
-    }
-
-    return result;
+    return CURLE_OK;
 }
 
 fn bad_option(opt_data: ?[*:0]const u8) bool {
@@ -3566,8 +3620,7 @@ fn telnet_do(data: *Curl_easy, done: *bool) callconv(.c) CURLcode {
     var result = init_telnet(data);
     if (result != CURLE_OK) return result;
 
-    const tn_raw = Curl_meta_get(data, CURL_META_TELNET_EASY) orelse return CURLE_FAILED_INIT;
-    const tn: *TELNET = @ptrCast(@alignCast(tn_raw));
+    const tn = getTelnetEasy(data) orelse return CURLE_FAILED_INIT;
 
     result = check_telnet_options(data, tn);
     if (result != CURLE_OK) return result;

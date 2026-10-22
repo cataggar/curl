@@ -10,6 +10,7 @@ const crypto = @import("crypto.zig");
 const containers = @import("containers.zig");
 const collections = @import("collections.zig");
 const cookie_getinfo_trc = @import("cookie_getinfo_trc.zig");
+const doh_hostip_easy = @import("doh_hostip_easy.zig");
 const sendf = @import("sendf.zig");
 const cfsocket_transfer = @import("cfsocket_transfer.zig");
 const setopt = @import("setopt.zig");
@@ -28,7 +29,7 @@ pub const timediff_t = i64;
 pub const curl_socket_t = if (builtin.os.tag == .windows) usize else c_int;
 pub const CURL_SOCKET_BAD: curl_socket_t = if (builtin.os.tag == .windows) ~@as(usize, 0) else -1;
 
-pub const Curl_easy = setopt.Curl_easy;
+pub const Curl_easy = sendf.CurlEasy;
 pub const connectdata = opaque {};
 pub const easy_pollset = opaque {};
 pub const curl_slist = protocol_version_mime.curl_slist;
@@ -67,7 +68,7 @@ pub const CURLPROTO_SCP: curl_prot_t = 1 << 4;
 pub const CURLPROTO_SFTP: curl_prot_t = 1 << 5;
 pub const PROTO_FAMILY_SSH: curl_prot_t = CURLPROTO_SCP | CURLPROTO_SFTP;
 
-pub const FIRSTSOCKET: c_int = 0;
+pub const FIRSTSOCKET = 0;
 pub const CLIENTWRITE_BODY: c_int = 1 << 0;
 pub const CLIENTWRITE_HEADER: c_int = 1 << 2;
 
@@ -124,7 +125,7 @@ pub const CURL_META_SSH_CONN = "meta:proto:ssh:conn";
 pub const Curl_send_fn = *const fn (
     data: *Curl_easy,
     sockindex: c_int,
-    buf: *const anyopaque,
+    buf: [*]const u8,
     len: usize,
     eos: bool,
     uppercase_pnwritten: *usize,
@@ -650,6 +651,7 @@ pub export fn Curl_get_pathname(
 
     var out: containers.dynbuf = undefined;
     containers.curlx_dyn_init(&out, MAX_PATHLENGTH);
+    errdefer containers.curlx_dyn_free(&out);
 
     var cp: [*:0]const u8 = cp_init;
     curlx_str_passblanks(&cp);
@@ -660,13 +662,11 @@ pub export fn Curl_get_pathname(
 
         while (cp[0] != quot) {
             if (cp[0] == 0) {
-                containers.curlx_dyn_free(&out);
                 return CURLE_QUOTE_ERROR;
             }
             if (cp[0] == '\\') {
                 cp += 1;
                 if (cp[0] != '\'' and cp[0] != '"' and cp[0] != '\\') {
-                    containers.curlx_dyn_free(&out);
                     return CURLE_QUOTE_ERROR;
                 }
             }
@@ -679,7 +679,6 @@ pub export fn Curl_get_pathname(
         cp += 1;
 
         if (containers.curlx_dyn_len(&out) == 0) {
-            containers.curlx_dyn_free(&out);
             return CURLE_QUOTE_ERROR;
         }
     } else {
@@ -699,10 +698,8 @@ pub export fn Curl_get_pathname(
         const rc = curlx_str_word(&cp, &word, MAX_PATHLENGTH);
         if (rc != 0) {
             if (rc == curlx_parse.STRE_BIG) {
-                containers.curlx_dyn_free(&out);
                 return CURLE_TOO_LARGE;
             } else if (!content) {
-                containers.curlx_dyn_free(&out);
                 return CURLE_QUOTE_ERROR;
             }
         } else {
@@ -716,6 +713,7 @@ pub export fn Curl_get_pathname(
     curlx_str_passblanks(&cp);
     cpp.* = cp;
     path.* = containers.curlx_dyn_ptr(&out);
+    out = std.mem.zeroes(containers.dynbuf);
     return CURLE_OK;
 }
 
@@ -928,9 +926,9 @@ extern fn libssh2_init(flags: c_int) callconv(.c) c_int;
 extern fn libssh2_exit() callconv(.c) void;
 extern fn libssh2_version(req_version_num: c_int) callconv(.c) ?[*:0]const u8;
 extern fn libssh2_session_init_ex(
-    my_alloc: ?*const anyopaque,
-    my_free: ?*const anyopaque,
-    my_realloc: ?*const anyopaque,
+    my_alloc: ?*const fn (usize, *?*anyopaque) callconv(.c) ?*anyopaque,
+    my_free: ?*const fn (?*anyopaque, *?*anyopaque) callconv(.c) void,
+    my_realloc: ?*const fn (?*anyopaque, usize, *?*anyopaque) callconv(.c) ?*anyopaque,
     abstract: ?*anyopaque,
 ) callconv(.c) ?*LIBSSH2_SESSION;
 extern fn libssh2_session_abstract(session: *LIBSSH2_SESSION) callconv(.c) *?*anyopaque;
@@ -1010,7 +1008,16 @@ extern fn libssh2_userauth_keyboard_interactive_ex(
     session: *LIBSSH2_SESSION,
     username: [*:0]const u8,
     username_len: c_uint,
-    response_callback: *const anyopaque,
+    response_callback: *const fn (
+        ?[*]const u8,
+        c_int,
+        ?[*]const u8,
+        c_int,
+        c_int,
+        ?[*]const LIBSSH2_USERAUTH_KBDINT_PROMPT,
+        ?[*]LIBSSH2_USERAUTH_KBDINT_RESPONSE,
+        *?*anyopaque,
+    ) callconv(.c) void,
 ) callconv(.c) c_int;
 extern fn libssh2_agent_init(session: *LIBSSH2_SESSION) callconv(.c) ?*LIBSSH2_AGENT;
 extern fn libssh2_agent_connect(agent: *LIBSSH2_AGENT) callconv(.c) c_int;
@@ -1125,6 +1132,18 @@ extern fn libssh2_channel_wait_eof(channel: *LIBSSH2_CHANNEL) callconv(.c) c_int
 extern fn libssh2_channel_wait_closed(channel: *LIBSSH2_CHANNEL) callconv(.c) c_int;
 extern fn libssh2_channel_free(channel: *LIBSSH2_CHANNEL) callconv(.c) c_int;
 
+inline fn fromOpaque(comptime Ptr: type, ptr: anytype) Ptr {
+    return @ptrCast(@alignCast(ptr));
+}
+
+inline fn getSshEasy(data: *Curl_easy) ?*SSHPROTO {
+    return doh_hostip_easy.metaGetTyped(SSHPROTO, data, CURL_META_SSH_EASY);
+}
+
+inline fn getSshConn(conn: *connectdata) ?*ssh_conn {
+    return doh_hostip_easy.connMetaGetTyped(ssh_conn, conn, CURL_META_SSH_CONN);
+}
+
 pub export fn Curl_zig_url_ssh_conn_keys(
     sshc_raw: ?*const anyopaque,
     ppriv_key: *?[*:0]const u8,
@@ -1132,14 +1151,14 @@ pub export fn Curl_zig_url_ssh_conn_keys(
 ) callconv(.c) void {
     if (comptime use_libssh2) {
         if (sshc_raw) |raw| {
-            const sshc: *const ssh_conn = @ptrCast(@alignCast(raw));
+            const sshc = fromOpaque(*const ssh_conn, raw);
             ppriv_key.* = sshc.priv_key;
             ppub_key.* = sshc.pub_key;
             return;
         }
     } else if (comptime use_libssh) {
         if (sshc_raw) |raw| {
-            const sshc: *const vssh_libssh.ssh_conn_libssh = @ptrCast(@alignCast(raw));
+            const sshc = fromOpaque(*const vssh_libssh.ssh_conn_libssh, raw);
             ppriv_key.* = sshc.priv_key;
             ppub_key.* = sshc.pub_key;
             return;
@@ -1152,7 +1171,7 @@ pub export fn Curl_zig_url_ssh_conn_keys(
 pub fn ssh_easy_dtor(key: [*:0]const u8, klen: usize, entry: ?*anyopaque) callconv(.c) void {
     _ = key;
     _ = klen;
-    const sshp: *SSHPROTO = @ptrCast(@alignCast(entry orelse return));
+    const sshp = fromOpaque(*SSHPROTO, entry orelse return);
     if (sshp.path) |p| {
         mem.free(p);
         sshp.path = null;
@@ -1170,13 +1189,13 @@ pub fn ssh_easy_dtor(key: [*:0]const u8, klen: usize, entry: ?*anyopaque) callco
         sshp.readdir_linkPath = null;
     }
     containers.curlx_dyn_free(&sshp.readdir);
-    mem.freeSized(sshp, @sizeOf(SSHPROTO));
+    mem.freeTyped(sshp);
 }
 
 pub fn ssh_conn_dtor(key: [*:0]const u8, klen: usize, entry: ?*anyopaque) callconv(.c) void {
     _ = key;
     _ = klen;
-    const sshc: *ssh_conn = @ptrCast(@alignCast(entry orelse return));
+    const sshc = fromOpaque(*ssh_conn, entry orelse return);
     if (sshc.priv_key) |pk| {
         mem.freeSecretZ(pk);
         sshc.priv_key = null;
@@ -1205,7 +1224,7 @@ pub fn ssh_conn_dtor(key: [*:0]const u8, klen: usize, entry: ?*anyopaque) callco
         mem.free(hd);
         sshc.homedir = null;
     }
-    mem.freeSized(sshc, @sizeOf(ssh_conn));
+    mem.freeTyped(sshc);
 }
 
 /// Multi-step SFTP quote path allocation with `errdefer` so a failed second
@@ -1240,14 +1259,16 @@ pub fn allocSftpQuotePaths(
 /// Multi-step SFTP readdir buffer allocation with `errdefer` so failure on the
 /// second buffer frees and nulls the first buffer.
 pub fn allocSftpReaddirBuffers(sshp: *SSHPROTO) error{OutOfMemory}!void {
-    const f_raw = mem.malloc(DYN_PATH_MAX + 1) orelse return error.OutOfMemory;
-    sshp.readdir_filename = @ptrCast(f_raw);
+    const f_slice = mem.allocSlice(u8, DYN_PATH_MAX + 1) orelse return error.OutOfMemory;
+    f_slice[DYN_PATH_MAX] = 0;
+    sshp.readdir_filename = f_slice[0..DYN_PATH_MAX :0].ptr;
     errdefer {
         mem.freeSized(sshp.readdir_filename, DYN_PATH_MAX + 1);
         sshp.readdir_filename = null;
     }
-    const le_raw = mem.malloc(DYN_PATH_MAX + 1) orelse return error.OutOfMemory;
-    sshp.readdir_longentry = @ptrCast(le_raw);
+    const le_slice = mem.allocSlice(u8, DYN_PATH_MAX + 1) orelse return error.OutOfMemory;
+    le_slice[DYN_PATH_MAX] = 0;
+    sshp.readdir_longentry = le_slice[0..DYN_PATH_MAX :0].ptr;
 }
 
 pub export fn Curl_ssh_setup_connection(
@@ -1257,30 +1278,28 @@ pub export fn Curl_ssh_setup_connection(
     const data = data_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     const conn = conn_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
 
-    const sshp_raw = mem.calloc(1, @sizeOf(SSHPROTO)) orelse return CURLE_OUT_OF_MEMORY;
-    const sshp: *SSHPROTO = @ptrCast(@alignCast(sshp_raw));
+    const sshp = mem.create(SSHPROTO) orelse return CURLE_OUT_OF_MEMORY;
     containers.curlx_dyn_init(&sshp.readdir, DYN_PATH_MAX * 2);
     if (Curl_meta_set(data, CURL_META_SSH_EASY, sshp, ssh_easy_dtor) != CURLE_OK) {
         return CURLE_OUT_OF_MEMORY;
     }
 
-    if (Curl_conn_meta_get(conn, CURL_META_SSH_CONN) == null) {
-        const ssh_raw = mem.calloc(1, @sizeOf(ssh_conn)) orelse return CURLE_OUT_OF_MEMORY;
-        const sshc: *ssh_conn = @ptrCast(@alignCast(ssh_raw));
+    if (getSshConn(conn) == null) {
+        const sshc = mem.create(ssh_conn) orelse return CURLE_OUT_OF_MEMORY;
+        var sshc_owned = true;
+        errdefer if (sshc_owned) {
+            if (sshc.priv_key) |pk| mem.freeSecretZ(pk);
+            if (sshc.pub_key) |pubk| mem.freeSecretZ(pubk);
+            mem.freeTyped(sshc);
+        };
         if (easyStrGet(data, setopt.STRING_SSH_PRIVATE_KEY)) |priv| {
-            sshc.priv_key = mem.strdup(priv) orelse {
-                mem.freeSized(sshc, @sizeOf(ssh_conn));
-                return CURLE_OUT_OF_MEMORY;
-            };
+            sshc.priv_key = mem.strdup(priv) orelse return CURLE_OUT_OF_MEMORY;
         }
         if (easyStrGet(data, setopt.STRING_SSH_PUBLIC_KEY)) |pubk| {
-            sshc.pub_key = mem.strdup(pubk) orelse {
-                if (sshc.priv_key) |pk| mem.freeSecretZ(pk);
-                mem.freeSized(sshc, @sizeOf(ssh_conn));
-                return CURLE_OUT_OF_MEMORY;
-            };
+            sshc.pub_key = mem.strdup(pubk) orelse return CURLE_OUT_OF_MEMORY;
         }
-        if (Curl_conn_meta_set(conn, CURL_META_SSH_CONN, ssh_raw, ssh_conn_dtor) != CURLE_OK) {
+        sshc_owned = false;
+        if (Curl_conn_meta_set(conn, CURL_META_SSH_CONN, sshc, ssh_conn_dtor) != CURLE_OK) {
             return CURLE_OUT_OF_MEMORY;
         }
     }
@@ -1362,7 +1381,7 @@ fn kbd_callback(
     _ = name_len;
     _ = instruction;
     _ = instruction_len;
-    const data: *Curl_easy = @ptrCast(@alignCast(abstract.* orelse return));
+    const data = fromOpaque(*Curl_easy, abstract.* orelse return);
     const conn = Curl_ftp_acc_get_conn(data) orelse return;
     if (num_prompts == 1) {
         if (prompts) |pr| {
@@ -1620,7 +1639,7 @@ fn ssh_check_fingerprint(data: *Curl_easy, sshc: *ssh_conn) CURLcode {
             ssh_state(data, sshc, .SSH_SESSION_FREE);
             return CURLE_PEER_FAILED_VERIFICATION;
         };
-        var md5buffer: [33]u8 = undefined;
+        var md5buffer: [33:0]u8 = undefined;
         const hex_chars = "0123456789abcdef";
         for (0..16) |i| {
             const b = fingerprint[i];
@@ -1628,7 +1647,7 @@ fn ssh_check_fingerprint(data: *Curl_easy, sshc: *ssh_conn) CURLcode {
             md5buffer[i * 2 + 1] = hex_chars[b & 0x0f];
         }
         md5buffer[32] = 0;
-        const md5_cstr: [*:0]const u8 = @ptrCast(&md5buffer);
+        const md5_cstr: [*:0]const u8 = &md5buffer;
         if (primitives.curl_strequal(md5_cstr, expected_md5) == 0) {
             Curl_failf(
                 data,
@@ -1981,7 +2000,7 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                     session,
                     user,
                     @intCast(std.mem.len(user)),
-                    @ptrCast(&kbd_callback),
+                    &kbd_callback,
                 );
                 if (rc == LIBSSH2_ERROR_EAGAIN) {
                     break;
@@ -2023,7 +2042,7 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
             },
 
             .SSH_SFTP_REALPATH => {
-                var tempHome: [DYN_PATH_MAX]u8 = undefined;
+                var tempHome: [DYN_PATH_MAX:0]u8 = undefined;
                 rc = libssh2_sftp_symlink_ex(
                     sshc.sftp_session.?,
                     ".",
@@ -2037,7 +2056,7 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                 }
                 if (rc > 0) {
                     tempHome[@intCast(rc)] = 0;
-                    sshc.homedir = mem.strdup(@ptrCast(&tempHome));
+                    sshc.homedir = mem.strdup(&tempHome);
                     if (sshc.homedir == null) {
                         ssh_state(data, sshc, .SSH_SFTP_SHUTDOWN);
                         sshc.actualcode = CURLE_OUT_OF_MEMORY;
@@ -2114,7 +2133,7 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                         break;
                     }
                     defer mem.free(header);
-                    result = sendf.Curl_client_write(@ptrCast(data), CLIENTWRITE_HEADER, header.?, std.mem.len(header.?));
+                    result = sendf.Curl_client_write(data, CLIENTWRITE_HEADER, header.?, std.mem.len(header.?));
                     if (result != CURLE_OK) {
                         sshc.actualcode = result;
                         ssh_state(data, sshc, .SSH_SFTP_SHUTDOWN);
@@ -2465,7 +2484,7 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                         break;
                     }
                     defer mem.free(tmp);
-                    result = sendf.Curl_client_write(@ptrCast(data), CLIENTWRITE_HEADER, tmp.?, std.mem.len(tmp.?));
+                    result = sendf.Curl_client_write(data, CLIENTWRITE_HEADER, tmp.?, std.mem.len(tmp.?));
                     if (result != CURLE_OK) {
                         sshc.actualcode = result;
                         ssh_state(data, sshc, .SSH_SFTP_SHUTDOWN);
@@ -2630,7 +2649,7 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                     Curl_pgrsSetUploadSize(data, Curl_ftp_acc_get_infilesize(data));
                 }
 
-                cfsocket_transfer.Curl_xfer_setup_send(@ptrCast(data), FIRSTSOCKET);
+                cfsocket_transfer.Curl_xfer_setup_send(data, FIRSTSOCKET);
                 Curl_vssh_set_conn_send_recv(conn, sftp_send, sftp_recv);
                 sshc.orig_waitfor = CURL_POLL_OUT;
                 ssh_state(data, sshc, .SSH_STOP);
@@ -2743,9 +2762,9 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                     sshp.readdir_filename.?[readdir_len] = 0;
 
                     if (Curl_ftp_acc_get_list_only(data)) {
-                        result = sendf.Curl_client_write(@ptrCast(data), CLIENTWRITE_BODY, sshp.readdir_filename.?, readdir_len);
+                        result = sendf.Curl_client_write(data, CLIENTWRITE_BODY, sshp.readdir_filename.?, readdir_len);
                         if (result == CURLE_OK) {
-                            result = sendf.Curl_client_write(@ptrCast(data), CLIENTWRITE_BODY, "\n", 1);
+                            result = sendf.Curl_client_write(data, CLIENTWRITE_BODY, "\n", 1);
                         }
                         if (result != CURLE_OK) {
                             sshc.actualcode = result;
@@ -2824,7 +2843,7 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                 if (result == CURLE_OK) {
                     if (containers.curlx_dyn_ptr(&sshp.readdir)) |ptr| {
                         result = sendf.Curl_client_write(
-                            @ptrCast(data),
+                            data,
                             CLIENTWRITE_BODY,
                             ptr,
                             containers.curlx_dyn_len(&sshp.readdir),
@@ -2854,7 +2873,7 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                     mem.free(le);
                     sshp.readdir_longentry = null;
                 }
-                cfsocket_transfer.Curl_xfer_setup_nop(@ptrCast(data));
+                cfsocket_transfer.Curl_xfer_setup_nop(data);
                 ssh_state(data, sshc, .SSH_STOP);
             },
 
@@ -2935,7 +2954,7 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                     if (size >= 0 and rf >= size) {
                         Curl_ftp_acc_set_req_size(data, 0);
                         Curl_pgrsSetDownloadSize(data, 0);
-                        cfsocket_transfer.Curl_xfer_setup_nop(@ptrCast(data));
+                        cfsocket_transfer.Curl_xfer_setup_nop(data);
                         ssh_state(data, sshc, .SSH_STOP);
                         break;
                     }
@@ -2956,9 +2975,9 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                 }
 
                 if (Curl_ftp_acc_get_no_body(data) or size == 0) {
-                    cfsocket_transfer.Curl_xfer_setup_nop(@ptrCast(data));
+                    cfsocket_transfer.Curl_xfer_setup_nop(data);
                 } else {
-                    cfsocket_transfer.Curl_xfer_setup_recv(@ptrCast(data), FIRSTSOCKET, size);
+                    cfsocket_transfer.Curl_xfer_setup_recv(data, FIRSTSOCKET, size);
                     Curl_vssh_set_conn_send_recv(conn, sftp_send, sftp_recv);
                     sshc.orig_waitfor = CURL_POLL_IN;
                 }
@@ -3060,7 +3079,7 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                 }
                 Curl_ftp_acc_set_req_size(data, infilesize);
                 Curl_pgrsSetUploadSize(data, infilesize);
-                cfsocket_transfer.Curl_xfer_setup_send(@ptrCast(data), FIRSTSOCKET);
+                cfsocket_transfer.Curl_xfer_setup_send(data, FIRSTSOCKET);
                 Curl_vssh_set_conn_send_recv(conn, scp_send, scp_recv);
                 sshc.orig_waitfor = CURL_POLL_OUT;
                 ssh_state(data, sshc, .SSH_STOP);
@@ -3098,7 +3117,7 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                 }
                 Curl_pgrsSetDownloadSize(data, bytecount);
                 Curl_ftp_acc_set_req_size(data, bytecount);
-                cfsocket_transfer.Curl_xfer_setup_recv(@ptrCast(data), FIRSTSOCKET, bytecount);
+                cfsocket_transfer.Curl_xfer_setup_recv(data, FIRSTSOCKET, bytecount);
                 Curl_vssh_set_conn_send_recv(conn, scp_send, scp_recv);
                 sshc.orig_waitfor = CURL_POLL_IN;
                 ssh_state(data, sshc, .SSH_STOP);
@@ -3247,8 +3266,8 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
 
 fn ssh_multi_statemach(data: *Curl_easy, done: *bool) CURLcode {
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
-    const sshp: *SSHPROTO = @ptrCast(@alignCast(Curl_meta_get(data, CURL_META_SSH_EASY) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
+    const sshp = getSshEasy(data) orelse return CURLE_FAILED_INIT;
     var block: bool = false;
     const result = ssh_statemach_act(data, sshc, sshp, &block);
     done.* = (sshc.state == .SSH_STOP) and !block;
@@ -3299,7 +3318,7 @@ fn ssh_pollset(data_opt: ?*Curl_easy, ps_opt: ?*easy_pollset) callconv(.c) CURLc
     const data = data_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     const ps = ps_opt orelse return CURLE_OK;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_OK;
-    const sshc: *ssh_conn = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_OK));
+    const sshc = getSshConn(conn) orelse return CURLE_OK;
     const sock = Curl_vssh_get_conn_firstsocket(conn);
     if (sock == CURL_SOCKET_BAD) return CURLE_OK;
 
@@ -3349,22 +3368,27 @@ fn ssh_connect(data_opt: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
     }
 
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
-    if (Curl_meta_get(data, CURL_META_SSH_EASY) == null) {
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
+    if (getSshEasy(data) == null) {
         const sc_res = Curl_ssh_setup_connection(data, conn);
         if (sc_res != CURLE_OK) return sc_res;
     }
 
     sshc.ssh_session = libssh2_session_init_ex(
-        @ptrCast(&libssh2_malloc_cb),
-        @ptrCast(&libssh2_free_cb),
-        @ptrCast(&libssh2_realloc_cb),
+        &libssh2_malloc_cb,
+        &libssh2_free_cb,
+        &libssh2_realloc_cb,
         data,
     );
     if (sshc.ssh_session == null) {
         Curl_failf(data, "Failure initialising ssh session");
         return CURLE_FAILED_INIT;
     }
+    var session_owned = true;
+    errdefer if (session_owned) {
+        _ = libssh2_session_free(sshc.ssh_session.?);
+        sshc.ssh_session = null;
+    };
 
     if (Curl_setopt_get_bit(data, 45)) {
         _ = libssh2_session_flag(sshc.ssh_session.?, LIBSSH2_FLAG_COMPRESS, 1);
@@ -3373,8 +3397,6 @@ fn ssh_connect(data_opt: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
     if (easyStrGet(data, setopt.STRING_SSH_KNOWNHOSTS)) |kh_file| {
         sshc.kh = libssh2_knownhost_init(sshc.ssh_session.?);
         if (sshc.kh == null) {
-            _ = libssh2_session_free(sshc.ssh_session.?);
-            sshc.ssh_session = null;
             return CURLE_FAILED_INIT;
         }
         const rc = libssh2_knownhost_readfile(sshc.kh.?, kh_file, LIBSSH2_KNOWNHOST_FILE_OPENSSH);
@@ -3382,6 +3404,7 @@ fn ssh_connect(data_opt: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
             Curl_infof(data, "Failed to read known hosts from %s", kh_file);
         }
     }
+    session_owned = false;
 
     ssh_state(data, sshc, .SSH_INIT);
     const result = ssh_multi_statemach(data, done);
@@ -3398,7 +3421,7 @@ fn ssh_connecting(data_opt: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
         return CURLE_NOT_BUILT_IN;
     }
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
     const result = ssh_multi_statemach(data, done);
     if (result == CURLE_OK and done.*) {
         sshc.initialised = true;
@@ -3414,7 +3437,7 @@ fn ssh_doing(data_opt: ?*Curl_easy, dophase_done: *bool) callconv(.c) CURLcode {
 
 fn scp_perform(data: *Curl_easy, connected: *bool, dophase_done: *bool) CURLcode {
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
 
     dophase_done.* = false;
     sshc.secondCreateDirs = 0;
@@ -3447,8 +3470,8 @@ fn scp_done(data_opt: ?*Curl_easy, status: CURLcode, premature: bool) callconv(.
     if (comptime !use_libssh2) return CURLE_NOT_BUILT_IN;
 
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
-    const sshp: *SSHPROTO = @ptrCast(@alignCast(Curl_meta_get(data, CURL_META_SSH_EASY) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
+    const sshp = getSshEasy(data) orelse return CURLE_FAILED_INIT;
 
     if (sshp.path) |p| {
         mem.free(p);
@@ -3471,8 +3494,8 @@ fn scp_disconnect(data_opt: ?*Curl_easy, conn_opt: ?*connectdata, dead_connectio
     const conn = conn_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     if (comptime !use_libssh2) return CURLE_OK;
 
-    const sshc: *ssh_conn = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_OK));
-    const sshp: ?*SSHPROTO = @ptrCast(@alignCast(Curl_meta_get(data, CURL_META_SSH_EASY)));
+    const sshc = getSshConn(conn) orelse return CURLE_OK;
+    const sshp = getSshEasy(data);
     if (sshp) |sp| {
         if (sp.path) |p| {
             mem.free(p);
@@ -3497,7 +3520,7 @@ fn scp_disconnect(data_opt: ?*Curl_easy, conn_opt: ?*connectdata, dead_connectio
 
 fn sftp_perform(data: *Curl_easy, connected: *bool, dophase_done: *bool) CURLcode {
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
 
     dophase_done.* = false;
     sshc.secondCreateDirs = 0;
@@ -3516,7 +3539,7 @@ fn sftp_connect_it(data_opt: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
         return CURLE_NOT_BUILT_IN;
     }
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
 
     if (!sshc.initialised) {
         var ssh_done: bool = false;
@@ -3539,7 +3562,7 @@ fn sftp_connecting(data_opt: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
         return CURLE_NOT_BUILT_IN;
     }
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
 
     var result = ssh_multi_statemach(data, done);
     if (result == CURLE_OK and done.*) {
@@ -3574,8 +3597,8 @@ fn sftp_done(data_opt: ?*Curl_easy, status: CURLcode, premature: bool) callconv(
     if (comptime !use_libssh2) return CURLE_NOT_BUILT_IN;
 
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
-    const sshp: *SSHPROTO = @ptrCast(@alignCast(Curl_meta_get(data, CURL_META_SSH_EASY) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
+    const sshp = getSshEasy(data) orelse return CURLE_FAILED_INIT;
 
     var result: CURLcode = CURLE_OK;
     var disconnect = false;
@@ -3607,8 +3630,8 @@ fn sftp_disconnect(data_opt: ?*Curl_easy, conn_opt: ?*connectdata, dead_connecti
     const conn = conn_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     if (comptime !use_libssh2) return CURLE_OK;
 
-    const sshc: *ssh_conn = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_OK));
-    const sshp: ?*SSHPROTO = @ptrCast(@alignCast(Curl_meta_get(data, CURL_META_SSH_EASY)));
+    const sshc = getSshConn(conn) orelse return CURLE_OK;
+    const sshp = getSshEasy(data);
     if (sshp) |sp| {
         if (sp.path) |p| {
             mem.free(p);
@@ -3633,7 +3656,7 @@ fn sftp_disconnect(data_opt: ?*Curl_easy, conn_opt: ?*connectdata, dead_connecti
 fn scp_send(
     data: *Curl_easy,
     sockindex: c_int,
-    mem_buf: *const anyopaque,
+    mem_buf: [*]const u8,
     len: usize,
     eos: bool,
     pnwritten: *usize,
@@ -3642,10 +3665,10 @@ fn scp_send(
     _ = eos;
     pnwritten.* = 0;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
     const ch = sshc.ssh_channel orelse return CURLE_SEND_ERROR;
 
-    const nwrite = libssh2_channel_write_ex(ch, 0, @ptrCast(mem_buf), len);
+    const nwrite = libssh2_channel_write_ex(ch, 0, mem_buf, len);
     ssh_block2waitfor(data, sshc, nwrite == LIBSSH2_ERROR_EAGAIN);
     if (nwrite == LIBSSH2_ERROR_EAGAIN) {
         return CURLE_AGAIN;
@@ -3666,7 +3689,7 @@ fn scp_recv(
     _ = sockindex;
     pnread.* = 0;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
     const ch = sshc.ssh_channel orelse return CURLE_RECV_ERROR;
 
     const nread = libssh2_channel_read_ex(ch, 0, mem_buf, len);
@@ -3683,7 +3706,7 @@ fn scp_recv(
 fn sftp_send(
     data: *Curl_easy,
     sockindex: c_int,
-    mem_buf: *const anyopaque,
+    mem_buf: [*]const u8,
     len: usize,
     eos: bool,
     pnwritten: *usize,
@@ -3692,10 +3715,10 @@ fn sftp_send(
     _ = eos;
     pnwritten.* = 0;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
     const h = sshc.sftp_handle orelse return CURLE_SEND_ERROR;
 
-    const nwrite = libssh2_sftp_write(h, @ptrCast(mem_buf), len);
+    const nwrite = libssh2_sftp_write(h, mem_buf, len);
     ssh_block2waitfor(data, sshc, nwrite == LIBSSH2_ERROR_EAGAIN);
     if (nwrite == LIBSSH2_ERROR_EAGAIN) {
         return CURLE_AGAIN;
@@ -3716,7 +3739,7 @@ fn sftp_recv(
     _ = sockindex;
     pnread.* = 0;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
     const h = sshc.sftp_handle orelse return CURLE_RECV_ERROR;
 
     const nread = libssh2_sftp_read(h, mem_buf, len);
@@ -3744,8 +3767,7 @@ fn ssh_attach(data_opt: ?*Curl_easy, conn_opt: ?*connectdata) callconv(.c) void 
     if (comptime !use_libssh2) return;
     const data = data_opt orelse return;
     const conn = conn_opt orelse return;
-    if (Curl_conn_meta_get(conn, CURL_META_SSH_CONN)) |raw| {
-        const sshc: *ssh_conn = @ptrCast(@alignCast(raw));
+    if (getSshConn(conn)) |sshc| {
         if (sshc.ssh_session) |sess| {
             const abstract = libssh2_session_abstract(sess);
             abstract.* = data;
@@ -3969,7 +3991,7 @@ test "ssh_conn and SSHPROTO teardown poisoning, key scrubbing, and errdefer quot
         var orig_free: mem.FreeCallback = undefined;
         fn freeFn(p: ?*anyopaque) callconv(.c) void {
             if (p) |non_null| {
-                const bytes: [*]const u8 = @ptrCast(non_null);
+                const bytes = fromOpaque(*const [2]u8, non_null);
                 if (bytes[0] == expected and bytes[1] == expected) {
                     poison_count.* += 1;
                 } else if (bytes[0] == 0 and bytes[1] == 0) {
@@ -3986,7 +4008,7 @@ test "ssh_conn and SSHPROTO teardown poisoning, key scrubbing, and errdefer quot
     cb.Curl_cfree = &TestHooks.freeFn;
     defer cb.Curl_cfree = TestHooks.orig_free;
 
-    const conn_ptr: *ssh_conn = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(ssh_conn)).?));
+    const conn_ptr = mem.create(ssh_conn).?;
     conn_ptr.rsa = mem.strdup("/secret/path/id_ed25519");
     conn_ptr.rsa_pub = mem.strdup("/secret/path/id_ed25519.pub");
     conn_ptr.quote_path1 = mem.strdup("/remote/q1");
@@ -3996,7 +4018,7 @@ test "ssh_conn and SSHPROTO teardown poisoning, key scrubbing, and errdefer quot
 
     // 3. Verify ssh_easy_dtor cleans up buffers and poisons freed SSHPROTO
     const before_proto = poisoned_frees;
-    const proto_ptr: *SSHPROTO = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(SSHPROTO)).?));
+    const proto_ptr = mem.create(SSHPROTO).?;
     containers.curlx_dyn_init(&proto_ptr.readdir, DYN_PATH_MAX * 2);
     proto_ptr.path = mem.strdup("/remote/file");
     try allocSftpReaddirBuffers(proto_ptr);

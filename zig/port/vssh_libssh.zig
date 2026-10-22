@@ -9,6 +9,7 @@ const curlx_time_net = @import("curlx_time_net.zig");
 const containers = @import("containers.zig");
 const collections = @import("collections.zig");
 const cookie_getinfo_trc = @import("cookie_getinfo_trc.zig");
+const doh_hostip_easy = @import("doh_hostip_easy.zig");
 const sendf = @import("sendf.zig");
 const cfsocket_transfer = @import("cfsocket_transfer.zig");
 const setopt = @import("setopt.zig");
@@ -384,7 +385,7 @@ extern fn ssh_options_set(session: ssh_session, opt_type: c_uint, value: ?*const
 extern fn ssh_options_parse_config(session: ssh_session, filename: ?[*:0]const u8) callconv(.c) c_int;
 extern fn ssh_set_blocking(session: ssh_session, blocking: c_int) callconv(.c) void;
 extern fn ssh_get_poll_flags(session: ssh_session) callconv(.c) c_int;
-extern fn ssh_get_error(error_obj: ?*anyopaque) callconv(.c) [*:0]const u8;
+extern fn ssh_get_error(error_obj: ?*const anyopaque) callconv(.c) [*:0]const u8;
 extern fn ssh_get_server_publickey(session: ssh_session, key: *?ssh_key) callconv(.c) c_int;
 extern fn ssh_get_publickey_hash(
     key: ssh_key,
@@ -720,7 +721,7 @@ fn myssh_in_SFTP_READDIR_INIT(data: *Curl_easy, sshc: *ssh_conn_libssh, sshp: *S
 
     sshc.sftp_dir = sftp_opendir(sshc.sftp_session.?, sshp.path orelse "/");
     if (sshc.sftp_dir == null) {
-        Curl_failf(data, "Could not open directory for reading: %s", ssh_get_error(@ptrCast(sshc.ssh_session)));
+        Curl_failf(data, "Could not open directory for reading: %s", ssh_get_error(sshc.ssh_session));
         return myssh_to_SFTP_CLOSE(data, sshc);
     }
     myssh_to(data, sshc, .SSH_SFTP_READDIR);
@@ -749,7 +750,7 @@ fn myssh_in_SFTP_READDIR(data: *Curl_easy, sshc: *ssh_conn_libssh, sshp: *SSHPRO
                 return SSH_ERROR;
             }
             defer mem.free(tmpLine);
-            const result = sendf.Curl_client_write(@ptrCast(data), CLIENTWRITE_BODY, tmpLine.?, sshc.readdir_len + 1);
+            const result = sendf.Curl_client_write(data, CLIENTWRITE_BODY, tmpLine.?, sshc.readdir_len + 1);
             if (result != CURLE_OK) {
                 myssh_to(data, sshc, .SSH_STOP);
                 sshc.actualcode = result;
@@ -781,7 +782,7 @@ fn myssh_in_SFTP_READDIR(data: *Curl_easy, sshc: *ssh_conn_libssh, sshp: *SSHPRO
     } else if (sftp_dir_eof(sshc.sftp_dir.?) != 0) {
         myssh_to(data, sshc, .SSH_SFTP_READDIR_DONE);
     } else {
-        Curl_failf(data, "Could not open remote directory for reading: %s", ssh_get_error(@ptrCast(sshc.ssh_session)));
+        Curl_failf(data, "Could not open remote directory for reading: %s", ssh_get_error(sshc.ssh_session));
         return myssh_to_SFTP_CLOSE(data, sshc);
     }
     return SSH_NO_ERROR;
@@ -796,7 +797,7 @@ fn myssh_in_SFTP_READDIR_LINK(data: *Curl_easy, sshc: *ssh_conn_libssh) c_int {
     const link_path = sshc.readdir_linkPath orelse "";
     sshc.readdir_link_attrs = sftp_lstat(sshc.sftp_session.?, link_path);
     if (sshc.readdir_link_attrs == null) {
-        Curl_failf(data, "Could not read symlink for reading: %s", ssh_get_error(@ptrCast(sshc.ssh_session)));
+        Curl_failf(data, "Could not read symlink for reading: %s", ssh_get_error(sshc.ssh_session));
         return myssh_to_SFTP_CLOSE(data, sshc);
     }
 
@@ -844,7 +845,7 @@ fn myssh_in_SFTP_READDIR_BOTTOM(data: *Curl_easy, sshc: *ssh_conn_libssh) c_int 
         result = CURLE_OUT_OF_MEMORY;
     } else if (containers.curlx_dyn_ptr(&sshc.readdir_buf)) |ptr| {
         result = sendf.Curl_client_write(
-            @ptrCast(data),
+            data,
             CLIENTWRITE_BODY,
             ptr,
             containers.curlx_dyn_len(&sshc.readdir_buf),
@@ -870,14 +871,14 @@ fn myssh_in_SFTP_READDIR_DONE(data: *Curl_easy, sshc: *ssh_conn_libssh) c_int {
         _ = sftp_closedir(dir);
         sshc.sftp_dir = null;
     }
-    cfsocket_transfer.Curl_xfer_setup_nop(@ptrCast(data));
+    cfsocket_transfer.Curl_xfer_setup_nop(data);
     myssh_to(data, sshc, .SSH_STOP);
     return SSH_NO_ERROR;
 }
 
 fn myssh_quote_error(data: *Curl_easy, sshc: *ssh_conn_libssh, cmd: ?[*:0]const u8) void {
     if (cmd) |c| {
-        Curl_failf(data, "%s command failed: %s", c, ssh_get_error(@ptrCast(sshc.ssh_session)));
+        Curl_failf(data, "%s command failed: %s", c, ssh_get_error(sshc.ssh_session));
     }
     if (sshc.quote_path1) |p| {
         mem.free(p);
@@ -929,7 +930,7 @@ fn myssh_in_SFTP_QUOTE_STATVFS(data: *Curl_easy, sshc: *ssh_conn_libssh) c_int {
             result = CURLE_OUT_OF_MEMORY;
         } else {
             defer mem.free(tmp);
-            result = sendf.Curl_client_write(@ptrCast(data), CLIENTWRITE_HEADER, tmp.?, std.mem.len(tmp.?));
+            result = sendf.Curl_client_write(data, CLIENTWRITE_HEADER, tmp.?, std.mem.len(tmp.?));
         }
         if (result != CURLE_OK) {
             myssh_to(data, sshc, .SSH_SFTP_CLOSE);
@@ -1291,7 +1292,7 @@ fn myssh_in_UPLOAD_INIT(data: *Curl_easy, sshc: *ssh_conn_libssh, sshp: *SSHPROT
         Curl_ftp_acc_set_req_size(data, infilesize);
         Curl_pgrsSetUploadSize(data, infilesize);
     }
-    cfsocket_transfer.Curl_xfer_setup_send(@ptrCast(data), FIRSTSOCKET);
+    cfsocket_transfer.Curl_xfer_setup_send(data, FIRSTSOCKET);
     Curl_vssh_set_conn_idx(conn, FIRSTSOCKET, 0);
     Curl_multi_mark_dirty(data);
     sshc.sftp_send_state = 0;
@@ -1307,7 +1308,7 @@ fn myssh_in_SFTP_DOWNLOAD_INIT(data: *Curl_easy, sshc: *ssh_conn_libssh, sshp: *
     const file_perms: u32 = @intCast(Curl_setopt_get_i64(data, 51));
     sshc.sftp_file = sftp_open(sshc.sftp_session.?, sshp.path orelse "", O_RDONLY, file_perms);
     if (sshc.sftp_file == null) {
-        Curl_failf(data, "Could not open remote file for reading: %s", ssh_get_error(@ptrCast(sshc.ssh_session)));
+        Curl_failf(data, "Could not open remote file for reading: %s", ssh_get_error(sshc.ssh_session));
         return myssh_to_SFTP_CLOSE(data, sshc);
     }
     sftp_file_set_nonblocking(sshc.sftp_file.?);
@@ -1384,12 +1385,12 @@ fn myssh_in_SFTP_DOWNLOAD_STAT(data: *Curl_easy, sshc: *ssh_conn_libssh) c_int {
 
     const req_size = Curl_ftp_acc_get_req_size(data);
     if (req_size == 0) {
-        cfsocket_transfer.Curl_xfer_setup_nop(@ptrCast(data));
+        cfsocket_transfer.Curl_xfer_setup_nop(data);
         Curl_infof(data, "File already completely downloaded");
         myssh_to(data, sshc, .SSH_STOP);
         return 0;
     }
-    cfsocket_transfer.Curl_xfer_setup_recv(@ptrCast(data), FIRSTSOCKET, req_size);
+    cfsocket_transfer.Curl_xfer_setup_recv(data, FIRSTSOCKET, req_size);
     Curl_vssh_set_conn_idx(conn, FIRSTSOCKET, 0);
     sshc.sftp_recv_state = 0;
     myssh_to(data, sshc, .SSH_STOP);
@@ -1450,12 +1451,12 @@ fn myssh_in_SFTP_INIT(data: *Curl_easy, sshc: *ssh_conn_libssh) c_int {
     ssh_set_blocking(session, 1);
     sshc.sftp_session = sftp_new(session);
     if (sshc.sftp_session == null) {
-        Curl_failf(data, "Failure initializing sftp session: %s", ssh_get_error(@ptrCast(session)));
+        Curl_failf(data, "Failure initializing sftp session: %s", ssh_get_error(session));
         return myssh_to_ERROR(data, sshc, CURLE_COULDNT_CONNECT);
     }
     const rc = sftp_init(sshc.sftp_session.?);
     if (rc != SSH_OK) {
-        Curl_failf(data, "Failure initializing sftp session: %s", ssh_get_error(@ptrCast(session)));
+        Curl_failf(data, "Failure initializing sftp session: %s", ssh_get_error(session));
         return myssh_to_ERROR(data, sshc, sftpErrorToCurle(SSH_FX_FAILURE));
     }
     myssh_to(data, sshc, .SSH_SFTP_REALPATH);
@@ -1541,7 +1542,7 @@ fn myssh_in_SFTP_QUOTE(data: *Curl_easy, sshc: *ssh_conn_libssh, sshp: *SSHPROTO
             return SSH_NO_ERROR;
         }
         defer mem.free(tmp);
-        const result = sendf.Curl_client_write(@ptrCast(data), CLIENTWRITE_HEADER, tmp.?, std.mem.len(tmp.?));
+        const result = sendf.Curl_client_write(data, CLIENTWRITE_HEADER, tmp.?, std.mem.len(tmp.?));
         if (result != CURLE_OK) {
             myssh_to(data, sshc, .SSH_SFTP_CLOSE);
             sshc.nextstate = .SSH_NO_STATE;
@@ -1921,7 +1922,7 @@ fn myssh_in_TRANS_INIT(data: *Curl_easy, sshc: *ssh_conn_libssh, sshp: *SSHPROTO
     }
 
     if (sshc.scp_session == null) {
-        Curl_failf(data, "%s", ssh_get_error(@ptrCast(session)));
+        Curl_failf(data, "%s", ssh_get_error(session));
         return myssh_to_ERROR(data, sshc, CURLE_UPLOAD_FAILED);
     }
     return 0;
@@ -1931,7 +1932,7 @@ fn myssh_in_SCP_UPLOAD_INIT(data: *Curl_easy, sshc: *ssh_conn_libssh, sshp: *SSH
     const conn = Curl_ftp_acc_get_conn(data) orelse return myssh_to_ERROR(data, sshc, CURLE_FAILED_INIT);
     var rc = ssh_scp_init(sshc.scp_session.?);
     if (rc != SSH_OK) {
-        Curl_failf(data, "%s", ssh_get_error(@ptrCast(sshc.ssh_session)));
+        Curl_failf(data, "%s", ssh_get_error(sshc.ssh_session));
         return myssh_to_ERROR(data, sshc, CURLE_UPLOAD_FAILED);
     }
     const file_perms: c_int = @intCast(Curl_setopt_get_i64(data, 51));
@@ -1942,10 +1943,10 @@ fn myssh_in_SCP_UPLOAD_INIT(data: *Curl_easy, sshc: *ssh_conn_libssh, sshp: *SSH
         file_perms,
     );
     if (rc != SSH_OK) {
-        Curl_failf(data, "%s", ssh_get_error(@ptrCast(sshc.ssh_session)));
+        Curl_failf(data, "%s", ssh_get_error(sshc.ssh_session));
         return myssh_to_ERROR(data, sshc, CURLE_UPLOAD_FAILED);
     }
-    cfsocket_transfer.Curl_xfer_setup_send(@ptrCast(data), FIRSTSOCKET);
+    cfsocket_transfer.Curl_xfer_setup_send(data, FIRSTSOCKET);
     Curl_vssh_set_conn_idx(conn, FIRSTSOCKET, 0);
     myssh_to(data, sshc, .SSH_STOP);
     return SSH_NO_ERROR;
@@ -1954,7 +1955,7 @@ fn myssh_in_SCP_UPLOAD_INIT(data: *Curl_easy, sshc: *ssh_conn_libssh, sshp: *SSH
 fn myssh_in_SCP_DOWNLOAD_INIT(data: *Curl_easy, sshc: *ssh_conn_libssh) c_int {
     const rc = ssh_scp_init(sshc.scp_session.?);
     if (rc != SSH_OK) {
-        Curl_failf(data, "%s", ssh_get_error(@ptrCast(sshc.ssh_session)));
+        Curl_failf(data, "%s", ssh_get_error(sshc.ssh_session));
         return myssh_to_ERROR(data, sshc, CURLE_COULDNT_CONNECT);
     }
     myssh_to(data, sshc, .SSH_SCP_DOWNLOAD);
@@ -1965,12 +1966,12 @@ fn myssh_SSH_SCP_DOWNLOAD(data: *Curl_easy, sshc: *ssh_conn_libssh) c_int {
     const conn = Curl_ftp_acc_get_conn(data) orelse return myssh_to_ERROR(data, sshc, CURLE_FAILED_INIT);
     const rc = ssh_scp_pull_request(sshc.scp_session.?);
     if (rc != SSH_SCP_REQUEST_NEWFILE) {
-        Curl_failf(data, "%s", ssh_get_error(@ptrCast(sshc.ssh_session)));
+        Curl_failf(data, "%s", ssh_get_error(sshc.ssh_session));
         return myssh_to_ERROR(data, sshc, CURLE_REMOTE_FILE_NOT_FOUND);
     }
     const bytecount: curl_off_t = @intCast(ssh_scp_request_get_size64(sshc.scp_session.?));
     Curl_http_acc_req_set_maxdownload(data, bytecount);
-    cfsocket_transfer.Curl_xfer_setup_recv(@ptrCast(data), FIRSTSOCKET, bytecount);
+    cfsocket_transfer.Curl_xfer_setup_recv(data, FIRSTSOCKET, bytecount);
     Curl_vssh_set_conn_idx(conn, FIRSTSOCKET, 0);
     myssh_to(data, sshc, .SSH_STOP);
     return 0;
@@ -1990,7 +1991,7 @@ fn myssh_in_SCP_SEND_EOF(data: *Curl_easy, sshc: *ssh_conn_libssh) c_int {
         const rc = ssh_scp_close(scp);
         if (rc == SSH_AGAIN) return SSH_AGAIN;
         if (rc != SSH_OK) {
-            Curl_infof(data, "Failed to close libssh scp channel: %s", ssh_get_error(@ptrCast(sshc.ssh_session)));
+            Curl_infof(data, "Failed to close libssh scp channel: %s", ssh_get_error(sshc.ssh_session));
         }
     }
     myssh_to(data, sshc, .SSH_SCP_CHANNEL_FREE);
@@ -2264,6 +2265,18 @@ fn myssh_statemachine(
     return result;
 }
 
+inline fn fromOpaque(comptime T: type, ptr: anytype) *T {
+    return @ptrCast(@alignCast(ptr));
+}
+
+inline fn getSshEasy(data: *Curl_easy) ?*SSHPROTO_libssh {
+    return doh_hostip_easy.metaGetTyped(SSHPROTO_libssh, data, CURL_META_SSH_EASY);
+}
+
+inline fn getSshConn(conn: *connectdata) ?*ssh_conn_libssh {
+    return doh_hostip_easy.connMetaGetTyped(ssh_conn_libssh, conn, CURL_META_SSH_CONN);
+}
+
 pub fn myssh_multi_statemach(data_opt: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
     const data = data_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     if (comptime !use_libssh) {
@@ -2271,8 +2284,8 @@ pub fn myssh_multi_statemach(data_opt: ?*Curl_easy, done: *bool) callconv(.c) CU
         return CURLE_FAILED_INIT;
     }
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn_libssh = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
-    const sshp: *SSHPROTO_libssh = @ptrCast(@alignCast(Curl_meta_get(data, CURL_META_SSH_EASY) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
+    const sshp = getSshEasy(data) orelse return CURLE_FAILED_INIT;
 
     var block: bool = false;
     const result = myssh_statemachine(data, sshc, sshp, &block);
@@ -2320,20 +2333,20 @@ fn myssh_block_statemach(
 fn myssh_easy_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callconv(.c) void {
     _ = key;
     _ = klen;
-    const sshp: *SSHPROTO_libssh = @ptrCast(@alignCast(entry orelse return));
+    const sshp = fromOpaque(SSHPROTO_libssh, entry orelse return);
     if (sshp.path) |p| {
         mem.free(p);
         sshp.path = null;
     }
-    mem.freeSized(sshp, @sizeOf(SSHPROTO_libssh));
+    mem.freeTyped(sshp);
 }
 
 fn myssh_conn_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callconv(.c) void {
     _ = key;
     _ = klen;
-    const sshc: *ssh_conn_libssh = @ptrCast(@alignCast(entry orelse return));
+    const sshc = fromOpaque(ssh_conn_libssh, entry orelse return);
     sshc_cleanup(sshc);
-    mem.freeSized(sshc, @sizeOf(ssh_conn_libssh));
+    mem.freeTyped(sshc);
 }
 
 fn setupPkeyLibsshInner(data: *Curl_easy, sshc: *ssh_conn_libssh) error{OutOfMemory}!void {
@@ -2409,8 +2422,7 @@ pub fn myssh_setup_connection(data_opt: ?*Curl_easy, conn_opt: ?*connectdata) ca
     const conn = conn_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     if (comptime !use_libssh) return CURLE_FAILED_INIT;
 
-    const sshc_raw = mem.calloc(1, @sizeOf(ssh_conn_libssh)) orelse return CURLE_OUT_OF_MEMORY;
-    const sshc: *ssh_conn_libssh = @ptrCast(@alignCast(sshc_raw));
+    const sshc = mem.create(ssh_conn_libssh) orelse return CURLE_OUT_OF_MEMORY;
     sshc.* = .{};
     containers.curlx_dyn_init(&sshc.readdir_buf, CURL_PATH_MAX * 2);
     sshc.initialized = true;
@@ -2418,8 +2430,7 @@ pub fn myssh_setup_connection(data_opt: ?*Curl_easy, conn_opt: ?*connectdata) ca
         return CURLE_OUT_OF_MEMORY;
     }
 
-    const sshp_raw = mem.calloc(1, @sizeOf(SSHPROTO_libssh)) orelse return CURLE_OUT_OF_MEMORY;
-    const sshp: *SSHPROTO_libssh = @ptrCast(@alignCast(sshp_raw));
+    const sshp = mem.create(SSHPROTO_libssh) orelse return CURLE_OUT_OF_MEMORY;
     sshp.* = .{};
     if (Curl_meta_set(data, CURL_META_SSH_EASY, sshp, myssh_easy_dtor) != CURLE_OK) {
         return CURLE_OUT_OF_MEMORY;
@@ -2435,8 +2446,8 @@ pub fn myssh_connect(data_opt: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
         return CURLE_FAILED_INIT;
     }
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn_libssh = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
-    const ssh: *SSHPROTO_libssh = @ptrCast(@alignCast(Curl_meta_get(data, CURL_META_SSH_EASY) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
+    const ssh = getSshEasy(data) orelse return CURLE_FAILED_INIT;
     _ = ssh;
     var sock = Curl_vssh_get_conn_firstsocket(conn);
 
@@ -2454,6 +2465,13 @@ pub fn myssh_connect(data_opt: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
         Curl_failf(data, "Failure initializing ssh session");
         return CURLE_FAILED_INIT;
     }
+    var session_owned = true;
+    errdefer if (session_owned) {
+        if (sshc.ssh_session) |s| {
+            ssh_free(s);
+            sshc.ssh_session = null;
+        }
+    };
     const session = sshc.ssh_session.?;
 
     const host_name = Curl_vssh_get_conn_host_name(conn);
@@ -2518,6 +2536,7 @@ pub fn myssh_connect(data_opt: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
             return CURLE_FAILED_INIT;
         }
     }
+    session_owned = false;
 
     myssh_to(data, sshc, .SSH_INIT);
     return myssh_multi_statemach(data, done);
@@ -2537,7 +2556,7 @@ pub fn scp_doing(data_opt: ?*Curl_easy, dophase_done: *bool) callconv(.c) CURLco
 
 fn scp_perform(data: *Curl_easy, connected: *bool, dophase_done: *bool) CURLcode {
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn_libssh = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
     if (trcSshEnabled(data)) {
         Curl_trc_feat_infof(data, &cookie_getinfo_trc.Curl_trc_feat_ssh, "DO phase starts");
     }
@@ -2559,8 +2578,8 @@ pub fn scp_disconnect(data_opt: ?*Curl_easy, conn_opt: ?*connectdata, dead_conne
     const conn = conn_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     if (comptime !use_libssh) return CURLE_OK;
 
-    const sshc: *ssh_conn_libssh = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_OK));
-    const sshp_opt: ?*SSHPROTO_libssh = @ptrCast(@alignCast(Curl_meta_get(data, CURL_META_SSH_EASY)));
+    const sshc = getSshConn(conn) orelse return CURLE_OK;
+    const sshp_opt = getSshEasy(data);
     var dummy_proto: SSHPROTO_libssh = .{};
     var result: CURLcode = CURLE_OK;
     if (sshc.ssh_session != null) {
@@ -2572,7 +2591,7 @@ pub fn scp_disconnect(data_opt: ?*Curl_easy, conn_opt: ?*connectdata, dead_conne
 
 fn myssh_done(data: *Curl_easy, sshc: *ssh_conn_libssh, status: CURLcode) CURLcode {
     var result: CURLcode = CURLE_OK;
-    const sshp_opt: ?*SSHPROTO_libssh = @ptrCast(@alignCast(Curl_meta_get(data, CURL_META_SSH_EASY)));
+    const sshp_opt = getSshEasy(data);
     if (status == CURLE_OK and sshp_opt != null) {
         result = myssh_block_statemach(data, sshc, sshp_opt.?, false);
     } else {
@@ -2590,7 +2609,7 @@ pub fn scp_done(data_opt: ?*Curl_easy, status: CURLcode, premature: bool) callco
     const data = data_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     if (comptime !use_libssh) return CURLE_FAILED_INIT;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn_libssh = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
     if (status == CURLE_OK) {
         myssh_to(data, sshc, .SSH_SCP_DONE);
     }
@@ -2609,7 +2628,7 @@ fn scp_send(
     _ = eos;
     pnwritten.* = 0;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn_libssh = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
     const rc = ssh_scp_write(sshc.scp_session orelse return CURLE_FAILED_INIT, buf, len);
     if (rc != SSH_OK) return CURLE_SSH;
     pnwritten.* = len;
@@ -2626,7 +2645,7 @@ fn scp_recv(
     _ = sockindex;
     pnread.* = 0;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn_libssh = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
     const nread = ssh_scp_read(sshc.scp_session orelse return CURLE_FAILED_INIT, buf, len);
     if (nread == SSH_ERROR or nread < 0) return CURLE_SSH;
     pnread.* = @intCast(nread);
@@ -2635,7 +2654,7 @@ fn scp_recv(
 
 fn sftp_perform(data: *Curl_easy, connected: *bool, dophase_done: *bool) CURLcode {
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn_libssh = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
     if (trcSshEnabled(data)) {
         Curl_trc_feat_infof(data, &cookie_getinfo_trc.Curl_trc_feat_ssh, "DO phase starts");
     }
@@ -2669,8 +2688,8 @@ pub fn sftp_disconnect(data_opt: ?*Curl_easy, conn_opt: ?*connectdata, dead_conn
     const conn = conn_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     if (comptime !use_libssh) return CURLE_OK;
 
-    const sshc: *ssh_conn_libssh = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_OK));
-    const sshp_opt: ?*SSHPROTO_libssh = @ptrCast(@alignCast(Curl_meta_get(data, CURL_META_SSH_EASY)));
+    const sshc = getSshConn(conn) orelse return CURLE_OK;
+    const sshp_opt = getSshEasy(data);
     var dummy_proto: SSHPROTO_libssh = .{};
     var result: CURLcode = CURLE_OK;
     if (trcSshEnabled(data)) {
@@ -2690,7 +2709,7 @@ pub fn sftp_done(data_opt: ?*Curl_easy, status: CURLcode, premature: bool) callc
     const data = data_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     if (comptime !use_libssh) return CURLE_FAILED_INIT;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn_libssh = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
     if (status == CURLE_OK) {
         if (!premature and Curl_ftp_acc_get_postquote(data) != null and !Curl_vssh_get_conn_retry(conn)) {
             sshc.nextstate = .SSH_SFTP_POSTQUOTE_INIT;
@@ -2712,7 +2731,7 @@ fn sftp_send(
     _ = eos;
     pnwritten.* = 0;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn_libssh = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
     const file = sshc.sftp_file orelse return CURLE_FAILED_INIT;
 
     if (Curl_libssh_has_sftp_aio()) {
@@ -2762,7 +2781,7 @@ fn sftp_recv(
     _ = sockindex;
     pnread.* = 0;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn_libssh = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
     const file = sshc.sftp_file orelse return CURLE_FAILED_INIT;
 
     const has_aio = Curl_libssh_has_sftp_aio();
@@ -2815,7 +2834,7 @@ pub fn myssh_do_it(data_opt: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
     var connected: bool = false;
     done.* = false;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn_libssh = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
 
     Curl_ftp_acc_set_req_size(data, -1);
     sshc.actualcode = CURLE_OK;
@@ -2833,7 +2852,7 @@ pub fn myssh_pollset(data_opt: ?*Curl_easy, ps_opt: ?*easy_pollset) callconv(.c)
     const data = data_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     const ps = ps_opt orelse return CURLE_OK;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const sshc: *ssh_conn_libssh = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
+    const sshc = getSshConn(conn) orelse return CURLE_FAILED_INIT;
     const sock = Curl_vssh_get_conn_firstsocket(conn);
     if (sock == CURL_SOCKET_BAD) return CURLE_FAILED_INIT;
 
