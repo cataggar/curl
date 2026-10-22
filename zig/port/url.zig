@@ -1096,7 +1096,7 @@ pub export fn Curl_close(datap: ?*?*Curl_easy) callconv(.c) CURLcode {
     }
     if (!hasFlag(FLAG_DISABLE_HTTP) and !hasFlag(FLAG_DISABLE_HSTS)) {
         const hsts = setoptGetPtr(altsvc_hsts_peer.Hsts, data, PTR_DATA_HSTS);
-        const hsts_write: ?altsvc_hsts_peer.HstsWriteCallback = @ptrCast(Curl_setopt_get_ptr(data, PTR_SET_HSTS_WRITE));
+        const hsts_write = setoptGetPtr(@typeInfo(altsvc_hsts_peer.HstsWriteCallback).pointer.child, data, PTR_SET_HSTS_WRITE);
         const hsts_write_userp = Curl_setopt_get_ptr(data, PTR_SET_HSTS_WRITE_USERP);
         _ = altsvc_hsts_peer.Curl_hsts_save(data, hsts, easyStr(data, STRING_HSTS), hsts_write, hsts_write_userp);
         if (Curl_setopt_get_ptr(data, PTR_DATA_SHARE) == null or Curl_setopt_get_ptr(data, PTR_SHARE_HSTS) == null) {
