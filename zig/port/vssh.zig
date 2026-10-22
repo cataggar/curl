@@ -3417,6 +3417,9 @@ fn scp_perform(data: *Curl_easy, connected: *bool, dophase_done: *bool) CURLcode
     const sshc: *ssh_conn = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
 
     dophase_done.* = false;
+    sshc.secondCreateDirs = 0;
+    sshc.nextstate = .SSH_NO_STATE;
+    sshc.actualcode = CURLE_OK;
     ssh_state(data, sshc, .SSH_SCP_TRANS_INIT);
     const result = ssh_multi_statemach(data, dophase_done);
     connected.* = true;
@@ -3454,6 +3457,7 @@ fn scp_done(data_opt: ?*Curl_easy, status: CURLcode, premature: bool) callconv(.
 
     var result: CURLcode = CURLE_OK;
     if (status == CURLE_OK) {
+        sshc.actualcode = CURLE_OK;
         ssh_state(data, sshc, .SSH_SCP_DONE);
         result = ssh_block_statemach(data, sshc, sshp, false);
     } else {
@@ -3478,6 +3482,7 @@ fn scp_disconnect(data_opt: ?*Curl_easy, conn_opt: ?*connectdata, dead_connectio
 
     var result: CURLcode = CURLE_OK;
     if (sshc.ssh_session != null) {
+        sshc.actualcode = CURLE_OK;
         if (!dead_connection) {
             ssh_state(data, sshc, .SSH_SESSION_DISCONNECT);
         } else {
@@ -3495,6 +3500,9 @@ fn sftp_perform(data: *Curl_easy, connected: *bool, dophase_done: *bool) CURLcod
     const sshc: *ssh_conn = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_SSH_CONN) orelse return CURLE_FAILED_INIT));
 
     dophase_done.* = false;
+    sshc.secondCreateDirs = 0;
+    sshc.nextstate = .SSH_NO_STATE;
+    sshc.actualcode = CURLE_OK;
     ssh_state(data, sshc, .SSH_SFTP_QUOTE_INIT);
     const result = ssh_multi_statemach(data, dophase_done);
     connected.* = true;
@@ -3572,6 +3580,7 @@ fn sftp_done(data_opt: ?*Curl_easy, status: CURLcode, premature: bool) callconv(
     var result: CURLcode = CURLE_OK;
     var disconnect = false;
 
+    sshc.actualcode = CURLE_OK;
     if (status == CURLE_OK) {
         if (!premature and Curl_ftp_acc_get_postquote(data) != null and !Curl_vssh_get_state_wildcardmatch(data)) {
             sshc.nextstate = .SSH_SFTP_POSTQUOTE_INIT;
@@ -3609,6 +3618,7 @@ fn sftp_disconnect(data_opt: ?*Curl_easy, conn_opt: ?*connectdata, dead_connecti
 
     var result: CURLcode = CURLE_OK;
     if (sshc.ssh_session != null) {
+        sshc.actualcode = CURLE_OK;
         if (!dead_connection) {
             ssh_state(data, sshc, .SSH_SFTP_SHUTDOWN);
         } else {

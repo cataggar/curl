@@ -190,7 +190,8 @@ jobs:
       - name: Install HTTP pytest dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libssl-dev zlib1g-dev libzstd-dev libnghttp2-dev libbrotli-dev libpsl-dev libidn2-dev libssh2-1-dev openssh-server openssh-client openssh-sftp-server libldap-dev libkrb5-dev pkg-config apache2 apache2-dev nghttp2-proxy python3-pytest python3-pytest-xdist python3-cryptography python3-filelock python3-psutil python3-websockets
+          sudo apt-get install -y --no-install-recommends libssl-dev zlib1g-dev libzstd-dev libnghttp2-dev libbrotli-dev libpsl-dev libidn2-dev libssh2-1-dev openssh-server openssh-client openssh-sftp-server libldap-dev libkrb5-dev pkg-config apache2 apache2-dev nghttp2-proxy python3-pip python3-pytest python3-pytest-xdist python3-cryptography python3-filelock python3-psutil
+          python3 -m pip install --break-system-packages --upgrade websockets
 
       - name: Run upstream HTTP pytest suite
         run: zig build test-pytest -Dssl=openssl -Dzlib=true -Dzstd=true -Dnghttp2=true -Dbrotli=true -Dpsl=true -Didn=libidn2 -Dssh=libssh2 -Dldap=openldap -Dgssapi=true
