@@ -1036,7 +1036,7 @@ fn wssl_new_session_cb(ssl: ?*WOLFSSL, session: ?*WOLFSSL_SESSION) callconv(.c) 
     }
 
     const timeout = wssl_ext.wolfSSL_SESSION_get_timeout(sess);
-    const valid_until = if (timeout > 0) c_ext.Curl_pgrs_now(data).tv_sec + @as(i64, @intCast(timeout)) else 0;
+    const valid_until = if (timeout > 0) vtls_scache_asn1.nowEpochSecs() + @as(i64, @intCast(timeout)) else 0;
     const ietf_tls_id = wssl_ext.wolfSSL_version(s);
     var sc_session: ?*CurlSslSession = null;
     const rc = vtls_scache_asn1.Curl_ssl_session_create2(

@@ -127,9 +127,9 @@ pub const CURLPROTO_HTTP: curl_prot_t = 1 << 0;
 pub const CURLPROTO_HTTPS: curl_prot_t = 1 << 1;
 pub const CURLPROTO_FTP: curl_prot_t = 1 << 2;
 pub const CURLPROTO_RTSP: curl_prot_t = 1 << 18;
-pub const CURLPROTO_WS: curl_prot_t = @as(curl_prot_t, 1) << 31;
-pub const CURLPROTO_WSS: curl_prot_t = @as(curl_prot_t, 1) << 32;
-pub const PROTO_FAMILY_HTTP: curl_prot_t = CURLPROTO_HTTP | CURLPROTO_HTTPS;
+pub const CURLPROTO_WS: curl_prot_t = @as(curl_prot_t, 1) << 30;
+pub const CURLPROTO_WSS: curl_prot_t = @as(curl_prot_t, 1) << 31;
+pub const PROTO_FAMILY_HTTP: curl_prot_t = CURLPROTO_HTTP | CURLPROTO_HTTPS | CURLPROTO_WS | CURLPROTO_WSS;
 
 // Feature bits from Curl_http_acc_features()
 const FEAT_SPNEGO: c_uint = 1 << 0;

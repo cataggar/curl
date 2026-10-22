@@ -149,7 +149,7 @@ inline fn infof(data: ?*anyopaque, comptime fmt: [*:0]const u8, args: anytype) v
     }
 }
 
-inline fn nowEpochSecs() curl_off_t {
+pub inline fn nowEpochSecs() curl_off_t {
     return @intCast(c_ext.time(null));
 }
 

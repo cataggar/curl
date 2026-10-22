@@ -63,6 +63,7 @@ pub const CF_QUERY_NEED_FLUSH: c_int = 7;
 pub const DYN_HAXPROXY: usize = 2048;
 
 pub const CLIENTWRITE_BODY: c_int = 1 << 0;
+pub const CLIENTWRITE_EOS: c_int = 1 << 7;
 pub const CURL_CW_CONTENT_DECODE: c_uint = 4;
 
 pub const MAX_IPADR_LEN: usize = 46;
@@ -1260,15 +1261,15 @@ fn cw_pause_buf_create(wtype: c_int, buflen: usize) ?*cw_pause_buf {
     const raw = mem.calloc(1, @sizeOf(cw_pause_buf)) orelse return null;
     const cwbuf: *cw_pause_buf = @ptrCast(@alignCast(raw));
     cwbuf.wtype = wtype;
-    if (buflen < CW_PAUSE_BUF_CHUNK) {
+    if ((wtype & CLIENTWRITE_BODY) != 0) {
         io_buffers.Curl_bufq_init2(
             &cwbuf.b,
-            buflen,
+            CW_PAUSE_BUF_CHUNK,
             1,
-            io_buffers.BUFQ_OPT_NO_SPARES,
+            io_buffers.BUFQ_OPT_SOFT_LIMIT | io_buffers.BUFQ_OPT_NO_SPARES,
         );
     } else {
-        io_buffers.Curl_bufq_init(&cwbuf.b, CW_PAUSE_BUF_CHUNK, 16 * 1024);
+        io_buffers.Curl_bufq_init(&cwbuf.b, @max(buflen, 1), 1);
     }
     return cwbuf;
 }
@@ -1311,62 +1312,52 @@ fn cw_pause_close(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) void {
 
 fn cw_pause_flush(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) CURLcode {
     const ctx = cwriterCtx(writer);
-    const decoding = Curl_cwriter_count(data, CURL_CW_CONTENT_DECODE) > 0;
     var result: CURLcode = CURLE_OK;
 
     while (ctx.buf != null and !cwriterIsPaused(data)) {
-        const tail = ctx.tail.?;
+        const first = ctx.buf.?;
         var buf: ?[*]const u8 = null;
         var blen: usize = 0;
 
-        if (io_buffers.Curl_bufq_peek(&tail.b, &buf, &blen)) {
-            const wlen: usize = if (decoding and ((tail.wtype & CLIENTWRITE_BODY) != 0))
+        if (io_buffers.Curl_bufq_peek(&first.b, &buf, &blen)) {
+            const wlen: usize = if ((first.wtype & CLIENTWRITE_BODY) != 0)
                 @min(blen, CW_PAUSE_DEC_WRITE_CHUNK)
             else
                 blen;
-            result = cwriterWrite(data, writer.next, tail.wtype, buf.?, wlen);
+            var chunk_wtype = first.wtype;
+            if (wlen < blen)
+                chunk_wtype &= ~CLIENTWRITE_EOS;
+            result = cwriterWrite(data, writer.next, chunk_wtype, buf.?, wlen);
             trcWrite(
                 data,
-                "[PAUSE]uffered, wrote %zu/%zu bytes of type %x -> %d",
-                .{ wlen, ctx.buf_total, tail.wtype, result },
+                "[PAUSE] flushed %zu/%zu bytes, type=%x -> %d",
+                .{ wlen, ctx.buf_total, first.wtype, result },
+            );
+            io_buffers.Curl_bufq_skip(&first.b, wlen);
+            ctx.buf_total -= wlen;
+            if (result != CURLE_OK)
+                return result;
+        } else if ((first.wtype & CLIENTWRITE_EOS) != 0) {
+            const empty = [_]u8{0};
+            result = cwriterWrite(data, writer.next, first.wtype, &empty, 0);
+            trcWrite(
+                data,
+                "[PAUSE] flushed 0/%zu bytes, type=%x -> %d",
+                .{ ctx.buf_total, first.wtype, result },
             );
             if (result != CURLE_OK)
                 return result;
+        }
 
-            io_buffers.Curl_bufq_skip(&tail.b, wlen);
-            ctx.buf_total -= wlen;
-            if (io_buffers.Curl_bufq_is_empty(&tail.b)) {
-                if (ctx.buf == tail) {
-                    ctx.buf = null;
-                    ctx.tail = null;
-                } else {
-                    var last = ctx.buf;
-                    while (last != null and last.?.next != tail) {
-                        last = last.?.next;
-                    }
-                    const prev = last orelse return CURLE_WRITE_ERROR;
-                    prev.next = null;
-                    ctx.tail = prev;
-                }
-                cw_pause_buf_free(tail);
-            }
-        } else if (ctx.buf == tail) {
-            ctx.buf = null;
-            ctx.tail = null;
-            cw_pause_buf_free(tail);
-        } else {
-            var last = ctx.buf;
-            while (last != null and last.?.next != tail) {
-                last = last.?.next;
-            }
-            const prev = last orelse return CURLE_WRITE_ERROR;
-            prev.next = null;
-            ctx.tail = prev;
-            cw_pause_buf_free(tail);
+        if (io_buffers.Curl_bufq_is_empty(&first.b)) {
+            ctx.buf = first.next;
+            if (ctx.buf == null)
+                ctx.tail = null;
+            cw_pause_buf_free(first);
         }
     }
 
-    if (result == CURLE_OK and ctx.buf == null) {
+    if (result == CURLE_OK) {
         result = cwriterFlush(data, writer.next);
     }
 
@@ -1382,8 +1373,6 @@ fn cw_pause_write(
 ) callconv(.c) CURLcode {
     const ctx = cwriterCtx(writer);
     var result: CURLcode = CURLE_OK;
-    var nwrote: usize = 0;
-    const decoding = Curl_cwriter_count(data, CURL_CW_CONTENT_DECODE) > 0;
     var buf = buf_in;
     var nbytes = nbytes_in;
 
@@ -1394,12 +1383,15 @@ fn cw_pause_write(
     }
 
     while (ctx.buf == null and !cwriterIsPaused(data)) {
-        var wlen = nbytes;
-        if (decoding and ((wtype & CLIENTWRITE_BODY) != 0) and (wlen > CW_PAUSE_DEC_WRITE_CHUNK)) {
-            wlen = CW_PAUSE_DEC_WRITE_CHUNK;
-        }
-        result = cwriterWrite(data, writer.next, wtype, buf, wlen);
-        trcWrite(data, "[PAUSE] wrote %zu/%zu bytes of type %x -> %d", .{ wlen, nbytes, wtype, result });
+        var chunk_wtype = wtype;
+        const wlen: usize = if ((wtype & CLIENTWRITE_BODY) != 0)
+            @min(nbytes, CW_PAUSE_DEC_WRITE_CHUNK)
+        else
+            nbytes;
+        if (wlen < nbytes)
+            chunk_wtype &= ~CLIENTWRITE_EOS;
+        result = cwriterWrite(data, writer.next, chunk_wtype, buf, wlen);
+        trcWrite(data, "[PAUSE] wrote %zu/%zu bytes of type %x -> %d", .{ wlen, nbytes, chunk_wtype, result });
         if (result != CURLE_OK)
             return result;
         buf += wlen;
@@ -1408,21 +1400,32 @@ fn cw_pause_write(
             return result;
     }
 
-    while (nbytes > 0) {
-        if (ctx.buf == null or ctx.buf.?.wtype != wtype) {
+    while (true) {
+        var nwrote: usize = 0;
+        if (ctx.tail != null and ctx.tail.?.wtype == wtype and (wtype & CLIENTWRITE_BODY) != 0) {
+            if (nbytes > 0) {
+                result = io_buffers.Curl_bufq_write(&ctx.tail.?.b, buf, nbytes, &nwrote);
+            }
+        } else {
             const cwbuf = cw_pause_buf_create(wtype, nbytes) orelse return CURLE_OUT_OF_MEMORY;
-            cwbuf.next = ctx.buf;
-            ctx.buf = cwbuf;
-            if (ctx.tail == null)
-                ctx.tail = cwbuf;
+            if (ctx.tail) |t| {
+                t.next = cwbuf;
+            } else {
+                ctx.buf = cwbuf;
+            }
+            ctx.tail = cwbuf;
+            if (nbytes > 0) {
+                result = io_buffers.Curl_bufq_write(&ctx.tail.?.b, buf, nbytes, &nwrote);
+            }
         }
-        result = io_buffers.Curl_bufq_write(&ctx.buf.?.b, buf, nbytes, &nwrote);
         trcWrite(data, "[PAUSE] buffered %zu bytes of type %x -> %d", .{ nwrote, wtype, result });
         if (result != CURLE_OK)
             return result;
         ctx.buf_total += nwrote;
         buf += nwrote;
         nbytes -= nwrote;
+        if (nbytes == 0)
+            break;
     }
     return result;
 }

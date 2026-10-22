@@ -1737,8 +1737,8 @@ const MAX_HTTP_RESP_HEADER_COUNT: usize = 5000;
 
 const CURLPROTO_HTTP: c_uint = 1 << 0;
 const CURLPROTO_HTTPS: c_uint = 1 << 1;
-const CURLPROTO_WS: c_uint = 1 << 28;
-const CURLPROTO_WSS: c_uint = 1 << 29;
+const CURLPROTO_WS: c_uint = 1 << 30;
+const CURLPROTO_WSS: c_uint = 1 << 31;
 const PROTO_FAMILY_HTTP: c_uint = CURLPROTO_HTTP | CURLPROTO_HTTPS | CURLPROTO_WS | CURLPROTO_WSS;
 
 const CLIENTWRITE_HEADER: c_int = 1 << 2;

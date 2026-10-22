@@ -819,9 +819,8 @@ pub fn pushheaderByNameImpl(h_opt: ?*curl_pushheaders, name_opt: ?[*:0]const u8)
     var i: usize = 0;
     while (i < stream.push_headers_used) : (i += 1) {
         const entry = hdrs[i];
-        if (std.mem.eql(u8, entry[0..len], name_slice)) {
-            if (entry[len] != ':')
-                continue;
+        const entry_slice = std.mem.span(entry);
+        if (entry_slice.len > len and std.mem.eql(u8, entry_slice[0..len], name_slice) and entry_slice[len] == ':') {
             return @ptrCast(entry + len + 1);
         }
     }

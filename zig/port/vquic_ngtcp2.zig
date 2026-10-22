@@ -1970,7 +1970,7 @@ fn cf_ngtcp2_new_session_cb(ssl: *anyopaque, ssl_sessionid: *anyopaque) callconv
     }
 
     const timeout = ngtcp2_ossl_c.SSL_SESSION_get_timeout(ssl_sessionid);
-    const valid_until = if (timeout > 0) Curl_pgrs_now(data).tv_sec + @as(i64, @intCast(timeout)) else 0;
+    const valid_until = if (timeout > 0) vtls_scache_asn1.nowEpochSecs() + @as(i64, @intCast(timeout)) else 0;
     const earlydata_max: usize = ngtcp2_ossl_c.SSL_SESSION_get_max_early_data(ssl_sessionid);
     const ietf_tls_id = ngtcp2_ossl_c.SSL_version(ssl);
 

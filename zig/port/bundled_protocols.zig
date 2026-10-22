@@ -3064,6 +3064,16 @@ pub fn libssh2_session_free(session: ?*anyopaque) callconv(.c) c_int {
     return 0;
 }
 
+var dummy_abstract_ptr: ?*anyopaque = null;
+
+pub fn libssh2_session_abstract(session: ?*anyopaque) callconv(.c) *?*anyopaque {
+    if (session) |ptr| {
+        const sess: *Libssh2Session = @ptrCast(@alignCast(ptr));
+        return &sess.abstract_ptr;
+    }
+    return &dummy_abstract_ptr;
+}
+
 pub fn libssh2_session_set_blocking(session: ?*anyopaque, blocking: c_int) callconv(.c) void {
     const sess: *Libssh2Session = @ptrCast(@alignCast(session orelse return));
     sess.blocking = blocking;
@@ -5039,6 +5049,7 @@ comptime {
         @export(&libssh2_exit, .{ .name = "libssh2_exit", .linkage = .strong });
         @export(&libssh2_version, .{ .name = "libssh2_version", .linkage = .strong });
         @export(&libssh2_session_init_ex, .{ .name = "libssh2_session_init_ex", .linkage = .strong });
+        @export(&libssh2_session_abstract, .{ .name = "libssh2_session_abstract", .linkage = .strong });
         @export(&libssh2_session_free, .{ .name = "libssh2_session_free", .linkage = .strong });
         @export(&libssh2_session_set_blocking, .{ .name = "libssh2_session_set_blocking", .linkage = .strong });
         @export(&libssh2_session_handshake, .{ .name = "libssh2_session_handshake", .linkage = .strong });

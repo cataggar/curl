@@ -894,8 +894,8 @@ pub const SSHPROTO = extern struct {
 /// Per-connection SSH state (`struct ssh_conn` in `lib/vssh/ssh.h`).
 /// Note: `priv_key` and `pub_key` are kept first for `Curl_zig_url_ssh_conn_keys`.
 pub const ssh_conn = extern struct {
-    priv_key: ?[*:0]const u8 = null,
-    pub_key: ?[*:0]const u8 = null,
+    priv_key: ?[*:0]u8 = null,
+    pub_key: ?[*:0]u8 = null,
     authlist: ?[*:0]const u8 = null,
     passphrase: ?[*:0]const u8 = null,
     rsa_pub: ?[*:0]u8 = null,
@@ -933,6 +933,7 @@ extern fn libssh2_session_init_ex(
     my_realloc: ?*const anyopaque,
     abstract: ?*anyopaque,
 ) callconv(.c) ?*LIBSSH2_SESSION;
+extern fn libssh2_session_abstract(session: *LIBSSH2_SESSION) callconv(.c) *?*anyopaque;
 extern fn libssh2_session_free(session: *LIBSSH2_SESSION) callconv(.c) c_int;
 extern fn libssh2_session_set_blocking(session: *LIBSSH2_SESSION, blocking: c_int) callconv(.c) void;
 extern fn libssh2_session_flag(session: *LIBSSH2_SESSION, flag: c_int, value: c_int) callconv(.c) c_int;
@@ -1129,9 +1130,16 @@ pub export fn Curl_zig_url_ssh_conn_keys(
     ppriv_key: *?[*:0]const u8,
     ppub_key: *?[*:0]const u8,
 ) callconv(.c) void {
-    if (comptime use_ssh) {
+    if (comptime use_libssh2) {
         if (sshc_raw) |raw| {
             const sshc: *const ssh_conn = @ptrCast(@alignCast(raw));
+            ppriv_key.* = sshc.priv_key;
+            ppub_key.* = sshc.pub_key;
+            return;
+        }
+    } else if (comptime use_libssh) {
+        if (sshc_raw) |raw| {
+            const sshc: *const vssh_libssh.ssh_conn_libssh = @ptrCast(@alignCast(raw));
             ppriv_key.* = sshc.priv_key;
             ppub_key.* = sshc.pub_key;
             return;
@@ -1169,6 +1177,14 @@ pub fn ssh_conn_dtor(key: [*:0]const u8, klen: usize, entry: ?*anyopaque) callco
     _ = key;
     _ = klen;
     const sshc: *ssh_conn = @ptrCast(@alignCast(entry orelse return));
+    if (sshc.priv_key) |pk| {
+        mem.freeSecretZ(pk);
+        sshc.priv_key = null;
+    }
+    if (sshc.pub_key) |pubk| {
+        mem.freeSecretZ(pubk);
+        sshc.pub_key = null;
+    }
     if (sshc.rsa) |r| {
         mem.freeSecretZ(r);
         sshc.rsa = null;
@@ -1250,6 +1266,20 @@ pub export fn Curl_ssh_setup_connection(
 
     if (Curl_conn_meta_get(conn, CURL_META_SSH_CONN) == null) {
         const ssh_raw = mem.calloc(1, @sizeOf(ssh_conn)) orelse return CURLE_OUT_OF_MEMORY;
+        const sshc: *ssh_conn = @ptrCast(@alignCast(ssh_raw));
+        if (easyStrGet(data, setopt.STRING_SSH_PRIVATE_KEY)) |priv| {
+            sshc.priv_key = mem.strdup(priv) orelse {
+                mem.freeSized(sshc, @sizeOf(ssh_conn));
+                return CURLE_OUT_OF_MEMORY;
+            };
+        }
+        if (easyStrGet(data, setopt.STRING_SSH_PUBLIC_KEY)) |pubk| {
+            sshc.pub_key = mem.strdup(pubk) orelse {
+                if (sshc.priv_key) |pk| mem.freeSecretZ(pk);
+                mem.freeSized(sshc, @sizeOf(ssh_conn));
+                return CURLE_OUT_OF_MEMORY;
+            };
+        }
         if (Curl_conn_meta_set(conn, CURL_META_SSH_CONN, ssh_raw, ssh_conn_dtor) != CURLE_OK) {
             return CURLE_OUT_OF_MEMORY;
         }
@@ -3325,9 +3355,6 @@ fn ssh_connect(data_opt: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
         if (sc_res != CURLE_OK) return sc_res;
     }
 
-    sshc.priv_key = easyStrGet(data, setopt.STRING_SSH_PRIVATE_KEY);
-    sshc.pub_key = easyStrGet(data, setopt.STRING_SSH_PUBLIC_KEY);
-
     sshc.ssh_session = libssh2_session_init_ex(
         @ptrCast(&libssh2_malloc_cb),
         @ptrCast(&libssh2_free_cb),
@@ -3703,6 +3730,19 @@ fn sshDisabledDo(data: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
     return CURLE_NOT_BUILT_IN;
 }
 
+fn ssh_attach(data_opt: ?*Curl_easy, conn_opt: ?*connectdata) callconv(.c) void {
+    if (comptime !use_libssh2) return;
+    const data = data_opt orelse return;
+    const conn = conn_opt orelse return;
+    if (Curl_conn_meta_get(conn, CURL_META_SSH_CONN)) |raw| {
+        const sshc: *ssh_conn = @ptrCast(@alignCast(raw));
+        if (sshc.ssh_session) |sess| {
+            const abstract = libssh2_session_abstract(sess);
+            abstract.* = data;
+        }
+    }
+}
+
 pub export const Curl_protocol_scp: Curl_protocol = if (use_libssh2) .{
     .setup_connection = Curl_ssh_setup_connection,
     .do_it = scp_do,
@@ -3714,6 +3754,7 @@ pub export const Curl_protocol_scp: Curl_protocol = if (use_libssh2) .{
     .doing_pollset = ssh_pollset,
     .perform_pollset = ssh_pollset,
     .disconnect = scp_disconnect,
+    .attach = ssh_attach,
 } else if (use_libssh)
     vssh_libssh.protocol_scp
 else
@@ -3732,6 +3773,7 @@ pub export const Curl_protocol_sftp: Curl_protocol = if (use_libssh2) .{
     .doing_pollset = ssh_pollset,
     .perform_pollset = ssh_pollset,
     .disconnect = sftp_disconnect,
+    .attach = ssh_attach,
 } else if (use_libssh)
     vssh_libssh.protocol_sftp
 else
