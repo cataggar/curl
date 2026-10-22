@@ -332,8 +332,16 @@ pub export fn Curl_trc_bind_easy(
     return true;
 }
 
+extern fn Curl_trc_bind_c(data: ?*Curl_easy) callconv(.c) void;
+
 inline fn lookupBoundEasy(data: ?*const Curl_easy) ?*BoundEasy {
     const d = data orelse return null;
+    if (in_libcurl) {
+        const pref: *const Curl_easy_prefix = @ptrCast(@alignCast(d));
+        if (pref.magic == CURLEASY_MAGIC_NUMBER) {
+            Curl_trc_bind_c(@constCast(d));
+        }
+    }
     for (&bound_easies) |*slot| {
         if (slot.data == d) return slot;
     }
@@ -1027,7 +1035,7 @@ pub export fn Curl_trc_init() callconv(.c) CURLcode {
 pub const PINGPONG_TIMEOUT_MS: timediff_t = 60 * 1000;
 const DYN_PINGPPONG_CMD: usize = 65536;
 const EXPIRE_SERVER_RESPONSE: c_uint = 12;
-const CLIENTWRITE_INFO: c_int = 1 << 2;
+const CLIENTWRITE_INFO: c_int = 1 << 1;
 const CURL_POLL_IN: c_int = 1;
 const CURL_POLL_OUT: c_int = 2;
 
@@ -2411,11 +2419,11 @@ fn cookieSortLessThan(_: void, c1: *Cookie, c2: *Cookie) bool {
     const n2 = if (c2.name) |n| std.mem.len(n) else 0;
     if (n1 != n2) return n1 > n2;
 
-    return c1.creationtime < c2.creationtime;
+    return c1.creationtime > c2.creationtime;
 }
 
 fn cookieSortCtLessThan(_: void, c1: *Cookie, c2: *Cookie) bool {
-    return c1.creationtime < c2.creationtime;
+    return c1.creationtime > c2.creationtime;
 }
 
 pub export fn Curl_secure_context(data: ?*Curl_easy, host: [*:0]const u8) callconv(.c) bool {

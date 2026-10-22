@@ -65,7 +65,7 @@ const CURL_POLL_OUT: c_int = 2;
 const FIRSTSOCKET: i8 = 0;
 const TIMER_APPCONNECT: c_uint = 5;
 const CLIENTWRITE_BODY: c_int = 1 << 0;
-const CLIENTWRITE_HEADER: c_int = 1 << 1;
+const CLIENTWRITE_HEADER: c_int = 1 << 2;
 
 const REQ_IO_RECV: c_int = 1 << 0;
 const REQ_IO_SEND: c_int = 1 << 1;

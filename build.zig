@@ -5,6 +5,7 @@ const backends = @import("zig/backends.zig");
 const test_servers = @import("zig/test_servers.zig");
 const test_libtests = @import("zig/test_libtests.zig");
 const test_units = @import("zig/test_units.zig");
+const test_conformance = @import("zig/test_conformance.zig");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -145,7 +146,7 @@ pub fn build(b: *std.Build) void {
     const test_release_step = b.step("test-release", "Run release tooling tests");
     test_release_step.dependOn(&run_release_tests.step);
 
-    _ = test_servers.addTestServersStep(
+    const test_servers_step = test_servers.addTestServersStep(
         b,
         target,
         optimize,
@@ -156,8 +157,8 @@ pub fn build(b: *std.Build) void {
         backend_options_step,
         shared,
     );
-    _ = test_libtests.addLibtests(b, target, optimize, lib, config_header, backend_opts, !shared);
-    test_units.setupUnitTests(
+    const libtests = test_libtests.addLibtests(b, target, optimize, lib, config_header, backend_opts, !shared);
+    const units = test_units.setupUnitTests(
         b,
         target,
         optimize,
@@ -167,6 +168,12 @@ pub fn build(b: *std.Build) void {
         backend_options_step,
         !shared,
     );
+    _ = test_conformance.addConformanceStep(b, &.{
+        test_servers_step,
+        &units.stage_units.step,
+        &units.stage_tunits.step,
+        &libtests.stage.step,
+    });
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(b.getInstallStep());

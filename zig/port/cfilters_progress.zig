@@ -1502,7 +1502,7 @@ const CF_QUERY_TRANSPORT: c_int = 14;
 const CF_QUERY_ALPN_NEGOTIATED: c_int = 15;
 const CF_QUERY_REALLY_CONNECTED: c_int = 16;
 
-const PROTOPT_NONETWORK: c_uint = 1 << 16;
+const PROTOPT_NONETWORK: c_uint = 1 << 4;
 
 const TRNSPRT_TCP: u8 = 3;
 const TRNSPRT_UNIX: u8 = 6;

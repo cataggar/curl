@@ -158,6 +158,7 @@ pub fn createConfigHeader(b: *std.Build, target: std.Build.ResolvedTarget) *std.
             .HAVE_SIGNAL = 1,
             .HAVE_SIGACTION = 1,
             .HAVE_SIGSETJMP = 1,
+            .HAVE_ALARM = 1,
             .HAVE_STRCASECMP = 1,
             .HAVE_STRINGS_H = 1,
             .HAVE_STRERROR_R = 1,

@@ -121,7 +121,7 @@ pub const CURL_PUSH_ERROROUT: c_int = 2;
 
 pub const CURLUPART_URL: c_uint = 0;
 pub const CURLUPART_SCHEME: c_uint = 1;
-pub const CURLUPART_PATH: c_uint = 6;
+pub const CURLUPART_PATH: c_uint = 7;
 
 pub const HTTP_PSEUDO_METHOD = ":method";
 pub const HTTP_PSEUDO_SCHEME = ":scheme";

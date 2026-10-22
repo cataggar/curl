@@ -95,14 +95,14 @@ pub const CURLE_NO_CONNECTION_AVAILABLE: CURLcode = 89;
 
 // CURLUcode constants
 pub const CURLUE_OK: CURLUcode = 0;
-pub const CURLUE_UNSUPPORTED_SCHEME: CURLUcode = 2;
+pub const CURLUE_UNSUPPORTED_SCHEME: CURLUcode = 5;
+pub const CURLUE_OUT_OF_MEMORY: CURLUcode = 7;
 pub const CURLUE_USER_NOT_ALLOWED: CURLUcode = 8;
 pub const CURLUE_NO_SCHEME: CURLUcode = 10;
 pub const CURLUE_NO_USER: CURLUcode = 11;
 pub const CURLUE_NO_PASSWORD: CURLUcode = 12;
 pub const CURLUE_NO_OPTIONS: CURLUcode = 13;
 pub const CURLUE_NO_QUERY: CURLUcode = 16;
-pub const CURLUE_OUT_OF_MEMORY: CURLUcode = 29;
 
 // CURLUPart constants
 pub const CURLUPART_URL: c_uint = 0;
@@ -114,14 +114,14 @@ pub const CURLUPART_PATH: c_uint = 7;
 pub const CURLUPART_QUERY: c_uint = 8;
 
 // CURLU flags
-pub const CURLU_NON_SUPPORT_SCHEME: c_uint = 1 << 1;
+pub const CURLU_NON_SUPPORT_SCHEME: c_uint = 1 << 3;
 pub const CURLU_PATH_AS_IS: c_uint = 1 << 4;
 pub const CURLU_DISALLOW_USER: c_uint = 1 << 5;
 pub const CURLU_URLDECODE: c_uint = 1 << 6;
 pub const CURLU_URLENCODE: c_uint = 1 << 7;
 pub const CURLU_GUESS_SCHEME: c_uint = 1 << 9;
-pub const CURLU_NO_GUESS_SCHEME: c_uint = 1 << 10;
-pub const CURLU_GET_EMPTY: c_uint = 1 << 15;
+pub const CURLU_GET_EMPTY: c_uint = 1 << 14;
+pub const CURLU_NO_GUESS_SCHEME: c_uint = 1 << 15;
 
 // Protocol flags & families
 pub const PROTOPT_SSL: u32 = protocol_version_mime.PROTOPT_SSL;

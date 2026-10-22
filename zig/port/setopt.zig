@@ -70,7 +70,7 @@ const UPLOADBUFFER_MIN: c_long = CURL_MAX_WRITE_SIZE;
 const UPLOADBUFFER_MAX: c_long = 2 * 1024 * 1024;
 const TFTP_BLKSIZE_MIN: c_long = 8;
 const TFTP_BLKSIZE_MAX: c_long = 65464;
-const CURL_GOOD_SHARE: c_uint = 0x7e51738e;
+const CURL_GOOD_SHARE: c_uint = 0x7e117a1e;
 const REJECT_ZERO: c_uint = 4;
 
 const HTTPREQ_GET: i64 = 0;

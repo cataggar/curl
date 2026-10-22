@@ -91,8 +91,8 @@ pub const AuthStruct = extern struct {
 };
 
 pub const DigestDataPrefix = extern struct {
-    origin: ?*Curl_peer = null,
     creds: ?*Curl_creds = null,
+    origin: ?*Curl_peer = null,
     nonce_or_input_token: ?*anyopaque = null,
 };
 
@@ -155,10 +155,10 @@ extern fn curlx_dyn_ptr(s: *const Dynbuf) callconv(.c) ?[*:0]u8;
 extern fn curlx_dyn_len(s: *const Dynbuf) callconv(.c) usize;
 
 extern fn Curl_peer_equal(p1: ?*const Curl_peer, p2: ?*const Curl_peer) callconv(.c) bool;
-extern fn Curl_peer_link(dst: *?*Curl_peer, src: ?*Curl_peer) callconv(.c) CURLcode;
+extern fn Curl_peer_link(dst: *?*Curl_peer, src: ?*Curl_peer) callconv(.c) void;
 extern fn Curl_peer_unlink(dst: *?*Curl_peer) callconv(.c) void;
 extern fn Curl_creds_same(c1: ?*const Curl_creds, c2: ?*const Curl_creds) callconv(.c) bool;
-extern fn Curl_creds_link(dst: *?*Curl_creds, src: ?*Curl_creds) callconv(.c) CURLcode;
+extern fn Curl_creds_link(dst: *?*Curl_creds, src: ?*Curl_creds) callconv(.c) void;
 extern fn Curl_creds_unlink(dst: *?*Curl_creds) callconv(.c) void;
 
 extern fn Curl_auth_digest_cleanup(digest: *DigestDataPrefix) callconv(.c) void;
@@ -292,13 +292,19 @@ fn digest_flush_stale(
     creds: ?*Curl_creds,
 ) void {
     _ = data;
-    if (origin == null or creds == null) {
-        Curl_auth_digest_cleanup(digest);
-    } else if ((digest.origin != null and !Curl_peer_equal(digest.origin, origin)) or
-        (digest.creds != null and !Curl_creds_same(digest.creds, creds)))
-    {
+    var flush = false;
+    if (digest.origin == null or !Curl_peer_equal(origin, digest.origin)) {
+        flush = true;
+    } else if (digest.creds != null and !Curl_creds_same(creds, digest.creds)) {
+        flush = true;
+    }
+
+    if (flush) {
         Curl_auth_digest_cleanup(digest);
     }
+
+    Curl_peer_link(&digest.origin, origin);
+    Curl_creds_link(&digest.creds, creds);
 }
 
 export fn Curl_input_digest(
@@ -326,10 +332,8 @@ export fn Curl_input_digest(
     var p: [*:0]const u8 = hdr + 6;
     while (p[0] != 0 and isBlank(p[0])) : (p += 1) {}
 
-    var result = Curl_auth_decode_digest_http_message(p, dig);
-    if (result == CURLE_OK) {
-        result = Curl_peer_link(&dig.origin, origin);
-    }
+    const result = Curl_auth_decode_digest_http_message(p, dig);
+    Curl_peer_link(&dig.origin, origin);
     return result;
 }
 
@@ -364,7 +368,7 @@ export fn Curl_output_digest(
 
     var response: ?[*:0]u8 = null;
     var len: usize = 0;
-    var result = Curl_auth_create_digest_http_message(
+    const result = Curl_auth_create_digest_http_message(
         data,
         creds,
         request,
@@ -376,11 +380,7 @@ export fn Curl_output_digest(
     if (result != CURLE_OK) return result;
 
     if (dig.creds == null) {
-        result = Curl_creds_link(&dig.creds, creds);
-        if (result != CURLE_OK) {
-            curlx_free(response);
-            return result;
-        }
+        Curl_creds_link(&dig.creds, creds);
     }
 
     const prefix: [*:0]const u8 = if (proxy) "Proxy-" else "";
@@ -502,12 +502,10 @@ export fn Curl_input_negotiate(
                 return CURLE_FAILED_INIT;
         }
         if (conn_creds_origin) |cco| {
-            result = Curl_peer_link(cco, origin);
+            Curl_peer_link(cco, origin);
         }
-        if (result == CURLE_OK) {
-            if (conn_creds) |cc| {
-                result = Curl_creds_link(cc, creds);
-            }
+        if (conn_creds) |cc| {
+            Curl_creds_link(cc, creds);
         }
     }
     return result;
@@ -773,12 +771,10 @@ export fn Curl_output_ntlm(
                         return CURLE_FAILED_INIT;
                 }
                 if (conn_creds_origin) |cco| {
-                    result = Curl_peer_link(cco, origin);
-                    if (result != CURLE_OK) return result;
+                    Curl_peer_link(cco, origin);
                 }
                 if (conn_creds) |cc| {
-                    result = Curl_creds_link(cc, creds);
-                    if (result != CURLE_OK) return result;
+                    Curl_creds_link(cc, creds);
                 }
             }
             result = Curl_auth_create_ntlm_type1_message(data, creds, "HTTP", host_str, ntlm_ptr, &ntlmmsg);
@@ -820,7 +816,8 @@ pub const ChunkyState = enum(c_int) {
     CHUNK_TRAILER = 5,
     CHUNK_TRAILER_CR = 6,
     CHUNK_TRAILER_POSTCR = 7,
-    CHUNK_FAILED = 8,
+    CHUNK_DONE = 8,
+    CHUNK_FAILED = 9,
 };
 
 pub const CHUNKcode = enum(c_int) {
@@ -832,6 +829,7 @@ pub const CHUNKcode = enum(c_int) {
     CHUNKE_BAD_ENCODING = 4,
     CHUNKE_OUT_OF_MEMORY = 5,
     CHUNKE_PASSTHRU_ERROR = 6,
+    CHUNKE_TRAILER_LIMIT = 7,
 };
 
 pub const Curl_chunker = extern struct {
@@ -846,11 +844,14 @@ pub const Curl_chunker = extern struct {
 };
 
 const CLIENTWRITE_BODY: c_int = 1 << 0;
-const CLIENTWRITE_HEADER: c_int = 1 << 1;
-const CLIENTWRITE_STATUS: c_int = 1 << 2;
-const CLIENTWRITE_CONNECT: c_int = 1 << 3;
-const CLIENTWRITE_TRAILER: c_int = 1 << 4;
-const CLIENTWRITE_EOS: c_int = 1 << 5;
+const CLIENTWRITE_INFO: c_int = 1 << 1;
+const CLIENTWRITE_HEADER: c_int = 1 << 2;
+const CLIENTWRITE_STATUS: c_int = 1 << 3;
+const CLIENTWRITE_CONNECT: c_int = 1 << 4;
+const CLIENTWRITE_1XX: c_int = 1 << 5;
+const CLIENTWRITE_TRAILER: c_int = 1 << 6;
+const CLIENTWRITE_EOS: c_int = 1 << 7;
+const CLIENTWRITE_0LEN: c_int = 1 << 8;
 
 const CURL_TRAILERFUNC_OK: c_int = 0;
 
@@ -864,8 +865,10 @@ pub const Curl_cwriter = extern struct {
 pub const Curl_cwtype = extern struct {
     name: [*:0]const u8,
     alias: ?[*:0]const u8,
+    flags: u8,
     do_init: *const fn (?*Curl_easy, *Curl_cwriter) callconv(.c) CURLcode,
     do_write: *const fn (?*Curl_easy, *Curl_cwriter, c_int, [*]const u8, usize) callconv(.c) CURLcode,
+    do_flush: *const fn (?*Curl_easy, *Curl_cwriter) callconv(.c) CURLcode,
     do_close: *const fn (?*Curl_easy, *Curl_cwriter) callconv(.c) void,
     cwriter_size: usize,
 };
@@ -876,7 +879,7 @@ pub const cw_chunked_ctx = extern struct {
 };
 
 pub const Curl_creader_phase = c_uint;
-pub const CURL_CR_TRANSFER_ENCODE: Curl_creader_phase = 3;
+pub const CURL_CR_TRANSFER_ENCODE: Curl_creader_phase = 1;
 
 pub const Curl_creader = extern struct {
     crt: *const Curl_crtype,
@@ -950,6 +953,7 @@ extern fn curl_slist_free_all(list: ?*curl_slist) callconv(.c) void;
 extern fn Curl_chunked_te_skip(data: ?*const Curl_easy) callconv(.c) bool;
 extern fn Curl_chunked_set_req_chunk(data: ?*Curl_easy) callconv(.c) void;
 extern fn Curl_chunked_set_download_done(data: ?*Curl_easy) callconv(.c) bool;
+extern fn Curl_chunked_no_body(data: ?*const Curl_easy) callconv(.c) bool;
 extern fn Curl_chunked_call_trailer_cb(data: ?*Curl_easy, trailers: *?*curl_slist) callconv(.c) c_int;
 
 export fn Curl_httpchunk_init(
@@ -985,9 +989,13 @@ export fn Curl_httpchunk_free(data: ?*Curl_easy, ch: *Curl_chunker) callconv(.c)
     curlx_dyn_free(&ch.trailer);
 }
 
+extern fn Curl_client_write(data: ?*Curl_easy, type_: c_int, buf: [*]const u8, len: usize) callconv(.c) CURLcode;
+extern fn Curl_verify_header(data: ?*Curl_easy, header: [*]const u8, hlen: usize) callconv(.c) CURLcode;
+extern fn Curl_bump_headersize(data: ?*Curl_easy, delta: usize, connect_only: bool) callconv(.c) CURLcode;
+
 export fn Curl_httpchunk_is_done(data: ?*Curl_easy, ch: *Curl_chunker) callconv(.c) bool {
     _ = data;
-    return ch.state == .CHUNK_STOP or ch.state == .CHUNK_FAILED;
+    return ch.state == .CHUNK_DONE;
 }
 
 fn httpchunk_readwrite(
@@ -1004,20 +1012,21 @@ fn httpchunk_readwrite(
     var piece: usize = 0;
 
     pconsumed.* = 0;
-    if (ch.state == .CHUNK_STOP) return CURLE_OK;
+    if (ch.state == .CHUNK_DONE) return CURLE_OK;
     if (ch.state == .CHUNK_FAILED) return CURLE_RECV_ERROR;
 
-    if (Curl_chunked_te_skip(data) and !ch.ignore_body) {
+    const te_skip = Curl_chunked_te_skip(data);
+    if (te_skip and !ch.ignore_body) {
         if (cw_next != null) {
             result = Curl_cwriter_write(data, cw_next, CLIENTWRITE_BODY, buf, blen);
-            if (result != CURLE_OK) {
-                ch.state = .CHUNK_FAILED;
-                ch.last_code = .CHUNKE_PASSTHRU_ERROR;
-                return result;
-            }
+        } else {
+            result = Curl_client_write(data, CLIENTWRITE_BODY, buf, blen);
         }
-        pconsumed.* = blen;
-        return CURLE_OK;
+        if (result != CURLE_OK) {
+            ch.state = .CHUNK_FAILED;
+            ch.last_code = .CHUNKE_PASSTHRU_ERROR;
+            return result;
+        }
     }
 
     while (length > 0) {
@@ -1025,6 +1034,9 @@ fn httpchunk_readwrite(
             .CHUNK_HEX => {
                 if (isXdigit(datap[0])) {
                     if (ch.hexindex >= CHUNK_MAXNUM_LEN) {
+                        if (data != null) {
+                            Curl_failf(data, "chunk hex-length longer than %d", CHUNK_MAXNUM_LEN);
+                        }
                         ch.state = .CHUNK_FAILED;
                         ch.last_code = .CHUNKE_TOO_LONG_HEX;
                         return CURLE_RECV_ERROR;
@@ -1032,9 +1044,13 @@ fn httpchunk_readwrite(
                     ch.hexbuffer[ch.hexindex] = datap[0];
                     datap += 1;
                     length -= 1;
+                    pconsumed.* += 1;
                     ch.hexindex += 1;
                 } else {
                     if (ch.hexindex == 0) {
+                        if (data != null) {
+                            Curl_failf(data, "chunk hex-length char not a hex digit: 0x%x", @as(c_uint, datap[0]));
+                        }
                         ch.state = .CHUNK_FAILED;
                         ch.last_code = .CHUNKE_ILLEGAL_HEX;
                         return CURLE_RECV_ERROR;
@@ -1042,6 +1058,9 @@ fn httpchunk_readwrite(
                     ch.hexbuffer[ch.hexindex] = 0;
                     var hex_ptr: [*:0]const u8 = @ptrCast(&ch.hexbuffer[0]);
                     if (curlx_str_hex(&hex_ptr, &ch.datasize, CURL_OFF_T_MAX) != STRE_OK) {
+                        if (data != null) {
+                            Curl_failf(data, "invalid chunk size: '%s'", @as([*:0]const u8, @ptrCast(&ch.hexbuffer[0])));
+                        }
                         ch.state = .CHUNK_FAILED;
                         ch.last_code = .CHUNKE_ILLEGAL_HEX;
                         return CURLE_RECV_ERROR;
@@ -1060,6 +1079,7 @@ fn httpchunk_readwrite(
                 }
                 datap += 1;
                 length -= 1;
+                pconsumed.* += 1;
             },
 
             .CHUNK_DATA => {
@@ -1068,9 +1088,11 @@ fn httpchunk_readwrite(
                     piece = @intCast(ch.datasize);
                 }
 
-                if (!ch.ignore_body) {
+                if (!te_skip and !ch.ignore_body) {
                     if (cw_next != null) {
                         result = Curl_cwriter_write(data, cw_next, CLIENTWRITE_BODY, datap, piece);
+                    } else {
+                        result = Curl_client_write(data, CLIENTWRITE_BODY, datap, piece);
                     }
                     if (result != CURLE_OK) {
                         ch.state = .CHUNK_FAILED;
@@ -1099,6 +1121,7 @@ fn httpchunk_readwrite(
                 }
                 datap += 1;
                 length -= 1;
+                pconsumed.* += 1;
             },
 
             .CHUNK_TRAILER => {
@@ -1114,29 +1137,42 @@ fn httpchunk_readwrite(
                         }
                         const full_tr = curlx_dyn_ptr(&ch.trailer) orelse tr_ptr;
                         trlen = curlx_dyn_len(&ch.trailer);
-                        if (!ch.ignore_body) {
+                        if (data != null) {
+                            result = Curl_verify_header(data, full_tr, trlen);
+                            if (result != CURLE_OK) {
+                                ch.state = .CHUNK_FAILED;
+                                ch.last_code = .CHUNKE_BAD_CHUNK;
+                                return result;
+                            }
+                        }
+                        if (!te_skip) {
+                            const hd_type = CLIENTWRITE_HEADER | CLIENTWRITE_TRAILER |
+                                (if (ch.in_connect) CLIENTWRITE_CONNECT else @as(c_int, 0));
                             if (cw_next != null) {
-                                result = Curl_cwriter_write(
-                                    data,
-                                    cw_next,
-                                    CLIENTWRITE_HEADER | CLIENTWRITE_TRAILER |
-                                        (if (ch.in_connect) CLIENTWRITE_CONNECT else @as(c_int, 0)),
-                                    full_tr,
-                                    trlen,
-                                );
+                                result = Curl_cwriter_write(data, cw_next, hd_type, full_tr, trlen);
+                            } else if (data != null) {
+                                result = Curl_client_write(data, hd_type, full_tr, trlen);
                             }
                             if (result != CURLE_OK) {
                                 ch.state = .CHUNK_FAILED;
                                 ch.last_code = .CHUNKE_PASSTHRU_ERROR;
                                 return result;
                             }
+                            if (data != null) {
+                                result = Curl_bump_headersize(data, trlen, false);
+                                if (result != CURLE_OK) {
+                                    ch.state = .CHUNK_FAILED;
+                                    ch.last_code = .CHUNKE_TRAILER_LIMIT;
+                                    return result;
+                                }
+                            }
                         }
                         curlx_dyn_reset(&ch.trailer);
                         ch.state = .CHUNK_TRAILER_CR;
-                        if (datap[0] == '\n') break;
+                        if (datap[0] == '\n') continue;
                     } else {
                         ch.state = .CHUNK_TRAILER_POSTCR;
-                        break;
+                        continue;
                     }
                 } else {
                     result = curlx_dyn_addn(&ch.trailer, datap, 1);
@@ -1148,6 +1184,7 @@ fn httpchunk_readwrite(
                 }
                 datap += 1;
                 length -= 1;
+                pconsumed.* += 1;
             },
 
             .CHUNK_TRAILER_CR => {
@@ -1155,6 +1192,7 @@ fn httpchunk_readwrite(
                     ch.state = .CHUNK_TRAILER_POSTCR;
                     datap += 1;
                     length -= 1;
+                    pconsumed.* += 1;
                 } else {
                     ch.state = .CHUNK_FAILED;
                     ch.last_code = .CHUNKE_BAD_CHUNK;
@@ -1165,11 +1203,12 @@ fn httpchunk_readwrite(
             .CHUNK_TRAILER_POSTCR => {
                 if (datap[0] != '\r' and datap[0] != '\n') {
                     ch.state = .CHUNK_TRAILER;
-                    break;
+                    continue;
                 }
                 if (datap[0] == '\r') {
                     datap += 1;
                     length -= 1;
+                    pconsumed.* += 1;
                 }
                 ch.state = .CHUNK_STOP;
             },
@@ -1177,13 +1216,19 @@ fn httpchunk_readwrite(
             .CHUNK_STOP => {
                 if (datap[0] == '\n') {
                     length -= 1;
+                    pconsumed.* += 1;
                     ch.datasize = @intCast(length);
+                    ch.state = .CHUNK_DONE;
                     return CURLE_OK;
                 } else {
                     ch.state = .CHUNK_FAILED;
                     ch.last_code = .CHUNKE_BAD_CHUNK;
                     return CURLE_RECV_ERROR;
                 }
+            },
+
+            .CHUNK_DONE => {
+                return CURLE_OK;
             },
 
             .CHUNK_FAILED => {
@@ -1203,6 +1248,7 @@ export fn Curl_chunked_strerror(code: CHUNKcode) callconv(.c) [*:0]const u8 {
         .CHUNKE_PASSTHRU_ERROR => "Error writing data to client",
         .CHUNKE_BAD_ENCODING => "Bad content-encoding found",
         .CHUNKE_OUT_OF_MEMORY => "Out of memory",
+        .CHUNKE_TRAILER_LIMIT => "trailers exceeded header limit",
         else => "OK",
     };
 }
@@ -1249,12 +1295,13 @@ fn cw_chunked_write(
 
     if (result != CURLE_OK) {
         if (ctx.ch.last_code == .CHUNKE_PASSTHRU_ERROR) {
-            return result;
-        }
-        if (data != null) {
+            if (data != null) {
+                Curl_failf(data, "Failed reading the chunked-encoded stream");
+            }
+        } else if (data != null) {
             Curl_failf(
                 data,
-                "Failed reading the chunked-encoded stream (%s)",
+                "%s in chunked-encoding",
                 Curl_chunked_strerror(ctx.ch.last_code),
             );
         }
@@ -1262,27 +1309,25 @@ fn cw_chunked_write(
     }
 
     const rest_len = blen - consumed;
-    if (ctx.ch.state == .CHUNK_STOP) {
-        const no_body = Curl_chunked_set_download_done(data);
+    if (ctx.ch.state == .CHUNK_DONE) {
+        _ = Curl_chunked_set_download_done(data);
         if (rest_len > 0) {
             if (data != null) {
-                Curl_trc_write(
+                Curl_infof(
                     data,
-                    "Leftover after chunking: %zu bytes ( ignoring)",
+                    "Leftovers after chunking: %zu bytes",
                     rest_len,
                 );
             }
         }
-        if ((type_ & CLIENTWRITE_EOS) == 0 and !no_body) {
-            var empty: [1]u8 = .{0};
-            result = Curl_cwriter_write(data, writer.next, CLIENTWRITE_BODY | CLIENTWRITE_EOS, &empty, 0);
-            if (result != CURLE_OK) return result;
-        }
     } else if ((type_ & CLIENTWRITE_EOS) != 0) {
-        if (data != null) {
-            Curl_failf(data, "transfer closed with outstanding read data remaining");
+        const no_body = if (data != null) Curl_chunked_no_body(data) else false;
+        if (!no_body) {
+            if (data != null) {
+                Curl_failf(data, "transfer closed with outstanding read data remaining");
+            }
+            return CURLE_PARTIAL_FILE_CONST;
         }
-        return CURLE_PARTIAL_FILE_CONST;
     }
 
     return CURLE_OK;
@@ -1290,11 +1335,15 @@ fn cw_chunked_write(
 
 const CURLE_PARTIAL_FILE_CONST: CURLcode = 18;
 
+extern fn Curl_cwriter_def_flush(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) CURLcode;
+
 pub export const Curl_httpchunk_unencoder: Curl_cwtype = .{
     .name = "chunked",
     .alias = "x-chunked",
+    .flags = 0,
     .do_init = cw_chunked_init,
     .do_write = cw_chunked_write,
+    .do_flush = Curl_cwriter_def_flush,
     .do_close = cw_chunked_close,
     .cwriter_size = @sizeOf(cw_chunked_ctx),
 };
@@ -2215,7 +2264,7 @@ test "Curl_httpchunk_read decodes chunked body and trailers" {
     var input = "5\r\nhello\r\n0\r\nX-Trailer: val\r\n\r\n".*;
     var consumed: usize = 0;
     try std.testing.expectEqual(CURLE_OK, Curl_httpchunk_read(null, &ch, &input, input.len, &consumed));
-    try std.testing.expectEqual(@as(usize, 5), consumed);
+    try std.testing.expectEqual(input.len, consumed);
     try std.testing.expect(Curl_httpchunk_is_done(null, &ch));
     try std.testing.expectEqualStrings("OK", std.mem.span(Curl_chunked_strerror(ch.last_code)));
 }

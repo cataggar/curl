@@ -5572,7 +5572,9 @@ fn run_all_transfers(share: ?*CURLSH, result_in: CURLcode) CURLcode {
         if (result == CURLE_OK) {
             result = result2;
         }
-        clean_getout(p.config.?);
+        if (p.config) |cfg| {
+            clean_getout(cfg);
+        }
         per = del_per_transfer(p);
     }
 

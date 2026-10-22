@@ -100,8 +100,8 @@ const CURLULFLAG_FLAGGED: u8 = 1 << 3;
 const CURLULFLAG_SEEN: u8 = 1 << 4;
 
 const CURLUPART_QUERY: c_uint = 8;
-const CURLU_URLDECODE: c_uint = 1 << 7;
-const CURLUE_OUT_OF_MEMORY: c_uint = 27;
+const CURLU_URLDECODE: c_uint = 1 << 6;
+const CURLUE_OUT_OF_MEMORY: c_uint = 7;
 
 const REJECT_CTRL: c_uint = 3;
 

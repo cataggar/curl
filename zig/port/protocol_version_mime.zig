@@ -18,7 +18,8 @@ const containers = @import("containers.zig");
 pub const CURLcode = c_uint;
 pub const CURLE_OK: CURLcode = 0;
 pub const CURLE_NOT_BUILT_IN: CURLcode = 4;
-pub const CURLE_READ_ERROR: CURLcode = 26;
+pub const CURLE_PARTIAL_FILE: CURLcode = 18;
+const CURLE_READ_ERROR: CURLcode = 26;
 pub const CURLE_OUT_OF_MEMORY: CURLcode = 27;
 pub const CURLE_ABORTED_BY_CALLBACK: CURLcode = 42;
 pub const CURLE_BAD_FUNCTION_ARGUMENT: CURLcode = 43;
@@ -1183,9 +1184,9 @@ pub const ENCODING_BUFFER_SIZE: usize = 256;
 
 pub const MIME_USERHEADERS_OWNER: c_uint = 1 << 0;
 pub const MIME_BODY_ONLY: c_uint = 1 << 1;
-pub const MIME_FAST_CONV: c_uint = 1 << 2;
+pub const MIME_FAST_CONV: c_uint = 1 << 4;
 
-pub const MIME_FILE_TRIED: c_uint = 1 << 0;
+pub const MIME_FILE_TRIED: c_uint = 1 << 3;
 
 pub const MIMESTRATEGY_MAIL: c_uint = 0;
 pub const MIMESTRATEGY_FORM: c_uint = 1;
@@ -1222,7 +1223,7 @@ const CURL_MAX_HTTP_HEADER: usize = 100 * 1024;
 const CURL_ZERO_TERMINATED: usize = std.math.maxInt(usize);
 const SEEK_SET: c_int = 0;
 
-const MATCH_STATEDATA: c_uint = 1 << 0;
+const MATCH_STATEDATA: c_uint = 1 << 2;
 
 const QP_OK: u8 = 1;
 const QP_SP: u8 = 2;
@@ -1900,7 +1901,7 @@ fn read_encoded_part_content(part: *curl_mimepart, buffer: [*]u8, bufsize: usize
                     return if (cursize != 0) cursize else sz;
                 },
                 STOP_FILLING => {
-                    return cursize;
+                    return if (cursize != 0) cursize else sz;
                 },
                 else => {
                     cursize += sz;
@@ -1930,7 +1931,7 @@ fn read_encoded_part_content(part: *curl_mimepart, buffer: [*]u8, bufsize: usize
                 return if (cursize != 0) cursize else sz;
             },
             STOP_FILLING => {
-                return cursize;
+                return if (cursize != 0) cursize else sz;
             },
             else => {
                 part.lastreadstatus = sz;
@@ -1948,51 +1949,49 @@ fn read_part_content(part: *curl_mimepart, buffer: [*]u8, bufsize: usize, hasrea
         else => {},
     }
 
-    if (part.datasize != @as(curl_off_t, -1) and part.encoder == null) {
-        std.debug.assert(part.state.offset <= part.datasize);
-        const rem: usize = @intCast(part.datasize - part.state.offset);
-        if (bufsize > rem) {
-            return read_part_content_inner(part, buffer, rem, hasread);
+    if (part.datasize != @as(curl_off_t, -1) and part.state.offset >= part.datasize) {
+        // sz is already zero.
+    } else {
+        var read_size = bufsize;
+        if (part.datasize != @as(curl_off_t, -1) and part.encoder == null) {
+            const rem: usize = @intCast(part.datasize - part.state.offset);
+            if (read_size > rem) read_size = rem;
         }
-    }
-    sz = read_part_content_inner(part, buffer, bufsize, hasread);
-    return sz;
-}
-
-fn read_part_content_inner(part: *curl_mimepart, buffer: [*]u8, bufsize: usize, hasread: *bool) usize {
-    var sz: usize = 0;
-    switch (part.kind) {
-        MIMEKIND_MULTIPART => {
-            sz = mime_subparts_read(buffer, 1, bufsize, part.arg, hasread);
-        },
-        MIMEKIND_FILE => {
-            if (part.fp != null and (part.flags & MIME_FILE_TRIED) != 0 and ferror(part.fp) != 0)
-                return READ_ERROR;
-            part.flags |= MIME_FILE_TRIED;
-            if (part.readfunc) |rf| {
-                if ((part.flags & MATCH_STATEDATA) == 0) {
-                    if (hasread.*)
-                        return STOP_FILLING;
-                    hasread.* = true;
+        switch (part.kind) {
+            MIMEKIND_MULTIPART => {
+                sz = mime_subparts_read(buffer, 1, read_size, part.arg, hasread);
+            },
+            MIMEKIND_FILE => {
+                if (part.fp != null and (part.flags & MIME_FILE_TRIED) != 0 and ferror(part.fp) != 0)
+                    return READ_ERROR;
+                part.flags |= MIME_FILE_TRIED;
+                if (part.readfunc) |rf| {
+                    if ((part.flags & MATCH_STATEDATA) == 0) {
+                        if (hasread.*)
+                            return STOP_FILLING;
+                        hasread.* = true;
+                    }
+                    sz = rf(buffer, 1, read_size, part.arg);
                 }
-                sz = rf(buffer, 1, bufsize, part.arg);
-            }
-        },
-        else => {
-            if (part.readfunc) |rf| {
-                if ((part.flags & MATCH_STATEDATA) == 0) {
-                    if (hasread.*)
-                        return STOP_FILLING;
-                    hasread.* = true;
+            },
+            else => {
+                if (part.readfunc) |rf| {
+                    if ((part.flags & MATCH_STATEDATA) == 0) {
+                        if (hasread.*)
+                            return STOP_FILLING;
+                        hasread.* = true;
+                    }
+                    sz = rf(buffer, 1, read_size, part.arg);
                 }
-                sz = rf(buffer, 1, bufsize, part.arg);
-            }
-        },
+            },
+        }
     }
 
     switch (sz) {
-        0 => {},
-        READ_ERROR, CURL_READFUNC_ABORT, CURL_READFUNC_PAUSE, STOP_FILLING => return sz,
+        STOP_FILLING => {},
+        0, READ_ERROR, CURL_READFUNC_ABORT, CURL_READFUNC_PAUSE => {
+            part.lastreadstatus = sz;
+        },
         else => {
             part.state.offset += @intCast(sz);
             part.lastreadstatus = sz;
@@ -2020,11 +2019,11 @@ fn readback_part(part: *curl_mimepart, buffer: [*]u8, bufsize: usize, hasread: *
             MIMESTATE_USER => {
                 if (hdr == null) {
                     mimesetstate(&part.state, MIMESTATE_EOH, null);
-                    break;
+                    continue;
                 }
                 if (match_header(hdr.?, "Content-Type", 12) != null) {
                     mimesetstate(&part.state, MIMESTATE_USER, hdr.?.next);
-                    break;
+                    continue;
                 }
                 const hdata = hdr.?.data.?;
                 sz = readback_bytes(&part.state, buf_ptr, rem_size, hdata, std.mem.len(hdata), "\r\n");
@@ -2071,7 +2070,7 @@ fn readback_part(part: *curl_mimepart, buffer: [*]u8, bufsize: usize, hasread: *
                         return if (cursize != 0) cursize else sz;
                     },
                     STOP_FILLING => {
-                        return cursize;
+                        return if (cursize != 0) cursize else sz;
                     },
                     else => {},
                 }
@@ -2104,7 +2103,6 @@ fn mime_subparts_read(buffer: [*]u8, size: usize, nitems: usize, instream: ?*any
         const part: ?*curl_mimepart = @ptrCast(@alignCast(mime.state.ptr));
         switch (mime.state.state) {
             MIMESTATE_BEGIN, MIMESTATE_BODY => {
-                hasread.* = true;
                 mimesetstate(&mime.state, MIMESTATE_BOUNDARY1, mime.firstpart);
                 mime.state.offset += 2;
             },
@@ -2127,11 +2125,11 @@ fn mime_subparts_read(buffer: [*]u8, size: usize, nitems: usize, instream: ?*any
             MIMESTATE_CONTENT => {
                 if (part == null) {
                     mimesetstate(&mime.state, MIMESTATE_END, null);
-                    break;
+                    continue;
                 }
                 sz = readback_part(part.?, buf_ptr, rem_size, hasread);
                 switch (sz) {
-                    READ_ERROR, CURL_READFUNC_ABORT, CURL_READFUNC_PAUSE => {
+                    READ_ERROR, CURL_READFUNC_ABORT, CURL_READFUNC_PAUSE, STOP_FILLING => {
                         return if (cursize != 0) cursize else sz;
                     },
                     0 => {
@@ -2221,6 +2219,7 @@ fn cleanup_part_content(part: *curl_mimepart) void {
     part.kind = MIMEKIND_NONE;
     part.flags &= ~MIME_FAST_CONV;
     part.flags &= ~MIME_FILE_TRIED;
+    part.flags &= ~MATCH_STATEDATA;
     part.lastreadstatus = 1;
     part.state.state = MIMESTATE_BEGIN;
 }
@@ -2774,8 +2773,8 @@ pub export fn Curl_mime_prepare_headers_ex(
     curl_slist_free_all(part.curlheaders);
     part.curlheaders = null;
 
-    if (part.state.state != MIMESTATE_BEGIN)
-        return CURLE_BAD_FUNCTION_ARGUMENT;
+    if (part.state.state == MIMESTATE_CURL)
+        mimesetstate(&part.state, MIMESTATE_CURL, null);
 
     customct = part.mimetype;
     if (customct == null)
@@ -2803,11 +2802,9 @@ pub export fn Curl_mime_prepare_headers_ex(
     }
 
     if (part.kind == MIMEKIND_MULTIPART) {
+        const subdisp: ?[*:0]const u8 = if (content_type_match(contenttype, "multipart/form-data", 19)) "form-data" else null;
         var subparts = @as(*curl_mime, @ptrCast(@alignCast(part.arg.?))).firstpart;
         while (subparts) |sp| : (subparts = sp.nextpart) {
-            var subdisp: ?[*:0]const u8 = null;
-            if (sp.filename != null or sp.name != null)
-                subdisp = if (strategy == MIMESTRATEGY_FORM) "form-data" else "attachment";
             result = Curl_mime_prepare_headers_ex(mime_formescape, sp, null, subdisp, strategy);
             if (result != CURLE_OK)
                 return result;
@@ -2983,6 +2980,7 @@ extern fn Curl_creader_create(
     crt: *const Curl_crtype,
     phase: c_uint,
 ) callconv(.c) CURLcode;
+extern fn Curl_creader_free(data: ?*anyopaque, reader: *Curl_creader) callconv(.c) void;
 extern fn Curl_creader_set(data: ?*anyopaque, r: *Curl_creader) callconv(.c) CURLcode;
 extern fn Curl_failf(data: ?*anyopaque, fmt: [*:0]const u8, ...) callconv(.c) void;
 extern fn Curl_trc_read(data: ?*anyopaque, fmt: [*:0]const u8, ...) callconv(.c) void;
@@ -3116,11 +3114,48 @@ fn cr_mime_total_length(data: ?*anyopaque, reader: *Curl_creader) callconv(.c) c
     return ctx.total_len;
 }
 
+fn mime_unpause(part_opt: ?*curl_mimepart) void {
+    const part = part_opt orelse return;
+    if (part.lastreadstatus == CURL_READFUNC_PAUSE)
+        part.lastreadstatus = 1;
+    if (part.kind == MIMEKIND_MULTIPART) {
+        if (part.arg) |arg| {
+            const mime: *curl_mime = @ptrCast(@alignCast(arg));
+            var subpart = mime.firstpart;
+            while (subpart) |sp| : (subpart = sp.nextpart) {
+                mime_unpause(sp);
+            }
+        }
+    }
+}
+
 fn cr_mime_resume_from(data: ?*anyopaque, reader: *Curl_creader, offset: curl_off_t) callconv(.c) CURLcode {
-    _ = data;
-    _ = reader;
-    _ = offset;
-    return CURLE_READ_ERROR;
+    const ctx: *cr_mime_ctx = @ptrCast(@alignCast(reader.ctx.?));
+    if (offset > 0) {
+        var passed: curl_off_t = 0;
+        var scratch: [4 * 1024]u8 = undefined;
+        while (passed < offset) {
+            const rem = offset - passed;
+            const readthisamountnow: usize = if (rem > @as(curl_off_t, scratch.len))
+                scratch.len
+            else
+                @intCast(rem);
+            const nread = Curl_mime_read(&scratch, 1, readthisamountnow, ctx.part);
+            passed += @intCast(nread);
+            if (nread == 0 or nread > readthisamountnow) {
+                Curl_failf(data, "Could only read %lld bytes from the mime post", @as(c_longlong, passed));
+                return CURLE_READ_ERROR;
+            }
+        }
+        if (ctx.total_len > 0) {
+            ctx.total_len -= offset;
+            if (ctx.total_len <= 0) {
+                Curl_failf(data, "Mime post already completely uploaded");
+                return CURLE_PARTIAL_FILE;
+            }
+        }
+    }
+    return CURLE_OK;
 }
 
 fn cr_mime_cntrl(data: ?*anyopaque, reader: *Curl_creader, opcode: c_uint) callconv(.c) CURLcode {
@@ -3139,6 +3174,7 @@ fn cr_mime_cntrl(data: ?*anyopaque, reader: *Curl_creader, opcode: c_uint) callc
             return CURLE_OK;
         },
         CURL_CRCNTRL_UNPAUSE => {
+            mime_unpause(ctx.part);
             return CURLE_OK;
         },
         CURL_CRCNTRL_CLEAR_EOS => {
@@ -3152,7 +3188,7 @@ fn cr_mime_cntrl(data: ?*anyopaque, reader: *Curl_creader, opcode: c_uint) callc
 fn cr_mime_is_paused(data: ?*anyopaque, reader: *Curl_creader) callconv(.c) bool {
     _ = data;
     const ctx: *cr_mime_ctx = @ptrCast(@alignCast(reader.ctx.?));
-    return ctx.read_status == CURLE_AGAIN;
+    return ctx.part.lastreadstatus == CURL_READFUNC_PAUSE;
 }
 
 fn cr_mime_done(data: ?*anyopaque, reader: *Curl_creader, premature: c_int) callconv(.c) void {
@@ -3181,9 +3217,11 @@ pub export fn Curl_creader_set_mime(data: ?*anyopaque, part: *curl_mimepart) cal
     if (result != CURLE_OK)
         return result;
     const ctx: *cr_mime_ctx = @ptrCast(@alignCast(r.?.ctx.?));
-    if (part.state.state == MIMESTATE_BEGIN and (part.flags & MIME_BODY_ONLY) != 0)
-        mimesetstate(&part.state, MIMESTATE_BODY, null);
     ctx.part = part;
+    if (mime_part_rewind(ctx.part) != CURL_SEEKFUNC_OK) {
+        Curl_creader_free(data, r.?);
+        return CURLE_SEND_FAIL_REWIND;
+    }
     ctx.total_len = mime_size(ctx.part);
 
     result = Curl_creader_set(data, r.?);
