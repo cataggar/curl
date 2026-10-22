@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const mem = @import("mem.zig");
 const containers = @import("containers.zig");
 const primitives = @import("primitives.zig");
+const doh_hostip_easy = @import("doh_hostip_easy.zig");
 const backend_options = @import("backend_options");
 
 pub const CURLcode = c_uint;
@@ -62,7 +63,7 @@ pub const Curl_meta_dtor = *const fn (key: ?*const anyopaque, key_len: usize, me
 const c_ext = struct {
     extern fn Curl_peer_equal(p1: ?*Curl_peer, p2: ?*Curl_peer) callconv(.c) bool;
     extern fn Curl_conn_meta_get(conn: ?*connectdata, key: [*:0]const u8) callconv(.c) ?*anyopaque;
-    extern fn Curl_conn_meta_set(conn: ?*connectdata, key: [*:0]const u8, meta_data: ?*anyopaque, meta_dtor: ?Curl_meta_dtor) callconv(.c) CURLcode;
+    extern fn Curl_conn_meta_set(conn: ?*connectdata, key: [*:0]const u8, meta_data: ?*anyopaque, meta_dtor: ?*const anyopaque) callconv(.c) CURLcode;
     extern fn Curl_conn_meta_remove(conn: ?*connectdata, key: [*:0]const u8) callconv(.c) void;
     extern fn Curl_failf(data: ?*Curl_easy, fmt: [*:0]const u8, ...) callconv(.c) void;
     extern fn Curl_infof(data: ?*Curl_easy, fmt: [*:0]const u8, ...) callconv(.c) void;
@@ -175,7 +176,7 @@ pub const TimeStamp = extern struct {
 pub const SecBuffer = extern struct {
     cbBuffer: c_ulong,
     BufferType: c_ulong,
-    pvBuffer: ?*anyopaque,
+    pvBuffer: ?[*]u8,
 };
 
 pub const SecBufferDesc = extern struct {
@@ -202,7 +203,7 @@ pub const SecPkgContext_Sizes = extern struct {
 
 pub const SecPkgContext_Bindings = extern struct {
     BindingsLength: c_ulong,
-    Bindings: ?*anyopaque,
+    Bindings: ?[*]u8,
 };
 
 pub const SEC_WINNT_AUTH_IDENTITY_EXA = extern struct {
@@ -312,7 +313,7 @@ pub const kerberos5data = if (builtin.os.tag == .windows) extern struct {
 
 pub const gss_buffer_desc = extern struct {
     length: usize = 0,
-    value: ?*anyopaque = null,
+    value: ?[*]u8 = null,
 };
 
 pub const negotiatedata = if (builtin.os.tag == .windows) extern struct {
@@ -385,14 +386,24 @@ pub fn createSspiIdentity(
     passwdp: ?[*:0]const u8,
     identity: *SEC_WINNT_AUTH_IDENTITY_EXA,
 ) callconv(.c) CURLcode {
+    createSspiIdentityInner(userp, passwdp, identity) catch return CURLE_OUT_OF_MEMORY;
+    return CURLE_OK;
+}
+
+fn createSspiIdentityInner(
+    userp: ?[*:0]const u8,
+    passwdp: ?[*:0]const u8,
+    identity: *SEC_WINNT_AUTH_IDENTITY_EXA,
+) error{OutOfMemory}!void {
     @memset(std.mem.asBytes(identity), 0);
     identity.Version = SEC_WINNT_AUTH_IDENTITY_VERSION;
     identity.Length = @sizeOf(SEC_WINNT_AUTH_IDENTITY_EXA);
 
-    const user_in: [*:0]const u8 = userp orelse return CURLE_OUT_OF_MEMORY;
-    const passwd_in: [*:0]const u8 = passwdp orelse return CURLE_OUT_OF_MEMORY;
+    const user_in: [*:0]const u8 = userp orelse return error.OutOfMemory;
+    const passwd_in: [*:0]const u8 = passwdp orelse return error.OutOfMemory;
 
-    const useranddomain = mem.strdup(user_in) orelse return CURLE_OUT_OF_MEMORY;
+    const useranddomain = mem.strdup(user_in) orelse return error.OutOfMemory;
+    defer mem.freeTyped(useranddomain);
     const uad_slice = std.mem.span(useranddomain);
 
     var user_ptr: [*:0]const u8 = useranddomain;
@@ -407,65 +418,47 @@ pub fn createSspiIdentity(
         user_ptr = useranddomain + idx + 1;
     }
 
-    const dup_user = mem.strdup(user_ptr) orelse {
-        mem.free(useranddomain);
-        return CURLE_OUT_OF_MEMORY;
-    };
+    const dup_user = mem.strdup(user_ptr) orelse return error.OutOfMemory;
+    errdefer mem.freeTyped(dup_user);
 
-    const dup_domain = mem.malloc(domlen + 1) orelse {
-        mem.free(dup_user);
-        mem.free(useranddomain);
-        return CURLE_OUT_OF_MEMORY;
-    };
+    const dup_domain = mem.allocMany(u8, domlen + 1) orelse return error.OutOfMemory;
+    errdefer mem.freeTyped(dup_domain);
     if (domlen > 0) {
         @memcpy(dup_domain[0..domlen], domain_ptr[0..domlen]);
     }
     dup_domain[domlen] = 0;
 
-    mem.free(useranddomain);
-
-    const passwd_dup = mem.strdup(passwd_in) orelse {
-        mem.free(dup_user);
-        mem.free(dup_domain);
-        return CURLE_OUT_OF_MEMORY;
-    };
+    const passwd_dup = mem.strdup(passwd_in) orelse return error.OutOfMemory;
     const pwlen = std.mem.span(passwd_dup).len;
-    const dup_passwd = mem.strdup(passwd_dup) orelse {
-        mem.free(dup_user);
-        mem.free(dup_domain);
+    defer {
         std.crypto.secureZero(u8, passwd_dup[0..pwlen]);
-        mem.free(passwd_dup);
-        return CURLE_OUT_OF_MEMORY;
-    };
+        mem.freeTyped(passwd_dup);
+    }
+
+    const dup_passwd = mem.strdup(passwd_dup) orelse return error.OutOfMemory;
 
     identity.Password = dup_passwd;
     identity.PasswordLength = uztoul(pwlen);
-
-    std.crypto.secureZero(u8, passwd_dup[0..pwlen]);
-    mem.free(passwd_dup);
-
     identity.User = dup_user;
     identity.UserLength = uztoul(std.mem.span(dup_user).len);
     identity.Domain = dup_domain;
     identity.DomainLength = uztoul(domlen);
     identity.Flags = CURL_SEC_WINNT_AUTH_IDENTITY;
-
-    return CURLE_OK;
 }
 
 pub fn sspiFreeIdentity(identity: ?*SEC_WINNT_AUTH_IDENTITY_EXA) callconv(.c) void {
     const id = identity orelse return;
     if (id.User) |u| {
-        mem.free(u);
+        mem.freeTyped(u);
         id.User = null;
     }
     if (id.Password) |p| {
         std.crypto.secureZero(u8, p[0..id.PasswordLength]);
-        mem.free(p);
+        mem.freeTyped(p);
         id.Password = null;
     }
     if (id.Domain) |d| {
-        mem.free(d);
+        mem.freeTyped(d);
         id.Domain = null;
     }
 }
@@ -482,6 +475,30 @@ comptime {
         @export(&authCreateNtlmType3MessageSspi, .{ .name = "Curl_auth_create_ntlm_type3_message" });
         @export(&authCleanupNtlmSspi, .{ .name = "Curl_auth_cleanup_ntlm" });
     }
+}
+
+fn acquireSspiCredentials(
+    sec_fn: *SecurityFunctionTableA,
+    pkg_name: [*:0]const u8,
+    p_identity: ?*SEC_WINNT_AUTH_IDENTITY_EXA,
+) error{ OutOfMemory, AcquireFailed }!*CredHandle {
+    const cred = mem.create(CredHandle) orelse return error.OutOfMemory;
+    errdefer mem.freeTyped(cred);
+    const status = sec_fn.AcquireCredentialsHandleA(
+        null,
+        @constCast(pkg_name),
+        SECPKG_CRED_OUTBOUND,
+        null,
+        p_identity,
+        null,
+        null,
+        cred,
+        null,
+    );
+    if (status != SEC_E_OK) {
+        return error.AcquireFailed;
+    }
+    return cred;
 }
 
 pub fn authIsNtlmSupportedSspi() callconv(.c) bool {
@@ -521,7 +538,7 @@ pub fn authCreateNtlmType1MessageSspi(
     ntlm.token_max = security_package.?.cbMaxToken;
     _ = sec_fn.FreeContextBuffer(security_package);
 
-    ntlm.output_token = mem.malloc(ntlm.token_max) orelse return CURLE_OUT_OF_MEMORY;
+    ntlm.output_token = mem.allocMany(u8, ntlm.token_max) orelse return CURLE_OUT_OF_MEMORY;
 
     if (credsHasUser(creds)) {
         const result = createSspiIdentity(creds.?.user, creds.?.passwd, &ntlm.identity);
@@ -532,32 +549,18 @@ pub fn authCreateNtlmType1MessageSspi(
         ntlm.p_identity = null;
     }
 
-    ntlm.credentials = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(CredHandle)) orelse return CURLE_OUT_OF_MEMORY));
+    ntlm.credentials = acquireSspiCredentials(sec_fn, SP_NAME_NTLM, ntlm.p_identity) catch |err| switch (err) {
+        error.OutOfMemory => return CURLE_OUT_OF_MEMORY,
+        error.AcquireFailed => return CURLE_LOGIN_DENIED,
+    };
 
-    status = sec_fn.AcquireCredentialsHandleA(
-        null,
-        @constCast(SP_NAME_NTLM),
-        SECPKG_CRED_OUTBOUND,
-        null,
-        ntlm.p_identity,
-        null,
-        null,
-        ntlm.credentials,
-        null,
-    );
-    if (status != SEC_E_OK) {
-        mem.free(ntlm.credentials);
-        ntlm.credentials = null;
-        return CURLE_LOGIN_DENIED;
-    }
-
-    ntlm.context = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(CtxtHandle)) orelse return CURLE_OUT_OF_MEMORY));
+    ntlm.context = mem.create(CtxtHandle) orelse return CURLE_OUT_OF_MEMORY;
 
     ntlm.spn = Curl_auth_build_spn(service, host, null) orelse return CURLE_OUT_OF_MEMORY;
 
     type_1_desc.ulVersion = SECBUFFER_VERSION;
     type_1_desc.cBuffers = 1;
-    type_1_desc.pBuffers = @ptrCast(&type_1_buf);
+    type_1_desc.pBuffers = (&type_1_buf)[0..1].ptr;
     type_1_buf.BufferType = SECBUFFER_TOKEN;
     type_1_buf.pvBuffer = ntlm.output_token;
     type_1_buf.cbBuffer = uztoul(ntlm.token_max);
@@ -651,7 +654,7 @@ pub fn authCreateNtlmType3MessageSspi(
 
     type_3_desc.ulVersion = SECBUFFER_VERSION;
     type_3_desc.cBuffers = 1;
-    type_3_desc.pBuffers = @ptrCast(&type_3_buf);
+    type_3_desc.pBuffers = (&type_3_buf)[0..1].ptr;
     type_3_buf.BufferType = SECBUFFER_TOKEN;
     type_3_buf.pvBuffer = ntlm.output_token;
     type_3_buf.cbBuffer = uztoul(ntlm.token_max);
@@ -693,31 +696,31 @@ pub fn authCleanupNtlmSspi(ntlm: *ntlmdata) callconv(.c) void {
         if (Curl_pSecFn) |sec_fn| {
             _ = sec_fn.DeleteSecurityContext(ctx);
         }
-        mem.free(ctx);
+        mem.freeTyped(ctx);
         ntlm.context = null;
     }
     if (ntlm.credentials) |cred| {
         if (Curl_pSecFn) |sec_fn| {
             _ = sec_fn.FreeCredentialsHandle(cred);
         }
-        mem.free(cred);
+        mem.freeTyped(cred);
         ntlm.credentials = null;
     }
     sspiFreeIdentity(ntlm.p_identity);
     ntlm.p_identity = null;
 
     if (ntlm.input_token) |tok| {
-        mem.free(tok);
+        mem.freeTyped(tok);
         ntlm.input_token = null;
     }
     if (ntlm.output_token) |tok| {
-        mem.free(tok);
+        mem.freeTyped(tok);
         ntlm.output_token = null;
     }
     ntlm.token_max = 0;
 
     if (ntlm.spn) |spn| {
-        mem.free(spn);
+        mem.freeTyped(spn);
         ntlm.spn = null;
     }
 }
@@ -736,7 +739,7 @@ pub const gss_name_t = ?*anyopaque;
 pub const gss_cred_id_t = ?*anyopaque;
 pub const gss_OID_desc = extern struct {
     length: u32,
-    elements: ?*anyopaque,
+    elements: ?[*]const u8,
 };
 pub const gss_OID = ?*gss_OID_desc;
 pub const gss_OID_set_desc = extern struct {
@@ -913,7 +916,7 @@ pub fn authCreateGssapiSecurityMessageGss(
         return CURLE_BAD_CONTENT_ENCODING;
     }
 
-    const indata: [*]const u8 = @ptrCast(output_token.value.?);
+    const indata: [*]const u8 = output_token.value.?;
     var sec_layer: u32 = indata[0];
     var max_size: u32 = (@as(u32, indata[1]) << 16) | (@as(u32, indata[2]) << 8) | @as(u32, indata[3]);
 
@@ -934,7 +937,8 @@ pub fn authCreateGssapiSecurityMessageGss(
         messagelen += authzid_slice.len;
     }
 
-    const message = mem.malloc(messagelen) orelse return CURLE_OUT_OF_MEMORY;
+    const message = mem.allocMany(u8, messagelen) orelse return CURLE_OUT_OF_MEMORY;
+    defer mem.freeTyped(message);
     message[0] = @intCast(sec_layer & 0xFF);
     message[1] = @intCast((max_size >> 16) & 0xFF);
     message[2] = @intCast((max_size >> 8) & 0xFF);
@@ -949,13 +953,11 @@ pub fn authCreateGssapiSecurityMessageGss(
     major_status = gss_ext.gss_wrap(&minor_status, krb5.context, 0, GSS_C_QOP_DEFAULT, &input_token, null, &output_token);
     if ((major_status & 0x80000000) != 0) {
         gss_ext.Curl_gss_log_error(data, "gss_wrap() failed: ", major_status, minor_status);
-        mem.free(message);
         return CURLE_AUTH_ERROR;
     }
 
     const result = Curl_bufref_memdup0(out, output_token.value, output_token.length);
     _ = gss_ext.gss_release_buffer(&unused_status, &output_token);
-    mem.free(message);
     return result;
 }
 
@@ -1018,7 +1020,7 @@ pub fn authCreateGssapiUserMessageSspi(
         krb5.token_max = security_package.?.cbMaxToken;
         _ = sec_fn.FreeContextBuffer(security_package);
 
-        krb5.output_token = mem.malloc(krb5.token_max) orelse return CURLE_OUT_OF_MEMORY;
+        krb5.output_token = mem.allocMany(u8, krb5.token_max) orelse return CURLE_OUT_OF_MEMORY;
     }
 
     if (krb5.credentials == null) {
@@ -1031,26 +1033,12 @@ pub fn authCreateGssapiUserMessageSspi(
             krb5.p_identity = null;
         }
 
-        krb5.credentials = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(CredHandle)) orelse return CURLE_OUT_OF_MEMORY));
+        krb5.credentials = acquireSspiCredentials(sec_fn, SP_NAME_KERBEROS, krb5.p_identity) catch |err| switch (err) {
+            error.OutOfMemory => return CURLE_OUT_OF_MEMORY,
+            error.AcquireFailed => return CURLE_LOGIN_DENIED,
+        };
 
-        status = sec_fn.AcquireCredentialsHandleA(
-            null,
-            @constCast(SP_NAME_KERBEROS),
-            SECPKG_CRED_OUTBOUND,
-            null,
-            krb5.p_identity,
-            null,
-            null,
-            krb5.credentials,
-            null,
-        );
-        if (status != SEC_E_OK) {
-            mem.free(krb5.credentials);
-            krb5.credentials = null;
-            return CURLE_LOGIN_DENIED;
-        }
-
-        krb5.context = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(CtxtHandle)) orelse return CURLE_OUT_OF_MEMORY));
+        krb5.context = mem.create(CtxtHandle) orelse return CURLE_OUT_OF_MEMORY;
     }
 
     if (chlg) |c| {
@@ -1061,7 +1049,7 @@ pub fn authCreateGssapiUserMessageSspi(
         }
         chlg_desc.ulVersion = SECBUFFER_VERSION;
         chlg_desc.cBuffers = 1;
-        chlg_desc.pBuffers = @ptrCast(&chlg_buf);
+        chlg_desc.pBuffers = (&chlg_buf)[0..1].ptr;
         chlg_buf.BufferType = SECBUFFER_TOKEN;
         chlg_buf.pvBuffer = @constCast(Curl_bufref_ptr(c));
         chlg_buf.cbBuffer = uztoul(len);
@@ -1069,7 +1057,7 @@ pub fn authCreateGssapiUserMessageSspi(
 
     resp_desc.ulVersion = SECBUFFER_VERSION;
     resp_desc.cBuffers = 1;
-    resp_desc.pBuffers = @ptrCast(&resp_buf);
+    resp_desc.pBuffers = (&resp_buf)[0..1].ptr;
     resp_buf.BufferType = SECBUFFER_TOKEN;
     resp_buf.pvBuffer = krb5.output_token;
     resp_buf.cbBuffer = uztoul(krb5.token_max);
@@ -1165,7 +1153,7 @@ pub fn authCreateGssapiSecurityMessageSspi(
         return CURLE_BAD_CONTENT_ENCODING;
     }
 
-    const indata: [*]const u8 = @ptrCast(input_buf[1].pvBuffer.?);
+    const indata: [*]const u8 = input_buf[1].pvBuffer.?;
     var sec_layer: c_ulong = indata[0];
     var max_size: c_ulong = (@as(c_ulong, indata[1]) << 16) | (@as(c_ulong, indata[2]) << 8) | @as(c_ulong, indata[3]);
 
@@ -1179,12 +1167,23 @@ pub fn authCreateGssapiSecurityMessageSspi(
         max_size = 0;
     }
 
-    const trailer: ?[*]u8 = mem.malloc(sizes.cbSecurityTrailer) orelse return CURLE_OUT_OF_MEMORY;
-    var message: ?[*]u8 = null;
-    var padding: ?[*]u8 = null;
-    var appdata: ?[*]u8 = null;
-    var appdatalen: usize = 0;
-    var result: CURLcode = CURLE_OK;
+    return wrapSspiSecurityMessage(sec_fn, krb5, &sizes, sec_layer, max_size, authzid, out) catch |err| switch (err) {
+        error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+        error.AuthError => CURLE_AUTH_ERROR,
+    };
+}
+
+fn wrapSspiSecurityMessage(
+    sec_fn: *SecurityFunctionTableA,
+    krb5: *kerberos5data,
+    sizes: *const SecPkgContext_Sizes,
+    sec_layer: c_ulong,
+    max_size: c_ulong,
+    authzid: ?[*:0]const u8,
+    out: *bufref,
+) error{ OutOfMemory, AuthError }!CURLcode {
+    const trailer = mem.allocMany(u8, sizes.cbSecurityTrailer) orelse return error.OutOfMemory;
+    defer mem.freeTyped(trailer);
 
     var messagelen: usize = 4;
     const authzid_slice = if (authzid) |az| std.mem.span(az) else "";
@@ -1192,73 +1191,52 @@ pub fn authCreateGssapiSecurityMessageSspi(
         messagelen += authzid_slice.len;
     }
 
-    blk: {
-        message = mem.malloc(messagelen) orelse {
-            result = CURLE_OUT_OF_MEMORY;
-            break :blk;
-        };
-        const msg = message.?;
-        msg[0] = @intCast(sec_layer & 0xFF);
-        msg[1] = @intCast((max_size >> 16) & 0xFF);
-        msg[2] = @intCast((max_size >> 8) & 0xFF);
-        msg[3] = @intCast(max_size & 0xFF);
-        if (authzid_slice.len > 0) {
-            @memcpy(msg[4 .. 4 + authzid_slice.len], authzid_slice);
-        }
-
-        padding = mem.malloc(sizes.cbBlockSize) orelse {
-            result = CURLE_OUT_OF_MEMORY;
-            break :blk;
-        };
-
-        var wrap_buf: [3]SecBuffer = .{
-            .{ .BufferType = SECBUFFER_TOKEN, .pvBuffer = trailer, .cbBuffer = sizes.cbSecurityTrailer },
-            .{ .BufferType = SECBUFFER_DATA, .pvBuffer = msg, .cbBuffer = uztoul(messagelen) },
-            .{ .BufferType = SECBUFFER_PADDING, .pvBuffer = padding, .cbBuffer = sizes.cbBlockSize },
-        };
-        var wrap_desc = SecBufferDesc{
-            .ulVersion = SECBUFFER_VERSION,
-            .cBuffers = 3,
-            .pBuffers = &wrap_buf,
-        };
-
-        status = sec_fn.EncryptMessage(krb5.context, KERB_WRAP_NO_ENCRYPT, &wrap_desc, 0);
-        if (status != SEC_E_OK) {
-            result = if (status == SEC_E_INSUFFICIENT_MEMORY) CURLE_OUT_OF_MEMORY else CURLE_AUTH_ERROR;
-            break :blk;
-        }
-
-        const len0: usize = wrap_buf[0].cbBuffer;
-        const len1: usize = wrap_buf[1].cbBuffer;
-        const len2: usize = wrap_buf[2].cbBuffer;
-        appdatalen = len0 + len1 + len2;
-        appdata = mem.malloc(appdatalen) orelse {
-            result = CURLE_OUT_OF_MEMORY;
-            break :blk;
-        };
-        const dst = appdata.?;
-        if (len0 > 0 and wrap_buf[0].pvBuffer != null) {
-            const p0: [*]const u8 = @ptrCast(wrap_buf[0].pvBuffer.?);
-            @memcpy(dst[0..len0], p0[0..len0]);
-        }
-        if (len1 > 0 and wrap_buf[1].pvBuffer != null) {
-            const p1: [*]const u8 = @ptrCast(wrap_buf[1].pvBuffer.?);
-            @memcpy(dst[len0 .. len0 + len1], p1[0..len1]);
-        }
-        if (len2 > 0 and wrap_buf[2].pvBuffer != null) {
-            const p2: [*]const u8 = @ptrCast(wrap_buf[2].pvBuffer.?);
-            @memcpy(dst[len0 + len1 .. appdatalen], p2[0..len2]);
-        }
+    const msg = mem.allocMany(u8, messagelen) orelse return error.OutOfMemory;
+    defer mem.freeTyped(msg);
+    msg[0] = @intCast(sec_layer & 0xFF);
+    msg[1] = @intCast((max_size >> 16) & 0xFF);
+    msg[2] = @intCast((max_size >> 8) & 0xFF);
+    msg[3] = @intCast(max_size & 0xFF);
+    if (authzid_slice.len > 0) {
+        @memcpy(msg[4 .. 4 + authzid_slice.len], authzid_slice);
     }
 
-    mem.free(padding);
-    mem.free(message);
-    mem.free(trailer);
+    const padding = mem.allocMany(u8, sizes.cbBlockSize) orelse return error.OutOfMemory;
+    defer mem.freeTyped(padding);
 
-    if (result != CURLE_OK)
-        return result;
+    var wrap_buf: [3]SecBuffer = .{
+        .{ .BufferType = SECBUFFER_TOKEN, .pvBuffer = trailer, .cbBuffer = sizes.cbSecurityTrailer },
+        .{ .BufferType = SECBUFFER_DATA, .pvBuffer = msg, .cbBuffer = uztoul(messagelen) },
+        .{ .BufferType = SECBUFFER_PADDING, .pvBuffer = padding, .cbBuffer = sizes.cbBlockSize },
+    };
+    var wrap_desc = SecBufferDesc{
+        .ulVersion = SECBUFFER_VERSION,
+        .cBuffers = 3,
+        .pBuffers = &wrap_buf,
+    };
 
-    Curl_bufref_set(out, appdata, appdatalen, &bufrefFreeCallback);
+    const status = sec_fn.EncryptMessage(krb5.context, KERB_WRAP_NO_ENCRYPT, &wrap_desc, 0);
+    if (status != SEC_E_OK) {
+        return if (status == SEC_E_INSUFFICIENT_MEMORY) error.OutOfMemory else error.AuthError;
+    }
+
+    const len0: usize = wrap_buf[0].cbBuffer;
+    const len1: usize = wrap_buf[1].cbBuffer;
+    const len2: usize = wrap_buf[2].cbBuffer;
+    const appdatalen = len0 + len1 + len2;
+    const dst = mem.allocMany(u8, appdatalen) orelse return error.OutOfMemory;
+    errdefer mem.freeTyped(dst);
+    if (len0 > 0 and wrap_buf[0].pvBuffer != null) {
+        @memcpy(dst[0..len0], wrap_buf[0].pvBuffer.?[0..len0]);
+    }
+    if (len1 > 0 and wrap_buf[1].pvBuffer != null) {
+        @memcpy(dst[len0 .. len0 + len1], wrap_buf[1].pvBuffer.?[0..len1]);
+    }
+    if (len2 > 0 and wrap_buf[2].pvBuffer != null) {
+        @memcpy(dst[len0 + len1 .. appdatalen], wrap_buf[2].pvBuffer.?[0..len2]);
+    }
+
+    Curl_bufref_set(out, dst, appdatalen, &bufrefFreeCallback);
     return CURLE_OK;
 }
 
@@ -1268,25 +1246,25 @@ pub fn authCleanupGssapiSspi(krb5: *kerberos5data) callconv(.c) void {
         if (Curl_pSecFn) |sec_fn| {
             _ = sec_fn.DeleteSecurityContext(ctx);
         }
-        mem.free(ctx);
+        mem.freeTyped(ctx);
         krb5.context = null;
     }
     if (krb5.credentials) |cred| {
         if (Curl_pSecFn) |sec_fn| {
             _ = sec_fn.FreeCredentialsHandle(cred);
         }
-        mem.free(cred);
+        mem.freeTyped(cred);
         krb5.credentials = null;
     }
     sspiFreeIdentity(krb5.p_identity);
     krb5.p_identity = null;
 
     if (krb5.spn) |spn| {
-        mem.free(spn);
+        mem.freeTyped(spn);
         krb5.spn = null;
     }
     if (krb5.output_token) |tok| {
-        mem.free(tok);
+        mem.freeTyped(tok);
         krb5.output_token = null;
     }
     krb5.token_max = 0;
@@ -1435,7 +1413,7 @@ pub fn authDecodeSpnegoMessageGss(
         if ((inquire_major & 0x80000000) == 0) {
             if (mech_type) |mt| {
                 if (mt.length == ntlmssp_oid.len and mt.elements != null) {
-                    const elems: [*]const u8 = @ptrCast(mt.elements.?);
+                    const elems = mt.elements.?;
                     if (std.mem.eql(u8, elems[0..ntlmssp_oid.len], ntlmssp_oid)) {
                         infof0(data, "SPNEGO chose NTLM, but NTLM is not allowed");
                         _ = gss_ext.gss_release_buffer(&unused_status, &output_token);
@@ -1461,7 +1439,7 @@ pub fn authCreateSpnegoMessageGss(
 ) callconv(.c) CURLcode {
     if (builtin.os.tag == .windows or !use_gssapi) return CURLE_NOT_BUILT_IN;
     var minor_status: OM_uint32 = 0;
-    const tok_ptr: ?[*]const u8 = if (nego.output_token.value) |v| @ptrCast(v) else null;
+    const tok_ptr: ?[*]const u8 = nego.output_token.value;
     const result = curlx_base64_encode(tok_ptr, nego.output_token.length, outptr, outlen);
     if (result != CURLE_OK) {
         _ = gss_ext.gss_release_buffer(&minor_status, &nego.output_token);
@@ -1564,7 +1542,7 @@ pub fn authDecodeSpnegoMessageExSspi(
         nego.token_max = security_package.?.cbMaxToken;
         _ = sec_fn.FreeContextBuffer(security_package);
 
-        nego.output_token = mem.malloc(nego.token_max) orelse return CURLE_OUT_OF_MEMORY;
+        nego.output_token = mem.allocMany(u8, nego.token_max) orelse return CURLE_OUT_OF_MEMORY;
     }
 
     if (nego.credentials == null) {
@@ -1588,7 +1566,8 @@ pub fn authDecodeSpnegoMessageExSspi(
         nego.identity.PackageList = @constCast("!ntlm");
         nego.identity.PackageListLength = 5;
 
-        nego.credentials = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(CredHandle)) orelse return CURLE_OUT_OF_MEMORY));
+        const cred = mem.create(CredHandle) orelse return CURLE_OUT_OF_MEMORY;
+        nego.credentials = cred;
 
         nego.status = sec_fn.AcquireCredentialsHandleA(
             null,
@@ -1602,12 +1581,12 @@ pub fn authDecodeSpnegoMessageExSspi(
             null,
         );
         if (nego.status != SEC_E_OK) {
-            mem.free(nego.credentials);
+            mem.freeTyped(cred);
             nego.credentials = null;
             return CURLE_AUTH_ERROR;
         }
 
-        nego.context = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(CtxtHandle)) orelse return CURLE_OUT_OF_MEMORY));
+        nego.context = mem.create(CtxtHandle) orelse return CURLE_OUT_OF_MEMORY;
     }
 
     chlg_desc.ulVersion = SECBUFFER_VERSION;
@@ -1649,7 +1628,7 @@ pub fn authDecodeSpnegoMessageExSspi(
 
     resp_desc.ulVersion = SECBUFFER_VERSION;
     resp_desc.cBuffers = 1;
-    resp_desc.pBuffers = @ptrCast(&resp_buf);
+    resp_desc.pBuffers = (&resp_buf)[0..1].ptr;
     resp_buf.BufferType = SECBUFFER_TOKEN;
     resp_buf.pvBuffer = nego.output_token;
     resp_buf.cbBuffer = uztoul(nego.token_max);
@@ -1730,25 +1709,25 @@ pub fn authCleanupSpnegoSspi(nego: *negotiatedata) callconv(.c) void {
         if (Curl_pSecFn) |sec_fn| {
             _ = sec_fn.DeleteSecurityContext(ctx);
         }
-        mem.free(ctx);
+        mem.freeTyped(ctx);
         nego.context = null;
     }
     if (nego.credentials) |cred| {
         if (Curl_pSecFn) |sec_fn| {
             _ = sec_fn.FreeCredentialsHandle(cred);
         }
-        mem.free(cred);
+        mem.freeTyped(cred);
         nego.credentials = null;
     }
     sspiFreeIdentity(nego.p_identity);
     nego.p_identity = null;
 
     if (nego.spn) |spn| {
-        mem.free(spn);
+        mem.freeTyped(spn);
         nego.spn = null;
     }
     if (nego.output_token) |tok| {
-        mem.free(tok);
+        mem.freeTyped(tok);
         nego.output_token = null;
     }
     nego.status = 0;
@@ -1762,12 +1741,12 @@ pub fn authCleanupSpnegoSspi(nego: *negotiatedata) callconv(.c) void {
 
 fn allocSpn2(s1: []const u8, sep: u8, s2: []const u8) ?[*:0]u8 {
     const total = s1.len + 1 + s2.len;
-    const buf = mem.malloc(total + 1) orelse return null;
+    const buf = mem.allocMany(u8, total + 1) orelse return null;
     @memcpy(buf[0..s1.len], s1);
     buf[s1.len] = sep;
     @memcpy(buf[s1.len + 1 ..][0..s2.len], s2);
     buf[total] = 0;
-    return @ptrCast(buf);
+    return buf[0..total :0].ptr;
 }
 
 pub export fn Curl_auth_build_spn(
@@ -1784,14 +1763,14 @@ pub export fn Curl_auth_build_spn(
         const h = std.mem.span(host.?);
         const r = std.mem.span(realm.?);
         const total = s.len + 1 + h.len + 1 + r.len;
-        const buf = mem.malloc(total + 1) orelse return null;
+        const buf = mem.allocMany(u8, total + 1) orelse return null;
         @memcpy(buf[0..s.len], s);
         buf[s.len] = '/';
         @memcpy(buf[s.len + 1 ..][0..h.len], h);
         buf[s.len + 1 + h.len] = '@';
         @memcpy(buf[s.len + 1 + h.len + 1 ..][0..r.len], r);
         buf[total] = 0;
-        return @ptrCast(buf);
+        return buf[0..total :0].ptr;
     } else if (host) |hv| {
         return allocSpn2(s, '/', std.mem.span(hv));
     } else if (realm) |rv| {
@@ -1870,19 +1849,19 @@ comptime {
     }
 }
 
-fn ntlmConnDtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callconv(.c) void {
+fn ntlmConnDtor(key: ?*const anyopaque, klen: usize, entry: ?*ntlmdata) callconv(.c) void {
     _ = key;
     _ = klen;
-    const ntlm: *ntlmdata = @ptrCast(@alignCast(entry orelse return));
+    const ntlm = entry orelse return;
     authCleanupNtlmSspi(ntlm);
-    mem.free(ntlm);
+    mem.freeTyped(ntlm);
 }
 
 pub fn authNtlmGet(conn: ?*connectdata, proxy: bool) callconv(.c) ?*ntlmdata {
     const key = if (proxy) CURL_META_NTLM_PROXY_CONN else CURL_META_NTLM_CONN;
-    var ntlm: ?*ntlmdata = @ptrCast(@alignCast(c_ext.Curl_conn_meta_get(conn, key)));
+    var ntlm = doh_hostip_easy.connMetaGetTyped(ntlmdata, conn, key);
     if (ntlm == null) {
-        ntlm = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(ntlmdata))));
+        ntlm = mem.create(ntlmdata);
         if (ntlm == null or c_ext.Curl_conn_meta_set(conn, key, ntlm, &ntlmConnDtor) != CURLE_OK) {
             return null;
         }
@@ -1894,22 +1873,22 @@ pub fn authNtlmRemove(conn: ?*connectdata, proxy: bool) callconv(.c) void {
     c_ext.Curl_conn_meta_remove(conn, if (proxy) CURL_META_NTLM_PROXY_CONN else CURL_META_NTLM_CONN);
 }
 
-fn krb5ConnDtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callconv(.c) void {
+fn krb5ConnDtor(key: ?*const anyopaque, klen: usize, entry: ?*kerberos5data) callconv(.c) void {
     _ = key;
     _ = klen;
-    const krb5: *kerberos5data = @ptrCast(@alignCast(entry orelse return));
+    const krb5 = entry orelse return;
     if (builtin.os.tag == .windows) {
         authCleanupGssapiSspi(krb5);
     } else if (use_gssapi) {
         authCleanupGssapiGss(krb5);
     }
-    mem.free(krb5);
+    mem.freeTyped(krb5);
 }
 
 pub fn authKrb5Get(conn: ?*connectdata) callconv(.c) ?*kerberos5data {
-    var krb5: ?*kerberos5data = @ptrCast(@alignCast(c_ext.Curl_conn_meta_get(conn, CURL_META_KRB5_CONN)));
+    var krb5 = doh_hostip_easy.connMetaGetTyped(kerberos5data, conn, CURL_META_KRB5_CONN);
     if (krb5 == null) {
-        krb5 = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(kerberos5data))));
+        krb5 = mem.create(kerberos5data);
         if (krb5 == null or c_ext.Curl_conn_meta_set(conn, CURL_META_KRB5_CONN, krb5, &krb5ConnDtor) != CURLE_OK) {
             return null;
         }
@@ -1917,23 +1896,23 @@ pub fn authKrb5Get(conn: ?*connectdata) callconv(.c) ?*kerberos5data {
     return krb5;
 }
 
-fn negoConnDtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callconv(.c) void {
+fn negoConnDtor(key: ?*const anyopaque, klen: usize, entry: ?*negotiatedata) callconv(.c) void {
     _ = key;
     _ = klen;
-    const nego: *negotiatedata = @ptrCast(@alignCast(entry orelse return));
+    const nego = entry orelse return;
     if (builtin.os.tag == .windows) {
         authCleanupSpnegoSspi(nego);
     } else if (use_gssapi) {
         authCleanupSpnegoGss(nego);
     }
-    mem.free(nego);
+    mem.freeTyped(nego);
 }
 
 pub fn authNegoGet(conn: ?*connectdata, proxy: bool) callconv(.c) ?*negotiatedata {
     const key = if (proxy) CURL_META_NEGO_PROXY_CONN else CURL_META_NEGO_CONN;
-    var nego: ?*negotiatedata = @ptrCast(@alignCast(c_ext.Curl_conn_meta_get(conn, key)));
+    var nego = doh_hostip_easy.connMetaGetTyped(negotiatedata, conn, key);
     if (nego == null) {
-        nego = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(negotiatedata))));
+        nego = mem.create(negotiatedata);
         if (nego == null or c_ext.Curl_conn_meta_set(conn, key, nego, &negoConnDtor) != CURLE_OK) {
             return null;
         }

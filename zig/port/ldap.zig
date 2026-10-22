@@ -6,6 +6,7 @@ const bufref_mod = @import("io_buffers.zig");
 const containers = @import("containers.zig");
 const cookie_getinfo_trc = @import("cookie_getinfo_trc.zig");
 const curlx_parse = @import("curlx_parse.zig");
+const doh_hostip_easy = @import("doh_hostip_easy.zig");
 const format_parse = @import("format_parse.zig");
 const primitives = @import("primitives.zig");
 const setopt = @import("setopt.zig");
@@ -84,8 +85,8 @@ pub const CURL_WAIT_POLLOUT: c_int = 0x0004;
 
 pub const CURLAUTH_BASIC: c_ulong = 1 << 0;
 
-pub const Curl_easy = opaque {};
-pub const connectdata = opaque {};
+pub const Curl_easy = doh_hostip_easy.Curl_easy;
+pub const connectdata = doh_hostip_easy.connectdata;
 const bufref = containers.bufref;
 extern fn Curl_bufref_set(br: *bufref, ptr: ?*const anyopaque, len: usize, dtor: ?*const fn (?*anyopaque) callconv(.c) void) callconv(.c) void;
 extern fn Curl_bufref_ptr(br: *const bufref) callconv(.c) ?[*:0]const u8;
@@ -109,23 +110,23 @@ pub const Curl_send = *const fn (
 ) callconv(.c) CURLcode;
 
 pub const Curl_protocol = extern struct {
-    setup_connection: ?*const fn (?*anyopaque, ?*anyopaque) callconv(.c) CURLcode = null,
-    do_it: ?*const fn (?*anyopaque, *bool) callconv(.c) CURLcode = null,
-    done: ?*const fn (?*anyopaque, CURLcode, bool) callconv(.c) CURLcode = null,
-    do_more: ?*const fn (?*anyopaque, *c_int) callconv(.c) CURLcode = null,
-    connect_it: ?*const fn (?*anyopaque, *bool) callconv(.c) CURLcode = null,
-    connecting: ?*const fn (?*anyopaque, *bool) callconv(.c) CURLcode = null,
-    doing: ?*const fn (?*anyopaque, *bool) callconv(.c) CURLcode = null,
-    proto_pollset: ?*const fn (?*anyopaque, ?*anyopaque) callconv(.c) CURLcode = null,
-    doing_pollset: ?*const fn (?*anyopaque, ?*anyopaque) callconv(.c) CURLcode = null,
-    domore_pollset: ?*const fn (?*anyopaque, ?*anyopaque) callconv(.c) CURLcode = null,
-    perform_pollset: ?*const fn (?*anyopaque, ?*anyopaque) callconv(.c) CURLcode = null,
-    disconnect: ?*const fn (?*anyopaque, ?*anyopaque, bool) callconv(.c) CURLcode = null,
-    write_resp: ?*const fn (?*anyopaque, [*]const u8, usize, bool, *bool) callconv(.c) CURLcode = null,
-    write_resp_hd: ?*const fn (?*anyopaque, [*]const u8, usize, bool) callconv(.c) CURLcode = null,
-    connection_is_dead: ?*const fn (?*anyopaque, ?*anyopaque) callconv(.c) bool = null,
-    attach: ?*const fn (?*anyopaque, ?*anyopaque) callconv(.c) void = null,
-    cntrl: ?*const fn (?*anyopaque, c_int, c_int) callconv(.c) CURLcode = null,
+    setup_connection: ?*const fn (?*Curl_easy, ?*connectdata) callconv(.c) CURLcode = null,
+    do_it: ?*const fn (?*Curl_easy, *bool) callconv(.c) CURLcode = null,
+    done: ?*const fn (?*Curl_easy, CURLcode, bool) callconv(.c) CURLcode = null,
+    do_more: ?*const fn (?*Curl_easy, *c_int) callconv(.c) CURLcode = null,
+    connect_it: ?*const fn (?*Curl_easy, *bool) callconv(.c) CURLcode = null,
+    connecting: ?*const fn (?*Curl_easy, *bool) callconv(.c) CURLcode = null,
+    doing: ?*const fn (?*Curl_easy, *bool) callconv(.c) CURLcode = null,
+    proto_pollset: ?*const fn (?*Curl_easy, ?*anyopaque) callconv(.c) CURLcode = null,
+    doing_pollset: ?*const fn (?*Curl_easy, ?*anyopaque) callconv(.c) CURLcode = null,
+    domore_pollset: ?*const fn (?*Curl_easy, ?*anyopaque) callconv(.c) CURLcode = null,
+    perform_pollset: ?*const fn (?*Curl_easy, ?*anyopaque) callconv(.c) CURLcode = null,
+    disconnect: ?*const fn (?*Curl_easy, ?*connectdata, bool) callconv(.c) CURLcode = null,
+    write_resp: ?*const fn (?*Curl_easy, [*]const u8, usize, bool, *bool) callconv(.c) CURLcode = null,
+    write_resp_hd: ?*const fn (?*Curl_easy, [*]const u8, usize, bool) callconv(.c) CURLcode = null,
+    connection_is_dead: ?*const fn (?*Curl_easy, ?*connectdata) callconv(.c) bool = null,
+    attach: ?*const fn (?*Curl_easy, ?*connectdata) callconv(.c) void = null,
+    cntrl: ?*const fn (?*Curl_easy, c_int, c_int) callconv(.c) CURLcode = null,
 };
 
 pub const CURL_META_LDAP_EASY = "meta:proto:ldap:easy";
@@ -244,8 +245,8 @@ pub const Sockbuf_IO = extern struct {
     sbi_setup: ?*const fn (sbiod: *Sockbuf_IO_Desc, arg: ?*anyopaque) callconv(.c) c_int,
     sbi_remove: ?*const fn (sbiod: *Sockbuf_IO_Desc) callconv(.c) c_int,
     sbi_ctrl: ?*const fn (sbiod: *Sockbuf_IO_Desc, opt: c_int, arg: ?*anyopaque) callconv(.c) c_int,
-    sbi_read: ?*const fn (sbiod: *Sockbuf_IO_Desc, buf: *anyopaque, len: ber_len_t) callconv(.c) ber_slen_t,
-    sbi_write: ?*const fn (sbiod: *Sockbuf_IO_Desc, buf: *anyopaque, len: ber_len_t) callconv(.c) ber_slen_t,
+    sbi_read: ?*const fn (sbiod: *Sockbuf_IO_Desc, buf: [*]u8, len: ber_len_t) callconv(.c) ber_slen_t,
+    sbi_write: ?*const fn (sbiod: *Sockbuf_IO_Desc, buf: [*]const u8, len: ber_len_t) callconv(.c) ber_slen_t,
     sbi_close: ?*const fn (sbiod: *Sockbuf_IO_Desc) callconv(.c) c_int,
 };
 
@@ -383,10 +384,10 @@ const SASL_AUTH_NONE: c_ushort = 0;
 
 const SASLproto = extern struct {
     service: [*:0]const u8,
-    sendauth: *const fn (data: ?*anyopaque, mech: [*:0]const u8, ir: *const bufref) callconv(.c) CURLcode,
-    contauth: *const fn (data: ?*anyopaque, mech: [*:0]const u8, contauth: *const bufref) callconv(.c) CURLcode,
-    cancelauth: *const fn (data: ?*anyopaque, mech: [*:0]const u8) callconv(.c) CURLcode,
-    getmessage: *const fn (data: ?*anyopaque, out: *bufref) callconv(.c) CURLcode,
+    sendauth: *const fn (data: ?*Curl_easy, mech: [*:0]const u8, ir: *const bufref) callconv(.c) CURLcode,
+    contauth: *const fn (data: ?*Curl_easy, mech: [*:0]const u8, contauth: *const bufref) callconv(.c) CURLcode,
+    cancelauth: *const fn (data: ?*Curl_easy, mech: [*:0]const u8) callconv(.c) CURLcode,
+    getmessage: *const fn (data: ?*Curl_easy, out: *bufref) callconv(.c) CURLcode,
     maxirlen: usize,
     contcode: c_int,
     finalcode: c_int,
@@ -404,7 +405,7 @@ const SASL = extern struct {
     flags: u8 = 0,
 };
 
-const Curl_meta_dtor = *const fn (key: ?*const anyopaque, key_len: usize, entry: ?*anyopaque) callconv(.c) void;
+const Curl_meta_dtor = ?*const anyopaque;
 
 // ============================================================================
 // Extern C Helpers & Internal libcurl Functions
@@ -581,7 +582,7 @@ extern fn ldap_get_attribute_ber(
 ) callconv(.c) c_int;
 extern fn ldap_memvfree(v: [*]?*anyopaque) callconv(.c) void;
 extern fn ber_memfree_x(p: ?*anyopaque, ctx: ?*anyopaque) callconv(.c) void;
-extern fn ber_memvfree_x(vec: ?[*]?*anyopaque, ctx: ?*anyopaque) callconv(.c) void;
+extern fn ber_memvfree_x(vec: ?[*]?[*:0]u8, ctx: ?*anyopaque) callconv(.c) void;
 extern fn ber_bvfree_x(bv: ?*BerValue, ctx: ?*anyopaque) callconv(.c) void;
 extern fn ber_bvecfree_x(bvec: ?[*]?*BerValue, ctx: ?*anyopaque) callconv(.c) void;
 extern fn ber_sockbuf_add_io(sb: *Sockbuf, sbio: *Sockbuf_IO, layer: c_int, arg: ?*anyopaque) callconv(.c) c_int;
@@ -749,7 +750,7 @@ fn oldapUrlParse(data: *Curl_easy, ludp: *?*LDAPURLDesc) CURLcode {
 }
 
 fn oldapParseLoginOptions(conn: *connectdata) CURLcode {
-    const li: *ldapconninfo = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT));
+    const li = doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT;
     var ptr = Curl_ldap_get_conn_options(conn) orelse return CURLE_OK;
     var result: CURLcode = CURLE_OK;
 
@@ -774,32 +775,32 @@ fn oldapParseLoginOptions(conn: *connectdata) CURLcode {
     return if (result == CURLE_URL_MALFORMAT) CURLE_SETOPT_OPTION_SYNTAX else result;
 }
 
-fn oldapSetupConnection(data_opt: ?*anyopaque, conn_opt: ?*anyopaque) callconv(.c) CURLcode {
+fn oldapSetupConnection(data_opt: ?*Curl_easy, conn_opt: ?*connectdata) callconv(.c) CURLcode {
     _ = conn_opt;
     if (comptime !use_openldap) return CURLE_NOT_BUILT_IN;
-    const data: *Curl_easy = @ptrCast(data_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT);
+    const data = data_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     var lud: ?*LDAPURLDesc = null;
     const result = oldapUrlParse(data, &lud);
     ldap_free_urldesc(lud);
     return result;
 }
 
-fn oldapGetMessage(data_opt: ?*anyopaque, out: *bufref) callconv(.c) CURLcode {
+fn oldapGetMessage(data_opt: ?*Curl_easy, out: *bufref) callconv(.c) CURLcode {
     if (comptime !use_openldap) return CURLE_NOT_BUILT_IN;
-    const data: *Curl_easy = @ptrCast(data_opt orelse return CURLE_FAILED_INIT);
+    const data = data_opt orelse return CURLE_FAILED_INIT;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const li: *ldapconninfo = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT));
+    const li = doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT;
     const servercred = li.servercred orelse return CURLE_WEIRD_SERVER_REPLY;
     const val = servercred.bv_val orelse return CURLE_WEIRD_SERVER_REPLY;
     Curl_bufref_set(out, val, @intCast(servercred.bv_len), null);
     return CURLE_OK;
 }
 
-fn oldapPerformAuth(data_opt: ?*anyopaque, mech: [*:0]const u8, initresp: *const bufref) callconv(.c) CURLcode {
+fn oldapPerformAuth(data_opt: ?*Curl_easy, mech: [*:0]const u8, initresp: *const bufref) callconv(.c) CURLcode {
     if (comptime !use_openldap) return CURLE_NOT_BUILT_IN;
-    const data: *Curl_easy = @ptrCast(data_opt orelse return CURLE_FAILED_INIT);
+    const data = data_opt orelse return CURLE_FAILED_INIT;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const li: *ldapconninfo = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT));
+    const li = doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT;
     const ld = li.ld orelse return CURLE_FAILED_INIT;
 
     var cred = BerValue{
@@ -815,11 +816,11 @@ fn oldapPerformAuth(data_opt: ?*anyopaque, mech: [*:0]const u8, initresp: *const
     return CURLE_OK;
 }
 
-fn oldapContinueAuth(data_opt: ?*anyopaque, mech: [*:0]const u8, resp: *const bufref) callconv(.c) CURLcode {
+fn oldapContinueAuth(data_opt: ?*Curl_easy, mech: [*:0]const u8, resp: *const bufref) callconv(.c) CURLcode {
     if (comptime !use_openldap) return CURLE_NOT_BUILT_IN;
-    const data: *Curl_easy = @ptrCast(data_opt orelse return CURLE_FAILED_INIT);
+    const data = data_opt orelse return CURLE_FAILED_INIT;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const li: *ldapconninfo = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT));
+    const li = doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT;
     const ld = li.ld orelse return CURLE_FAILED_INIT;
 
     var cred = BerValue{
@@ -835,12 +836,12 @@ fn oldapContinueAuth(data_opt: ?*anyopaque, mech: [*:0]const u8, resp: *const bu
     return CURLE_OK;
 }
 
-fn oldapCancelAuth(data_opt: ?*anyopaque, mech: [*:0]const u8) callconv(.c) CURLcode {
+fn oldapCancelAuth(data_opt: ?*Curl_easy, mech: [*:0]const u8) callconv(.c) CURLcode {
     _ = mech;
     if (comptime !use_openldap) return CURLE_NOT_BUILT_IN;
-    const data: *Curl_easy = @ptrCast(data_opt orelse return CURLE_FAILED_INIT);
+    const data = data_opt orelse return CURLE_FAILED_INIT;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const li: *ldapconninfo = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT));
+    const li = doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT;
     const ld = li.ld orelse return CURLE_FAILED_INIT;
 
     const rc = ldap_sasl_bind(ld, null, LDAP_SASL_NULL, null, null, null, &li.msgid);
@@ -852,7 +853,7 @@ fn oldapCancelAuth(data_opt: ?*anyopaque, mech: [*:0]const u8) callconv(.c) CURL
 
 fn oldapPerformBind(data: *Curl_easy, newstate: ldapstate) CURLcode {
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const li: *ldapconninfo = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT));
+    const li = doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT;
     const ld = li.ld orelse return CURLE_FAILED_INIT;
 
     var binddn: ?[*:0]const u8 = null;
@@ -879,7 +880,7 @@ fn oldapPerformBind(data: *Curl_easy, newstate: ldapstate) CURLcode {
 
 fn oldapPerformMechs(data: *Curl_easy) CURLcode {
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const li: *ldapconninfo = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT));
+    const li = doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT;
     const ld = li.ld orelse return CURLE_FAILED_INIT;
 
     var supported_sasl_mechs = [_]?[*:0]u8{
@@ -909,7 +910,7 @@ fn oldapPerformMechs(data: *Curl_easy) CURLcode {
 
 fn oldapPerformSasl(data: *Curl_easy) CURLcode {
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const li: *ldapconninfo = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT));
+    const li = doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT;
     var progress: c_uint = SASL_IDLE;
     var result = Curl_pop3_smtp_sasl_start(&li.sasl, data, true, &progress);
     oldapState(data, li, .OLDAP_SASL);
@@ -946,8 +947,7 @@ pub fn ldapsbTlsRemove(sbiod: *Sockbuf_IO_Desc) callconv(.c) c_int {
 pub fn ldapsbTlsClose(sbiod: *Sockbuf_IO_Desc) callconv(.c) c_int {
     const data = ldapsbValidEasy(sbiod.sbiod_pvt) orelse return -1;
     if (Curl_ftp_acc_get_conn(data)) |conn| {
-        if (Curl_conn_meta_get(conn, CURL_META_LDAP_CONN)) |li_raw| {
-            const li: *ldapconninfo = @ptrCast(@alignCast(li_raw));
+        if (doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN)) |li| {
             if (li.dupfd != CURL_SOCKET_BAD) {
                 Curl_ldap_sclose(li.dupfd);
                 li.dupfd = CURL_SOCKET_BAD;
@@ -966,46 +966,44 @@ pub fn ldapsbTlsCtrl(sbiod: *Sockbuf_IO_Desc, opt: c_int, arg: ?*anyopaque) call
     return 0;
 }
 
-pub fn ldapsbTlsRead(sbiod: *Sockbuf_IO_Desc, buf: *anyopaque, len: ber_len_t) callconv(.c) ber_slen_t {
+pub fn ldapsbTlsRead(sbiod: *Sockbuf_IO_Desc, buf: [*]u8, len: ber_len_t) callconv(.c) ber_slen_t {
     const data = ldapsbValidEasy(sbiod.sbiod_pvt) orelse {
         Curl_ldap_set_sockerrno_einval();
         return -1;
     };
     const conn = Curl_ftp_acc_get_conn(data) orelse return 0;
-    const li_raw = Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse {
+    const li = doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN) orelse {
         Curl_ldap_set_sockerrno_einval();
         return -1;
     };
-    const li: *ldapconninfo = @ptrCast(@alignCast(li_raw));
     const recv_fn = li.recv orelse {
         Curl_ldap_set_sockerrno_einval();
         return -1;
     };
     var nread: usize = 0;
-    const result = recv_fn(data, FIRSTSOCKET, @ptrCast(buf), @intCast(len), &nread);
+    const result = recv_fn(data, FIRSTSOCKET, buf, @intCast(len), &nread);
     if (result == CURLE_AGAIN) {
         Curl_ldap_set_sockerrno_ewouldblock();
     }
     return if (result != CURLE_OK) -1 else @intCast(nread);
 }
 
-pub fn ldapsbTlsWrite(sbiod: *Sockbuf_IO_Desc, buf: *anyopaque, len: ber_len_t) callconv(.c) ber_slen_t {
+pub fn ldapsbTlsWrite(sbiod: *Sockbuf_IO_Desc, buf: [*]const u8, len: ber_len_t) callconv(.c) ber_slen_t {
     const data = ldapsbValidEasy(sbiod.sbiod_pvt) orelse {
         Curl_ldap_set_sockerrno_einval();
         return -1;
     };
     const conn = Curl_ftp_acc_get_conn(data) orelse return 0;
-    const li_raw = Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse {
+    const li = doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN) orelse {
         Curl_ldap_set_sockerrno_einval();
         return -1;
     };
-    const li: *ldapconninfo = @ptrCast(@alignCast(li_raw));
     const send_fn = li.send orelse {
         Curl_ldap_set_sockerrno_einval();
         return -1;
     };
     var nwritten: usize = 0;
-    const result = send_fn(data, FIRSTSOCKET, @ptrCast(buf), @intCast(len), false, &nwritten);
+    const result = send_fn(data, FIRSTSOCKET, buf, @intCast(len), false, &nwritten);
     if (result == CURLE_AGAIN) {
         Curl_ldap_set_sockerrno_ewouldblock();
     }
@@ -1025,15 +1023,14 @@ var ldapsb_tls = Sockbuf_IO{
 };
 
 fn sslInstalled(conn: *connectdata) bool {
-    const li_raw = Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse return false;
-    const li: *ldapconninfo = @ptrCast(@alignCast(li_raw));
+    const li = doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN) orelse return false;
     return li.recv != null;
 }
 
 fn oldapSslConnect(data: *Curl_easy, newstate: ldapstate) CURLcode {
     if (comptime !use_ssl) return CURLE_FAILED_INIT;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const li: *ldapconninfo = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT));
+    const li = doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT;
     const ld = li.ld orelse return CURLE_FAILED_INIT;
 
     var ssldone: bool = false;
@@ -1043,7 +1040,7 @@ fn oldapSslConnect(data: *Curl_easy, newstate: ldapstate) CURLcode {
 
     if (ssldone) {
         var sb: ?*Sockbuf = null;
-        if (ldap_get_option(ld, LDAP_OPT_SOCKBUF, @ptrCast(&sb)) != LDAP_OPT_SUCCESS or
+        if (ldap_get_option(ld, LDAP_OPT_SOCKBUF, mem.toRawPtr(&sb).?) != LDAP_OPT_SUCCESS or
             sb == null or
             ber_sockbuf_add_io(sb.?, &ldapsb_tls, LBER_SBIOD_LEVEL_TRANSPORT, data) != 0)
         {
@@ -1068,11 +1065,10 @@ const saslldap = SASLproto{
     .flags = 0,
 };
 
-pub fn oldapConnDtor(key: ?*const anyopaque, key_len: usize, entry: ?*anyopaque) callconv(.c) void {
+pub fn oldapConnDtor(key: ?*const anyopaque, key_len: usize, entry: ?*ldapconninfo) callconv(.c) void {
     _ = key;
     _ = key_len;
-    const li_raw = entry orelse return;
-    const li: *ldapconninfo = @ptrCast(@alignCast(li_raw));
+    const li = entry orelse return;
     if (comptime use_openldap) {
         if (li.servercred) |sc| {
             if (sc.bv_val) |p| {
@@ -1093,20 +1089,14 @@ pub fn oldapConnDtor(key: ?*const anyopaque, key_len: usize, entry: ?*anyopaque)
         }
     }
     mem.secureZero(&li.sasl, @sizeOf(SASL));
-    mem.freeSized(li, @sizeOf(ldapconninfo));
+    mem.destroy(li);
 }
 
-pub fn oldapReqDtor(key: ?*const anyopaque, key_len: usize, entry: ?*anyopaque) callconv(.c) void {
-    _ = key;
-    _ = key_len;
-    const req_raw = entry orelse return;
-    const req: *ldapreqinfo = @ptrCast(@alignCast(req_raw));
-    mem.freeSized(req, @sizeOf(ldapreqinfo));
-}
+pub const oldapReqDtor = doh_hostip_easy.metaDtorTyped(ldapreqinfo);
 
 fn oldapPerformStarttls(data: *Curl_easy) CURLcode {
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const li: *ldapconninfo = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT));
+    const li = doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT;
     const ld = li.ld orelse return CURLE_FAILED_INIT;
 
     const rc = ldap_extended_operation(ld, LDAP_EXOP_START_TLS, null, null, null, &li.msgid);
@@ -1117,18 +1107,39 @@ fn oldapPerformStarttls(data: *Curl_easy) CURLcode {
     return CURLE_OK;
 }
 
-fn oldapConnect(data_opt: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
+fn oldapInitLdapFd(data: *Curl_easy, conn: *connectdata, li: *ldapconninfo) error{ OutOfMemory, ConnectFailed }!void {
+    const hosturl = Curl_ldap_format_hosturl(conn) orelse return error.OutOfMemory;
+    defer alloc.Curl_free(hosturl);
+
+    const sockfd = Curl_vssh_get_conn_firstsocket(conn);
+    const dupfd = Curl_ldap_dup_socket(sockfd);
+    if (dupfd == CURL_SOCKET_BAD) {
+        return error.ConnectFailed;
+    }
+    errdefer Curl_ldap_sclose(dupfd);
+
+    const rc = ldap_init_fd(@intCast(dupfd), li.proto, hosturl, &li.ld);
+    if (rc != LDAP_SUCCESS) {
+        failfMsg(data, "LDAP local: Cannot connect to %s, %s", .{
+            hosturl,
+            ldap_err2string(rc) orelse "unknown",
+        });
+        return error.ConnectFailed;
+    }
+    li.dupfd = dupfd;
+}
+
+fn oldapConnect(data_opt: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
     _ = done;
     if (comptime !use_openldap) {
         return CURLE_NOT_BUILT_IN;
     }
-    const data: *Curl_easy = @ptrCast(data_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT);
+    const data = data_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const li_raw = alloc.Curl_calloc(1, @sizeOf(ldapconninfo)) orelse return CURLE_OUT_OF_MEMORY;
-    const li: *ldapconninfo = @ptrCast(@alignCast(li_raw));
+    const li = mem.create(ldapconninfo) orelse return CURLE_OUT_OF_MEMORY;
     li.* = .{};
 
-    var result = Curl_conn_meta_set(conn, CURL_META_LDAP_CONN, li, oldapConnDtor);
+    var result = Curl_conn_meta_set(conn, CURL_META_LDAP_CONN, li, &oldapConnDtor);
     if (result != CURLE_OK) return result;
 
     li.proto = ldap_pvt_url_scheme2proto(Curl_ldap_get_origin_scheme_name(data));
@@ -1138,25 +1149,10 @@ fn oldapConnect(data_opt: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
     result = oldapParseLoginOptions(conn);
     if (result != CURLE_OK) return result;
 
-    const hosturl = Curl_ldap_format_hosturl(conn) orelse return CURLE_OUT_OF_MEMORY;
-    defer alloc.Curl_free(hosturl);
-
-    const sockfd = Curl_vssh_get_conn_firstsocket(conn);
-    const dupfd = Curl_ldap_dup_socket(sockfd);
-    if (dupfd == CURL_SOCKET_BAD) {
-        return CURLE_COULDNT_CONNECT;
-    }
-
-    const rc = ldap_init_fd(@intCast(dupfd), li.proto, hosturl, &li.ld);
-    if (rc != LDAP_SUCCESS) {
-        Curl_ldap_sclose(dupfd);
-        failfMsg(data, "LDAP local: Cannot connect to %s, %s", .{
-            hosturl,
-            ldap_err2string(rc) orelse "unknown",
-        });
-        return CURLE_COULDNT_CONNECT;
-    }
-    li.dupfd = dupfd;
+    oldapInitLdapFd(data, conn, li) catch |err| return switch (err) {
+        error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+        error.ConnectFailed => CURLE_COULDNT_CONNECT,
+    };
 
     var ver: c_int = LDAP_VERSION3;
     _ = ldap_set_option(li.ld, LDAP_OPT_PROTOCOL_VERSION, &ver);
@@ -1165,9 +1161,9 @@ fn oldapConnect(data_opt: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
     {
         var max: ber_len_t = 256 * 1024;
         var sb: ?*Sockbuf = null;
-        if (ldap_get_option(li.ld, LDAP_OPT_SOCKBUF, @ptrCast(&sb)) != LDAP_OPT_SUCCESS or
+        if (ldap_get_option(li.ld, LDAP_OPT_SOCKBUF, mem.toRawPtr(&sb).?) != LDAP_OPT_SUCCESS or
             sb == null or
-            ber_sockbuf_ctrl(sb.?, LBER_SB_OPT_SET_MAX_INCOMING, @ptrCast(&max)) == 0)
+            ber_sockbuf_ctrl(sb.?, LBER_SB_OPT_SET_MAX_INCOMING, &max) == 0)
         {
             return CURLE_FAILED_INIT;
         }
@@ -1194,7 +1190,7 @@ fn oldapConnect(data_opt: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
 
 fn oldapStateMechsResp(data: *Curl_easy, msg: *LDAPMessage, code: c_int) CURLcode {
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const li: *ldapconninfo = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT));
+    const li = doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT;
     const ld = li.ld orelse return CURLE_FAILED_INIT;
 
     var ber: ?*BerElement = null;
@@ -1257,7 +1253,7 @@ fn oldapStateMechsResp(data: *Curl_easy, msg: *LDAPMessage, code: c_int) CURLcod
 
 fn oldapStateSaslResp(data: *Curl_easy, msg: *LDAPMessage, code: c_int) CURLcode {
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const li: *ldapconninfo = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT));
+    const li = doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT;
     const ld = li.ld orelse return CURLE_FAILED_INIT;
 
     li.servercred = null;
@@ -1296,7 +1292,7 @@ fn oldapStateSaslResp(data: *Curl_easy, msg: *LDAPMessage, code: c_int) CURLcode
 
 fn oldapStateBindResp(data: *Curl_easy, msg: *LDAPMessage, code: c_int) CURLcode {
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const li: *ldapconninfo = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT));
+    const li = doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT;
     const ld = li.ld orelse return CURLE_FAILED_INIT;
 
     if (code != LDAP_SUCCESS) {
@@ -1325,14 +1321,14 @@ fn oldapStateBindResp(data: *Curl_easy, msg: *LDAPMessage, code: c_int) CURLcode
     return result;
 }
 
-fn oldapConnecting(data_opt: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
+fn oldapConnecting(data_opt: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
     if (comptime !use_openldap) {
         done.* = false;
         return CURLE_NOT_BUILT_IN;
     }
-    const data: *Curl_easy = @ptrCast(data_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT);
+    const data = data_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const li: *ldapconninfo = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT));
+    const li = doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT;
     const ld = li.ld orelse return CURLE_FAILED_INIT;
 
     var result: CURLcode = CURLE_OK;
@@ -1461,18 +1457,17 @@ fn oldapConnecting(data_opt: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
     return result;
 }
 
-fn oldapDisconnect(data_opt: ?*anyopaque, conn_opt: ?*anyopaque, dead_connection: bool) callconv(.c) CURLcode {
+fn oldapDisconnect(data_opt: ?*Curl_easy, conn_opt: ?*connectdata, dead_connection: bool) callconv(.c) CURLcode {
     _ = dead_connection;
     if (comptime !use_openldap) return CURLE_OK;
-    const data: *Curl_easy = @ptrCast(data_opt orelse return CURLE_OK);
-    const conn: *connectdata = @ptrCast(conn_opt orelse return CURLE_OK);
-    if (Curl_conn_meta_get(conn, CURL_META_LDAP_CONN)) |li_raw| {
-        const li: *ldapconninfo = @ptrCast(@alignCast(li_raw));
+    const data = data_opt orelse return CURLE_OK;
+    const conn = conn_opt orelse return CURLE_OK;
+    if (doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN)) |li| {
         if (li.ld) |ld| {
             if (comptime use_ssl) {
                 if (sslInstalled(conn)) {
                     var sb: ?*Sockbuf = null;
-                    if (ldap_get_option(ld, LDAP_OPT_SOCKBUF, @ptrCast(&sb)) != LDAP_OPT_SUCCESS or
+                    if (ldap_get_option(ld, LDAP_OPT_SOCKBUF, mem.toRawPtr(&sb).?) != LDAP_OPT_SUCCESS or
                         sb == null or
                         ber_sockbuf_add_io(sb.?, &ldapsb_tls, LBER_SBIOD_LEVEL_TRANSPORT, data) != 0)
                     {
@@ -1487,30 +1482,39 @@ fn oldapDisconnect(data_opt: ?*anyopaque, conn_opt: ?*anyopaque, dead_connection
     return CURLE_OK;
 }
 
-fn oldapDo(data_opt: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
+fn oldapRegisterReq(data: *Curl_easy, ld: *LDAP, msgid: c_int) error{OutOfMemory}!void {
+    errdefer _ = ldap_abandon_ext(ld, msgid, null, null);
+    const lr = mem.create(ldapreqinfo) orelse return error.OutOfMemory;
+    lr.* = .{ .msgid = msgid, .num_entries = 0 };
+    if (doh_hostip_easy.metaSetTyped(ldapreqinfo, data, CURL_META_LDAP_EASY, lr) != CURLE_OK) {
+        return error.OutOfMemory;
+    }
+}
+
+fn oldapDo(data_opt: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
     if (comptime !use_openldap) {
         done.* = false;
         return CURLE_NOT_BUILT_IN;
     }
-    const data: *Curl_easy = @ptrCast(data_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT);
+    const data = data_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const li: *ldapconninfo = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT));
+    const li = doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT;
     const ld = li.ld orelse return CURLE_FAILED_INIT;
 
     infofMsg(data, "LDAP local: %s", .{Curl_ldap_get_state_url(data) orelse ""});
 
     var lud: ?*LDAPURLDesc = null;
-    var result = oldapUrlParse(data, &lud);
+    const result = oldapUrlParse(data, &lud);
     if (result != CURLE_OK) return result;
+    defer ldap_free_urldesc(lud);
 
     if (comptime use_ssl) {
         if (sslInstalled(conn)) {
             var sb: ?*Sockbuf = null;
-            if (ldap_get_option(ld, LDAP_OPT_SOCKBUF, @ptrCast(&sb)) != LDAP_OPT_SUCCESS or
+            if (ldap_get_option(ld, LDAP_OPT_SOCKBUF, mem.toRawPtr(&sb).?) != LDAP_OPT_SUCCESS or
                 sb == null or
                 ber_sockbuf_add_io(sb.?, &ldapsb_tls, LBER_SBIOD_LEVEL_TRANSPORT, data) != 0)
             {
-                ldap_free_urldesc(lud);
                 return CURLE_FAILED_INIT;
             }
         }
@@ -1531,7 +1535,6 @@ fn oldapDo(data_opt: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
         0,
         &msgid,
     );
-    ldap_free_urldesc(lud);
     if (rc != LDAP_SUCCESS) {
         failfMsg(data, "LDAP local: ldap_search_ext %s", .{
             ldap_err2string(rc) orelse "unknown",
@@ -1539,34 +1542,22 @@ fn oldapDo(data_opt: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
         return CURLE_LDAP_SEARCH_FAILED;
     }
 
-    const lr_raw = alloc.Curl_calloc(1, @sizeOf(ldapreqinfo)) orelse {
-        _ = ldap_abandon_ext(ld, msgid, null, null);
-        return CURLE_OUT_OF_MEMORY;
-    };
-    const lr: *ldapreqinfo = @ptrCast(@alignCast(lr_raw));
-    lr.* = .{ .msgid = msgid, .num_entries = 0 };
-    result = Curl_meta_set(data, CURL_META_LDAP_EASY, lr, oldapReqDtor);
-    if (result != CURLE_OK) {
-        _ = ldap_abandon_ext(ld, msgid, null, null);
-        return CURLE_OUT_OF_MEMORY;
-    }
+    oldapRegisterReq(data, ld, msgid) catch return CURLE_OUT_OF_MEMORY;
 
     Curl_xfer_setup_recv(data, FIRSTSOCKET, -1);
     done.* = true;
     return CURLE_OK;
 }
 
-fn oldapDone(data_opt: ?*anyopaque, res: CURLcode, premature: bool) callconv(.c) CURLcode {
+fn oldapDone(data_opt: ?*Curl_easy, res: CURLcode, premature: bool) callconv(.c) CURLcode {
     _ = res;
     _ = premature;
     if (comptime !use_openldap) return CURLE_OK;
-    const data: *Curl_easy = @ptrCast(data_opt orelse return CURLE_OK);
-    if (Curl_meta_get(data, CURL_META_LDAP_EASY)) |lr_raw| {
-        const lr: *ldapreqinfo = @ptrCast(@alignCast(lr_raw));
+    const data = data_opt orelse return CURLE_OK;
+    if (doh_hostip_easy.metaGetTyped(ldapreqinfo, data, CURL_META_LDAP_EASY)) |lr| {
         if (lr.msgid != 0) {
             if (Curl_ftp_acc_get_conn(data)) |conn| {
-                if (Curl_conn_meta_get(conn, CURL_META_LDAP_CONN)) |li_raw| {
-                    const li: *ldapconninfo = @ptrCast(@alignCast(li_raw));
+                if (doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN)) |li| {
                     if (li.ld) |ld| {
                         _ = ldap_abandon_ext(ld, lr.msgid, null, null);
                     }
@@ -1625,8 +1616,8 @@ fn oldapRecv(
     _ = len;
     pnread.* = 0;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const li: *ldapconninfo = @ptrCast(@alignCast(Curl_conn_meta_get(conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT));
-    const lr: *ldapreqinfo = @ptrCast(@alignCast(Curl_meta_get(data, CURL_META_LDAP_EASY) orelse return CURLE_FAILED_INIT));
+    const li = doh_hostip_easy.connMetaGetTyped(ldapconninfo, conn, CURL_META_LDAP_CONN) orelse return CURLE_FAILED_INIT;
+    const lr = doh_hostip_easy.metaGetTyped(ldapreqinfo, data, CURL_META_LDAP_EASY) orelse return CURLE_FAILED_INIT;
     const ld = li.ld orelse return CURLE_FAILED_INIT;
 
     var msg: ?*LDAPMessage = null;
@@ -1720,7 +1711,7 @@ fn oldapRecv(
                         }
 
                         const binary = attr_len > 7 and
-                            primitives.curl_strnequal(@ptrCast(attr_ptr + (attr_len - 7)), ";binary", 7) != 0;
+                            std.ascii.eqlIgnoreCase(attr_slice[attr_len - 7 ..], ";binary");
 
                         const vals = bvals.?;
                         var i: usize = 0;
@@ -1831,7 +1822,7 @@ pub fn ldapCleanupUrldescLowFields(ludp: *LdapUrlDescLow) void {
                 attrs[i] = null;
             }
         }
-        alloc.Curl_free(@ptrCast(attrs));
+        mem.freeTyped(attrs);
         ludp.lud_attrs = null;
     }
     ludp.lud_attrs_dups = 0;
@@ -1894,8 +1885,7 @@ fn ldapUrlParse2LowInner(
 
     if (p.?[0] != 0) {
         const count = numEntries(p.?);
-        const attrs_raw = alloc.Curl_calloc(count + 1, @sizeOf(?[*:0]u8)) orelse return error.OutOfMemory;
-        const attrs: [*]?[*:0]u8 = @ptrCast(@alignCast(attrs_raw));
+        const attrs = mem.callocMany(?[*:0]u8, count + 1) orelse return error.OutOfMemory;
         ludp.lud_attrs = attrs;
 
         var atp: ?[*:0]const u8 = p.?;
@@ -2041,12 +2031,33 @@ fn showVals(data: *Curl_easy, vals: [*]?*BerValue, attr: [*:0]const u8) CURLcode
     return result;
 }
 
-fn legacyLdapDo(data_opt: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
+fn parseWin32UrlDescLow(data: *Curl_easy, conn: *connectdata, rc_out: *c_int) error{UrlParseFailed}!*LdapUrlDescLow {
+    const low_ptr = mem.create(LdapUrlDescLow) orelse {
+        rc_out.* = LDAP_NO_MEMORY;
+        return error.UrlParseFailed;
+    };
+    errdefer ldapFreeUrldescLow(low_ptr);
+    low_ptr.* = .{};
+    rc_out.* = ldapUrlParse2Low(
+        Curl_ldap_get_up_path(data),
+        Curl_ldap_get_up_query(data),
+        Curl_ldap_get_origin_scheme_name(data),
+        Curl_ldap_get_conn_hostname(conn),
+        Curl_vssh_get_conn_remote_port(conn),
+        low_ptr,
+    );
+    if (rc_out.* != LDAP_SUCCESS) {
+        return error.UrlParseFailed;
+    }
+    return low_ptr;
+}
+
+fn legacyLdapDo(data_opt: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
     if (comptime !use_legacy_ldap) {
         done.* = false;
         return CURLE_NOT_BUILT_IN;
     }
-    const data: *Curl_easy = @ptrCast(data_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT);
+    const data = data_opt orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
 
     done.* = true;
@@ -2082,26 +2093,10 @@ fn legacyLdapDo(data_opt: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
     }
 
     if (comptime use_win32_ldap) {
-        const low_raw = alloc.Curl_calloc(1, @sizeOf(LdapUrlDescLow)) orelse {
-            rc = LDAP_NO_MEMORY;
+        ludp_low = parseWin32UrlDescLow(data, conn, &rc) catch {
             failfMsg(data, "Bad LDAP URL: %s", .{ldap_err2string(rc) orelse "unknown"});
             return CURLE_URL_MALFORMAT;
         };
-        const low_ptr: *LdapUrlDescLow = @ptrCast(@alignCast(low_raw));
-        low_ptr.* = .{};
-        rc = ldapUrlParse2Low(
-            Curl_ldap_get_up_path(data),
-            Curl_ldap_get_up_query(data),
-            Curl_ldap_get_origin_scheme_name(data),
-            Curl_ldap_get_conn_hostname(conn),
-            Curl_vssh_get_conn_remote_port(conn),
-            low_ptr,
-        );
-        if (rc != LDAP_SUCCESS) {
-            ldapFreeUrldescLow(low_ptr);
-        } else {
-            ludp_low = low_ptr;
-        }
     } else {
         rc = ldap_url_parse(Curl_ldap_get_state_url(data) orelse "", &ludp);
     }
@@ -2309,7 +2304,7 @@ pub fn Curl_ldap_version(buf: [*]u8, bufsz: usize) callconv(.c) void {
     if (bufsz == 0) return;
     if (comptime use_openldap) {
         var api = LDAPAPIInfo{ .ldapai_info_version = LDAP_API_INFO_VERSION };
-        if (ldap_get_option(null, LDAP_OPT_API_INFO, @ptrCast(&api)) == LDAP_OPT_SUCCESS) {
+        if (ldap_get_option(null, LDAP_OPT_API_INFO, &api) == LDAP_OPT_SUCCESS) {
             const ver_u: c_uint = @intCast(@max(api.ldapai_vendor_version, 0));
             const patch: c_uint = ver_u % 100;
             const major: c_uint = ver_u / 10000;
@@ -2323,7 +2318,7 @@ pub fn Curl_ldap_version(buf: [*]u8, bufsz: usize) callconv(.c) void {
             }) catch "OpenLDAP";
             buf[s.len] = 0;
             if (api.ldapai_vendor_name) |vn| ldap_memfree(vn);
-            if (api.ldapai_extensions) |ext| ber_memvfree_x(@ptrCast(ext), null);
+            if (api.ldapai_extensions) |ext| ber_memvfree_x(ext, null);
             return;
         }
         const prefix = "OpenLDAP";
@@ -2340,7 +2335,7 @@ pub fn Curl_ldap_version(buf: [*]u8, bufsz: usize) callconv(.c) void {
             return;
         }
         var api = LDAPAPIInfo{ .ldapai_info_version = LDAP_API_INFO_VERSION };
-        if (ldap_get_option(null, LDAP_OPT_API_INFO, @ptrCast(&api)) == 0) {
+        if (ldap_get_option(null, LDAP_OPT_API_INFO, &api) == 0) {
             const ver_u: c_uint = @intCast(@max(api.ldapai_vendor_version, 0));
             const patch: c_uint = ver_u % 100;
             const major: c_uint = ver_u / 10000;
@@ -2356,7 +2351,7 @@ pub fn Curl_ldap_version(buf: [*]u8, bufsz: usize) callconv(.c) void {
             }) catch "LDAP";
             buf[s.len] = 0;
             if (api.ldapai_vendor_name) |vn| ldap_memfree(vn);
-            if (api.ldapai_extensions) |ext| ber_memvfree_x(@ptrCast(ext), null);
+            if (api.ldapai_extensions) |ext| ber_memvfree_x(ext, null);
             return;
         }
         const prefix = "LDAP/1";
@@ -2372,7 +2367,7 @@ pub fn Curl_ldap_version(buf: [*]u8, bufsz: usize) callconv(.c) void {
     }
 }
 
-fn ldapDisabledDo(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
+fn ldapDisabledDo(data: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
     _ = data;
     done.* = false;
     return CURLE_NOT_BUILT_IN;
@@ -2431,8 +2426,7 @@ test "LDAP error mapping and low-level URL parser" {
     try std.testing.expectEqual(LDAP_SCOPE_SUBTREE, str2scope("subtree"));
     try std.testing.expectEqual(@as(c_int, -1), str2scope("invalid"));
 
-    const desc_raw = alloc.Curl_calloc(1, @sizeOf(LdapUrlDescLow)) orelse unreachable;
-    const desc: *LdapUrlDescLow = @ptrCast(@alignCast(desc_raw));
+    const desc = mem.create(LdapUrlDescLow) orelse unreachable;
     desc.* = .{};
     defer ldapFreeUrldescLow(desc);
 
@@ -2460,8 +2454,7 @@ test "LDAP error mapping and low-level URL parser" {
 }
 
 test "ldapUrlParse2Low errdefer cleanup on scope, filter, attribute, and extension failures" {
-    const desc_raw = alloc.Curl_calloc(1, @sizeOf(LdapUrlDescLow)) orelse unreachable;
-    const desc: *LdapUrlDescLow = @ptrCast(@alignCast(desc_raw));
+    const desc = mem.create(LdapUrlDescLow) orelse unreachable;
     desc.* = .{};
     defer ldapFreeUrldescLow(desc);
 
@@ -2555,14 +2548,12 @@ test "ldapconninfo and ldapreqinfo poisoning and ldapsb_tls invalid-magic reject
     cb.Curl_cfree = &TestHooks.freeFn;
     defer cb.Curl_cfree = TestHooks.orig_free;
 
-    const li_raw = alloc.Curl_calloc(1, @sizeOf(ldapconninfo)) orelse unreachable;
-    const li: *ldapconninfo = @ptrCast(@alignCast(li_raw));
+    const li = mem.create(ldapconninfo) orelse unreachable;
     li.* = .{};
     oldapConnDtor(null, 0, li);
     try std.testing.expectEqual(@as(usize, 1), poisoned_frees);
 
-    const lr_raw = alloc.Curl_calloc(1, @sizeOf(ldapreqinfo)) orelse unreachable;
-    const lr: *ldapreqinfo = @ptrCast(@alignCast(lr_raw));
+    const lr = mem.create(ldapreqinfo) orelse unreachable;
     lr.* = .{ .msgid = 42, .num_entries = 3 };
     oldapReqDtor(null, 0, lr);
     try std.testing.expectEqual(@as(usize, 2), poisoned_frees);
@@ -2579,14 +2570,14 @@ test "ldapconninfo and ldapreqinfo poisoning and ldapsb_tls invalid-magic reject
     };
 
     try std.testing.expect(ldapsbValidEasy(null) == null);
-    try std.testing.expect(ldapsbValidEasy(@ptrCast(&fake_easy_bad)) == null);
-    try std.testing.expect(ldapsbValidEasy(@ptrCast(&fake_easy_good)) != null);
+    try std.testing.expect(ldapsbValidEasy(&fake_easy_bad) == null);
+    try std.testing.expect(ldapsbValidEasy(&fake_easy_good) != null);
 
     try std.testing.expectEqual(@as(c_int, -1), ldapsbTlsSetup(&sbiod, null));
-    try std.testing.expectEqual(@as(c_int, -1), ldapsbTlsSetup(&sbiod, @ptrCast(&fake_easy_bad)));
+    try std.testing.expectEqual(@as(c_int, -1), ldapsbTlsSetup(&sbiod, &fake_easy_bad));
     try std.testing.expect(sbiod.sbiod_pvt == null);
 
-    try std.testing.expectEqual(@as(c_int, 0), ldapsbTlsSetup(&sbiod, @ptrCast(&fake_easy_good)));
+    try std.testing.expectEqual(@as(c_int, 0), ldapsbTlsSetup(&sbiod, &fake_easy_good));
     try std.testing.expect(sbiod.sbiod_pvt != null);
 
     // Corrupt magic in-place (simulating use-after-free / 0xaaaaaaaa poison)

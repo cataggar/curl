@@ -188,7 +188,7 @@ fn trimHeaders(head: ?*curl_slist) void {
         if (data_ptr[colon] == 0)
             continue;
 
-        var value: [*:0]const u8 = @ptrCast(data_ptr + colon + 1);
+        var value: [*:0]const u8 = data_ptr + colon + 1;
         var store: [*]u8 = data_ptr + colon + 1;
 
         curlx_str_passblanks(&value);
@@ -342,7 +342,7 @@ fn shouldUrlencode(service_name: *const Curl_str) bool {
 }
 
 fn findChar(s: [*:0]const u8, ch: u8) ?[*:0]u8 {
-    var p: [*:0]u8 = @ptrCast(@constCast(s));
+    var p: [*:0]u8 = @constCast(s);
     while (p[0] != 0) : (p += 1) {
         if (p[0] == ch)
             return p;
@@ -367,6 +367,31 @@ fn compareHeaderNames(a: [*:0]const u8, b: [*:0]const u8) c_int {
     return if (len_a < len_b) -1 else 1;
 }
 
+fn mergeOneDuplicateHeader(curr: *curl_slist, next: *curl_slist, curr_data: [*:0]const u8, next_data: [*:0]const u8) error{ OutOfMemory, BadArgument }!void {
+    var buf: dynbuf = undefined;
+    containers.curlx_dyn_init(&buf, CURL_MAX_HTTP_HEADER);
+    errdefer containers.curlx_dyn_free(&buf);
+
+    if (containers.curlx_dyn_add(&buf, curr_data) != CURLE_OK)
+        return error.OutOfMemory;
+
+    const colon_next = findChar(next_data, ':') orelse return error.BadArgument;
+    const val_next: [*:0]const u8 = colon_next + 1;
+
+    if (containers.curlx_dyn_addn(&buf, ",", 1) != CURLE_OK)
+        return error.OutOfMemory;
+
+    if (containers.curlx_dyn_add(&buf, val_next) != CURLE_OK)
+        return error.OutOfMemory;
+
+    mem.free(curr.data);
+    curr.data = containers.curlx_dyn_ptr(&buf);
+
+    curr.next = next.next;
+    mem.free(next.data);
+    mem.freeTyped(next);
+}
+
 fn mergeDuplicateHeaders(head: ?*curl_slist) CURLcode {
     var curr_opt = head;
     while (curr_opt) |curr| {
@@ -375,33 +400,10 @@ fn mergeDuplicateHeaders(head: ?*curl_slist) CURLcode {
         const next_data = next.data orelse break;
 
         if (compareHeaderNames(curr_data, next_data) == 0) {
-            var buf: dynbuf = undefined;
-            containers.curlx_dyn_init(&buf, CURL_MAX_HTTP_HEADER);
-
-            var result = containers.curlx_dyn_add(&buf, curr_data);
-            if (result != CURLE_OK)
-                return result;
-
-            const colon_next = findChar(next_data, ':') orelse {
-                containers.curlx_dyn_free(&buf);
-                return CURLE_BAD_FUNCTION_ARGUMENT;
+            mergeOneDuplicateHeader(curr, next, curr_data, next_data) catch |err| return switch (err) {
+                error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+                error.BadArgument => CURLE_BAD_FUNCTION_ARGUMENT,
             };
-            const val_next: [*:0]const u8 = colon_next + 1;
-
-            result = containers.curlx_dyn_addn(&buf, ",", 1);
-            if (result != CURLE_OK)
-                return result;
-
-            result = containers.curlx_dyn_add(&buf, val_next);
-            if (result != CURLE_OK)
-                return result;
-
-            mem.free(curr.data);
-            curr.data = containers.curlx_dyn_ptr(&buf);
-
-            curr.next = next.next;
-            mem.free(next.data);
-            mem.free(next);
         } else {
             curr_opt = curr.next;
         }
@@ -413,7 +415,7 @@ fn makeHeaders(
     data: ?*anyopaque,
     http_host: ?[*:0]const u8,
     custom_headers: ?*curl_slist,
-    timestamp: *[TIMESTAMP_SIZE]u8,
+    timestamp: *[TIMESTAMP_SIZE - 1:0]u8,
     provider1: [*]const u8,
     plen: usize,
     date_header: *?[*:0]u8,
@@ -421,10 +423,37 @@ fn makeHeaders(
     canonical_headers: *dynbuf,
     signed_headers: *dynbuf,
 ) CURLcode {
-    var date_hdr_key: [DATE_HDR_KEY_LEN]u8 = @splat(0);
-    var date_full_hdr: [DATE_FULL_HDR_LEN]u8 = @splat(0);
+    makeHeadersInner(
+        data,
+        http_host,
+        custom_headers,
+        timestamp,
+        provider1,
+        plen,
+        date_header,
+        content_sha256_header,
+        canonical_headers,
+        signed_headers,
+    ) catch return CURLE_OUT_OF_MEMORY;
+    return CURLE_OK;
+}
+
+fn makeHeadersInner(
+    data: ?*anyopaque,
+    http_host: ?[*:0]const u8,
+    custom_headers: ?*curl_slist,
+    timestamp: *[TIMESTAMP_SIZE - 1:0]u8,
+    provider1: [*]const u8,
+    plen: usize,
+    date_header: *?[*:0]u8,
+    content_sha256_header: [*:0]const u8,
+    canonical_headers: *dynbuf,
+    signed_headers: *dynbuf,
+) error{OutOfMemory}!void {
+    var date_hdr_key: [DATE_HDR_KEY_LEN - 1:0]u8 = @splat(0);
+    var date_full_hdr: [DATE_FULL_HDR_LEN - 1:0]u8 = @splat(0);
     var head: ?*curl_slist = null;
-    var result: CURLcode = CURLE_OUT_OF_MEMORY;
+    defer curl_slist_free_all(head);
 
     _ = curl_msnprintf(
         &date_hdr_key,
@@ -442,30 +471,22 @@ fn makeHeaders(
         "x-%.*s-date:%s",
         @as(c_int, @intCast(plen)),
         provider1,
-        @as([*:0]const u8, @ptrCast(timestamp)),
+        @as([*:0]const u8, timestamp),
     );
     primitives.Curl_strntolower(date_full_hdr[2..].ptr, provider1, plen);
 
     if (Curl_checkheaders(data, "Host", 4) == null) {
         if (http_host) |hh| {
-            const fullhost = mem.strdup(hh);
-            if (fullhost) |fh| {
-                head = Curl_slist_append_nodup(null, fh);
-            }
-            if (head == null) {
-                mem.free(fullhost);
-                curl_slist_free_all(head);
-                return result;
-            }
+            const fullhost = mem.strdup(hh) orelse return error.OutOfMemory;
+            head = Curl_slist_append_nodup(null, fullhost) orelse {
+                mem.freeTyped(fullhost);
+                return error.OutOfMemory;
+            };
         }
     }
 
     if (content_sha256_header[0] != 0) {
-        const tmp_head = curl_slist_append(head, content_sha256_header) orelse {
-            curl_slist_free_all(head);
-            return result;
-        };
-        head = tmp_head;
+        head = curl_slist_append(head, content_sha256_header) orelse return error.OutOfMemory;
     }
 
     var l_opt = custom_headers;
@@ -483,46 +504,32 @@ fn makeHeaders(
         if (ptr[0] == 0 and @intFromPtr(ptr) != @intFromPtr(sep_ptr + 1))
             continue;
 
-        const dupdata = mem.strdup(l_data) orelse {
-            curl_slist_free_all(head);
-            return result;
-        };
+        const dupdata = mem.strdup(l_data) orelse return error.OutOfMemory;
         const sep_offset = @intFromPtr(sep_ptr) - @intFromPtr(l_data);
         dupdata[sep_offset] = ':';
-        const tmp_head = Curl_slist_append_nodup(head, dupdata) orelse {
-            mem.free(dupdata);
-            curl_slist_free_all(head);
-            return result;
+        head = Curl_slist_append_nodup(head, dupdata) orelse {
+            mem.freeTyped(dupdata);
+            return error.OutOfMemory;
         };
-        head = tmp_head;
     }
 
     trimHeaders(head);
 
-    const date_hdr_key_z: [*:0]const u8 = @ptrCast(&date_hdr_key);
-    const date_full_hdr_z: [*:0]const u8 = @ptrCast(&date_full_hdr);
+    const date_hdr_key_z: [*:0]const u8 = &date_hdr_key;
+    const date_full_hdr_z: [*:0]const u8 = &date_full_hdr;
     date_header.* = findDateHdr(data, date_hdr_key_z);
     if (date_header.* == null) {
-        const tmp_head = curl_slist_append(head, date_full_hdr_z) orelse {
-            curl_slist_free_all(head);
-            return result;
-        };
-        head = tmp_head;
+        head = curl_slist_append(head, date_full_hdr_z) orelse return error.OutOfMemory;
         date_header.* = curl_maprintf(
             "%s: %s\r\n",
             date_hdr_key_z,
-            @as([*:0]const u8, @ptrCast(timestamp)),
-        );
-        if (date_header.* == null) {
-            curl_slist_free_all(head);
-            return result;
-        }
+            @as([*:0]const u8, timestamp),
+        ) orelse return error.OutOfMemory;
     } else {
         const dh = date_header.*.?;
         const colon = findChar(dh, ':') orelse {
             date_header.* = null;
-            curl_slist_free_all(head);
-            return result;
+            return error.OutOfMemory;
         };
         var value: [*:0]const u8 = colon + 1;
         curlx_str_passblanks(&value);
@@ -553,10 +560,8 @@ fn makeHeaders(
         }
     }
 
-    result = mergeDuplicateHeaders(head);
-    if (result != CURLE_OK) {
-        curl_slist_free_all(head);
-        return result;
+    if (mergeDuplicateHeaders(head) != CURLE_OK) {
+        return error.OutOfMemory;
     }
 
     var it = head;
@@ -565,8 +570,7 @@ fn makeHeaders(
         if (containers.curlx_dyn_add(canonical_headers, curr_data) != CURLE_OK or
             containers.curlx_dyn_add(canonical_headers, "\n") != CURLE_OK)
         {
-            curl_slist_free_all(head);
-            return CURLE_OUT_OF_MEMORY;
+            return error.OutOfMemory;
         }
 
         if (findChar(curr_data, ':')) |tmp| {
@@ -575,18 +579,13 @@ fn makeHeaders(
 
         if (curr != head) {
             if (containers.curlx_dyn_add(signed_headers, ";") != CURLE_OK) {
-                curl_slist_free_all(head);
-                return CURLE_OUT_OF_MEMORY;
+                return error.OutOfMemory;
             }
         }
         if (containers.curlx_dyn_add(signed_headers, curr_data) != CURLE_OK) {
-            curl_slist_free_all(head);
-            return CURLE_OUT_OF_MEMORY;
+            return error.OutOfMemory;
         }
     }
-
-    curl_slist_free_all(head);
-    return CURLE_OK;
 }
 
 fn parseContentShaHdr(
@@ -622,7 +621,7 @@ fn calcPayloadHash(
     postfields: ?[*:0]const u8,
     postfieldsize: i64,
     sha_hash: *[CURL_SHA256_DIGEST_LENGTH]u8,
-    sha_hex: *[SHA256_HEX_LENGTH]u8,
+    sha_hex: *[SHA256_HEX_LENGTH - 1:0]u8,
 ) CURLcode {
     var post_data_len: usize = 0;
     var post_ptr: ?[*]const u8 = null;
@@ -649,8 +648,8 @@ fn calcS3PayloadHash(
     provider1: [*]const u8,
     plen: usize,
     sha_hash: *[CURL_SHA256_DIGEST_LENGTH]u8,
-    sha_hex: *[SHA256_HEX_LENGTH]u8,
-    header: *[CONTENT_SHA256_HDR_LEN + 2]u8,
+    sha_hex: *[SHA256_HEX_LENGTH - 1:0]u8,
+    header: *[CONTENT_SHA256_HDR_LEN + 1:0]u8,
 ) CURLcode {
     const empty_method = (httpreq == HTTPREQ_GET or httpreq == HTTPREQ_HEAD);
     const empty_payload = (empty_method or filesize == 0);
@@ -671,7 +670,7 @@ fn calcS3PayloadHash(
         "x-%.*s-content-sha256: %s",
         @as(c_int, @intCast(plen)),
         provider1,
-        @as([*:0]const u8, @ptrCast(sha_hex)),
+        @as([*:0]const u8, sha_hex),
     );
     return CURLE_OK;
 }
@@ -892,8 +891,8 @@ fn getPayloadHash(
     provider1: *const Curl_str,
     service: *const Curl_str,
     sha_hash: *[CURL_SHA256_DIGEST_LENGTH]u8,
-    sha_hex: *[SHA256_HEX_LENGTH]u8,
-    content_sha256_hdr: *[CONTENT_SHA256_HDR_LEN + 2]u8,
+    sha_hex: *[SHA256_HEX_LENGTH - 1:0]u8,
+    content_sha256_hdr: *[CONTENT_SHA256_HDR_LEN + 1:0]u8,
     payload_hash_out: *?[*]const u8,
     payload_hash_len_out: *usize,
 ) CURLcode {
@@ -921,12 +920,12 @@ fn getPayloadHash(
             return result;
 
         payload_hash_out.* = sha_hex;
-        payload_hash_len_out.* = std.mem.len(@as([*:0]const u8, @ptrCast(sha_hex)));
+        payload_hash_len_out.* = std.mem.len(@as([*:0]const u8, sha_hex));
     }
     return CURLE_OK;
 }
 
-fn getTimestamp(timestamp: *[TIMESTAMP_SIZE]u8) CURLcode {
+fn getTimestamp(timestamp: *[TIMESTAMP_SIZE - 1:0]u8) CURLcode {
     const clock: time_t = if (getenv("CURL_FORCETIME") != null) 0 else libc_time.now();
     var tm: StructTm = .{};
     const result = curlx_time_net.curlx_gmtime(clock, &tm);
@@ -970,8 +969,8 @@ pub export fn Curl_output_aws_sigv4_ex(
     var provider1: Curl_str = .{ .str = null, .len = 0 };
     var region: Curl_str = .{ .str = null, .len = 0 };
     var service: Curl_str = .{ .str = null, .len = 0 };
-    var timestamp: [TIMESTAMP_SIZE]u8 = @splat(0);
-    var date: [9]u8 = @splat(0);
+    var timestamp: [TIMESTAMP_SIZE - 1:0]u8 = @splat(0);
+    var date: [8:0]u8 = @splat(0);
     var canonical_headers: dynbuf = undefined;
     var signed_headers: dynbuf = undefined;
     var date_header: ?[*:0]u8 = null;
@@ -980,8 +979,8 @@ pub export fn Curl_output_aws_sigv4_ex(
     var payload_hash: ?[*]const u8 = null;
     var payload_hash_len: usize = 0;
     var sha_hash: [CURL_SHA256_DIGEST_LENGTH]u8 = @splat(0);
-    var sha_hex: [SHA256_HEX_LENGTH]u8 = @splat(0);
-    var content_sha256_hdr: [CONTENT_SHA256_HDR_LEN + 2]u8 = @splat(0);
+    var sha_hex: [SHA256_HEX_LENGTH - 1:0]u8 = @splat(0);
+    var content_sha256_hdr: [CONTENT_SHA256_HDR_LEN + 1:0]u8 = @splat(0);
     var canonical_request: ?[*:0]u8 = null;
     var request_type: ?[*:0]u8 = null;
     var credential_scope: ?[*:0]u8 = null;
@@ -1056,7 +1055,7 @@ pub export fn Curl_output_aws_sigv4_ex(
             provider1.str.?,
             provider1.len,
             &date_header,
-            @ptrCast(&content_sha256_hdr),
+            &content_sha256_hdr,
             &canonical_headers,
             &signed_headers,
         );
@@ -1103,7 +1102,7 @@ pub export fn Curl_output_aws_sigv4_ex(
             primitives.Curl_strntolower(request_type.?, request_type.?, provider0.len);
             credential_scope = curl_maprintf(
                 "%s/%.*s/%.*s/%s",
-                @as([*:0]const u8, @ptrCast(&date)),
+                @as([*:0]const u8, &date),
                 @as(c_int, @intCast(region.len)),
                 region.str.?,
                 @as(c_int, @intCast(service.len)),
@@ -1122,9 +1121,9 @@ pub export fn Curl_output_aws_sigv4_ex(
                         "%.*s4-HMAC-SHA256\n%s\n%s\n%s",
                         @as(c_int, @intCast(provider0.len)),
                         provider0.str.?,
-                        @as([*:0]const u8, @ptrCast(&timestamp)),
+                        @as([*:0]const u8, &timestamp),
                         credential_scope.?,
-                        @as([*:0]const u8, @ptrCast(&sha_hex)),
+                        @as([*:0]const u8, &sha_hex),
                     );
                     if (str_to_sign == null) {
                         result = CURLE_OUT_OF_MEMORY;
@@ -1168,10 +1167,10 @@ pub export fn Curl_output_aws_sigv4_ex(
         if (result != CURLE_OK) return result;
 
         sha256ToHex(&sha_hex, &sign0);
-        Curl_infof(data, "aws_sigv4: Signature - %s", @as([*:0]const u8, @ptrCast(&sha_hex)));
+        Curl_infof(data, "aws_sigv4: Signature - %s", @as([*:0]const u8, &sha_hex));
 
         const dh_str: [*:0]const u8 = date_header orelse "";
-        const csha_str: [*:0]const u8 = @ptrCast(&content_sha256_hdr);
+        const csha_str: [*:0]const u8 = &content_sha256_hdr;
         const csha_crlf: [*:0]const u8 = if (content_sha256_hdr[0] != 0) "\r\n" else "";
 
         const auth_headers = curl_maprintf(
@@ -1181,7 +1180,7 @@ pub export fn Curl_output_aws_sigv4_ex(
             user_esc,
             credential_scope.?,
             containers.curlx_dyn_ptr(&signed_headers).?,
-            @as([*:0]const u8, @ptrCast(&sha_hex)),
+            @as([*:0]const u8, &sha_hex),
             dh_str,
             csha_str,
             csha_crlf,
@@ -1364,13 +1363,17 @@ fn shareDestroy(share_opt: ?*Curl_share) void {
     _ = Curl_close(&share.admin);
 
     share_mutex.destroy(&share.lock);
-    curlx_memzero(@ptrCast(share), @sizeOf(Curl_share));
-    mem.free(share);
+    curlx_memzero(std.mem.asBytes(share).ptr, @sizeOf(Curl_share));
+    mem.freeTyped(share);
 }
 
 pub export fn curl_share_init() callconv(.c) ?*Curl_share {
-    const raw = mem.calloc(1, @sizeOf(Curl_share)) orelse return null;
-    const share: *Curl_share = @ptrCast(@alignCast(raw));
+    return shareInitInner() catch null;
+}
+
+fn shareInitInner() error{InitFailed}!*Curl_share {
+    const share = mem.create(Curl_share) orelse return error.InitFailed;
+    errdefer shareDestroy(share);
 
     share.magic = CURL_GOOD_SHARE;
     share.specifier |= (@as(c_uint, 1) << CURL_LOCK_DATA_SHARE);
@@ -1379,8 +1382,7 @@ pub export fn curl_share_init() callconv(.c) ?*Curl_share {
     Curl_dnscache_init(&share.dnscache, 23);
     share.admin = curl_easy_init();
     if (share.admin == null) {
-        shareDestroy(share);
-        return null;
+        return error.InitFailed;
     }
     Curl_share_init_admin(share.admin);
     return share;
@@ -1634,8 +1636,8 @@ pub export fn Curl_share_easy_unlink_ex(
     last_cpid: *u32,
     pcookies: ?*?*anyopaque,
     phsts: ?*?*anyopaque,
-    ppsl: ?*?*anyopaque,
-    multi_psl: ?*anyopaque,
+    ppsl: ?*?*threads_psl.PslCache,
+    multi_psl: ?*threads_psl.PslCache,
 ) callconv(.c) CURLcode {
     if (pshare.*) |share| {
         const locked = shareLockAcquire(share, data);
@@ -1656,7 +1658,7 @@ pub export fn Curl_share_easy_unlink_ex(
                 ph.* = null;
         }
         if (ppsl) |pp| {
-            if (@as(?*anyopaque, @ptrCast(&share.psl)) == pp.*)
+            if (&share.psl == pp.*)
                 pp.* = multi_psl;
         }
 
@@ -1677,7 +1679,7 @@ pub export fn Curl_share_easy_link_ex(
     last_cpid: *u32,
     pcookies: ?*?*anyopaque,
     phsts: ?*?*anyopaque,
-    ppsl: ?*?*anyopaque,
+    ppsl: ?*?*threads_psl.PslCache,
 ) callconv(.c) CURLcode {
     if (pshare.* != null)
         return CURLE_FAILED_INIT;
@@ -1707,7 +1709,7 @@ pub export fn Curl_share_easy_link_ex(
         }
         if (ppsl) |pp| {
             if ((share.specifier & (@as(c_uint, 1) << CURL_LOCK_DATA_PSL)) != 0) {
-                pp.* = @ptrCast(&share.psl);
+                pp.* = &share.psl;
             }
         }
 
@@ -1758,7 +1760,7 @@ pub const curl_header = extern struct {
     amount: usize,
     index: usize,
     origin: c_uint,
-    anchor: ?*anyopaque,
+    anchor: ?*Curl_llist_node,
 };
 
 pub const Curl_header_store = extern struct {
@@ -1951,7 +1953,7 @@ pub export fn curl_easy_header(
 
                 var e_opt = containers.Curl_llist_head(reg.httphdrs);
                 while (e_opt) |e| : (e_opt = containers.Curl_node_next(e)) {
-                    const hs: *Curl_header_store = @ptrCast(@alignCast(containers.Curl_node_elem(e).?));
+                    const hs = collections.llistElemTyped(Curl_header_store, e).?;
                     if (primitives.curl_strequal(hs.name, name) != 0 and
                         (@as(c_uint, hs.type) & origin) != 0 and
                         hs.request == request)
@@ -1974,7 +1976,7 @@ pub export fn curl_easy_header(
                         var match: usize = 0;
                         var it_opt = containers.Curl_llist_head(reg.httphdrs);
                         while (it_opt) |e| : (it_opt = containers.Curl_node_next(e)) {
-                            const hs: *Curl_header_store = @ptrCast(@alignCast(containers.Curl_node_elem(e).?));
+                            const hs = collections.llistElemTyped(Curl_header_store, e).?;
                             if (primitives.curl_strequal(hs.name, name) != 0 and
                                 (@as(c_uint, hs.type) & origin) != 0 and
                                 hs.request == request)
@@ -2039,14 +2041,13 @@ fn nextheaderCacheBuild(
     request: c_int,
     count: usize,
 ) bool {
-    const raw = mem.malloc(@sizeOf(NextheaderCacheEntry) * count) orelse return false;
-    defer mem.free(raw);
-    const headers: [*]NextheaderCacheEntry = @ptrCast(@alignCast(raw));
+    const headers = mem.allocMany(NextheaderCacheEntry, count) orelse return false;
+    defer mem.freeTyped(headers);
 
     var i: usize = 0;
     var e_opt = containers.Curl_llist_head(reg.httphdrs);
     while (e_opt) |e| : (e_opt = containers.Curl_node_next(e)) {
-        const hs: *Curl_header_store = @ptrCast(@alignCast(containers.Curl_node_elem(e).?));
+        const hs = collections.llistElemTyped(Curl_header_store, e).?;
         if ((@as(c_uint, hs.type) & origin) != 0 and hs.request == request) {
             headers[i] = .{ .header = hs, .order = i };
             i += 1;
@@ -2101,8 +2102,7 @@ pub export fn curl_easy_nextheader(
                 var valid_prev = true;
 
                 if (prev) |p| {
-                    if (p.anchor) |anc| {
-                        const prev_node: *Curl_llist_node = @ptrCast(@alignCast(anc));
+                    if (p.anchor) |prev_node| {
                         pick_opt = containers.Curl_node_next(prev_node);
                     } else {
                         valid_prev = false;
@@ -2113,14 +2113,14 @@ pub export fn curl_easy_nextheader(
 
                 if (valid_prev) {
                     while (pick_opt) |node| {
-                        const hs: *Curl_header_store = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+                        const hs = collections.llistElemTyped(Curl_header_store, node).?;
                         if ((@as(c_uint, hs.type) & origin) != 0 and hs.request == request)
                             break;
                         pick_opt = containers.Curl_node_next(node);
                     }
 
                     if (pick_opt) |pick| {
-                        const hs: *Curl_header_store = @ptrCast(@alignCast(containers.Curl_node_elem(pick).?));
+                        const hs = collections.llistElemTyped(Curl_header_store, pick).?;
                         const count = containers.Curl_llist_count(reg.httphdrs);
                         var amount: usize = 0;
                         var index: usize = 0;
@@ -2135,7 +2135,7 @@ pub export fn curl_easy_nextheader(
                         } else {
                             var e_opt = containers.Curl_llist_head(reg.httphdrs);
                             while (e_opt) |e| : (e_opt = containers.Curl_node_next(e)) {
-                                const check: *Curl_header_store = @ptrCast(@alignCast(containers.Curl_node_elem(e).?));
+                                const check = collections.llistElemTyped(Curl_header_store, e).?;
                                 if (primitives.curl_strequal(hs.name, check.name) != 0 and
                                     check.request == request and
                                     (@as(c_uint, check.type) & origin) != 0)
@@ -2160,7 +2160,7 @@ pub export fn curl_easy_nextheader(
 }
 
 fn namevalue(
-    header: [*]u8,
+    header: [*:0]u8,
     hlen: usize,
     htype: c_uint,
     name: *?[*:0]u8,
@@ -2168,7 +2168,7 @@ fn namevalue(
 ) CURLcode {
     var ptr = header;
     var end = header + hlen - 1;
-    name.* = @ptrCast(header);
+    name.* = header;
 
     if (htype == CURLH_PSEUDO) {
         if (ptr[0] != ':')
@@ -2186,7 +2186,7 @@ fn namevalue(
     }
 
     while (isBlank(ptr[0])) : (ptr += 1) {}
-    value.* = @ptrCast(ptr);
+    value.* = ptr;
 
     while (@intFromPtr(end) > @intFromPtr(ptr) and isBlank(end[0])) {
         end[0] = 0;
@@ -2231,26 +2231,39 @@ pub export fn Curl_headers_push(
         return CURLE_TOO_LARGE;
     }
 
-    const raw = mem.calloc(1, @sizeOf(Curl_header_store) + hlen) orelse return CURLE_OUT_OF_MEMORY;
+    return pushHeaderStore(data, reg, header, hlen, htype) catch |err| switch (err) {
+        error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+        error.InvalidHeader => CURLE_BAD_FUNCTION_ARGUMENT,
+    };
+}
+
+fn pushHeaderStore(
+    data: ?*anyopaque,
+    reg: HeaderReg,
+    header: [*]const u8,
+    hlen: usize,
+    htype: u8,
+) error{ OutOfMemory, InvalidHeader }!CURLcode {
+    const raw = mem.callocMany(u8, @sizeOf(Curl_header_store) + hlen) orelse return error.OutOfMemory;
     const hs: *Curl_header_store = @ptrCast(@alignCast(raw));
-    const buf_ptr: [*]u8 = @ptrCast(&hs.buffer);
+    errdefer mem.freeTyped(hs);
+    const buf_ptr: [*:0]u8 = (&hs.buffer)[0..0 :0].ptr;
     @memcpy(buf_ptr[0..hlen], header[0..hlen]);
     buf_ptr[hlen] = 0;
 
     var name: ?[*:0]u8 = null;
     var value: ?[*:0]u8 = null;
     const result = namevalue(buf_ptr, hlen, htype, &name, &value);
-    if (result == CURLE_OK) {
-        hs.name = name;
-        hs.value = value;
-        hs.type = htype;
-        hs.request = reg.requests.*;
-        containers.Curl_llist_append(reg.httphdrs, hs, &hs.node);
-    } else {
+    if (result != CURLE_OK) {
         Curl_failf(data, "Invalid response header");
-        mem.free(hs);
+        return error.InvalidHeader;
     }
-    return result;
+    hs.name = name;
+    hs.value = value;
+    hs.type = htype;
+    hs.request = reg.requests.*;
+    containers.Curl_llist_append(reg.httphdrs, hs, &hs.node);
+    return CURLE_OK;
 }
 
 fn hdsCwCollectWrite(
@@ -2299,16 +2312,24 @@ pub export fn Curl_headers_init_ex(
         if (Curl_cwriter_get_by_name(data, hds_cw_collect.name) != null)
             return CURLE_OK;
 
-        var writer: ?*Curl_cwriter = null;
-        var result = Curl_cwriter_create(&writer, data, &hds_cw_collect, CURL_CW_PROTOCOL);
-        if (result != CURLE_OK)
-            return result;
+        return initHeaderCollector(data) catch |err| switch (err) {
+            error.CreateFailed => CURLE_OUT_OF_MEMORY,
+        };
+    }
+    return CURLE_OK;
+}
 
-        result = Curl_cwriter_add(data, writer.?);
-        if (result != CURLE_OK) {
-            Curl_cwriter_free(data, writer.?);
-            return result;
-        }
+fn initHeaderCollector(data: ?*anyopaque) error{CreateFailed}!CURLcode {
+    var writer: ?*Curl_cwriter = null;
+    var result = Curl_cwriter_create(&writer, data, &hds_cw_collect, CURL_CW_PROTOCOL);
+    if (result != CURLE_OK)
+        return result;
+    errdefer Curl_cwriter_free(data, writer.?);
+
+    result = Curl_cwriter_add(data, writer.?);
+    if (result != CURLE_OK) {
+        Curl_cwriter_free(data, writer.?);
+        return result;
     }
     return CURLE_OK;
 }
@@ -2394,7 +2415,7 @@ extern fn Curl_cshutdn_data_get_info(
 ) callconv(.c) void;
 extern fn Curl_cshutdn_multi_get_info(
     multi: ?*anyopaque,
-    padmin: *?*anyopaque,
+    padmin: *?*vdns_cfilters.Curl_easy,
     has_socket_cb: *bool,
 ) callconv(.c) void;
 extern fn Curl_cshutdn_fdset_apply(
@@ -2488,7 +2509,7 @@ pub export fn Curl_cshutdn_clear_timer(
 }
 
 pub export fn Curl_cshutdn_try_once_idx(
-    data: ?*anyopaque,
+    data: ?*vdns_cfilters.Curl_easy,
     sockindex: i8,
     done: *bool,
 ) callconv(.c) CURLcode {
@@ -2533,7 +2554,7 @@ pub export fn Curl_cshutdn_try_once_idx(
     while (cf_opt) |cf| : (cf_opt = cf.next) {
         if (!cf.isShutdown()) {
             var cfdone: bool = false;
-            result = cf.cft.do_shutdown(cf, @ptrCast(data), &cfdone);
+            result = cf.cft.do_shutdown(cf, data, &cfdone);
             if (result != CURLE_OK) {
                 return result;
             } else if (!cfdone) {
@@ -2546,7 +2567,7 @@ pub export fn Curl_cshutdn_try_once_idx(
     return result;
 }
 
-fn cshutdnRunOnce(data: ?*anyopaque, conn: ?*anyopaque, done: *bool) void {
+fn cshutdnRunOnce(data: ?*vdns_cfilters.Curl_easy, conn: ?*anyopaque, done: *bool) void {
     var start_ms: timediff_t = -1;
     var timeout_ms: timediff_t = 0;
     var created: Curltime = undefined;
@@ -2585,7 +2606,7 @@ fn cshutdnRunOnce(data: ?*anyopaque, conn: ?*anyopaque, done: *bool) void {
 }
 
 pub export fn Curl_cshutdn_try_once(
-    admin: ?*anyopaque,
+    admin: ?*vdns_cfilters.Curl_easy,
     conn: ?*anyopaque,
     done: *bool,
 ) callconv(.c) void {
@@ -2595,7 +2616,7 @@ pub export fn Curl_cshutdn_try_once(
 }
 
 pub export fn Curl_cshutdn_terminate(
-    admin: ?*anyopaque,
+    admin: ?*vdns_cfilters.Curl_easy,
     conn: ?*anyopaque,
     do_shutdown: bool,
 ) callconv(.c) void {
@@ -2629,7 +2650,7 @@ pub export fn Curl_cshutdn_terminate(
 
 fn cshutdnDestroyOldest(
     cs: *cshutdn,
-    admin: ?*anyopaque,
+    admin: ?*vdns_cfilters.Curl_easy,
     destination: ?[*:0]const u8,
     count: usize,
 ) usize {
@@ -2660,7 +2681,7 @@ fn cshutdnDestroyOldest(
 
 pub export fn Curl_cshutdn_close_oldest(
     cs_opt: ?*cshutdn,
-    admin: ?*anyopaque,
+    admin: ?*vdns_cfilters.Curl_easy,
     destination: ?[*:0]const u8,
     count: usize,
 ) callconv(.c) usize {
@@ -2670,7 +2691,7 @@ pub export fn Curl_cshutdn_close_oldest(
 
 fn cshutdnWait(
     cs: *cshutdn,
-    admin: ?*anyopaque,
+    admin: ?*vdns_cfilters.Curl_easy,
     timeout_ms: c_int,
 ) CURLcode {
     var a_few_on_stack: [NUM_POLLS_ON_STACK]headers_sock.Pollfd = undefined;
@@ -2689,7 +2710,7 @@ fn cshutdnWait(
 
 fn cshutdnPerform(
     cs: *cshutdn,
-    admin: ?*anyopaque,
+    admin: ?*vdns_cfilters.Curl_easy,
     sigpipe_ctx: ?*CurlSigpipeCtx,
 ) void {
     if (cs.conns.n == 0)
@@ -2719,7 +2740,7 @@ fn cshutdnPerform(
 
 fn cshutdnTerminateAll(
     cs: *cshutdn,
-    admin: ?*anyopaque,
+    admin: ?*vdns_cfilters.Curl_easy,
     timeout_ms: c_int,
 ) void {
     const started = Curl_pgrs_now(admin).*;
@@ -2754,7 +2775,7 @@ pub export fn Curl_cshutdn_init(cs: *cshutdn) callconv(.c) void {
 
 pub export fn Curl_cshutdn_destroy(
     cs: *cshutdn,
-    admin: ?*anyopaque,
+    admin: ?*vdns_cfilters.Curl_easy,
 ) callconv(.c) void {
     if (admin != null) {
         if (cs.conns.n != 0) {
@@ -2793,7 +2814,7 @@ pub export fn Curl_cshutdn_add(
     conn: ?*anyopaque,
     max_shutdowns: usize,
 ) callconv(.c) void {
-    var admin: ?*anyopaque = null;
+    var admin: ?*vdns_cfilters.Curl_easy = null;
     var has_socket_cb: bool = false;
     Curl_cshutdn_multi_get_info(multi, &admin, &has_socket_cb);
 
@@ -2819,7 +2840,7 @@ pub export fn Curl_cshutdn_add(
 
 pub export fn Curl_cshutdn_perform(
     cs: *cshutdn,
-    admin: ?*anyopaque,
+    admin: ?*vdns_cfilters.Curl_easy,
     sigpipe_ctx: ?*CurlSigpipeCtx,
 ) callconv(.c) void {
     cshutdnPerform(cs, admin, sigpipe_ctx);
@@ -2948,7 +2969,7 @@ test "Curl_headers_push and cleanup lifecycle" {
     var nh_count: usize = 0;
     var requests: c_int = 0;
     var dummy_easy: u64 = 0x1234;
-    const easy_ptr: *anyopaque = @ptrCast(&dummy_easy);
+    const easy_ptr: *anyopaque = &dummy_easy;
 
     Curl_headers_Register(easy_ptr, &httphdrs, &headerout, &nh_origin, &nh_request, &nh_count, &requests);
     defer _ = Curl_headers_cleanup(easy_ptr);
@@ -2960,12 +2981,12 @@ test "Curl_headers_push and cleanup lifecycle" {
     try std.testing.expectEqual(@as(usize, 2), containers.Curl_llist_count(&httphdrs));
 
     const first_node = containers.Curl_llist_head(&httphdrs).?;
-    const first_hs: *Curl_header_store = @ptrCast(@alignCast(containers.Curl_node_elem(first_node).?));
+    const first_hs = collections.llistElemTyped(Curl_header_store, first_node).?;
     try std.testing.expectEqualStrings("Content-Type", std.mem.span(first_hs.name.?));
     try std.testing.expectEqualStrings("text/plain", std.mem.span(first_hs.value.?));
 
     const second_node = containers.Curl_node_next(first_node).?;
-    const second_hs: *Curl_header_store = @ptrCast(@alignCast(containers.Curl_node_elem(second_node).?));
+    const second_hs = collections.llistElemTyped(Curl_header_store, second_node).?;
     try std.testing.expectEqualStrings("X-Custom", std.mem.span(second_hs.name.?));
     try std.testing.expectEqualStrings("hello world", std.mem.span(second_hs.value.?));
 
