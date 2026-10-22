@@ -143,6 +143,7 @@ typedef struct {
   size_t valuelen;
   uint8_t flags;
 } nghttp2_nv;
+typedef union nghttp2_frame nghttp2_frame;
 #endif
 
 nghttp2_nv *Curl_dynhds_to_nva(struct dynhds *dynhds, size_t *pcount);

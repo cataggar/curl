@@ -4926,22 +4926,22 @@ int Curl_zig_ares_init_channel(struct Curl_easy *data,
 
 const char *Curl_zig_easy_get_dns_servers(const struct Curl_easy *data)
 {
-  return data ? CURL_EASY_STR(data, STRING_DNS_SERVERS) : NULL;
+  return data ? CURL_EASY_STR((struct Curl_easy *)data, STRING_DNS_SERVERS) : NULL;
 }
 
 const char *Curl_zig_easy_get_dns_interface(const struct Curl_easy *data)
 {
-  return data ? CURL_EASY_STR(data, STRING_DNS_INTERFACE) : NULL;
+  return data ? CURL_EASY_STR((struct Curl_easy *)data, STRING_DNS_INTERFACE) : NULL;
 }
 
 const char *Curl_zig_easy_get_dns_local_ip4(const struct Curl_easy *data)
 {
-  return data ? CURL_EASY_STR(data, STRING_DNS_LOCAL_IP4) : NULL;
+  return data ? CURL_EASY_STR((struct Curl_easy *)data, STRING_DNS_LOCAL_IP4) : NULL;
 }
 
 const char *Curl_zig_easy_get_dns_local_ip6(const struct Curl_easy *data)
 {
-  return data ? CURL_EASY_STR(data, STRING_DNS_LOCAL_IP6) : NULL;
+  return data ? CURL_EASY_STR((struct Curl_easy *)data, STRING_DNS_LOCAL_IP6) : NULL;
 }
 #endif
 

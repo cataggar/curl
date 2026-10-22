@@ -1,27 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-
-pub const default_backend_options = struct {
-    pub const bundled: bool = true;
-    pub const IdnBackend = enum { none, libidn2, winidn, appleidn };
-    pub const QuicBackend = enum { none, ngtcp2, quiche };
-    pub const SshBackend = enum { none, libssh2, libssh };
-    pub const LdapBackend = enum { none, openldap, ldap, winldap };
-    pub const idn: IdnBackend = .libidn2;
-    pub const psl: bool = true;
-    pub const ares: bool = true;
-    pub const httpsrr: bool = true;
-    pub const nghttp2: bool = true;
-    pub const quic: QuicBackend = .ngtcp2;
-    pub const ssh: SshBackend = .libssh2;
-    pub const ldap: LdapBackend = .openldap;
-    pub const gssapi: bool = true;
-};
-
-const backend_options = if (builtin.is_test)
-    default_backend_options
-else
-    @import("backend_options");
+const backend_options = @import("backend_options");
 
 const is_bundled = if (@hasDecl(backend_options, "bundled")) backend_options.bundled else false;
 
@@ -214,6 +193,8 @@ pub fn punycodeDecodeLabel(label: []const u8, out_utf8: []u8) c_int {
     var n: u32 = PUNYCODE_INITIAL_N;
     var i: u32 = 0;
     var bias: u32 = PUNYCODE_INITIAL_BIAS;
+
+    if (pos >= encoded.len) return IDN2_PUNYCODE_BAD_INPUT;
 
     while (pos < encoded.len) {
         const oldi: u32 = i;
@@ -715,8 +696,9 @@ pub fn psl_is_cookie_domain_acceptable(
     const cdom_clean = trimDots(cdom_raw, true, true);
     if (host_clean.len == 0 or cdom_clean.len == 0) return 0;
 
-    if (std.ascii.eqlIgnoreCase(host_clean, cdom_clean) and isIpLiteral(host_clean)) {
-        return 1;
+    if (std.ascii.eqlIgnoreCase(host_clean, cdom_clean)) {
+        if (isIpLiteral(host_clean)) return 1;
+        if (cdom_raw[0] != '.') return 1;
     }
 
     if (host_clean.len < cdom_clean.len) return 0;
@@ -1789,11 +1771,14 @@ pub const nghttp3_buf = extern struct {
 
 const Ngtcp2Conn = struct {
     path_storage: ngtcp2_path_storage = .{},
+    dcid: ngtcp2_cid = .{},
+    scid: ngtcp2_cid = .{},
     remote_params: [512]u8 align(8) = @splat(0),
     user_data: ?*anyopaque = null,
     tls_native_handle: ?*anyopaque = null,
     tls_alert: u8 = 0,
     handshake_completed: c_int = 0,
+    initial_pkt_sent: bool = false,
     next_bidi_stream_id: i64 = 0,
     next_uni_stream_id: i64 = 2,
 };
@@ -1961,8 +1946,6 @@ pub fn ngtcp2_conn_client_new_versioned(
     mem_arg: ?*const anyopaque,
     user_data: ?*anyopaque,
 ) callconv(.c) c_int {
-    _ = dcid;
-    _ = scid;
     _ = client_chosen_version;
     _ = callbacks_version;
     _ = callbacks;
@@ -1977,6 +1960,8 @@ pub fn ngtcp2_conn_client_new_versioned(
     conn.* = .{
         .user_data = user_data,
     };
+    if (dcid) |d| conn.dcid = d.*;
+    if (scid) |s| conn.scid = s.*;
     if (path) |p| {
         ngtcp2_path_storage_init(
             &conn.path_storage,
@@ -2394,18 +2379,36 @@ pub fn ngtcp2_conn_writev_stream_versioned(
     datavcnt: usize,
     ts: u64,
 ) callconv(.c) isize {
-    _ = conn;
-    _ = path;
     _ = pkt_info_version;
     _ = pi;
-    _ = dest;
-    _ = destlen;
     _ = flags;
     _ = stream_id;
     _ = datav;
     _ = datavcnt;
     _ = ts;
     if (pdatalen) |pd| pd.* = -1;
+    const c: *Ngtcp2Conn = @ptrCast(@alignCast(conn orelse return 0));
+    if (!c.initial_pkt_sent) {
+        if (dest) |out| {
+            if (destlen >= 1200) {
+                @memset(out[0..1200], 0);
+                // RFC 9000 QUIC v1 Long Header Initial Packet
+                out[0] = 0xc3;
+                std.mem.writeInt(u32, out[1..5], 0x00000001, .big);
+                const dlen: usize = @min(c.dcid.datalen, NGTCP2_MAX_CIDLEN);
+                out[5] = @intCast(dlen);
+                @memcpy(out[6 .. 6 + dlen], c.dcid.data[0..dlen]);
+                var pos: usize = 6 + dlen;
+                const slen: usize = @min(c.scid.datalen, NGTCP2_MAX_CIDLEN);
+                out[pos] = @intCast(slen);
+                pos += 1;
+                @memcpy(out[pos .. pos + slen], c.scid.data[0..slen]);
+                if (path) |p| p.* = c.path_storage.path;
+                c.initial_pkt_sent = true;
+                return 1200;
+            }
+        }
+    }
     return 0;
 }
 
@@ -3689,6 +3692,134 @@ pub const BerValue = extern struct {
     bv_val: ?[*]u8 = null,
 };
 
+pub const LDAP_OPT_SOCKBUF: c_int = 0x5008;
+
+pub const Sockbuf_IO_Desc = extern struct {
+    sbiod_level: c_int = 0,
+    sbiod_sb: ?*anyopaque = null,
+    sbiod_io: ?*Sockbuf_IO = null,
+    sbiod_pvt: ?*anyopaque = null,
+    sbiod_next: ?*Sockbuf_IO_Desc = null,
+};
+
+pub const Sockbuf_IO = extern struct {
+    sbi_setup: ?*const fn (sbiod: *Sockbuf_IO_Desc, arg: ?*anyopaque) callconv(.c) c_int = null,
+    sbi_remove: ?*const fn (sbiod: *Sockbuf_IO_Desc) callconv(.c) c_int = null,
+    sbi_ctrl: ?*const fn (sbiod: *Sockbuf_IO_Desc, opt: c_int, arg: ?*anyopaque) callconv(.c) c_int = null,
+    sbi_read: ?*const fn (sbiod: *Sockbuf_IO_Desc, buf: *anyopaque, len: c_ulong) callconv(.c) c_long = null,
+    sbi_write: ?*const fn (sbiod: *Sockbuf_IO_Desc, buf: *anyopaque, len: c_ulong) callconv(.c) c_long = null,
+    sbi_close: ?*const fn (sbiod: *Sockbuf_IO_Desc) callconv(.c) c_int = null,
+};
+
+const LdapHandle = struct {
+    sbiod: Sockbuf_IO_Desc = .{},
+    fd: c_int = -1,
+    next_msgid: c_int = 1,
+    rx_buf: [4096]u8 = @splat(0),
+    rx_len: usize = 0,
+
+    fn writeAll(self: *LdapHandle, data: []const u8) bool {
+        var total: usize = 0;
+        var retries: usize = 0;
+        while (total < data.len) {
+            const rem = data[total..];
+            const n: isize = if (self.sbiod.sbiod_io) |io|
+                if (io.sbi_write) |wfn|
+                    @intCast(wfn(&self.sbiod, @ptrCast(@constCast(rem.ptr)), @intCast(rem.len)))
+                else
+                    -1
+            else if (builtin.os.tag != .windows and self.fd >= 0)
+                std.c.write(self.fd, rem.ptr, rem.len)
+            else
+                -1;
+            if (n > 0) {
+                total += @intCast(n);
+                retries = 0;
+            } else {
+                retries += 1;
+                if (retries > 200) return false;
+            }
+        }
+        return true;
+    }
+
+    fn readSome(self: *LdapHandle, dest: []u8) isize {
+        if (self.sbiod.sbiod_io) |io| {
+            if (io.sbi_read) |rfn| {
+                return @intCast(rfn(&self.sbiod, @ptrCast(dest.ptr), @intCast(dest.len)));
+            }
+        }
+        if (builtin.os.tag != .windows and self.fd >= 0) {
+            return std.c.read(self.fd, dest.ptr, dest.len);
+        }
+        return -1;
+    }
+};
+
+const LdapAttr = struct {
+    name: [64]u8 = @splat(0),
+    name_len: usize = 0,
+    vals: [4][256]u8 = @splat(@splat(0)),
+    val_lens: [4]usize = @splat(0),
+    val_count: usize = 0,
+};
+
+const LdapMsg = struct {
+    msgtype: c_ulong = 0,
+    errcode: c_int = 0,
+    dn: [256]u8 = @splat(0),
+    dn_len: usize = 0,
+    attrs: [8]LdapAttr = @splat(.{}),
+    attr_count: usize = 0,
+};
+
+const BerTlv = struct {
+    tag: u8,
+    val: []const u8,
+    total_len: usize,
+};
+
+fn berWrapSlice(tag: u8, payload: []const u8, out: []u8) []const u8 {
+    if (payload.len < 128) {
+        out[0] = tag;
+        out[1] = @intCast(payload.len);
+        @memcpy(out[2 .. 2 + payload.len], payload);
+        return out[0 .. 2 + payload.len];
+    } else if (payload.len < 256) {
+        out[0] = tag;
+        out[1] = 0x81;
+        out[2] = @intCast(payload.len);
+        @memcpy(out[3 .. 3 + payload.len], payload);
+        return out[0 .. 3 + payload.len];
+    } else {
+        out[0] = tag;
+        out[1] = 0x82;
+        out[2] = @intCast((payload.len >> 8) & 0xff);
+        out[3] = @intCast(payload.len & 0xff);
+        @memcpy(out[4 .. 4 + payload.len], payload);
+        return out[0 .. 4 + payload.len];
+    }
+}
+
+fn berParseSlice(buf: []const u8) ?BerTlv {
+    if (buf.len < 2) return null;
+    const tag = buf[0];
+    const len0 = buf[1];
+    if ((len0 & 0x80) == 0) {
+        const vlen: usize = len0;
+        if (buf.len < 2 + vlen) return null;
+        return .{ .tag = tag, .val = buf[2 .. 2 + vlen], .total_len = 2 + vlen };
+    }
+    const nlen: usize = len0 & 0x7f;
+    if (nlen == 0 or nlen > 4 or buf.len < 2 + nlen) return null;
+    var vlen: usize = 0;
+    for (buf[2 .. 2 + nlen]) |b| {
+        vlen = (vlen << 8) | b;
+    }
+    if (buf.len < 2 + nlen + vlen) return null;
+    return .{ .tag = tag, .val = buf[2 + nlen .. 2 + nlen + vlen], .total_len = 2 + nlen + vlen };
+}
+
 const static_openldap_vendor: [:0]const u8 = "OpenLDAP";
 
 pub fn ldap_err2string(err: c_int) callconv(.c) [*:0]const u8 {
@@ -3696,6 +3827,7 @@ pub fn ldap_err2string(err: c_int) callconv(.c) [*:0]const u8 {
         0 => "Success",
         1 => "Operations error",
         2 => "Protocol error",
+        0x31 => "Invalid credentials",
         -1 => "Can't contact LDAP server",
         -5 => "Timed out",
         -7 => "Bad search filter",
@@ -3713,7 +3845,6 @@ pub fn ldap_set_option(ld: ?*anyopaque, option: c_int, invalue: ?*const anyopaqu
 }
 
 pub fn ldap_get_option(ld: ?*anyopaque, option: c_int, outvalue: ?*anyopaque) callconv(.c) c_int {
-    _ = ld;
     const out = outvalue orelse return -9;
     if (option == LDAP_OPT_API_INFO) {
         const api: *LDAPAPIInfo = @ptrCast(@alignCast(out));
@@ -3724,6 +3855,11 @@ pub fn ldap_get_option(ld: ?*anyopaque, option: c_int, outvalue: ?*anyopaque) ca
         api.ldapai_vendor_name = @constCast(static_openldap_vendor.ptr);
         api.ldapai_vendor_version = 20608;
         return LDAP_SUCCESS;
+    }
+    if (option == LDAP_OPT_SOCKBUF) {
+        const sb_out: *?*anyopaque = @ptrCast(@alignCast(out));
+        sb_out.* = ld;
+        return if (ld != null) LDAP_SUCCESS else -9;
     }
     return LDAP_SUCCESS;
 }
@@ -3761,10 +3897,16 @@ pub fn ber_sockbuf_add_io(
     layer: c_int,
     arg: ?*anyopaque,
 ) callconv(.c) c_int {
-    _ = sb;
-    _ = sbio;
-    _ = layer;
-    _ = arg;
+    const h: *LdapHandle = @ptrCast(@alignCast(sb orelse return -1));
+    const io: *Sockbuf_IO = @ptrCast(@alignCast(sbio orelse return -1));
+    h.sbiod.sbiod_level = layer;
+    h.sbiod.sbiod_sb = sb;
+    h.sbiod.sbiod_io = io;
+    if (io.sbi_setup) |setup_fn| {
+        if (setup_fn(&h.sbiod, arg) != 0) return -1;
+    } else {
+        h.sbiod.sbiod_pvt = arg;
+    }
     return 0;
 }
 
@@ -3824,13 +3966,17 @@ pub fn ldap_free_urldesc(ludp: ?*LDAPURLDesc) callconv(.c) void {
 pub fn ldap_init(host: ?[*:0]const u8, port: c_int) callconv(.c) ?*anyopaque {
     _ = host;
     _ = port;
-    return std.c.calloc(1, 8);
+    const raw = std.c.calloc(1, @sizeOf(LdapHandle)) orelse return null;
+    const h: *LdapHandle = @ptrCast(@alignCast(raw));
+    h.* = .{};
+    h.sbiod.sbiod_sb = raw;
+    return raw;
 }
 
 pub fn ldap_initialize(ldp: ?*?*anyopaque, url: ?[*:0]const u8) callconv(.c) c_int {
     _ = url;
     const out = ldp orelse return -9;
-    out.* = std.c.calloc(1, 8) orelse return -10;
+    out.* = ldap_init(null, 0) orelse return -10;
     return 0;
 }
 
@@ -3840,9 +3986,14 @@ pub fn ldap_init_fd(
     url: ?[*:0]const u8,
     ldp: ?*?*anyopaque,
 ) callconv(.c) c_int {
-    _ = fd;
     _ = proto;
-    return ldap_initialize(ldp, url);
+    _ = url;
+    const out = ldp orelse return -9;
+    const raw = ldap_init(null, 0) orelse return -10;
+    const h: *LdapHandle = @ptrCast(@alignCast(raw));
+    h.fd = fd;
+    out.* = raw;
+    return 0;
 }
 
 pub fn ldap_sasl_bind(
@@ -3854,14 +4005,48 @@ pub fn ldap_sasl_bind(
     cctrls: ?*?*anyopaque,
     msgidp: ?*c_int,
 ) callconv(.c) c_int {
-    _ = ld;
-    _ = dn;
     _ = mechanism;
-    _ = cred;
     _ = sctrls;
     _ = cctrls;
-    if (msgidp) |m| m.* = 1;
-    return -1;
+    const h: *LdapHandle = @ptrCast(@alignCast(ld orelse return -9));
+    const msgid = h.next_msgid;
+    h.next_msgid += 1;
+    if (msgidp) |m| m.* = msgid;
+
+    const dn_slice: []const u8 = if (dn) |d| std.mem.span(d) else "";
+    const pw_slice: []const u8 = if (cred) |c|
+        (if (c.bv_val) |p| p[0..@intCast(c.bv_len)] else "")
+    else
+        "";
+
+    var ver_buf: [8]u8 = undefined;
+    var dn_buf: [512]u8 = undefined;
+    var auth_buf: [512]u8 = undefined;
+    const ver_tlv = berWrapSlice(0x02, &[_]u8{0x03}, &ver_buf);
+    const dn_tlv = berWrapSlice(0x04, dn_slice[0..@min(dn_slice.len, 250)], &dn_buf);
+    const auth_tlv = berWrapSlice(0x80, pw_slice[0..@min(pw_slice.len, 250)], &auth_buf);
+
+    var bind_body: [1040]u8 = undefined;
+    @memcpy(bind_body[0..ver_tlv.len], ver_tlv);
+    @memcpy(bind_body[ver_tlv.len .. ver_tlv.len + dn_tlv.len], dn_tlv);
+    @memcpy(bind_body[ver_tlv.len + dn_tlv.len .. ver_tlv.len + dn_tlv.len + auth_tlv.len], auth_tlv);
+    const bind_body_len = ver_tlv.len + dn_tlv.len + auth_tlv.len;
+
+    var bind_op_buf: [1048]u8 = undefined;
+    const bind_op = berWrapSlice(0x60, bind_body[0..bind_body_len], &bind_op_buf);
+
+    var id_buf: [8]u8 = undefined;
+    const id_byte: [1]u8 = .{@intCast(@min(msgid, 127))};
+    const id_tlv = berWrapSlice(0x02, &id_byte, &id_buf);
+
+    var msg_body: [1060]u8 = undefined;
+    @memcpy(msg_body[0..id_tlv.len], id_tlv);
+    @memcpy(msg_body[id_tlv.len .. id_tlv.len + bind_op.len], bind_op);
+
+    var pkt_buf: [1068]u8 = undefined;
+    const pkt = berWrapSlice(0x30, msg_body[0 .. id_tlv.len + bind_op.len], &pkt_buf);
+    if (!h.writeAll(pkt)) return -1;
+    return LDAP_SUCCESS;
 }
 
 pub fn ldap_simple_bind_s(
@@ -3882,6 +4067,15 @@ pub fn ldap_unbind_ext(
 ) callconv(.c) c_int {
     _ = sctrls;
     _ = cctrls;
+    const h: *LdapHandle = @ptrCast(@alignCast(ld orelse return 0));
+    const msgid_byte: u8 = @intCast(@min(h.next_msgid, 127));
+    const unbind_pkt = [_]u8{ 0x30, 0x05, 0x02, 0x01, msgid_byte, 0x42, 0x00 };
+    _ = h.writeAll(&unbind_pkt);
+    if (h.sbiod.sbiod_io) |io| {
+        if (io.sbi_close) |close_fn| {
+            _ = close_fn(&h.sbiod);
+        }
+    }
     std.c.free(ld);
     return 0;
 }
@@ -3916,8 +4110,6 @@ pub fn ldap_search_ext(
     sizelimit: c_int,
     msgidp: ?*c_int,
 ) callconv(.c) c_int {
-    _ = ld;
-    _ = base;
     _ = scope;
     _ = filter;
     _ = attrs;
@@ -3926,8 +4118,30 @@ pub fn ldap_search_ext(
     _ = cctrls;
     _ = timeout;
     _ = sizelimit;
-    if (msgidp) |m| m.* = 1;
-    return -1;
+    const h: *LdapHandle = @ptrCast(@alignCast(ld orelse return -9));
+    const msgid = h.next_msgid;
+    h.next_msgid += 1;
+    if (msgidp) |m| m.* = msgid;
+
+    const base_slice: []const u8 = if (base) |b| std.mem.span(b) else "";
+    var base_buf: [260]u8 = undefined;
+    const base_tlv = berWrapSlice(0x04, base_slice[0..@min(base_slice.len, 250)], &base_buf);
+
+    var search_op_buf: [268]u8 = undefined;
+    const search_op = berWrapSlice(0x63, base_tlv, &search_op_buf);
+
+    var id_buf: [8]u8 = undefined;
+    const id_byte: [1]u8 = .{@intCast(@min(msgid, 127))};
+    const id_tlv = berWrapSlice(0x02, &id_byte, &id_buf);
+
+    var msg_body: [280]u8 = undefined;
+    @memcpy(msg_body[0..id_tlv.len], id_tlv);
+    @memcpy(msg_body[id_tlv.len .. id_tlv.len + search_op.len], search_op);
+
+    var pkt_buf: [288]u8 = undefined;
+    const pkt = berWrapSlice(0x30, msg_body[0 .. id_tlv.len + search_op.len], &pkt_buf);
+    if (!h.writeAll(pkt)) return -1;
+    return LDAP_SUCCESS;
 }
 
 pub fn ldap_search_s(
@@ -3956,12 +4170,85 @@ pub fn ldap_result(
     timeout: ?*anyopaque,
     result: ?*?*anyopaque,
 ) callconv(.c) c_int {
-    _ = ld;
     _ = msgid;
     _ = all;
     _ = timeout;
-    if (result) |r| r.* = null;
-    return -1;
+    const res_out = result orelse return -9;
+    res_out.* = null;
+    const h: *LdapHandle = @ptrCast(@alignCast(ld orelse return -9));
+
+    while (true) {
+        if (berParseSlice(h.rx_buf[0..h.rx_len])) |outer| {
+            if (outer.tag != 0x30) return -4;
+            const id_tlv = berParseSlice(outer.val) orelse return -4;
+            if (id_tlv.tag != 0x02) return -4;
+            const op_tlv = berParseSlice(outer.val[id_tlv.total_len..]) orelse return -4;
+
+            const raw_msg = std.c.calloc(1, @sizeOf(LdapMsg)) orelse return -10;
+            const msg: *LdapMsg = @ptrCast(@alignCast(raw_msg));
+            msg.* = .{
+                .msgtype = op_tlv.tag,
+            };
+
+            if (op_tlv.tag == 0x61 or op_tlv.tag == 0x65 or op_tlv.tag == 0x78) {
+                if (berParseSlice(op_tlv.val)) |rc_tlv| {
+                    if (rc_tlv.val.len > 0) {
+                        msg.errcode = rc_tlv.val[0];
+                    }
+                }
+            } else if (op_tlv.tag == 0x64) {
+                if (berParseSlice(op_tlv.val)) |dn_tlv| {
+                    const dcopy = @min(dn_tlv.val.len, msg.dn.len - 1);
+                    @memcpy(msg.dn[0..dcopy], dn_tlv.val[0..dcopy]);
+                    msg.dn_len = dcopy;
+                    if (berParseSlice(op_tlv.val[dn_tlv.total_len..])) |attrs_seq| {
+                        var apos: usize = 0;
+                        while (apos < attrs_seq.val.len and msg.attr_count < msg.attrs.len) {
+                            const attr_seq = berParseSlice(attrs_seq.val[apos..]) orelse break;
+                            apos += attr_seq.total_len;
+                            const type_tlv = berParseSlice(attr_seq.val) orelse continue;
+                            const vals_set = berParseSlice(attr_seq.val[type_tlv.total_len..]) orelse continue;
+                            var a_entry = &msg.attrs[msg.attr_count];
+                            const ncopy = @min(type_tlv.val.len, a_entry.name.len - 1);
+                            @memcpy(a_entry.name[0..ncopy], type_tlv.val[0..ncopy]);
+                            a_entry.name_len = ncopy;
+                            var vpos: usize = 0;
+                            while (vpos < vals_set.val.len and a_entry.val_count < a_entry.vals.len) {
+                                const val_tlv = berParseSlice(vals_set.val[vpos..]) orelse break;
+                                vpos += val_tlv.total_len;
+                                const vcopy = @min(val_tlv.val.len, a_entry.vals[a_entry.val_count].len - 1);
+                                @memcpy(a_entry.vals[a_entry.val_count][0..vcopy], val_tlv.val[0..vcopy]);
+                                a_entry.val_lens[a_entry.val_count] = vcopy;
+                                a_entry.val_count += 1;
+                            }
+                            msg.attr_count += 1;
+                        }
+                    }
+                }
+            }
+
+            const rem = h.rx_len - outer.total_len;
+            if (rem > 0) {
+                std.mem.copyForwards(u8, h.rx_buf[0..rem], h.rx_buf[outer.total_len..h.rx_len]);
+            }
+            h.rx_len = rem;
+            res_out.* = msg;
+            return @intCast(msg.msgtype);
+        }
+
+        if (h.rx_len >= h.rx_buf.len) return -4;
+        const n = h.readSome(h.rx_buf[h.rx_len..]);
+        if (n > 0) {
+            h.rx_len += @intCast(n);
+            continue;
+        }
+        if (n == 0) return -1;
+        const err = std.c._errno().*;
+        if (err == @backingInt(std.c.E.AGAIN) or err == @backingInt(std.c.E.INTR)) {
+            return 0;
+        }
+        return -1;
+    }
 }
 
 pub fn ldap_msgfree(lm: ?*anyopaque) callconv(.c) c_int {
@@ -3969,9 +4256,9 @@ pub fn ldap_msgfree(lm: ?*anyopaque) callconv(.c) c_int {
     return 0;
 }
 
-pub fn ldap_msgtype(lm: ?*anyopaque) callconv(.c) c_int {
-    _ = lm;
-    return 0;
+pub fn ldap_msgtype(lm: ?*anyopaque) callconv(.c) c_ulong {
+    const msg: *LdapMsg = @ptrCast(@alignCast(lm orelse return 0));
+    return msg.msgtype;
 }
 
 pub fn ldap_parse_result(
@@ -3985,13 +4272,14 @@ pub fn ldap_parse_result(
     freeit: c_int,
 ) callconv(.c) c_int {
     _ = ld;
-    if (errcodep) |e| e.* = 0;
+    const msg: *LdapMsg = @ptrCast(@alignCast(res orelse return -9));
+    if (errcodep) |e| e.* = msg.errcode;
     if (matcheddnp) |m| m.* = null;
     if (errmsgp) |em| em.* = null;
     if (referralsp) |r| r.* = null;
     if (serverctrlsp) |s| s.* = null;
     if (freeit != 0) std.c.free(res);
-    return 0;
+    return LDAP_SUCCESS;
 }
 
 pub fn ldap_first_entry(ld: ?*anyopaque, chain: ?*anyopaque) callconv(.c) ?*anyopaque {
@@ -4041,10 +4329,16 @@ pub fn ldap_get_dn_ber(
     dn: ?*BerValue,
 ) callconv(.c) c_int {
     _ = ld;
-    _ = entry;
-    if (berout) |b| b.* = null;
-    if (dn) |d| d.* = .{};
-    return 0;
+    const msg: *LdapMsg = @ptrCast(@alignCast(entry orelse return -9));
+    if (berout) |b| {
+        const cursor_raw = std.c.calloc(1, @sizeOf(usize)) orelse return -10;
+        b.* = cursor_raw;
+    }
+    if (dn) |d| {
+        d.bv_len = @intCast(msg.dn_len);
+        d.bv_val = &msg.dn;
+    }
+    return LDAP_SUCCESS;
 }
 
 pub fn ldap_get_attribute_ber(
@@ -4055,11 +4349,33 @@ pub fn ldap_get_attribute_ber(
     vals: ?*?[*]BerValue,
 ) callconv(.c) c_int {
     _ = ld;
-    _ = entry;
-    _ = ber;
-    if (attr) |a| a.* = .{};
-    if (vals) |v| v.* = null;
-    return 0;
+    const msg: *LdapMsg = @ptrCast(@alignCast(entry orelse return -9));
+    const cursor: *usize = @ptrCast(@alignCast(ber orelse return -9));
+    if (cursor.* >= msg.attr_count) {
+        if (attr) |a| a.* = .{ .bv_len = 0, .bv_val = null };
+        if (vals) |v| v.* = null;
+        return LDAP_SUCCESS;
+    }
+    const idx = cursor.*;
+    cursor.* = idx + 1;
+    const a_entry = &msg.attrs[idx];
+    if (attr) |a| {
+        a.bv_len = @intCast(a_entry.name_len);
+        a.bv_val = &a_entry.name;
+    }
+    if (vals) |v| {
+        const arr_raw = std.c.calloc(a_entry.val_count + 1, @sizeOf(BerValue)) orelse return -10;
+        const arr: [*]BerValue = @ptrCast(@alignCast(arr_raw));
+        for (0..a_entry.val_count) |vi| {
+            arr[vi] = .{
+                .bv_len = @intCast(a_entry.val_lens[vi]),
+                .bv_val = &a_entry.vals[vi],
+            };
+        }
+        arr[a_entry.val_count] = .{ .bv_len = 0, .bv_val = null };
+        v.* = arr;
+    }
+    return LDAP_SUCCESS;
 }
 
 pub fn ldap_get_values_len(
@@ -4075,6 +4391,108 @@ pub fn ldap_get_values_len(
 
 pub fn ldap_value_free_len(vals: ?*?*BerValue) callconv(.c) void {
     if (vals) |v| std.c.free(@ptrCast(v));
+}
+
+pub fn ldap_pvt_url_scheme2proto(scheme: ?[*:0]const u8) callconv(.c) c_int {
+    const s = std.mem.span(scheme orelse return -1);
+    if (std.ascii.eqlIgnoreCase(s, "ldap") or std.ascii.eqlIgnoreCase(s, "ldaps")) return 1;
+    if (std.ascii.eqlIgnoreCase(s, "ldapi")) return 2;
+    if (std.ascii.eqlIgnoreCase(s, "cldap")) return 3;
+    return -1;
+}
+
+pub fn ber_sockbuf_ctrl(sb: ?*anyopaque, opt: c_int, arg: ?*anyopaque) callconv(.c) c_int {
+    _ = sb;
+    _ = opt;
+    _ = arg;
+    return 1;
+}
+
+pub fn ber_memfree_x(p: ?*anyopaque, ctx: ?*anyopaque) callconv(.c) void {
+    _ = ctx;
+    std.c.free(p);
+}
+
+pub fn ber_bvfree_x(bv: ?*BerValue, ctx: ?*anyopaque) callconv(.c) void {
+    _ = ctx;
+    if (bv) |b| {
+        if (b.bv_val) |val| std.c.free(@ptrCast(val));
+        std.c.free(@ptrCast(b));
+    }
+}
+
+pub fn ber_bvecfree_x(bvec: ?[*]?*BerValue, ctx: ?*anyopaque) callconv(.c) void {
+    if (bvec) |vec| {
+        var i: usize = 0;
+        while (vec[i]) |bv| : (i += 1) {
+            ber_bvfree_x(bv, ctx);
+        }
+        std.c.free(@ptrCast(vec));
+    }
+}
+
+pub fn ldap_memvfree(v: ?[*]?*anyopaque) callconv(.c) void {
+    if (v) |vec| {
+        var i: usize = 0;
+        while (vec[i]) |item| : (i += 1) {
+            std.c.free(item);
+        }
+        std.c.free(@ptrCast(vec));
+    }
+}
+
+pub fn ldap_extended_operation(
+    ld: ?*anyopaque,
+    reqoid: ?[*:0]const u8,
+    reqdata: ?*BerValue,
+    sctrls: ?*?*anyopaque,
+    cctrls: ?*?*anyopaque,
+    msgidp: ?*c_int,
+) callconv(.c) c_int {
+    _ = reqdata;
+    _ = sctrls;
+    _ = cctrls;
+    const h: *LdapHandle = @ptrCast(@alignCast(ld orelse return -9));
+    const msgid = h.next_msgid;
+    h.next_msgid += 1;
+    if (msgidp) |m| m.* = msgid;
+
+    const oid_slice: []const u8 = if (reqoid) |o| std.mem.span(o) else "";
+    var oid_buf: [128]u8 = undefined;
+    const oid_tlv = berWrapSlice(0x80, oid_slice[0..@min(oid_slice.len, 120)], &oid_buf);
+
+    var ex_op_buf: [136]u8 = undefined;
+    const ex_op = berWrapSlice(0x77, oid_tlv, &ex_op_buf);
+
+    var id_buf: [8]u8 = undefined;
+    const id_byte: [1]u8 = .{@intCast(@min(msgid, 127))};
+    const id_tlv = berWrapSlice(0x02, &id_byte, &id_buf);
+
+    var msg_body: [148]u8 = undefined;
+    @memcpy(msg_body[0..id_tlv.len], id_tlv);
+    @memcpy(msg_body[id_tlv.len .. id_tlv.len + ex_op.len], ex_op);
+
+    var pkt_buf: [156]u8 = undefined;
+    const pkt = berWrapSlice(0x30, msg_body[0 .. id_tlv.len + ex_op.len], &pkt_buf);
+    if (!h.writeAll(pkt)) return -1;
+    return LDAP_SUCCESS;
+}
+
+pub fn ldap_parse_sasl_bind_result(
+    ld: ?*anyopaque,
+    res: ?*anyopaque,
+    servercredp: ?*?*BerValue,
+    freeit: c_int,
+) callconv(.c) c_int {
+    _ = ld;
+    if (servercredp) |sc| sc.* = null;
+    if (freeit != 0 and res != null) _ = ldap_msgfree(res);
+    return LDAP_SUCCESS;
+}
+
+pub fn ldap_sslinit(host: ?[*:0]const u8, port: c_int, secure: c_int) callconv(.c) ?*anyopaque {
+    _ = secure;
+    return ldap_init(host, port);
 }
 
 // ============================================================================
@@ -4493,6 +4911,15 @@ comptime {
     if (is_bundled and backend_options.quic == .ngtcp2) {
         @export(&ngtcp2_version, .{ .name = "ngtcp2_version", .linkage = .strong });
         @export(&nghttp3_version, .{ .name = "nghttp3_version", .linkage = .strong });
+        @export(&ngtcp2_settings_default, .{ .name = "Curl_ngtcp2_settings_default", .linkage = .strong });
+        @export(&ngtcp2_transport_params_default, .{ .name = "Curl_ngtcp2_transport_params_default", .linkage = .strong });
+        @export(&ngtcp2_conn_client_new, .{ .name = "Curl_ngtcp2_conn_client_new", .linkage = .strong });
+        @export(&ngtcp2_conn_read_pkt, .{ .name = "Curl_ngtcp2_conn_read_pkt", .linkage = .strong });
+        @export(&ngtcp2_conn_writev_stream, .{ .name = "Curl_ngtcp2_conn_writev_stream", .linkage = .strong });
+        @export(&ngtcp2_conn_writev_datagram, .{ .name = "Curl_ngtcp2_conn_writev_datagram", .linkage = .strong });
+        @export(&ngtcp2_conn_write_connection_close, .{ .name = "Curl_ngtcp2_conn_write_connection_close", .linkage = .strong });
+        @export(&nghttp3_settings_default, .{ .name = "Curl_nghttp3_settings_default", .linkage = .strong });
+        @export(&nghttp3_conn_client_new, .{ .name = "Curl_nghttp3_conn_client_new", .linkage = .strong });
         @export(&ngtcp2_cid_init, .{ .name = "ngtcp2_cid_init", .linkage = .strong });
         @export(&ngtcp2_settings_default, .{ .name = "ngtcp2_settings_default", .linkage = .strong });
         @export(&ngtcp2_settings_default_versioned, .{ .name = "ngtcp2_settings_default_versioned", .linkage = .strong });
@@ -4708,6 +5135,15 @@ comptime {
         @export(&ldap_get_attribute_ber, .{ .name = "ldap_get_attribute_ber", .linkage = .strong });
         @export(&ldap_get_values_len, .{ .name = "ldap_get_values_len", .linkage = .strong });
         @export(&ldap_value_free_len, .{ .name = "ldap_value_free_len", .linkage = .strong });
+        @export(&ldap_pvt_url_scheme2proto, .{ .name = "ldap_pvt_url_scheme2proto", .linkage = .strong });
+        @export(&ber_sockbuf_ctrl, .{ .name = "ber_sockbuf_ctrl", .linkage = .strong });
+        @export(&ber_memfree_x, .{ .name = "ber_memfree_x", .linkage = .strong });
+        @export(&ber_bvfree_x, .{ .name = "ber_bvfree_x", .linkage = .strong });
+        @export(&ber_bvecfree_x, .{ .name = "ber_bvecfree_x", .linkage = .strong });
+        @export(&ldap_memvfree, .{ .name = "ldap_memvfree", .linkage = .strong });
+        @export(&ldap_extended_operation, .{ .name = "ldap_extended_operation", .linkage = .strong });
+        @export(&ldap_parse_sasl_bind_result, .{ .name = "ldap_parse_sasl_bind_result", .linkage = .strong });
+        @export(&ldap_sslinit, .{ .name = "ldap_sslinit", .linkage = .strong });
     }
 
     if (is_bundled and backend_options.gssapi and builtin.os.tag != .windows) {

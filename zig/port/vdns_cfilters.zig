@@ -596,7 +596,6 @@ inline fn cwriterFlush(data: ?*Curl_easy, writer: ?*Curl_cwriter) CURLcode {
 // Minimal Curl_easy Accessors (req.writer.paused and set.strings)
 // ============================================================================
 
-const EASY_WRITER_PAUSED_OFFSET: usize = 240;
 const use_ssh = if (@hasDecl(backend_options, "ssh")) backend_options.ssh != .none else false;
 const enable_hsts = if (@hasDecl(backend_options, "ssl")) backend_options.ssl != .none else false;
 const ssh_off: u8 = if (use_ssh) 5 else 0;
@@ -604,21 +603,15 @@ const hsts_off: u8 = if (enable_hsts) 1 else 0;
 const ares_off: u8 = if (use_ares) 4 else 0;
 const STRING_HAPROXY_CLIENT_IP: u8 = 65 + ssh_off + hsts_off + ares_off;
 extern fn Curl_easy_strset_ptr(data: *Curl_easy) callconv(.c) *collections.u8_strset;
+extern fn Curl_cw_out_is_paused(data: ?*const Curl_easy) callconv(.c) bool;
+extern fn Curl_cw_out_set_paused(data: ?*Curl_easy, paused: bool) callconv(.c) void;
 
 inline fn cwriterIsPaused(data: ?*const Curl_easy) bool {
-    const d = data orelse return false;
-    const base: [*]const u8 = @ptrCast(d);
-    return (base[EASY_WRITER_PAUSED_OFFSET] & 0x01) != 0;
+    return Curl_cw_out_is_paused(data);
 }
 
 inline fn cwriterSetPaused(data: ?*Curl_easy, paused: bool) void {
-    const d = data orelse return;
-    const base: [*]u8 = @ptrCast(d);
-    if (paused) {
-        base[EASY_WRITER_PAUSED_OFFSET] |= 0x01;
-    } else {
-        base[EASY_WRITER_PAUSED_OFFSET] &= ~@as(u8, 0x01);
-    }
+    Curl_cw_out_set_paused(data, paused);
 }
 
 inline fn isValidU8Strset(set: *const collections.u8_strset) bool {
