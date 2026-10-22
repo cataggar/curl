@@ -37,7 +37,9 @@ pub const Curl_easy = opaque {};
 pub const connectdata = opaque {};
 pub const Curl_peer = opaque {};
 pub const Curl_creds = opaque {};
-pub const NtlmData = opaque {};
+pub const NtlmData = extern struct {
+    _opaque: [8]u64 = @splat(0),
+};
 pub const HmacParams = opaque {};
 pub const HmacCtx = opaque {};
 
@@ -93,7 +95,8 @@ pub const AuthStruct = extern struct {
 pub const DigestDataPrefix = extern struct {
     creds: ?*Curl_creds = null,
     origin: ?*Curl_peer = null,
-    nonce_or_input_token: ?*anyopaque = null,
+    nonce_or_input_token: ?[*:0]u8 = null,
+    _tail: [104]u8 = @splat(0),
 };
 
 pub const NegotiateDataPrefix = extern struct {
@@ -133,7 +136,7 @@ inline fn curlx_free(ptr: ?*anyopaque) void {
 }
 extern fn curl_maprintf(fmt: [*:0]const u8, ...) callconv(.c) ?[*:0]u8;
 extern fn curl_msnprintf(buffer: [*]u8, maxlength: usize, format: [*:0]const u8, ...) callconv(.c) c_int;
-extern fn curl_strnequal(s1: [*:0]const u8, s2: [*:0]const u8, n: usize) callconv(.c) c_int;
+extern fn curl_strnequal(s1: [*]const u8, s2: [*]const u8, n: usize) callconv(.c) c_int;
 extern fn Curl_failf(data: ?*Curl_easy, fmt: [*:0]const u8, ...) callconv(.c) void;
 extern fn Curl_infof(data: ?*Curl_easy, fmt: [*:0]const u8, ...) callconv(.c) void;
 extern fn Curl_trc_write(data: ?*Curl_easy, fmt: [*:0]const u8, ...) callconv(.c) void;
@@ -423,7 +426,7 @@ pub const SpnegoDecodeFn = *const fn (
 
 pub const SpnegoCreateFn = *const fn (
     *NegotiateDataPrefix,
-    *?[*:0]u8,
+    ?*?[*:0]u8,
     *usize,
     *bool,
     *bool,
@@ -550,14 +553,10 @@ export fn Curl_output_negotiate(
         }
     }
 
-    var dummy_out: ?[*:0]u8 = null;
     var dummy_len: usize = 0;
     var has_context: bool = false;
     var is_done: bool = false;
-    _ = @call(.auto, @as(
-        *const fn (*NegotiateDataPrefix, ?*?[*:0]u8, *usize, *bool, *bool) callconv(.c) CURLcode,
-        @ptrCast(create_cb),
-    ), .{ ctx, null, &dummy_len, &has_context, &is_done });
+    _ = create_cb(ctx, null, &dummy_len, &has_context, &is_done);
 
     var result: CURLcode = CURLE_OK;
     if (!has_context and st.* == CURL_NEGO_AUTH_DONE) {
@@ -588,6 +587,8 @@ export fn Curl_output_negotiate(
         }
     }
 
+    var dummy_out: ?[*:0]u8 = null;
+    defer curlx_free(dummy_out);
     result = create_cb(ctx, &dummy_out, &dummy_len, &has_context, &is_done);
     if (result != CURLE_OK) return result;
 
@@ -597,7 +598,6 @@ export fn Curl_output_negotiate(
         curlx_free(old);
     }
     alloc_ptr.* = userp;
-    curlx_free(dummy_out);
 
     if (userp == null) return CURLE_OUT_OF_MEMORY;
 
@@ -1056,10 +1056,11 @@ fn httpchunk_readwrite(
                         return CURLE_RECV_ERROR;
                     }
                     ch.hexbuffer[ch.hexindex] = 0;
-                    var hex_ptr: [*:0]const u8 = @ptrCast(&ch.hexbuffer[0]);
+                    const hex_z: [*:0]const u8 = ch.hexbuffer[0..ch.hexindex :0].ptr;
+                    var hex_ptr: [*:0]const u8 = hex_z;
                     if (curlx_str_hex(&hex_ptr, &ch.datasize, CURL_OFF_T_MAX) != STRE_OK) {
                         if (data != null) {
-                            Curl_failf(data, "invalid chunk size: '%s'", @as([*:0]const u8, @ptrCast(&ch.hexbuffer[0])));
+                            Curl_failf(data, "invalid chunk size: '%s'", hex_z);
                         }
                         ch.state = .CHUNK_FAILED;
                         ch.last_code = .CHUNKE_ILLEGAL_HEX;
@@ -1263,15 +1264,19 @@ export fn Curl_httpchunk_read(
     return httpchunk_readwrite(data, ch, null, buf, blen, pconsumed);
 }
 
+inline fn cwChunkedCtx(writer: *Curl_cwriter) *cw_chunked_ctx {
+    return @ptrCast(@alignCast(writer.ctx));
+}
+
 fn cw_chunked_init(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) CURLcode {
-    const ctx: *cw_chunked_ctx = @ptrCast(@alignCast(writer.ctx));
+    const ctx = cwChunkedCtx(writer);
     Curl_chunked_set_req_chunk(data);
     Curl_httpchunk_init(data, &ctx.ch, false, false);
     return CURLE_OK;
 }
 
 fn cw_chunked_close(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) void {
-    const ctx: *cw_chunked_ctx = @ptrCast(@alignCast(writer.ctx));
+    const ctx = cwChunkedCtx(writer);
     Curl_httpchunk_free(data, &ctx.ch);
 }
 
@@ -1282,7 +1287,7 @@ fn cw_chunked_write(
     buf: [*]const u8,
     blen: usize,
 ) callconv(.c) CURLcode {
-    const ctx: *cw_chunked_ctx = @ptrCast(@alignCast(writer.ctx));
+    const ctx = cwChunkedCtx(writer);
     var result: CURLcode = CURLE_OK;
     var consumed: usize = 0;
 
@@ -1350,21 +1355,24 @@ pub export const Curl_httpchunk_unencoder: Curl_cwtype = .{
 
 const BUFQ_OPT_SOFT_LIMIT: c_int = 1 << 0;
 
+inline fn crChunkedCtx(reader: *Curl_creader) *cr_chunked_ctx {
+    return @ptrCast(@alignCast(reader.ctx));
+}
+
 fn cr_chunked_init(data: ?*Curl_easy, reader: *Curl_creader) callconv(.c) CURLcode {
     _ = data;
-    const ctx: *cr_chunked_ctx = @ptrCast(@alignCast(reader.ctx));
+    const ctx = crChunkedCtx(reader);
     Curl_bufq_init2(&ctx.buf, 16 * 1024, 2, BUFQ_OPT_SOFT_LIMIT);
     return CURLE_OK;
 }
 
 fn cr_chunked_close(data: ?*Curl_easy, reader: *Curl_creader) callconv(.c) void {
     _ = data;
-    const ctx: *cr_chunked_ctx = @ptrCast(@alignCast(reader.ctx));
+    const ctx = crChunkedCtx(reader);
     Curl_bufq_free(&ctx.buf);
 }
 
-fn add_last_chunk(data: ?*Curl_easy, reader: *Curl_creader) CURLcode {
-    const ctx: *cr_chunked_ctx = @ptrCast(@alignCast(reader.ctx));
+fn add_last_chunk(data: ?*Curl_easy, ctx: *cr_chunked_ctx) CURLcode {
     var trailers: ?*curl_slist = null;
     var result: CURLcode = CURLE_OK;
     var n: usize = 0;
@@ -1373,20 +1381,18 @@ fn add_last_chunk(data: ?*Curl_easy, reader: *Curl_creader) CURLcode {
     if (rc < 0) {
         return Curl_bufq_cwrite(&ctx.buf, "0\r\n\r\n", 5, &n);
     }
+    defer curl_slist_free_all(trailers);
 
     if (rc != CURL_TRAILERFUNC_OK) {
         if (data != null) {
             Curl_failf(data, "operation aborted by trailing headers callback");
         }
-        curl_slist_free_all(trailers);
         return CURLE_ABORTED_BY_CALLBACK;
     }
 
     result = Curl_bufq_cwrite(&ctx.buf, "0\r\n", 3, &n);
-    if (result != CURLE_OK) {
-        curl_slist_free_all(trailers);
+    if (result != CURLE_OK)
         return result;
-    }
 
     var cur = trailers;
     while (cur) |node| : (cur = node.next) {
@@ -1399,15 +1405,11 @@ fn add_last_chunk(data: ?*Curl_easy, reader: *Curl_creader) CURLcode {
         if (result == CURLE_OK) {
             result = Curl_bufq_cwrite(&ctx.buf, "\r\n", 2, &n);
         }
-        if (result != CURLE_OK) {
-            curl_slist_free_all(trailers);
+        if (result != CURLE_OK)
             return result;
-        }
     }
 
-    result = Curl_bufq_cwrite(&ctx.buf, "\r\n", 2, &n);
-    curl_slist_free_all(trailers);
-    return result;
+    return Curl_bufq_cwrite(&ctx.buf, "\r\n", 2, &n);
 }
 
 const CHUNK_SCRATCH_SIZE: usize = 32;
@@ -1420,7 +1422,7 @@ fn cr_chunked_read(
     pnread: *usize,
     peos: *bool,
 ) callconv(.c) CURLcode {
-    const ctx: *cr_chunked_ctx = @ptrCast(@alignCast(reader.ctx));
+    const ctx = crChunkedCtx(reader);
     var result: CURLcode = CURLE_OK;
     var nread: usize = 0;
     var n: usize = 0;
@@ -1487,7 +1489,7 @@ fn cr_chunked_read(
         }
 
         if (ctx.read_eos) {
-            result = add_last_chunk(data, reader);
+            result = add_last_chunk(data, ctx);
             if (result != CURLE_OK) return result;
         }
     }
@@ -1528,21 +1530,28 @@ pub export const Curl_httpchunk_encoder: Curl_crtype = .{
     .creader_size = @sizeOf(cr_chunked_ctx),
 };
 
-export fn Curl_httpchunk_add_reader(data: ?*Curl_easy) callconv(.c) CURLcode {
+fn addChunkedReaderImpl(data: ?*Curl_easy, out_err: *CURLcode) error{AddFailed}!void {
     var reader: ?*Curl_creader = null;
-    var result = Curl_creader_create(&reader, data, &Curl_httpchunk_encoder, CURL_CR_TRANSFER_ENCODE);
-    if (result == CURLE_OK) {
-        if (reader) |r| {
-            result = Curl_creader_add(data, r);
-        }
-    }
+    errdefer if (reader) |r| Curl_creader_free(data, r);
 
+    var result = Curl_creader_create(&reader, data, &Curl_httpchunk_encoder, CURL_CR_TRANSFER_ENCODE);
     if (result != CURLE_OK) {
-        if (reader) |r| {
-            Curl_creader_free(data, r);
+        out_err.* = result;
+        return error.AddFailed;
+    }
+    if (reader) |r| {
+        result = Curl_creader_add(data, r);
+        if (result != CURLE_OK) {
+            out_err.* = result;
+            return error.AddFailed;
         }
     }
-    return result;
+}
+
+export fn Curl_httpchunk_add_reader(data: ?*Curl_easy) callconv(.c) CURLcode {
+    var result: CURLcode = CURLE_OK;
+    addChunkedReaderImpl(data, &result) catch return result;
+    return CURLE_OK;
 }
 
 // ============================================================================
@@ -1771,11 +1780,11 @@ fn httpsig_resolve_header(
         }
         const hnamelen = colon orelse continue;
         if (hnamelen != nlen) continue;
-        if (curl_strnequal(hdata, @ptrCast(name), nlen) == 0) continue;
+        if (curl_strnequal(hdata, name, nlen) == 0) continue;
 
         var vstart: usize = hnamelen + 1;
         while (hdata[vstart] != 0 and isBlank(hdata[vstart])) : (vstart += 1) {}
-        var vend: usize = vstart + std.mem.len(@as([*:0]const u8, @ptrCast(hdata + vstart)));
+        var vend: usize = std.mem.len(hdata);
         while (vend > vstart and isBlank(hdata[vend - 1])) : (vend -= 1) {}
 
         var c_idx = vstart;
@@ -1802,7 +1811,7 @@ fn httpsig_resolve_header(
         found = true;
     }
 
-    if (!found and nlen == 4 and curl_strnequal(@ptrCast(name), "host", 4) != 0) {
+    if (!found and nlen == 4 and curl_strnequal(name, "host", 4) != 0) {
         if (http_host) |hh| {
             if (hh[0] != 0) {
                 return curlx_dyn_add(val_buf, hh);
@@ -1854,7 +1863,9 @@ fn httpsig_build_base(
     var first_comp: bool = true;
 
     curlx_dyn_init(&val_buf, HTTPSIG_MAX_VAL_LEN);
+    defer curlx_dyn_free(&val_buf);
     curlx_dyn_init(&seen_buf, HTTPSIG_MAX_PARAMS_LEN);
+    defer curlx_dyn_free(&seen_buf);
 
     const effective_hdrs: [*:0]const u8 = if (hdr_list != null and hdr_list.?[0] != 0)
         hdr_list.?
@@ -1862,18 +1873,12 @@ fn httpsig_build_base(
         "@method @authority @path";
 
     result = curlx_dyn_addn(params_buf, "(", 1);
-    if (result != CURLE_OK) {
-        curlx_dyn_free(&val_buf);
-        curlx_dyn_free(&seen_buf);
+    if (result != CURLE_OK)
         return result;
-    }
 
     result = curlx_dyn_addn(&seen_buf, " ", 1);
-    if (result != CURLE_OK) {
-        curlx_dyn_free(&val_buf);
-        curlx_dyn_free(&seen_buf);
+    if (result != CURLE_OK)
         return result;
-    }
 
     var p: [*:0]const u8 = effective_hdrs;
     while (p[0] != 0) {
@@ -1896,8 +1901,6 @@ fn httpsig_build_base(
                     tok_start,
                 );
             }
-            curlx_dyn_free(&val_buf);
-            curlx_dyn_free(&seen_buf);
             return CURLE_BAD_FUNCTION_ARGUMENT;
         }
 
@@ -1916,17 +1919,12 @@ fn httpsig_build_base(
                             tok_start,
                         );
                     }
-                    curlx_dyn_free(&val_buf);
-                    curlx_dyn_free(&seen_buf);
                     return CURLE_BAD_FUNCTION_ARGUMENT;
                 }
             }
             result = curlx_dyn_addf(&seen_buf, "%.*s ", @as(c_int, @intCast(tok_len)), tok_start);
-            if (result != CURLE_OK) {
-                curlx_dyn_free(&val_buf);
-                curlx_dyn_free(&seen_buf);
+            if (result != CURLE_OK)
                 return result;
-            }
         }
 
         curlx_dyn_reset(&val_buf);
@@ -1959,11 +1957,8 @@ fn httpsig_build_base(
             );
         }
 
-        if (result != CURLE_OK) {
-            curlx_dyn_free(&val_buf);
-            curlx_dyn_free(&seen_buf);
+        if (result != CURLE_OK)
             return result;
-        }
 
         const val_str: [*:0]const u8 = curlx_dyn_ptr(&val_buf) orelse "";
         result = curlx_dyn_addf(
@@ -1973,26 +1968,17 @@ fn httpsig_build_base(
             tok_start,
             val_str,
         );
-        if (result != CURLE_OK) {
-            curlx_dyn_free(&val_buf);
-            curlx_dyn_free(&seen_buf);
+        if (result != CURLE_OK)
             return result;
-        }
 
         if (!first_comp) {
             result = curlx_dyn_addn(params_buf, " ", 1);
-            if (result != CURLE_OK) {
-                curlx_dyn_free(&val_buf);
-                curlx_dyn_free(&seen_buf);
+            if (result != CURLE_OK)
                 return result;
-            }
         }
         result = curlx_dyn_addf(params_buf, "\"%.*s\"", @as(c_int, @intCast(tok_len)), tok_start);
-        if (result != CURLE_OK) {
-            curlx_dyn_free(&val_buf);
-            curlx_dyn_free(&seen_buf);
+        if (result != CURLE_OK)
             return result;
-        }
         first_comp = false;
     }
 
@@ -2003,18 +1989,11 @@ fn httpsig_build_base(
         keyid,
         alg.iana_name,
     );
-    if (result != CURLE_OK) {
-        curlx_dyn_free(&val_buf);
-        curlx_dyn_free(&seen_buf);
+    if (result != CURLE_OK)
         return result;
-    }
 
     const params_str: [*:0]const u8 = curlx_dyn_ptr(params_buf) orelse "";
-    result = curlx_dyn_addf(base_buf, "\"@signature-params\": %s", params_str);
-
-    curlx_dyn_free(&val_buf);
-    curlx_dyn_free(&seen_buf);
-    return result;
+    return curlx_dyn_addf(base_buf, "\"@signature-params\": %s", params_str);
 }
 
 export fn Curl_output_httpsig(
@@ -2077,18 +2056,19 @@ export fn Curl_output_httpsig(
                 "HTTPSIG: keyid contains invalid characters (no quotes, backslashes, or control characters allowed)",
             );
         }
-        std.crypto.secureZero(u8, &raw_key);
         return CURLE_BAD_FUNCTION_ARGUMENT;
     }
 
+    defer std.crypto.secureZero(u8, &raw_key);
     var result = httpsig_parse_hex_key(data, hk, &raw_key, alg.key_len);
-    if (result != CURLE_OK) {
-        std.crypto.secureZero(u8, &raw_key);
+    if (result != CURLE_OK)
         return result;
-    }
 
     curlx_dyn_init(&base_buf, HTTPSIG_MAX_BASE_LEN);
+    defer curlx_dyn_free(&base_buf);
     curlx_dyn_init(&params_buf, HTTPSIG_MAX_PARAMS_LEN);
+    defer curlx_dyn_free(&params_buf);
+    defer curlx_free(sig_b64);
 
     result = httpsig_build_base(
         data,
@@ -2107,19 +2087,10 @@ export fn Curl_output_httpsig(
         origin_defport,
         method_override,
     );
-    if (result != CURLE_OK) {
-        curlx_dyn_free(&base_buf);
-        curlx_dyn_free(&params_buf);
-        curlx_free(sig_b64);
-        std.crypto.secureZero(u8, &raw_key);
+    if (result != CURLE_OK)
         return result;
-    }
 
     const hmac_ctx = Curl_HMAC_init(alg.hmac_params, &raw_key, @intCast(alg.key_len)) orelse {
-        curlx_dyn_free(&base_buf);
-        curlx_dyn_free(&params_buf);
-        curlx_free(sig_b64);
-        std.crypto.secureZero(u8, &raw_key);
         return CURLE_OUT_OF_MEMORY;
     };
 
@@ -2129,13 +2100,8 @@ export fn Curl_output_httpsig(
     _ = Curl_HMAC_final(hmac_ctx, &sig_raw);
 
     result = curlx_base64_encode(&sig_raw, alg.sig_len, &sig_b64, &sig_b64_len);
-    if (result != CURLE_OK) {
-        curlx_dyn_free(&base_buf);
-        curlx_dyn_free(&params_buf);
-        curlx_free(sig_b64);
-        std.crypto.secureZero(u8, &raw_key);
+    if (result != CURLE_OK)
         return result;
-    }
 
     var has_sig = false;
     var has_sig_input = false;
@@ -2158,10 +2124,6 @@ export fn Curl_output_httpsig(
                 "HTTPSIG: custom Signature or Signature-Input headers conflict with automatic signing",
             );
         }
-        curlx_dyn_free(&base_buf);
-        curlx_dyn_free(&params_buf);
-        curlx_free(sig_b64);
-        std.crypto.secureZero(u8, &raw_key);
         return CURLE_BAD_FUNCTION_ARGUMENT;
     }
 
@@ -2173,23 +2135,14 @@ export fn Curl_output_httpsig(
             params_str,
             sig_b64,
         );
-        if (hda.* == null) {
-            curlx_dyn_free(&base_buf);
-            curlx_dyn_free(&params_buf);
-            curlx_free(sig_b64);
-            std.crypto.secureZero(u8, &raw_key);
+        if (hda.* == null)
             return CURLE_OUT_OF_MEMORY;
-        }
     }
 
     if (authhost) |ah| {
         ah.setDone(true);
     }
 
-    curlx_dyn_free(&base_buf);
-    curlx_dyn_free(&params_buf);
-    curlx_free(sig_b64);
-    std.crypto.secureZero(u8, &raw_key);
     return CURLE_OK;
 }
 
@@ -2221,8 +2174,8 @@ test "Curl_range parses valid and invalid byte ranges" {
 }
 
 test "Curl_input_digest and Curl_output_digest handle headers and state" {
-    var digest_bytes: [128]u8 align(@alignOf(DigestDataPrefix)) = std.mem.zeroes([128]u8);
-    const dig: *DigestDataPrefix = @ptrCast(&digest_bytes[0]);
+    var dig_val: DigestDataPrefix = .{};
+    const dig = &dig_val;
     defer Curl_http_auth_cleanup_digest(null, dig, null);
 
     try std.testing.expectEqual(CURLE_AUTH_ERROR, Curl_input_digest(null, false, "Basic Zm9vOmJhcg==", dig, null));
@@ -2235,8 +2188,8 @@ test "Curl_input_digest and Curl_output_digest handle headers and state" {
 }
 
 test "Curl_input_ntlm and Curl_output_ntlm state transitions" {
-    var ntlm_bytes: [64]u8 align(8) = std.mem.zeroes([64]u8);
-    const ntlm: *NtlmData = @ptrCast(&ntlm_bytes[0]);
+    var ntlm_val: NtlmData = .{};
+    const ntlm = &ntlm_val;
     var state: c_uint = NTLMSTATE_NONE;
     var alloc_hdr: ?[*:0]u8 = null;
     defer if (alloc_hdr) |p| curlx_free(p);
@@ -2338,8 +2291,8 @@ test "adversarial chunked transfer-encoding overflow and digest unquoting edge c
     try std.testing.expectEqual(CHUNKcode.CHUNKE_BAD_CHUNK, ch.last_code);
 
     // 4. Digest auth header with trailing backslash before NUL and unterminated quotes
-    var digest_bytes: [128]u8 align(@alignOf(DigestDataPrefix)) = std.mem.zeroes([128]u8);
-    const dig: *DigestDataPrefix = @ptrCast(&digest_bytes[0]);
+    var dig_val: DigestDataPrefix = .{};
+    const dig = &dig_val;
     defer Curl_http_auth_cleanup_digest(null, dig, null);
 
     const malformed_digest = "Digest realm=\"test\\";
@@ -2348,5 +2301,5 @@ test "adversarial chunked transfer-encoding overflow and digest unquoting edge c
     const escaped_quote_digest = "Digest realm=\"te\\\"st\", nonce=\"abc\\\\def\", opaque=\"unterminated";
     try std.testing.expectEqual(CURLE_OK, Curl_input_digest(null, false, escaped_quote_digest, dig, null));
     try std.testing.expect(dig.nonce_or_input_token != null);
-    try std.testing.expectEqualStrings("abc\\def", std.mem.span(@as([*:0]const u8, @ptrCast(dig.nonce_or_input_token.?))));
+    try std.testing.expectEqualStrings("abc\\def", std.mem.span(dig.nonce_or_input_token.?));
 }
