@@ -1407,9 +1407,9 @@ const CURLAUTH_BASIC: u8 = 1 << 0;
 const CURLAUTH_GSSAPI: u8 = 1 << 2;
 
 const CF_TYPE_IP_CONNECT: c_int = 1 << 0;
-const CF_TYPE_PROXY: c_int = 1 << 4;
-const CF_QUERY_HOST_PORT: c_int = 2;
-const CF_QUERY_ALPN_NEGOTIATED: c_int = 5;
+const CF_TYPE_PROXY: c_int = 1 << 3;
+const CF_QUERY_HOST_PORT: c_int = 11;
+const CF_QUERY_ALPN_NEGOTIATED: c_int = 15;
 
 pub const Curl_creds = extern struct {
     user: [*:0]const u8,

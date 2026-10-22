@@ -1339,6 +1339,7 @@ const cr_eob_ctx = extern struct {
 fn cr_eob_init(data: ?*anyopaque, reader: *Curl_creader) callconv(.c) CURLcode {
     _ = data;
     const ctx: *cr_eob_ctx = @fieldParentPtr("super", reader);
+    ctx.n_eob = 2;
     io_buffers.Curl_bufq_init2(&ctx.buf, 16 * 1024, 1, io_buffers.BUFQ_OPT_SOFT_LIMIT);
     return CURLE_OK;
 }
@@ -1372,76 +1373,57 @@ fn cr_eob_read(
 
         ctx.eos = eos;
         if (nread != 0) {
-            if (ctx.n_eob == 0 and buf[0] == '.') {
-                result = io_buffers.Curl_bufq_cwrite(&ctx.buf, SMTP_EOB.ptr + 2, 1, &nread);
-                if (result != CURLE_OK)
-                    return result;
+            if (ctx.n_eob == 0 and std.mem.indexOfScalar(u8, buf[0..nread], SMTP_EOB[0]) == null) {
+                pnread.* = nread;
+                peos.* = false;
+                return CURLE_OK;
             }
+            var n: usize = 0;
+            start = 0;
             for (0..nread) |idx| {
                 i = idx;
-                const prev = ctx.n_eob;
-                switch (buf[i]) {
-                    0x0d => ctx.n_eob = 1,
-                    0x0a => {
-                        if (ctx.n_eob == 1 or ctx.n_eob == 4)
-                            ctx.n_eob += 1
-                        else
-                            ctx.n_eob = 0;
-                    },
-                    0x2e => {
-                        if (ctx.n_eob == 2)
-                            ctx.n_eob += 1
-                        else
-                            ctx.n_eob = 0;
-                    },
-                    else => ctx.n_eob = 0,
-                }
-
-                if (prev != 0 and prev >= ctx.n_eob) {
-                    result = io_buffers.Curl_bufq_cwrite(&ctx.buf, SMTP_EOB.ptr, prev, &nread);
+                if (ctx.n_eob >= SMTP_EOB_FIND_LEN) {
+                    result = io_buffers.Curl_bufq_cwrite(&ctx.buf, buf + start, i - start, &n);
                     if (result != CURLE_OK)
                         return result;
-                    if (ctx.n_eob == 0)
-                        start = i
-                    else
-                        start = i + 1;
-                } else if (ctx.n_eob == SMTP_EOB_FIND_LEN) {
-                    result = io_buffers.Curl_bufq_cwrite(&ctx.buf, "..", 2, &nread);
+                    result = io_buffers.Curl_bufq_cwrite(&ctx.buf, ".", 1, &n);
                     if (result != CURLE_OK)
                         return result;
                     ctx.n_eob = 0;
-                    start = i + 1;
+                    start = i;
                     Curl_pop3_smtp_inc_infilesize(data);
-                } else if (ctx.n_eob == 1 and i > start) {
-                    result = io_buffers.Curl_bufq_cwrite(&ctx.buf, buf + start, i - start, &nread);
-                    if (result != CURLE_OK)
-                        return result;
-                    start = i + 1;
                 }
+
+                if (buf[i] != SMTP_EOB[ctx.n_eob])
+                    ctx.n_eob = 0;
+
+                if (buf[i] == SMTP_EOB[ctx.n_eob])
+                    ctx.n_eob += 1;
             }
 
-            if (ctx.n_eob == 0 and i >= start) {
-                result = io_buffers.Curl_bufq_cwrite(&ctx.buf, buf + start, i + 1 - start, &nread);
+            if (start < nread) {
+                result = io_buffers.Curl_bufq_cwrite(&ctx.buf, buf + start, nread - start, &n);
                 if (result != CURLE_OK)
                     return result;
             }
-        }
-
-        if (ctx.eos and !ctx.eob_added) {
-            const tail: [*:0]const u8 = switch (ctx.n_eob) {
-                1 => "\r\r\n.\r\n",
-                2 => ".\r\n",
-                else => "\r\n.\r\n",
-            };
-            result = io_buffers.Curl_bufq_cwrite(&ctx.buf, tail, std.mem.len(tail), &nread);
-            if (result != CURLE_OK)
-                return result;
-            ctx.n_eob = 0;
-            ctx.eob_added = true;
         }
     }
 
     peos.* = false;
+
+    if (ctx.eos and !ctx.eob_added) {
+        var n: usize = 0;
+        const eob: [*:0]const u8 = switch (ctx.n_eob) {
+            2 => ".\r\n",
+            3 => ".\r\n.\r\n",
+            else => "\r\n.\r\n",
+        };
+        result = io_buffers.Curl_bufq_cwrite(&ctx.buf, eob, std.mem.len(eob), &n);
+        if (result != CURLE_OK)
+            return result;
+        ctx.eob_added = true;
+    }
+
     if (!io_buffers.Curl_bufq_is_empty(&ctx.buf)) {
         result = io_buffers.Curl_bufq_cread(&ctx.buf, buf, blen, pnread);
     } else {

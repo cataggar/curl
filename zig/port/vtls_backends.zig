@@ -109,10 +109,10 @@ pub const CURLSSLOPT_AUTO_CLIENT_CERT: u8 = 1 << 5;
 pub const CURLSSLOPT_EARLYDATA: u8 = 1 << 6;
 
 pub const CF_TYPE_SSL: c_int = 1 << 1;
-pub const CF_TYPE_PROXY: c_int = 1 << 5;
+pub const CF_TYPE_PROXY: c_int = 1 << 3;
 pub const CF_LVL_SSL: c_int = 2;
 
-pub const CF_CTRL_DATA_SETUP: c_int = 1;
+pub const CF_CTRL_DATA_SETUP: c_int = 4;
 pub const CF_CTRL_CONN_INFO_UPDATE: c_int = 256 + 0;
 pub const CF_CTRL_REPORT_STATS: c_int = 256 + 3;
 
@@ -121,8 +121,7 @@ pub const CF_QUERY_CONNECT_REPLY_MS: c_int = 2;
 pub const CF_QUERY_SOCKET: c_int = 3;
 pub const CF_QUERY_TIMER_CONNECT: c_int = 4;
 pub const CF_QUERY_TIMER_APPCONNECT: c_int = 5;
-pub const CF_QUERY_HTTP_VERSION: c_int = 10;
-pub const CF_QUERY_IS_MULTIPLEX: c_int = 11;
+pub const CF_QUERY_HTTP_VERSION: c_int = 9;
 pub const CF_QUERY_SSL_INFO: c_int = 12;
 pub const CF_QUERY_SSL_CTX_INFO: c_int = 13;
 pub const CF_QUERY_ALPN_NEGOTIATED: c_int = 15;

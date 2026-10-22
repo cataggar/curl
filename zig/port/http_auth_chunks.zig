@@ -333,7 +333,9 @@ export fn Curl_input_digest(
     while (p[0] != 0 and isBlank(p[0])) : (p += 1) {}
 
     const result = Curl_auth_decode_digest_http_message(p, dig);
-    Curl_peer_link(&dig.origin, origin);
+    if (result == CURLE_OK) {
+        Curl_peer_link(&dig.origin, origin);
+    }
     return result;
 }
 

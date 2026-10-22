@@ -54,8 +54,8 @@ pub const AI_NUMERICHOST: c_int = 4;
 pub const CURL_POLL_IN: c_int = 1;
 pub const CURL_POLL_OUT: c_int = 2;
 
-pub const CF_TYPE_PROXY: c_int = 1 << 4;
-pub const CF_TYPE_SETUP: c_int = 1 << 7;
+pub const CF_TYPE_PROXY: c_int = 1 << 3;
+pub const CF_TYPE_SETUP: c_int = 1 << 5;
 
 pub const CF_CTRL_FLUSH: c_int = 258;
 pub const CF_QUERY_NEED_FLUSH: c_int = 7;

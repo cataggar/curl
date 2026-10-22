@@ -94,7 +94,7 @@ const CURLPROXY_SOCKS4A: u8 = 6;
 const CURLPROXY_SOCKS5_HOSTNAME: u8 = 7;
 const CURLPROXY_HTTPS3: u8 = 8;
 
-const PROTO_FAMILY_HTTP: u32 = (1 << 0) | (1 << 1);
+const PROTO_FAMILY_HTTP: u32 = (1 << 0) | (1 << 1) | (1 << 30) | (1 << 31);
 const PROTOPT_SSL: u32 = 1 << 0;
 const PROTOPT_NONETWORK: u32 = 1 << 4;
 const PROTOPT_PROXY_AS_HTTP: u32 = 1 << 11;
@@ -103,19 +103,19 @@ const PROTOPT_HTTP_PROXY_TUNNEL: u32 = 1 << 18;
 
 const CREDS_NONE: u8 = 0;
 const CREDS_URL: u8 = 1;
-const CREDS_NETRC: u8 = 2;
-const CREDS_OPTION: u8 = 3;
+const CREDS_OPTION: u8 = 2;
+const CREDS_NETRC: u8 = 3;
 
 const TRNSPRT_TCP: u8 = 3;
 const TRNSPRT_UDP: u8 = 4;
 const TRNSPRT_QUIC: u8 = 5;
 
 const CF_TYPE_IP_CONNECT: c_int = 1 << 0;
-const CF_TYPE_SETUP: c_int = 1 << 1;
 const CF_TYPE_PROXY: c_int = 1 << 3;
+const CF_TYPE_SETUP: c_int = 1 << 5;
 
-const CF_QUERY_HOST_PORT: c_int = 2;
-const CF_QUERY_ALPN_NEGOTIATED: c_int = 3;
+const CF_QUERY_HOST_PORT: c_int = 11;
+const CF_QUERY_ALPN_NEGOTIATED: c_int = 15;
 
 const CURL_POLL_IN: c_int = 1;
 const CURL_POLL_OUT: c_int = 2;
@@ -124,10 +124,14 @@ const CURLINFO_HEADER_IN: c_uint = 1;
 const CURLINFO_HEADER_OUT: c_uint = 2;
 
 const CLIENTWRITE_BODY: c_int = 1 << 0;
+const CLIENTWRITE_INFO: c_int = 1 << 1;
 const CLIENTWRITE_HEADER: c_int = 1 << 2;
 const CLIENTWRITE_STATUS: c_int = 1 << 3;
 const CLIENTWRITE_CONNECT: c_int = 1 << 4;
+const CLIENTWRITE_1XX: c_int = 1 << 5;
+const CLIENTWRITE_TRAILER: c_int = 1 << 6;
 const CLIENTWRITE_EOS: c_int = 1 << 7;
+const CLIENTWRITE_0LEN: c_int = 1 << 8;
 
 const HTTPREQ_GET: c_uint = 0;
 const HTTPREQ_POST_FORM: u8 = 2;
@@ -314,7 +318,7 @@ inline fn checkprefix(prefix: [:0]const u8, str: [*:0]const u8) bool {
 }
 
 inline fn peerIsIpv6(peer: *const Curl_peer) bool {
-    return (peer.flags & 0x02) != 0;
+    return (peer.flags & 0x04) != 0;
 }
 
 // ============================================================================

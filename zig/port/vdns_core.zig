@@ -1804,7 +1804,7 @@ fn cf_dns_start(
     if (curlDnsqIsAddr(ctx.dns_queries) != 0) {
         if (peer.hostname != null and Curl_is_ipv4addr(peer.hostname.?)) {
             ctx.dns_queries |= CURL_DNSQ_A;
-        } else if (use_ipv6 and (peer.flags & 0x02) != 0) {
+        } else if (use_ipv6 and (peer.flags & 0x04) != 0) {
             ctx.dns_queries |= CURL_DNSQ_AAAA;
         }
 
