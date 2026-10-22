@@ -106,6 +106,12 @@ export fn curl_unescape(string: ?[*]const u8, length: c_int) callconv(.c) ?[*:0]
     return curl_easy_unescape(null, string, length, null);
 }
 
+fn cstrLen(s: [*]const u8) usize {
+    var i: usize = 0;
+    while (s[i] != 0) : (i += 1) {}
+    return i;
+}
+
 export fn curl_easy_escape(curl: ?*anyopaque, string: ?[*]const u8, length: c_int) callconv(.c) ?[*:0]u8 {
     _ = curl;
     const s = string orelse return null;
@@ -114,7 +120,7 @@ export fn curl_easy_escape(curl: ?*anyopaque, string: ?[*]const u8, length: c_in
     const len: usize = if (length != 0)
         @intCast(length)
     else
-        std.mem.len(@as([*:0]const u8, @ptrCast(s)));
+        cstrLen(s);
 
     if (len == 0) {
         return mem.strdup("");
@@ -123,7 +129,7 @@ export fn curl_easy_escape(curl: ?*anyopaque, string: ?[*]const u8, length: c_in
         return null;
     }
 
-    const encoded = mem.malloc((len * 3) + 1) orelse return null;
+    const encoded = mem.allocMany(u8, (len * 3) + 1) orelse return null;
     var target: usize = 0;
     var src_idx: usize = 0;
     var f_idx: usize = 0;
@@ -153,25 +159,18 @@ export fn curl_easy_escape(curl: ?*anyopaque, string: ?[*]const u8, length: c_in
         target += nappend;
     }
     encoded[target] = 0;
-    return @ptrCast(encoded);
+    return encoded[0..target :0].ptr;
 }
 
-export fn Curl_urldecode(
-    string: ?[*]const u8,
+fn urldecodeInner(
+    s: [*]const u8,
     length: usize,
-    ostring: *?[*:0]u8,
-    olen: ?*usize,
     ctrl: c_uint,
-) callconv(.c) CURLcode {
-    const s = string orelse return CURLE_BAD_FUNCTION_ARGUMENT;
-    var alloc: usize = if (length != 0)
-        length
-    else
-        std.mem.len(@as([*:0]const u8, @ptrCast(s)));
-
-    const alloc_plus_one = std.math.add(usize, alloc, 1) catch return CURLE_OUT_OF_MEMORY;
-    const ns_base = mem.malloc(alloc_plus_one) orelse return CURLE_OUT_OF_MEMORY;
-    ostring.* = @ptrCast(ns_base);
+) error{ OutOfMemory, UrlMalformat }![:0]u8 {
+    var alloc: usize = if (length != 0) length else cstrLen(s);
+    const alloc_plus_one = std.math.add(usize, alloc, 1) catch return error.OutOfMemory;
+    const ns_base = mem.allocMany(u8, alloc_plus_one) orelse return error.OutOfMemory;
+    errdefer mem.destroy(ns_base);
 
     const reject_limit: u8 = if (ctrl == REJECT_CTRL)
         0x20
@@ -193,9 +192,7 @@ export fn Curl_urldecode(
                     cur += 3;
                     alloc -= 3;
                     if (in < reject_limit) {
-                        mem.free(ns_base);
-                        ostring.* = null;
-                        return CURLE_URL_MALFORMAT;
+                        return error.UrlMalformat;
                     }
                     ns_base[out_idx] = in;
                     out_idx += 1;
@@ -214,16 +211,12 @@ export fn Curl_urldecode(
             if (reject_limit != 0) {
                 if (reject_limit == 1) {
                     if (std.mem.indexOfScalar(u8, cur[0..n], 0) != null) {
-                        mem.free(ns_base);
-                        ostring.* = null;
-                        return CURLE_URL_MALFORMAT;
+                        return error.UrlMalformat;
                     }
                 } else {
                     for (cur[0..n]) |b| {
                         if (b < 0x20) {
-                            mem.free(ns_base);
-                            ostring.* = null;
-                            return CURLE_URL_MALFORMAT;
+                            return error.UrlMalformat;
                         }
                     }
                 }
@@ -236,9 +229,27 @@ export fn Curl_urldecode(
         }
     }
     ns_base[out_idx] = 0;
+    return ns_base[0..out_idx :0];
+}
 
+export fn Curl_urldecode(
+    string: ?[*]const u8,
+    length: usize,
+    ostring: *?[*:0]u8,
+    olen: ?*usize,
+    ctrl: c_uint,
+) callconv(.c) CURLcode {
+    const s = string orelse return CURLE_BAD_FUNCTION_ARGUMENT;
+    const decoded = urldecodeInner(s, length, ctrl) catch |err| {
+        ostring.* = null;
+        return switch (err) {
+            error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+            error.UrlMalformat => CURLE_URL_MALFORMAT,
+        };
+    };
+    ostring.* = decoded.ptr;
     if (olen) |ol| {
-        ol.* = out_idx;
+        ol.* = decoded.len;
     }
     return CURLE_OK;
 }
@@ -1467,7 +1478,7 @@ fn curlSspiStrerrorImpl(err: c_long, buf: ?[*]u8, buflen: usize) callconv(.c) ?[
         sspi_win.SetLastError(old_win_err);
     }
 
-    return @ptrCast(out);
+    return out[0..copy_len :0].ptr;
 }
 
 comptime {

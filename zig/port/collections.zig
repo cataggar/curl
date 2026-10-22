@@ -1,6 +1,18 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const mem = @import("mem.zig");
+const containers = @import("containers.zig");
+
+pub const Curl_llist_node = containers.Curl_llist_node;
+
+inline fn fromOpaque(comptime T: type, raw: anytype) if (@typeInfo(T) == .pointer) ?T else ?*T {
+    const p = mem.toRawPtr(raw) orelse return null;
+    return @ptrCast(@alignCast(p));
+}
+
+inline fn opaqueBytes(p: ?*const anyopaque) ?[*]const u8 {
+    return @ptrCast(p);
+}
 
 pub const CURLcode = c_uint;
 pub const CURLE_OK: CURLcode = 0;
@@ -27,7 +39,7 @@ export fn Curl_ptrarray_init(pa: *ptrarray) callconv(.c) void {
 
 export fn Curl_ptrarray_clear(pa: *ptrarray) callconv(.c) void {
     if (pa.data) |d| {
-        mem.free(@ptrCast(d));
+        mem.destroy(d);
         pa.data = null;
     }
     pa.n = 0;
@@ -52,14 +64,12 @@ export fn Curl_ptrarray_add(pa: *ptrarray, ptr: ?*anyopaque) callconv(.c) CURLco
             std.math.maxInt(u32) - pa.capacity;
 
         const new_cap: usize = @as(usize, pa.capacity + growth);
-        const alloc_bytes = std.math.mul(usize, new_cap, @sizeOf(?*anyopaque)) catch return CURLE_OUT_OF_MEMORY;
-        const raw = mem.calloc(1, alloc_bytes) orelse return CURLE_OUT_OF_MEMORY;
-        const ndata: [*]?*anyopaque = @ptrCast(@alignCast(raw));
+        const ndata = mem.callocMany(?*anyopaque, new_cap) orelse return CURLE_OUT_OF_MEMORY;
         if (pa.n > 0) {
             const old = pa.data.?;
             @memcpy(ndata[0..pa.n], old[0..pa.n]);
         }
-        mem.free(@ptrCast(pa.data));
+        mem.destroy(pa.data);
         pa.data = ndata;
         pa.capacity += growth;
     }
@@ -121,14 +131,13 @@ export fn Curl_uint32_bset_resize(bset: *uint32_bset, nmax: u32) callconv(.c) CU
         (std.math.maxInt(u32) / 64);
 
     if (nslots != bset.nslots) {
-        const raw = mem.calloc(@as(usize, nslots), @sizeOf(u64)) orelse return CURLE_OUT_OF_MEMORY;
-        const slots: [*]u64 = @ptrCast(@alignCast(raw));
+        const slots = mem.callocMany(u64, nslots) orelse return CURLE_OUT_OF_MEMORY;
         if (bset.slots) |old_slots| {
             const copy_n: usize = @min(nslots, bset.nslots);
             if (copy_n > 0) {
                 @memcpy(slots[0..copy_n], old_slots[0..copy_n]);
             }
-            mem.free(@ptrCast(old_slots));
+            mem.destroy(old_slots);
         }
         bset.slots = slots;
         bset.nslots = nslots;
@@ -138,7 +147,7 @@ export fn Curl_uint32_bset_resize(bset: *uint32_bset, nmax: u32) callconv(.c) CU
 }
 
 export fn Curl_uint32_bset_destroy(bset: *uint32_bset) callconv(.c) void {
-    mem.free(@ptrCast(bset.slots));
+    mem.destroy(bset.slots);
     bset.slots = null;
     bset.nslots = 0;
     bset.first_slot_used = 0;
@@ -272,7 +281,7 @@ pub export fn uint32_spbset_clear(bset: *uint32_spbset) callconv(.c) void {
     var chunk_opt = bset.head.next;
     while (chunk_opt) |chunk| {
         const next = chunk.next;
-        mem.free(@ptrCast(chunk));
+        mem.destroy(chunk);
         chunk_opt = next;
     }
     bset.head = .{
@@ -383,8 +392,7 @@ fn uint32_spbset_get_chunk(bset: ?*uint32_spbset, i: u32, grow: bool) ?*uint32_s
         if (reused == &set.head) return &set.head;
         chunk = reused;
     } else {
-        const raw = mem.calloc(1, @sizeOf(uint32_spbset_chunk)) orelse return null;
-        chunk = @ptrCast(@alignCast(raw));
+        chunk = mem.create(uint32_spbset_chunk) orelse return null;
         chunk.offset = i_offset;
     }
 
@@ -527,8 +535,7 @@ fn uint32_tbl_clear_rows(tbl: *uint32_tbl, from: u32, upto_excluding: u32) void 
 export fn Curl_uint32_tbl_resize(tbl: *uint32_tbl, nrows: u32) callconv(.c) CURLcode {
     if (nrows == 0) return CURLE_BAD_FUNCTION_ARGUMENT;
     if (nrows != tbl.nrows) {
-        const raw = mem.calloc(@as(usize, nrows), @sizeOf(?*anyopaque)) orelse return CURLE_OUT_OF_MEMORY;
-        const rows: [*]?*anyopaque = @ptrCast(@alignCast(raw));
+        const rows = mem.callocMany(?*anyopaque, nrows) orelse return CURLE_OUT_OF_MEMORY;
         if (tbl.rows) |old_rows| {
             const copy_n: usize = @min(nrows, tbl.nrows);
             if (copy_n > 0) {
@@ -537,7 +544,7 @@ export fn Curl_uint32_tbl_resize(tbl: *uint32_tbl, nrows: u32) callconv(.c) CURL
             if (nrows < tbl.nrows) {
                 uint32_tbl_clear_rows(tbl, nrows, tbl.nrows);
             }
-            mem.free(@ptrCast(old_rows));
+            mem.destroy(old_rows);
         }
         tbl.rows = rows;
         tbl.nrows = nrows;
@@ -552,7 +559,7 @@ pub export fn uint32_tbl_clear(tbl: *uint32_tbl) callconv(.c) void {
 
 export fn Curl_uint32_tbl_destroy(tbl: *uint32_tbl) callconv(.c) void {
     uint32_tbl_clear(tbl);
-    mem.free(@ptrCast(tbl.rows));
+    mem.destroy(tbl.rows);
     tbl.rows = null;
     tbl.nrows = 0;
     tbl.nentries = 0;
@@ -697,13 +704,13 @@ export fn Curl_u8_strset_clear(set: *u8_strset) callconv(.c) void {
     const cnt: usize = u8StrsetSlotCnt(set);
     for (0..cnt) |i| {
         if (set.data[i]) |p| {
-            mem.free(@ptrCast(p));
+            mem.destroy(p);
             set.data[i] = null;
         }
     }
     const sdata_ptr: [*]?[*:0]u8 = &set.sdata;
     if (set.data != sdata_ptr) {
-        mem.free(@ptrCast(set.data));
+        mem.destroy(set.data);
     }
     Curl_u8_strset_init(set);
 }
@@ -746,7 +753,7 @@ fn u8_strset_grow(set: *u8_strset) bool {
     const prev_ids = set.ids;
     const prev_slots = set.slotbits;
 
-    set.data = @ptrCast(@alignCast(d));
+    set.data = fromOpaque([*]?[*:0]u8, d).?;
     set.ids = d + (nslots * @sizeOf(?[*:0]u8));
     set.psl = set.ids + nslots;
     set.slotbits = nslotbits;
@@ -761,7 +768,7 @@ fn u8_strset_grow(set: *u8_strset) bool {
     }
     const sdata_ptr: [*]?[*:0]u8 = &set.sdata;
     if (prev_data != sdata_ptr) {
-        mem.free(@ptrCast(prev_data));
+        mem.destroy(prev_data);
     }
     return true;
 }
@@ -801,13 +808,13 @@ pub export fn Curl_u8_strset_setn(set: *u8_strset, id: u8, str: ?[*:0]u8) callco
 
     var i: u8 = 0;
     if (u8_strset_get_index(set, id, &i)) {
-        mem.free(@ptrCast(set.data[i]));
+        mem.destroy(set.data[i]);
         set.data[i] = val;
         return CURLE_OK;
     }
 
     if (set.count >= u8StrsetSlotCnt(set) and !u8_strset_grow(set)) {
-        mem.free(@ptrCast(val));
+        mem.destroy(val);
         return CURLE_OUT_OF_MEMORY;
     }
 
@@ -821,13 +828,7 @@ pub export fn Curl_u8_strset_setx(set: *u8_strset, id: u8, str: ?[*]const u8, sl
         return CURLE_OK;
     };
 
-    if (slen >= std.math.maxInt(usize)) return CURLE_OUT_OF_MEMORY;
-    const raw = mem.malloc(slen + 1) orelse return CURLE_OUT_OF_MEMORY;
-    if (slen > 0) {
-        @memcpy(raw[0..slen], s[0..slen]);
-    }
-    raw[slen] = 0;
-    const val: [*:0]u8 = @ptrCast(raw);
+    const val = mem.memdup0(s, slen) orelse return CURLE_OUT_OF_MEMORY;
     return Curl_u8_strset_setn(set, id, val);
 }
 
@@ -848,7 +849,7 @@ fn u8_strset_unset_impl(set: *u8_strset, id: u8, zero: bool) void {
                     std.crypto.secureZero(u8, s[0..len]);
                 }
             }
-            mem.free(@ptrCast(s));
+            mem.destroy(s);
             set.data[i] = null;
         }
         set.ids[i] = 0;
@@ -876,17 +877,25 @@ pub export fn Curl_u8_strset_unset0(set: *u8_strset, id: u8) callconv(.c) void {
     u8_strset_unset_impl(set, id, true);
 }
 
-export fn Curl_u8_strset_copy(dest: *u8_strset, src: *u8_strset) callconv(.c) CURLcode {
-    var result: CURLcode = CURLE_OK;
+fn u8StrsetCopyInner(dest: *u8_strset, src: *u8_strset, out_rc: *CURLcode) error{CopyFailed}!void {
     Curl_u8_strset_clear(dest);
+    errdefer Curl_u8_strset_clear(dest);
     const cnt: usize = u8StrsetSlotCnt(src);
-    var i: usize = 0;
-    while (result == CURLE_OK and i < cnt) : (i += 1) {
+    for (0..cnt) |i| {
         if (src.data[i]) |s| {
-            result = u8_strset_set(dest, src.ids[i], s);
+            const rc = u8_strset_set(dest, src.ids[i], s);
+            if (rc != CURLE_OK) {
+                out_rc.* = rc;
+                return error.CopyFailed;
+            }
         }
     }
-    return result;
+}
+
+export fn Curl_u8_strset_copy(dest: *u8_strset, src: *u8_strset) callconv(.c) CURLcode {
+    var result: CURLcode = CURLE_OK;
+    u8StrsetCopyInner(dest, src, &result) catch return result;
+    return CURLE_OK;
 }
 
 // ============================================================================
@@ -937,7 +946,7 @@ export fn Curl_u32_ptrset_clear(set: *u32_ptrset) callconv(.c) void {
         }
     }
     if (set.data) |data| {
-        mem.free(@ptrCast(data));
+        mem.destroy(data);
     }
     Curl_u32_ptrset_init(set, set.dtor);
 }
@@ -986,8 +995,8 @@ fn u32_ptrset_grow(set: *u32_ptrset) bool {
     const prev_ids = set.ids;
     const pslotbits = set.slotbits;
 
-    const data_ptr: [*]?*anyopaque = @ptrCast(@alignCast(d));
-    const ids_ptr: [*]u32 = @ptrCast(@alignCast(data_ptr + nslots));
+    const data_ptr = fromOpaque([*]?*anyopaque, d).?;
+    const ids_ptr = fromOpaque([*]u32, data_ptr + nslots).?;
     const psl_ptr: [*]u32 = ids_ptr + nslots;
 
     set.data = data_ptr;
@@ -1005,7 +1014,7 @@ fn u32_ptrset_grow(set: *u32_ptrset) bool {
                 u32_ptrset_add(set, pids[i], p);
             }
         }
-        mem.free(@ptrCast(pdata));
+        mem.destroy(pdata);
     }
     return true;
 }
@@ -1176,9 +1185,9 @@ export fn Curl_hash_global_init() callconv(.c) CURLcode {
 pub export fn hash_str_seeded(key: ?*const anyopaque, key_length: usize, slots_num: usize, seed: usize) callconv(.c) usize {
     var h: usize = 5381 ^ seed;
     if (key_length > 0) {
-        if (key) |k| {
-            const key_chars: [*]const c_char = @ptrCast(k);
-            for (key_chars[0..key_length]) |c| {
+        if (opaqueBytes(key)) |key_bytes| {
+            for (key_bytes[0..key_length]) |b| {
+                const c: c_char = @bitCast(b);
                 const j: usize = if (@typeInfo(c_char).int.signedness == .signed)
                     @bitCast(@as(isize, c))
                 else
@@ -1196,15 +1205,13 @@ pub export fn hash_str(key: ?*const anyopaque, key_length: usize, slots_num: usi
 }
 
 inline fn hash_elem_key(he: *Curl_hash_element) [*]u8 {
-    const base: [*]u8 = @ptrCast(he);
-    return base + @offsetOf(Curl_hash_element, "key");
+    return &he.key;
 }
 
 fn hash_socket(key: ?*const anyopaque, key_length: usize, slots_num: usize) usize {
     if (key_length != @sizeOf(curl_socket_t)) return 0;
-    const k = key orelse return 0;
+    const src = opaqueBytes(key) orelse return 0;
     var socket: curl_socket_t = 0;
-    const src: [*]const u8 = @ptrCast(k);
     @memcpy(std.mem.asBytes(&socket), src[0..@sizeOf(curl_socket_t)]);
     if (builtin.os.tag == .windows) {
         return socket % slots_num;
@@ -1217,8 +1224,8 @@ fn hash_socket(key: ?*const anyopaque, key_length: usize, slots_num: usize) usiz
 
 fn compare_socket(key1: ?*const anyopaque, key1_len: usize, key2: ?*const anyopaque, key2_len: usize) bool {
     if (key1_len != @sizeOf(curl_socket_t) or key2_len != @sizeOf(curl_socket_t)) return false;
-    const k1: [*]const u8 = @ptrCast(key1 orelse return false);
-    const k2: [*]const u8 = @ptrCast(key2 orelse return false);
+    const k1 = opaqueBytes(key1) orelse return false;
+    const k2 = opaqueBytes(key2) orelse return false;
     var socket1: curl_socket_t = 0;
     var socket2: curl_socket_t = 0;
     @memcpy(std.mem.asBytes(&socket1), k1[0..@sizeOf(curl_socket_t)]);
@@ -1229,8 +1236,8 @@ fn compare_socket(key1: ?*const anyopaque, key1_len: usize, key2: ?*const anyopa
 fn compare_bytes(key1: ?*const anyopaque, key1_len: usize, key2: ?*const anyopaque, key2_len: usize) bool {
     if (key1_len != key2_len) return false;
     if (key1_len == 0) return true;
-    const k1: [*]const u8 = @ptrCast(key1 orelse return false);
-    const k2: [*]const u8 = @ptrCast(key2 orelse return false);
+    const k1 = opaqueBytes(key1) orelse return false;
+    const k2 = opaqueBytes(key2) orelse return false;
     return std.mem.eql(u8, k1[0..key1_len], k2[0..key2_len]);
 }
 
@@ -1274,11 +1281,10 @@ fn hash_elem_create(
 ) ?*Curl_hash_element {
     const total = std.math.add(usize, @sizeOf(Curl_hash_element), key_len) catch return null;
     const raw = mem.malloc(total) orelse return null;
-    const he: *Curl_hash_element = @ptrCast(@alignCast(raw));
+    const he = fromOpaque(Curl_hash_element, raw).?;
     he.next = null;
     if (key_len > 0) {
-        if (key) |k| {
-            const src: [*]const u8 = @ptrCast(k);
+        if (opaqueBytes(key)) |src| {
             @memcpy(hash_elem_key(he)[0..key_len], src[0..key_len]);
         }
     }
@@ -1301,7 +1307,7 @@ fn hash_elem_clear_ptr(h: *Curl_hash, he: *Curl_hash_element) void {
 
 fn hash_elem_destroy(h: *Curl_hash, he: *Curl_hash_element) void {
     hash_elem_clear_ptr(h, he);
-    mem.free(@ptrCast(he));
+    mem.destroy(he);
 }
 
 fn hash_elem_unlink(h: *Curl_hash, he_anchor: *?*Curl_hash_element, he: *Curl_hash_element) void {
@@ -1324,8 +1330,7 @@ export fn Curl_hash_add2(
 ) callconv(.c) ?*anyopaque {
     if (!hash_key_is_valid(h.type, key_len)) return null;
     if (h.table == null) {
-        const raw = mem.calloc(h.slots, @sizeOf(?*Curl_hash_element)) orelse return null;
-        h.table = @ptrCast(@alignCast(raw));
+        h.table = mem.callocMany(?*Curl_hash_element, h.slots) orelse return null;
     }
 
     const table = h.table.?;
@@ -1377,10 +1382,11 @@ export fn Curl_hash_delete(
 }
 
 export fn Curl_hash_pick(
-    h: *Curl_hash,
+    h_opt: ?*Curl_hash,
     key: ?*const anyopaque,
     key_len: usize,
 ) callconv(.c) ?*anyopaque {
+    const h = h_opt orelse return null;
     if (!hash_key_is_valid(h.type, key_len)) return null;
     if (h.table) |table| {
         const slot_idx = hash_compute(h.type, key, key_len, h.slots);
@@ -1393,6 +1399,36 @@ export fn Curl_hash_pick(
     }
     return null;
 }
+
+pub fn hashPickTyped(comptime T: type, h: ?*Curl_hash, key: ?*const anyopaque, key_len: usize) ?*T {
+    return fromOpaque(T, Curl_hash_pick(h, key, key_len));
+}
+
+pub const Curl_hash_pick_typed = hashPickTyped;
+
+pub fn hashAddTyped(comptime T: type, h: *Curl_hash, key: ?*const anyopaque, key_len: usize, p: *T) ?*T {
+    return fromOpaque(T, Curl_hash_add(h, key, key_len, p));
+}
+
+pub const Curl_hash_add_typed = hashAddTyped;
+
+pub fn llistElemTyped(comptime T: type, node: ?*const Curl_llist_node) ?*T {
+    const n = node orelse return null;
+    return fromOpaque(T, n._ptr);
+}
+
+pub const Curl_llist_elem_typed = llistElemTyped;
+
+pub fn hashDtorTyped(comptime T: type) Curl_hash_dtor {
+    const S = struct {
+        fn dtor(p: ?*anyopaque) callconv(.c) void {
+            mem.freeTyped(fromOpaque(T, p));
+        }
+    };
+    return &S.dtor;
+}
+
+pub const Curl_hash_dtor_typed = hashDtorTyped;
 
 export fn Curl_hash_clean(h: ?*Curl_hash) callconv(.c) void {
     const hash = h orelse return;
@@ -1410,7 +1446,7 @@ export fn Curl_hash_clean(h: ?*Curl_hash) callconv(.c) void {
 export fn Curl_hash_destroy(h: *Curl_hash) callconv(.c) void {
     if (h.table) |table| {
         Curl_hash_clean(h);
-        mem.free(@ptrCast(table));
+        mem.destroy(table);
         h.table = null;
     }
     h.slots = 0;
@@ -1769,7 +1805,7 @@ test "uint32_tbl operations and round-robin keys" {
 fn fmtStrId(buf: *[64]u8, idx: u8) ![*:0]const u8 {
     const slice = try std.fmt.bufPrint(buf[0 .. buf.len - 1], "str-{d}", .{idx});
     buf[slice.len] = 0;
-    return @ptrCast(buf);
+    return buf[0..slice.len :0].ptr;
 }
 
 test "u8_strset operations, collisions, growth, copy, unset0" {
@@ -1857,7 +1893,7 @@ fn testPtrsetDtor(_: u32, _: ?*anyopaque) callconv(.c) void {
 }
 
 fn testPtrsetVisit(_: u32, _: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) bool {
-    const counter: *usize = @ptrCast(@alignCast(user_data.?));
+    const counter = fromOpaque(usize, user_data).?;
     counter.* += 1;
     return true;
 }
@@ -1998,4 +2034,22 @@ test "Curl_hash bytes and socket keys, iteration, and cleanup" {
     try std.testing.expectEqual(@as(c_int, 0), Curl_hash_delete(&sock_hash, &skey, @sizeOf(curl_socket_t)));
     try std.testing.expectEqual(@as(?*anyopaque, null), Curl_hash_pick(&sock_hash, &skey, @sizeOf(curl_socket_t)));
     try std.testing.expectEqual(@as(?*anyopaque, &val2), Curl_hash_pick(&sock_hash, &scollision, @sizeOf(curl_socket_t)));
+
+    // Test typed hash and llist helpers
+    var typed_hash: Curl_hash = undefined;
+    Curl_hash_init(&typed_hash, 7, CURL_HASH_TYPE_BYTES, hashDtorTyped(u64));
+    defer Curl_hash_destroy(&typed_hash);
+
+    const heap_val = mem.create(u64) orelse return error.OutOfMemory;
+    heap_val.* = 0xfeedface;
+    try std.testing.expectEqual(@as(?*u64, heap_val), hashAddTyped(u64, &typed_hash, "tk", 2, heap_val));
+    try std.testing.expectEqual(@as(?*u64, heap_val), hashPickTyped(u64, &typed_hash, "tk", 2));
+    try std.testing.expectEqual(@as(u64, 0xfeedface), hashPickTyped(u64, &typed_hash, "tk", 2).?.*);
+
+    var list: containers.Curl_llist = undefined;
+    var node: Curl_llist_node = undefined;
+    var elem_val: u32 = 1234;
+    containers.Curl_llist_init(&list, null);
+    containers.Curl_llist_insert_next(&list, null, &elem_val, &node);
+    try std.testing.expectEqual(@as(?*u32, &elem_val), llistElemTyped(u32, containers.Curl_llist_head(&list)));
 }

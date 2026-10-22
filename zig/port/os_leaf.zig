@@ -1,15 +1,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const mem = @import("mem.zig");
 
 const CURLE_OK: c_uint = 0;
 const CURLE_FAILED_INIT: c_uint = 2;
 const CURLE_READ_ERROR: c_uint = 26;
-
-extern var Curl_cmalloc: *const fn (usize) callconv(.c) ?*anyopaque;
-extern var Curl_cfree: *const fn (?*anyopaque) callconv(.c) void;
-extern var Curl_crealloc: *const fn (?*anyopaque, usize) callconv(.c) ?*anyopaque;
-extern var Curl_cstrdup: *const fn ([*:0]const u8) callconv(.c) ?[*:0]u8;
-extern var Curl_ccalloc: *const fn (usize, usize) callconv(.c) ?*anyopaque;
 
 pub const Dynbuf = extern struct {
     bufr: ?[*]u8,
@@ -155,7 +150,7 @@ pub const win32 = struct {
     ) callconv(.winapi) c_int;
 
     extern "kernel32" fn GetModuleHandleA(lpModuleName: ?[*:0]const u8) callconv(.winapi) ?*anyopaque;
-    extern "kernel32" fn GetProcAddress(hModule: *anyopaque, lpProcName: [*:0]const u8) callconv(.winapi) ?*const anyopaque;
+    extern "kernel32" fn GetProcAddress(hModule: *anyopaque, lpProcName: [*:0]const u8) callconv(.winapi) ?RtlVerifyVersionInfoFn;
     extern "kernel32" fn VerSetConditionMask(ConditionMask: u64, TypeMask: u32, Condition: u8) callconv(.winapi) u64;
     extern "kernel32" fn VerifyVersionInfoW(lpVersionInformation: *OUR_OSVERSIONINFOEXW, dwTypeMask: u32, dwlConditionMask: u64) callconv(.winapi) c_int;
     extern "kernel32" fn GetFullPathNameW(lpFileName: [*:0]const u16, nBufferLength: u32, lpBuffer: ?[*]u16, lpFilePart: ?*?[*:0]u16) callconv(.winapi) u32;
@@ -218,126 +213,134 @@ pub const win32 = struct {
         return true;
     }
 
-    fn fix_excessive_path(in_opt: ?[*:0]const u8, out: *?[*:0]u8) bool {
+    fn fixExcessivePathInner(in: [*:0]const u8) error{Failed}![*:0]u8 {
         const max_path_len: usize = 32767;
-        out.* = null;
-        const in = in_opt orelse return false;
-
         if (startsWithU8(in, "\\\\?\\"))
-            return false;
+            return error.Failed;
 
         var needed: usize = 0;
         var count: usize = 0;
         if (mbstowcs_s(&needed, null, 0, in, 0) != 0)
-            return false;
+            return error.Failed;
         if (needed == 0 or needed >= max_path_len)
-            return false;
-        const ibuf_raw = Curl_cmalloc(needed * @sizeOf(u16)) orelse return false;
-        defer Curl_cfree(ibuf_raw);
-        const ibuf: [*]u16 = @ptrCast(@alignCast(ibuf_raw));
+            return error.Failed;
+        const ibuf = mem.allocMany(u16, needed) orelse return error.Failed;
+        defer mem.destroy(ibuf);
         if (mbstowcs_s(&count, ibuf, needed, in, needed - 1) != 0)
-            return false;
+            return error.Failed;
         if (count != needed)
-            return false;
-        const in_w: [*:0]const u16 = @ptrCast(ibuf);
+            return error.Failed;
+        ibuf[needed - 1] = 0;
+        const in_w: [*:0]const u16 = ibuf[0 .. needed - 1 :0].ptr;
 
         needed = @as(usize, GetFullPathNameW(in_w, 0, null, null));
         if (needed == 0 or needed > max_path_len)
-            return false;
+            return error.Failed;
         if (needed <= MAX_PATH)
-            return false;
+            return error.Failed;
 
-        var fbuf_raw: ?*anyopaque = Curl_cmalloc(needed * @sizeOf(u16)) orelse return false;
-        defer if (fbuf_raw) |p| Curl_cfree(p);
-        var fbuf: [*:0]u16 = @ptrCast(@alignCast(fbuf_raw.?));
-        count = @as(usize, GetFullPathNameW(in_w, @intCast(needed), fbuf, null));
+        var fbuf_ptr: ?[*]u16 = mem.allocMany(u16, needed) orelse return error.Failed;
+        defer mem.destroy(fbuf_ptr);
+        count = @as(usize, GetFullPathNameW(in_w, @intCast(needed), fbuf_ptr.?, null));
         if (count == 0 or count >= needed)
-            return false;
+            return error.Failed;
+        fbuf_ptr.?[count] = 0;
+        var fbuf: [*:0]u16 = fbuf_ptr.?[0..count :0].ptr;
 
         if (startsWithU16(fbuf, "\\\\?\\")) {
             // do nothing
         } else if (startsWithU16(fbuf, "\\\\.\\")) {
             fbuf[2] = '?';
         } else if (startsWithU16(fbuf, "\\\\.") or startsWithU16(fbuf, "\\\\?")) {
-            return false;
+            return error.Failed;
         } else if (startsWithU16(fbuf, "\\\\")) {
             needed = 8 + (count - 2) + 1;
             if (needed > max_path_len)
-                return false;
-            const temp_raw = Curl_cmalloc(needed * @sizeOf(u16)) orelse return false;
-            const temp: [*]u16 = @ptrCast(@alignCast(temp_raw));
+                return error.Failed;
+            const temp = mem.allocMany(u16, needed) orelse return error.Failed;
             const unc_prefix = [_]u16{ '\\', '\\', '?', '\\', 'U', 'N', 'C', '\\' };
+            const unc_len = 8 + (count - 2);
             @memcpy(temp[0..8], &unc_prefix);
-            @memcpy(temp[8 .. 8 + (count - 2)], fbuf[2..count]);
-            temp[8 + (count - 2)] = 0;
-            Curl_cfree(fbuf_raw);
-            fbuf_raw = temp_raw;
-            fbuf = @ptrCast(temp);
+            @memcpy(temp[8..unc_len], fbuf[2..count]);
+            temp[unc_len] = 0;
+            mem.destroy(fbuf_ptr);
+            fbuf_ptr = temp;
+            fbuf = temp[0..unc_len :0].ptr;
         } else {
             needed = 4 + count + 1;
             if (needed > max_path_len)
-                return false;
-            const temp_raw = Curl_cmalloc(needed * @sizeOf(u16)) orelse return false;
-            const temp: [*]u16 = @ptrCast(@alignCast(temp_raw));
+                return error.Failed;
+            const temp = mem.allocMany(u16, needed) orelse return error.Failed;
             const prefix = [_]u16{ '\\', '\\', '?', '\\' };
+            const pref_len = 4 + count;
             @memcpy(temp[0..4], &prefix);
-            @memcpy(temp[4 .. 4 + count], fbuf[0..count]);
-            temp[4 + count] = 0;
-            Curl_cfree(fbuf_raw);
-            fbuf_raw = temp_raw;
-            fbuf = @ptrCast(temp);
+            @memcpy(temp[4..pref_len], fbuf[0..count]);
+            temp[pref_len] = 0;
+            mem.destroy(fbuf_ptr);
+            fbuf_ptr = temp;
+            fbuf = temp[0..pref_len :0].ptr;
         }
 
         if (wcstombs_s(&needed, null, 0, fbuf, 0) != 0)
-            return false;
+            return error.Failed;
         if (needed == 0 or needed >= max_path_len)
-            return false;
-        const obuf_raw = Curl_cmalloc(needed) orelse return false;
-        const obuf: [*]u8 = @ptrCast(obuf_raw);
+            return error.Failed;
+        const obuf = mem.allocMany(u8, needed) orelse return error.Failed;
+        errdefer mem.destroy(obuf);
         if (wcstombs_s(&count, obuf, needed, fbuf, needed - 1) != 0 or count != needed) {
-            Curl_cfree(obuf_raw);
-            return false;
+            return error.Failed;
         }
-        out.* = @ptrCast(obuf);
+        obuf[needed - 1] = 0;
+        return obuf[0 .. needed - 1 :0].ptr;
+    }
+
+    fn fix_excessive_path(in_opt: ?[*:0]const u8, out: *?[*:0]u8) bool {
+        out.* = null;
+        const in = in_opt orelse return false;
+        out.* = fixExcessivePathInner(in) catch return false;
         return true;
+    }
+
+    fn convertUtf8ToWcharInner(s: [*:0]const u8) error{Failed}![*:0]u16 {
+        const str_w_len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, null, 0);
+        if (str_w_len <= 0) return error.Failed;
+        const len: usize = @intCast(str_w_len);
+        const str_w = mem.allocMany(u16, len) orelse return error.Failed;
+        errdefer mem.destroy(str_w);
+        if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, str_w, str_w_len) == 0) {
+            return error.Failed;
+        }
+        str_w[len - 1] = 0;
+        return str_w[0 .. len - 1 :0].ptr;
     }
 
     pub fn curlx_convert_UTF8_to_wchar(str_utf8: ?[*:0]const u8) callconv(.c) ?[*:0]u16 {
         const s = str_utf8 orelse return null;
-        const str_w_len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, null, 0);
-        if (str_w_len > 0) {
-            const raw = Curl_cmalloc(@as(usize, @intCast(str_w_len)) * @sizeOf(u16)) orelse return null;
-            const str_w: [*]u16 = @ptrCast(@alignCast(raw));
-            if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, str_w, str_w_len) == 0) {
-                Curl_cfree(raw);
-                return null;
-            }
-            return @ptrCast(str_w);
+        return convertUtf8ToWcharInner(s) catch null;
+    }
+
+    fn convertWcharToUtf8Inner(s: [*:0]const u16) error{Failed}![*:0]u8 {
+        const bytes = WideCharToMultiByte(CP_UTF8, 0, s, -1, null, 0, null, null);
+        if (bytes <= 0) return error.Failed;
+        const len: usize = @intCast(bytes);
+        const str_utf8 = mem.allocMany(u8, len) orelse return error.Failed;
+        errdefer mem.destroy(str_utf8);
+        if (WideCharToMultiByte(CP_UTF8, 0, s, -1, str_utf8, bytes, null, null) == 0) {
+            return error.Failed;
         }
-        return null;
+        str_utf8[len - 1] = 0;
+        return str_utf8[0 .. len - 1 :0].ptr;
     }
 
     pub fn curlx_convert_wchar_to_UTF8(str_w: ?[*:0]const u16) callconv(.c) ?[*:0]u8 {
         const s = str_w orelse return null;
-        const bytes = WideCharToMultiByte(CP_UTF8, 0, s, -1, null, 0, null, null);
-        if (bytes > 0) {
-            const raw = Curl_cmalloc(@as(usize, @intCast(bytes))) orelse return null;
-            const str_utf8: [*]u8 = @ptrCast(raw);
-            if (WideCharToMultiByte(CP_UTF8, 0, s, -1, str_utf8, bytes, null, null) == 0) {
-                Curl_cfree(raw);
-                return null;
-            }
-            return @ptrCast(str_utf8);
-        }
-        return null;
+        return convertWcharToUtf8Inner(s) catch null;
     }
 
     pub fn curlx_verify_windows_init() callconv(.c) void {
         if (GetModuleHandleA("ntdll")) |hmod| {
-            if (GetProcAddress(hmod, "RtlVerifyVersionInfo")) |proc| {
-                s_pRtlVerifyVersionInfo = @ptrCast(@alignCast(proc));
-                return;
-            }
+            s_pRtlVerifyVersionInfo = GetProcAddress(hmod, "RtlVerifyVersionInfo");
+            return;
         }
         s_pRtlVerifyVersionInfo = null;
     }
@@ -455,7 +458,7 @@ pub const win32 = struct {
         const fname = filename orelse return invalidHandleValue();
         var fixed: ?[*:0]u8 = null;
         const target: [*:0]const u8 = if (fix_excessive_path(fname, &fixed)) fixed.? else fname;
-        defer if (fixed) |f| Curl_cfree(@ptrCast(f));
+        defer mem.destroy(fixed);
 
         return CreateFileA(
             target,
@@ -475,7 +478,7 @@ pub const win32 = struct {
         const fname = filename orelse return invalidHandleValue();
         var fixed: ?[*:0]u8 = null;
         const target: [*:0]const u8 = if (fix_excessive_path(fname, &fixed)) fixed.? else fname;
-        defer if (fixed) |f| Curl_cfree(@ptrCast(f));
+        defer mem.destroy(fixed);
 
         return FindFirstFileA(target, find_data);
     }
@@ -491,7 +494,7 @@ pub const win32 = struct {
 
         var fixed: ?[*:0]u8 = null;
         const target: [*:0]const u8 = if (fix_excessive_path(fname, &fixed)) fixed.? else fname;
-        defer if (fixed) |f| Curl_cfree(@ptrCast(f));
+        defer mem.destroy(fixed);
 
         _errno().* = _sopen_s(&res, target, oflag, SH_DENYNO, pmode);
         return res;
@@ -509,7 +512,7 @@ pub const win32 = struct {
 
         var fixed: ?[*:0]u8 = null;
         const target: [*:0]const u8 = if (fix_excessive_path(fname, &fixed)) fixed.? else fname;
-        defer if (fixed) |f| Curl_cfree(@ptrCast(f));
+        defer mem.destroy(fixed);
 
         return _fsopen(target, m, SH_DENYNO);
     }
@@ -527,7 +530,7 @@ pub const win32 = struct {
 
         var fixed: ?[*:0]u8 = null;
         const target: [*:0]const u8 = if (fix_excessive_path(fname, &fixed)) fixed.? else fname;
-        defer if (fixed) |f| Curl_cfree(@ptrCast(f));
+        defer mem.destroy(fixed);
 
         _errno().* = freopen_s(&file, target, m, fp);
         return file;
@@ -541,7 +544,7 @@ pub const win32 = struct {
 
         var fixed: ?[*:0]u8 = null;
         const target: [*:0]const u8 = if (fix_excessive_path(p, &fixed)) fixed.? else p;
-        defer if (fixed) |f| Curl_cfree(@ptrCast(f));
+        defer mem.destroy(fixed);
 
         return _stati64(target, buffer);
     }
@@ -554,7 +557,7 @@ pub const win32 = struct {
 
         var fixed: ?[*:0]u8 = null;
         const target: [*:0]const u8 = if (fix_excessive_path(p, &fixed)) fixed.? else p;
-        defer if (fixed) |f| Curl_cfree(@ptrCast(f));
+        defer mem.destroy(fixed);
 
         return _mkdir(target);
     }
@@ -568,8 +571,8 @@ pub const win32 = struct {
         const target_oldpath: [*:0]const u8 = if (fix_excessive_path(old_p, &oldpath_fixed)) oldpath_fixed.? else old_p;
         const target_newpath: [*:0]const u8 = if (fix_excessive_path(new_p, &newpath_fixed)) newpath_fixed.? else new_p;
         defer {
-            if (oldpath_fixed) |f| Curl_cfree(@ptrCast(f));
-            if (newpath_fixed) |f| Curl_cfree(@ptrCast(f));
+            mem.destroy(oldpath_fixed);
+            mem.destroy(newpath_fixed);
         }
 
         const max_wait_ms: i64 = 1000;
@@ -612,15 +615,15 @@ pub const win32 = struct {
         while (i < buflen and b[i] != 0) : (i += 1) {
             if (b[i] == '\n') {
                 if (i > 0 and b[i - 1] == '\r') {
-                    b[i - 1] = 0;
-                } else {
-                    b[i] = 0;
+                    i -= 1;
                 }
+                b[i] = 0;
                 break;
             }
         }
 
-        return if (b[0] != 0) @ptrCast(b) else null;
+        b[@min(i, buflen - 1)] = 0;
+        return if (b[0] != 0) b[0..@min(i, buflen - 1) :0].ptr else null;
     }
 
     pub fn curlx_winapi_strerror(err: u32, buf: ?[*]u8, buflen: usize) callconv(.c) ?[*:0]const u8 {
@@ -646,7 +649,9 @@ pub const win32 = struct {
         if (old_win_err != GetLastError())
             SetLastError(old_win_err);
 
-        return @ptrCast(b);
+        const len = std.mem.indexOfScalar(u8, b[0..buflen], 0) orelse 0;
+        b[len] = 0;
+        return b[0..len :0].ptr;
     }
 
     pub fn curlx_win32_random(entropy: ?[*]u8, length: usize) callconv(.c) c_uint {
@@ -690,46 +695,46 @@ pub export fn curlx_fseek(stream: ?*anyopaque, offset: i64, whence: c_int) callc
     }
 }
 
+fn getenvWin32(v: [*:0]const u8) error{Failed}![*:0]u8 {
+    var buf: ?[*]u8 = null;
+    errdefer mem.destroy(buf);
+    var rc: u32 = 1;
+    const max: u32 = 32768;
+
+    while (true) {
+        buf = mem.reallocMany(u8, buf, rc) orelse return error.Failed;
+        const bufsize = rc;
+
+        rc = win32.GetEnvironmentVariableA(v, buf, bufsize);
+        if (rc == 0 or rc == bufsize or rc > max) {
+            return error.Failed;
+        }
+        if (rc < bufsize) {
+            buf.?[rc] = 0;
+            return buf.?[0..rc :0].ptr;
+        }
+    }
+}
+
 pub export fn curl_getenv(variable: ?[*:0]const u8) callconv(.c) ?[*:0]u8 {
     const v = variable orelse return null;
     if (builtin.os.tag == .windows) {
-        var buf: ?[*]u8 = null;
-        var rc: u32 = 1;
-        const max: u32 = 32768;
-
-        while (true) {
-            const tmp = Curl_crealloc(@ptrCast(buf), rc) orelse {
-                Curl_cfree(@ptrCast(buf));
-                return null;
-            };
-            buf = @ptrCast(tmp);
-            const bufsize = rc;
-
-            rc = win32.GetEnvironmentVariableA(v, buf, bufsize);
-            if (rc == 0 or rc == bufsize or rc > max) {
-                Curl_cfree(@ptrCast(buf));
-                return null;
-            }
-            if (rc < bufsize) {
-                return @ptrCast(buf);
-            }
-        }
+        return getenvWin32(v) catch null;
     } else {
         const env = posix_c.getenv(v) orelse return null;
         if (env[0] == 0) return null;
-        return Curl_cstrdup(env);
+        return mem.strdup(env);
     }
 }
 
 pub export fn Curl_fileinfo_alloc() callconv(.c) ?*Fileinfo {
-    const raw = Curl_ccalloc(1, @sizeOf(Fileinfo)) orelse return null;
-    return @ptrCast(@alignCast(raw));
+    return mem.create(Fileinfo);
 }
 
 pub export fn Curl_fileinfo_cleanup(finfo: ?*Fileinfo) callconv(.c) void {
     const f = finfo orelse return;
     curlx_dyn_free(&f.buf);
-    Curl_cfree(f);
+    mem.destroy(f);
 }
 
 pub export fn Curl_get_line(buf: *Dynbuf, input: ?*anyopaque, eof: *bool) callconv(.c) c_uint {
@@ -799,7 +804,7 @@ test "curl_getenv existing and missing variables" {
 
     const path_val = curl_getenv("PATH");
     if (path_val) |p| {
-        defer Curl_cfree(@ptrCast(p));
+        defer mem.free(p);
         try std.testing.expect(std.mem.len(p) > 0);
     }
 

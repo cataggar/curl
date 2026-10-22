@@ -174,16 +174,15 @@ pub export fn Curl_read16_be(buf: [*]const u8) callconv(.c) c_ushort {
 // 4. lib/curl_memrchr.c (lib/curl_memrchr.h)
 // ============================================================================
 
-pub export fn Curl_memrchr(s: ?*const anyopaque, c: c_int, n: usize) callconv(.c) ?*anyopaque {
+pub export fn Curl_memrchr(s: ?[*]const u8, c: c_int, n: usize) callconv(.c) ?*anyopaque {
     if (n > 0) {
-        if (s) |ptr| {
-            const bytes: [*]const u8 = @ptrCast(ptr);
+        if (s) |bytes| {
             const target: u8 = @truncate(@as(c_uint, @bitCast(c)));
             var i: usize = n;
             while (i > 0) {
                 i -= 1;
                 if (bytes[i] == target) {
-                    return @ptrCast(@constCast(&bytes[i]));
+                    return @constCast(&bytes[i]);
                 }
             }
         }
@@ -326,7 +325,7 @@ pub export fn curlx_uztoso(uznum: usize) callconv(.c) i64 {
 // ============================================================================
 
 const win32_snprintf = if (builtin.os.tag == .windows) struct {
-    extern fn vsnprintf(buf: [*]u8, maxlen: usize, fmt: [*:0]const u8, ap: [*]u8) callconv(.c) c_int;
+    extern fn vsnprintf(buf: [*]u8, maxlen: usize, fmt: [*:0]const u8, ap: [*]usize) callconv(.c) c_int;
 
     pub fn curlx_win32_snprintf(
         buf: [*]u8,
@@ -339,7 +338,7 @@ const win32_snprintf = if (builtin.os.tag == .windows) struct {
     ) callconv(.c) void {
         if (maxlen == 0) return;
         var va_args = [_]usize{ a0, a1, a2, a3 };
-        _ = vsnprintf(buf, maxlen, fmt, @ptrCast(&va_args));
+        _ = vsnprintf(buf, maxlen, fmt, &va_args);
         buf[maxlen - 1] = 0;
     }
 } else struct {};
@@ -453,13 +452,13 @@ test "Curl_memrchr" {
     try std.testing.expectEqual(@as(?*anyopaque, null), Curl_memrchr(data.ptr, 'z', data.len));
 
     const last_a = Curl_memrchr(data.ptr, 'a', data.len);
-    try std.testing.expectEqual(@as(?*const u8, &data[8]), @as(?*const u8, @ptrCast(last_a)));
+    try std.testing.expectEqual(@as(?*anyopaque, @constCast(&data[8])), last_a);
 
     const mid_a = Curl_memrchr(data.ptr, 'a', 8);
-    try std.testing.expectEqual(@as(?*const u8, &data[3]), @as(?*const u8, @ptrCast(mid_a)));
+    try std.testing.expectEqual(@as(?*anyopaque, @constCast(&data[3])), mid_a);
 
     const first_a = Curl_memrchr(data.ptr, 'a', 3);
-    try std.testing.expectEqual(@as(?*const u8, &data[0]), @as(?*const u8, @ptrCast(first_a)));
+    try std.testing.expectEqual(@as(?*anyopaque, @constCast(&data[0])), first_a);
 }
 
 test "curlx_strcopy" {

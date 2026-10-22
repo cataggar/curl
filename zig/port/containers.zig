@@ -94,7 +94,7 @@ fn dynNappend(s: *dynbuf, mem_ptr: ?[*]const u8, len: usize) CURLcode {
     }
 
     if (a != s.allc) {
-        const p = mem.realloc(if (s.bufr) |b| @ptrCast(b) else null, a) orelse {
+        const p = mem.realloc(s.bufr, a) orelse {
             curlx_dyn_free(s);
             return CURLE_OUT_OF_MEMORY;
         };
@@ -138,9 +138,12 @@ pub export fn curlx_dyn_tail(s: *dynbuf, trail: usize) callconv(.c) CURLcode {
     return CURLE_OK;
 }
 
+fn rawToConstBytes(ptr: ?*const anyopaque) ?[*]const u8 {
+    return @ptrCast(ptr);
+}
+
 pub export fn curlx_dyn_addn(s: *dynbuf, mem_ptr: ?*const anyopaque, len: usize) callconv(.c) CURLcode {
-    const p: ?[*]const u8 = if (mem_ptr) |m| @ptrCast(m) else null;
-    return dynNappend(s, p, len);
+    return dynNappend(s, rawToConstBytes(mem_ptr), len);
 }
 
 pub export fn curlx_dyn_add(s: *dynbuf, str: [*:0]const u8) callconv(.c) CURLcode {
@@ -243,11 +246,11 @@ comptime {
 pub extern fn curlx_dyn_addf(s: *dynbuf, fmt: [*:0]const u8, ...) callconv(.c) CURLcode;
 
 pub export fn curlx_dyn_ptr(s: *const dynbuf) callconv(.c) ?[*:0]u8 {
-    return if (s.bufr) |b| @ptrCast(b) else null;
+    return if (s.bufr) |b| b[0..s.leng :0].ptr else null;
 }
 
 pub export fn curlx_dyn_take(s: *dynbuf, plen: *usize) callconv(.c) ?[*:0]u8 {
-    const ptr: ?[*:0]u8 = if (s.bufr) |b| @ptrCast(b) else null;
+    const ptr = curlx_dyn_ptr(s);
     plen.* = s.leng;
     s.bufr = null;
     s.leng = 0;
@@ -299,7 +302,7 @@ export fn Curl_bufref_init(br: *bufref) callconv(.c) void {
 export fn Curl_bufref_free(br: *bufref) callconv(.c) void {
     if (br.ptr) |p| {
         if (br.dtor) |dtor| {
-            dtor(@ptrCast(@constCast(p)));
+            dtor(@constCast(p));
         }
     }
     br.dtor = null;
@@ -309,7 +312,7 @@ export fn Curl_bufref_free(br: *bufref) callconv(.c) void {
 
 export fn Curl_bufref_set(br: *bufref, ptr: ?*const anyopaque, len: usize, dtor: ?BufrefDtor) callconv(.c) void {
     Curl_bufref_free(br);
-    br.ptr = if (ptr) |p| @ptrCast(p) else null;
+    br.ptr = rawToConstBytes(ptr);
     br.len = len;
     br.dtor = dtor;
 }
@@ -319,7 +322,7 @@ export fn Curl_bufref_uptr(br: *const bufref) callconv(.c) ?[*]const u8 {
 }
 
 export fn Curl_bufref_ptr(br: *const bufref) callconv(.c) ?[*:0]const u8 {
-    return if (br.ptr) |p| @ptrCast(p) else null;
+    return @ptrCast(br.ptr);
 }
 
 export fn Curl_bufref_len(br: *const bufref) callconv(.c) usize {
@@ -327,15 +330,9 @@ export fn Curl_bufref_len(br: *const bufref) callconv(.c) usize {
 }
 
 export fn Curl_bufref_memdup0(br: *bufref, ptr: ?*const anyopaque, len: usize) callconv(.c) CURLcode {
-    var cpy: ?*anyopaque = null;
-    if (ptr) |p| {
-        const dup = mem.malloc(len + 1) orelse return CURLE_OUT_OF_MEMORY;
-        if (len > 0) {
-            const src: [*]const u8 = @ptrCast(p);
-            @memcpy(dup[0..len], src[0..len]);
-        }
-        dup[len] = 0;
-        cpy = @ptrCast(dup);
+    var cpy: ?[*:0]u8 = null;
+    if (rawToConstBytes(ptr)) |src| {
+        cpy = mem.memdup0(src, len) orelse return CURLE_OUT_OF_MEMORY;
     }
     Curl_bufref_set(br, cpy, len, &bufrefFreeCallback);
     return CURLE_OK;
@@ -533,8 +530,7 @@ fn slistGetLast(list: ?*curl_slist) ?*curl_slist {
 }
 
 export fn Curl_slist_append_nodup(list: ?*curl_slist, data: ?[*:0]const u8) callconv(.c) ?*curl_slist {
-    const raw = mem.malloc(@sizeOf(curl_slist)) orelse return null;
-    const new_item: *curl_slist = @ptrCast(@alignCast(raw));
+    const new_item = mem.alloc(curl_slist) orelse return null;
     new_item.next = null;
     new_item.data = if (data) |d| @constCast(d) else null;
 
@@ -545,14 +541,15 @@ export fn Curl_slist_append_nodup(list: ?*curl_slist, data: ?[*:0]const u8) call
     return list;
 }
 
+fn slistAppendInner(list: ?*curl_slist, d: [*:0]const u8) error{OutOfMemory}!*curl_slist {
+    const dupdata = mem.strdup(d) orelse return error.OutOfMemory;
+    errdefer mem.free(dupdata);
+    return Curl_slist_append_nodup(list, dupdata) orelse return error.OutOfMemory;
+}
+
 export fn curl_slist_append(list: ?*curl_slist, data: ?[*:0]const u8) callconv(.c) ?*curl_slist {
     const d = data orelse return null;
-    const dupdata = mem.strdup(d) orelse return null;
-    const res = Curl_slist_append_nodup(list, dupdata);
-    if (res == null) {
-        mem.free(dupdata);
-    }
-    return res;
+    return slistAppendInner(list, d) catch null;
 }
 
 export fn Curl_slist_duplicate(inlist: ?*curl_slist) callconv(.c) ?*curl_slist {
