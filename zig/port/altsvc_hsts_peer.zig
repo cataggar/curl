@@ -64,7 +64,7 @@ pub const CURLE_OUT_OF_MEMORY: c_uint = 27;
 pub const CURLE_ABORTED_BY_CALLBACK: c_uint = 42;
 pub const CURLE_BAD_FUNCTION_ARGUMENT: c_uint = 43;
 pub const CURLE_AGAIN: c_uint = 81;
-pub const CURLE_SETOPT_OPTION_SYNTAX: c_uint = 98;
+pub const CURLE_SETOPT_OPTION_SYNTAX: c_uint = 49;
 
 pub const CURLM_OK: c_int = 0;
 pub const CURLM_OUT_OF_MEMORY: c_int = 3;

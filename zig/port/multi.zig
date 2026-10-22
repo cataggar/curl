@@ -293,9 +293,9 @@ pub const PROTO_FAMILY_HTTP: curl_prot_t = (1 << 0) | (1 << 1) | (1 << 30) | (1 
 
 pub const CURLPIPE_MULTIPLEX: c_long = 2;
 
-pub const CURLMNWC_CLEAR_CONNS: c_long = 1 << 0;
-pub const CURLMNWC_CLEAR_DNS: c_long = 1 << 1;
 pub const CURLMNWC_CLEAR_ALL: c_long = 1 << 0;
+pub const CURLMNWC_CLEAR_CONNS: c_long = 1 << 1;
+pub const CURLMNWC_CLEAR_DNS: c_long = 1 << 2;
 
 pub const CURLMOPT_SOCKETFUNCTION: CURLMoption = 20001;
 pub const CURLMOPT_SOCKETDATA: CURLMoption = 10002;

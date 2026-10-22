@@ -56,7 +56,7 @@ pub const CURLE_SSL_CACERT_BADFILE: CURLcode = 77;
 pub const CURLE_REMOTE_FILE_NOT_FOUND: CURLcode = 78;
 pub const CURLE_AGAIN: CURLcode = 81;
 pub const CURLE_AUTH_ERROR: CURLcode = 94;
-pub const CURLE_SETOPT_OPTION_SYNTAX: CURLcode = 98;
+pub const CURLE_SETOPT_OPTION_SYNTAX: CURLcode = 49;
 
 pub const curl_off_t = i64;
 pub const curl_prot_t = u32;

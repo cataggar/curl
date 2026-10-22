@@ -1242,8 +1242,11 @@ fn imap_state_listsearch_resp(data: ?*Curl_easy, imap: *IMAP, imapc: *imap_conn,
                     imapc.pp.overflow = after_header - chunk;
                     _ = curlx_dyn_tail(&imapc.pp.recvbuf, imapc.pp.overflow);
                 } else {
+                    imapc.pp.overflow = 0;
                     containers.curlx_dyn_reset(&imapc.pp.recvbuf);
                 }
+            } else {
+                imapc.pp.overflow = 0;
             }
 
             size += std.math.cast(curl_off_t, len) orelse 0;
