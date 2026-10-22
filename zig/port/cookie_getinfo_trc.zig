@@ -902,6 +902,8 @@ extern var Curl_cft_h1_proxy: vfilters.Curl_cftype;
 extern var Curl_cft_http_proxy: vfilters.Curl_cftype;
 extern var Curl_cft_socks_proxy: vfilters.Curl_cftype;
 extern var Curl_cft_http_connect: vfilters.Curl_cftype;
+extern var Curl_cft_nghttp2: vfilters.Curl_cftype;
+extern var Curl_cft_h2_proxy: vfilters.Curl_cftype;
 
 var registered_cft_ssl: ?*vfilters.Curl_cftype = null;
 var registered_cft_ssl_proxy: ?*vfilters.Curl_cftype = null;
@@ -919,7 +921,7 @@ const trc_cft_def = struct {
     category: c_uint,
 };
 
-const trc_cfts = [_]trc_cft_def{
+const trc_cfts_base = [_]trc_cft_def{
     .{ .cft = &Curl_cft_dns, .category = TRC_CT_NETWORK },
     .{ .cft = &Curl_cft_tcp, .category = TRC_CT_NETWORK },
     .{ .cft = &Curl_cft_udp, .category = TRC_CT_NETWORK },
@@ -934,6 +936,14 @@ const trc_cfts = [_]trc_cft_def{
     .{ .cft = &Curl_cft_socks_proxy, .category = TRC_CT_PROXY },
     .{ .cft = &Curl_cft_http_connect, .category = TRC_CT_PROTOCOL },
 };
+
+const trc_cfts = if (backend_options.nghttp2)
+    trc_cfts_base ++ [_]trc_cft_def{
+        .{ .cft = &Curl_cft_nghttp2, .category = TRC_CT_PROTOCOL },
+        .{ .cft = &Curl_cft_h2_proxy, .category = TRC_CT_PROXY },
+    }
+else
+    trc_cfts_base;
 
 fn trcApplyLevelByName(token: *curlx_parse.Curl_str, lvl: c_int) void {
     if (in_libcurl) {
@@ -1025,6 +1035,12 @@ pub export fn Curl_trc_opt(config: ?[*:0]const u8) callconv(.c) CURLcode {
 }
 
 pub export fn Curl_trc_init() callconv(.c) CURLcode {
+    const config = os_leaf.curl_getenv("CURL_DEBUG");
+    if (config) |cfg| {
+        const res = trcOpt(cfg);
+        mem.free(cfg);
+        return res;
+    }
     return CURLE_OK;
 }
 

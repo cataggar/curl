@@ -165,10 +165,10 @@ pub const CURL_CF_SSL_DEFAULT: c_int = -1;
 
 // Cpool match result
 pub const cpool_match_result = c_int;
-pub const CPOOL_MATCH_CONT: cpool_match_result = 0;
-pub const CPOOL_MATCH_FOUND: cpool_match_result = 1;
-pub const CPOOL_MATCH_TOO_OLD: cpool_match_result = 2;
-pub const CPOOL_MATCH_CLOSE: cpool_match_result = 3;
+pub const CPOOL_MATCH_FOUND: cpool_match_result = 0;
+pub const CPOOL_MATCH_CONT: cpool_match_result = 1;
+pub const CPOOL_MATCH_CLOSE: cpool_match_result = 2;
+pub const CPOOL_MATCH_TOO_OLD: cpool_match_result = 3;
 
 // Proxy types
 pub const CURLPROXY_HTTP: u8 = 0;

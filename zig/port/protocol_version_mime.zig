@@ -1187,8 +1187,8 @@ const MAX_MIME_LEVELS: usize = 40;
 pub const MIME_USERHEADERS_OWNER: c_uint = 1 << 0;
 pub const MIME_BODY_ONLY: c_uint = 1 << 1;
 pub const MIME_FAST_READ: c_uint = 1 << 2;
-pub const MIME_FAST_CONV: c_uint = 1 << 2;
-pub const MIME_FILE_TRIED: c_uint = 1 << 3;
+pub const MIME_FAST_CONV: c_uint = 1 << 3;
+pub const MIME_FILE_TRIED: c_uint = 1 << 4;
 
 pub const MIMESTRATEGY_MAIL: c_uint = 0;
 pub const MIMESTRATEGY_FORM: c_uint = 1;

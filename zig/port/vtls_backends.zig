@@ -122,6 +122,7 @@ pub const CF_QUERY_SOCKET: c_int = 3;
 pub const CF_QUERY_TIMER_CONNECT: c_int = 4;
 pub const CF_QUERY_TIMER_APPCONNECT: c_int = 5;
 pub const CF_QUERY_HTTP_VERSION: c_int = 9;
+pub const CF_QUERY_HOST_PORT: c_int = 11;
 pub const CF_QUERY_SSL_INFO: c_int = 12;
 pub const CF_QUERY_SSL_CTX_INFO: c_int = 13;
 pub const CF_QUERY_ALPN_NEGOTIATED: c_int = 15;
@@ -6746,7 +6747,7 @@ pub const openssl_backend = struct {
             }
             const reason = ossl_ext.X509_verify_cert_error_string(ossl_verify);
             if (conn_config.verifypeer()) {
-                c_ext.Curl_failf(data, "SSL certificate problem: %s", reason);
+                c_ext.Curl_failf(data, "SSL certificate OpenSSL verify result: %s (%ld)", reason, ossl_verify);
                 return CURLE_PEER_FAILED_VERIFICATION;
             } else {
                 c_ext.Curl_infof(data, " SSL certificate verify result: %s (%ld), continuing anyway.", reason, ossl_verify);
@@ -6964,7 +6965,7 @@ pub const openssl_backend = struct {
         }
 
         const timeout = ossl_ext.SSL_SESSION_get_timeout(session);
-        const valid_until = if (timeout > 0) c_ext.Curl_pgrs_now(data).tv_sec + @as(i64, @intCast(timeout)) else 0;
+        const valid_until = if (timeout > 0) vtls_scache_asn1.nowEpochSecs() + @as(i64, @intCast(timeout)) else 0;
         const ietf_tls_id = if (octx.ssl) |s| ossl_ext.SSL_version(s) else TLS1_3_VERSION;
         const earlydata_max: usize = ossl_ext.SSL_SESSION_get_max_early_data(session);
 
@@ -7136,11 +7137,13 @@ pub const openssl_backend = struct {
             }
         }
 
-        const ciphers13: ?[*:0]const u8 = if (conn_config.cipher_list13) |c| c else c_ext.Curl_vtls_acc_ssl_cipher13_list(data, is_proxy);
-        if (ciphers13) |c13_str| {
-            if (ossl_ext.SSL_CTX_set_ciphersuites(ssl_ctx, c13_str) == 0) {
-                c_ext.Curl_failf(data, "failed setting TLS 1.3 cipher suite: %s", c13_str);
-                return CURLE_SSL_CIPHER;
+        if (ver_range.max_ver == 0 or ver_range.max_ver >= TLS1_3_VERSION) {
+            const ciphers13: ?[*:0]const u8 = if (conn_config.cipher_list13) |c| c else c_ext.Curl_vtls_acc_ssl_cipher13_list(data, is_proxy);
+            if (ciphers13) |c13_str| {
+                if (ossl_ext.SSL_CTX_set_ciphersuites(ssl_ctx, c13_str) == 0) {
+                    c_ext.Curl_failf(data, "failed setting TLS 1.3 cipher suite: %s", c13_str);
+                    return CURLE_SSL_CIPHER;
+                }
             }
         }
 
@@ -7231,7 +7234,7 @@ pub const openssl_backend = struct {
                     &sc_session,
                 );
                 if (sc_session) |scs| {
-                    defer _ = vtls_scache_asn1.Curl_ssl_scache_put_zig(
+                    defer vtls_scache_asn1.Curl_ssl_scache_return_zig(
                         cf,
                         data,
                         scache,
@@ -7309,7 +7312,7 @@ pub const openssl_backend = struct {
         }
 
         const timeout = ossl_ext.SSL_SESSION_get_timeout(ssl_sessionid);
-        const valid_until = if (timeout > 0) c_ext.Curl_pgrs_now(data).tv_sec + @as(i64, @intCast(timeout)) else 0;
+        const valid_until = if (timeout > 0) vtls_scache_asn1.nowEpochSecs() + @as(i64, @intCast(timeout)) else 0;
         const ietf_tls_id = ossl_ext.SSL_version(ssl);
         var sc_session: ?*CurlSslSession = null;
         const res = vtls_scache_asn1.Curl_ssl_session_create2(
@@ -7402,11 +7405,13 @@ pub const openssl_backend = struct {
             }
         }
 
-        const ciphers13: ?[*:0]const u8 = if (conn_config.cipher_list13) |c| c else c_ext.Curl_vtls_acc_ssl_cipher13_list(data, is_proxy);
-        if (ciphers13) |c13_str| {
-            if (ossl_ext.SSL_CTX_set_ciphersuites(ssl_ctx, c13_str) == 0) {
-                c_ext.Curl_failf(data, "failed setting TLS 1.3 cipher suite: %s", c13_str);
-                return CURLE_SSL_CIPHER;
+        if (ver_range.max_ver == 0 or ver_range.max_ver >= TLS1_3_VERSION) {
+            const ciphers13: ?[*:0]const u8 = if (conn_config.cipher_list13) |c| c else c_ext.Curl_vtls_acc_ssl_cipher13_list(data, is_proxy);
+            if (ciphers13) |c13_str| {
+                if (ossl_ext.SSL_CTX_set_ciphersuites(ssl_ctx, c13_str) == 0) {
+                    c_ext.Curl_failf(data, "failed setting TLS 1.3 cipher suite: %s", c13_str);
+                    return CURLE_SSL_CIPHER;
+                }
             }
         }
 
@@ -7495,7 +7500,16 @@ pub const openssl_backend = struct {
                     &sc_session,
                 );
                 if (sc_session) |scs| {
-                    defer vtls_scache_asn1.Curl_ssl_session_destroy(scs);
+                    defer vtls_scache_asn1.Curl_ssl_scache_return_zig(
+                        cf,
+                        data,
+                        scache,
+                        has_share_scache,
+                        @ptrCast(conn_config),
+                        trc_feat,
+                        peer_key,
+                        scs,
+                    );
                     if (scs.sdata != null and scs.sdata_len > 0) {
                         var sdata_ptr: ?[*]const u8 = scs.sdata;
                         if (ossl_ext.d2i_SSL_SESSION(null, &sdata_ptr, @intCast(scs.sdata_len))) |sess| {
@@ -7553,7 +7567,7 @@ pub const openssl_backend = struct {
                 connssl.io_need = CURL_SSL_IO_NEED_SEND;
                 return CURLE_OK;
             }
-            if (octx.io_result != CURLE_OK and octx.io_result != CURLE_AGAIN) {
+            if (octx.io_result == CURLE_SSL_CACERT_BADFILE or octx.io_result == CURLE_OUT_OF_MEMORY) {
                 return octx.io_result;
             }
             var err_buf: [256]u8 = @splat(0);

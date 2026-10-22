@@ -1241,12 +1241,13 @@ pub export fn Curl_cipher_suite_get_str(
 pub const CurlPeer = extern struct {
     scheme: ?*const anyopaque,
     hostname: [*:0]const u8,
-    zoneid: ?[*:0]u8,
-    refcount: u32,
-    scopeid: u32,
+    zoneid: ?[*:0]u8 = null,
+    refcount: u32 = 1,
+    scopeid: u32 = 0,
     port: u16,
-    flags: c_uint,
-    user_hostname: [1]u8,
+    _win_pad: if (builtin.os.tag == .windows) [2]u8 else [0]u8 = if (builtin.os.tag == .windows) .{ 0, 0 } else .{},
+    flags: if (builtin.os.tag == .windows) c_uint else u8 = 0,
+    user_hostname: [1]u8 = .{0},
 };
 
 pub const SslPeer = extern struct {

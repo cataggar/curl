@@ -6,6 +6,7 @@ const test_servers = @import("zig/test_servers.zig");
 const test_libtests = @import("zig/test_libtests.zig");
 const test_units = @import("zig/test_units.zig");
 const test_conformance = @import("zig/test_conformance.zig");
+const test_pytest = @import("zig/test_pytest.zig");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -174,6 +175,7 @@ pub fn build(b: *std.Build) void {
         &units.stage_tunits.step,
         &libtests.stage.step,
     });
+    _ = test_pytest.addTestPytestStep(b, target, test_servers_step, &libtests.stage.step);
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(b.getInstallStep());
