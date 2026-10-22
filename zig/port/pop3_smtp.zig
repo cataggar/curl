@@ -546,8 +546,7 @@ fn pop3_perform_authentication(data: ?*anyopaque, conn: ?*anyopaque) CURLcode {
         } else if ((pop3c.authtypes & pop3c.preftype & POP3_TYPE_CLEARTEXT) != 0) {
             result = pop3_perform_user(data, conn);
         } else {
-            Curl_pop3_smtp_infof_msg(data, "No known authentication mechanisms supported");
-            result = CURLE_LOGIN_DENIED;
+            result = Curl_pop3_smtp_sasl_is_blocked(&pop3c.sasl, data);
         }
     }
 
@@ -646,11 +645,11 @@ fn pop3_state_capa_resp(data: ?*anyopaque, pop3code: c_int, instate: pop3state) 
 
     if (pop3code == '*') {
         if (line_opt) |line| {
-            if (len >= 4 and std.mem.eql(u8, line[0..4], "STLS")) {
+            if (len >= 4 and primitives.curl_strnequal(line, "STLS", 4) != 0) {
                 pop3c.tls_supported = true;
-            } else if (len >= 4 and std.mem.eql(u8, line[0..4], "USER")) {
+            } else if (len >= 4 and primitives.curl_strnequal(line, "USER", 4) != 0) {
                 pop3c.authtypes |= POP3_TYPE_CLEARTEXT;
-            } else if (len >= 5 and std.mem.eql(u8, line[0..5], "SASL ")) {
+            } else if (len >= 5 and primitives.curl_strnequal(line, "SASL ", 5) != 0) {
                 pop3c.authtypes |= POP3_TYPE_SASL;
                 var idx: usize = 5;
                 len -= 5;
@@ -670,7 +669,7 @@ fn pop3_state_capa_resp(data: ?*anyopaque, pop3code: c_int, instate: pop3state) 
                     idx += wordlen;
                     len -= wordlen;
                 }
-            } else if (len >= 4 and std.mem.eql(u8, line[0..4], "UTF8")) {
+            } else if (len >= 4 and primitives.curl_strnequal(line, "UTF8", 4) != 0) {
                 pop3c.utf8_supported = true;
             }
         }
@@ -813,14 +812,18 @@ fn pop3_state_command_resp(data: ?*anyopaque, pop3code: c_int, instate: pop3stat
         Curl_xfer_setup_recv(data, FIRSTSOCKET, -1);
 
         if (pp.overflow != 0) {
-            if (containers.curlx_dyn_ptr(&pp.recvbuf)) |recv_ptr| {
-                result = Curl_pop3_write(data, recv_ptr + pp.nfinal, pp.overflow);
+            _ = containers.curlx_dyn_tail(&pp.recvbuf, pp.overflow);
+            pp.nfinal = 0;
+
+            if (!Curl_pop3_smtp_get_req_no_body(data)) {
+                if (containers.curlx_dyn_ptr(&pp.recvbuf)) |recv_ptr| {
+                    result = Curl_pop3_write(data, recv_ptr, containers.curlx_dyn_len(&pp.recvbuf));
+                    if (result != CURLE_OK)
+                        return result;
+                }
             }
             containers.curlx_dyn_reset(&pp.recvbuf);
-            pp.nfinal = 0;
             pp.overflow = 0;
-            if (result != CURLE_OK)
-                return result;
         }
     } else {
         pp.overflow = 0;
@@ -953,6 +956,10 @@ fn pop3_done(data: ?*anyopaque, status: CURLcode, premature: bool) callconv(.c) 
     const pop3_raw = Curl_meta_get(data, CURL_META_POP3_EASY) orelse return CURLE_OK;
     const pop3: *POP3 = @ptrCast(@alignCast(pop3_raw));
 
+    if (status != CURLE_OK) {
+        Curl_pop3_smtp_connclose(Curl_pop3_smtp_get_conn(data));
+    }
+
     if (pop3.id) |id| {
         mem.free(@ptrCast(id));
         pop3.id = null;
@@ -971,14 +978,14 @@ fn pop3_perform(data: ?*anyopaque, connected: *bool, dophase_done: *bool) CURLco
     const pop3_raw = Curl_meta_get(data, CURL_META_POP3_EASY) orelse return CURLE_FAILED_INIT;
     const pop3: *POP3 = @ptrCast(@alignCast(pop3_raw));
 
+    var result = pop3_perform_command(data);
+    if (result != CURLE_OK)
+        return result;
+
     if (Curl_pop3_smtp_get_req_no_body(data))
         pop3.transfer = PPTRANSFER_INFO;
 
     dophase_done.* = false;
-
-    var result = pop3_perform_command(data);
-    if (result != CURLE_OK)
-        return result;
 
     result = pop3_multi_statemach(data, dophase_done);
     connected.* = Curl_pop3_smtp_conn_is_connected(conn);
@@ -1100,10 +1107,12 @@ fn pop3_parse_url_options(conn: ?*anyopaque, pop3c: *pop3_conn) CURLcode {
         ptr_opt = ptr + i;
     }
 
-    switch (Curl_pop3_smtp_sasl_get_prefmech(&pop3c.sasl)) {
-        SASL_AUTH_NONE => pop3c.preftype &= ~POP3_TYPE_SASL,
-        SASL_AUTH_DEFAULT => {},
-        else => pop3c.preftype = POP3_TYPE_SASL,
+    if (pop3c.preftype != POP3_TYPE_APOP) {
+        switch (Curl_pop3_smtp_sasl_get_prefmech(&pop3c.sasl)) {
+            SASL_AUTH_NONE => pop3c.preftype = 0,
+            SASL_AUTH_DEFAULT => pop3c.preftype = POP3_TYPE_ANY,
+            else => pop3c.preftype = POP3_TYPE_SASL,
+        }
     }
 
     return result;
@@ -1218,14 +1227,6 @@ pub export fn Curl_pop3_write(data: ?*anyopaque, str: [*]const u8, nread: usize)
     return result;
 }
 
-fn pop3_write_resp_hd(data: ?*anyopaque, buf: [*]const u8, blen: usize, is_eos: bool) callconv(.c) CURLcode {
-    _ = data;
-    _ = buf;
-    _ = blen;
-    _ = is_eos;
-    return CURLE_RECV_ERROR;
-}
-
 fn pop3_write_resp(data: ?*anyopaque, buf: [*]const u8, blen: usize, is_eos: bool) callconv(.c) CURLcode {
     _ = is_eos;
     const conn = Curl_pop3_smtp_get_conn(data);
@@ -1248,7 +1249,7 @@ pub export const Curl_protocol_pop3 = Curl_protocol{
     .perform_pollset = null,
     .disconnect = pop3_disconnect,
     .write_resp = pop3_write_resp,
-    .write_resp_hd = pop3_write_resp_hd,
+    .write_resp_hd = null,
     .connection_is_dead = null,
     .attach = null,
     .follow = null,
@@ -1391,7 +1392,8 @@ fn cr_eob_read(
                         return result;
                     ctx.n_eob = 0;
                     start = i;
-                    Curl_pop3_smtp_inc_infilesize(data);
+                    if (Curl_pop3_smtp_get_infilesize(data) > 0)
+                        Curl_pop3_smtp_inc_infilesize(data);
                 }
 
                 if (buf[i] != SMTP_EOB[ctx.n_eob])
@@ -1491,6 +1493,8 @@ fn smtp_endofresp(
         if (curlx_str_number(&p, &code, if (len == 5) 99999 else 999) != 0)
             return false;
         resp.* = @intCast(code);
+        if (resp.* == 1)
+            resp.* = 0;
         return true;
     } else if (line[3] == '-' and (smtpc.state == .SMTP_EHLO or smtpc.state == .SMTP_COMMAND)) {
         resp.* = 1;
@@ -1633,10 +1637,6 @@ fn smtp_perform_authentication(data: ?*anyopaque, smtpc: *smtp_conn) CURLcode {
             smtp_state(data, smtpc, .SMTP_AUTH);
         } else {
             result = Curl_pop3_smtp_sasl_is_blocked(&smtpc.sasl, data);
-            if (result == CURLE_OK) {
-                Curl_pop3_smtp_infof_msg(data, "No known authentication mechanisms supported");
-                result = CURLE_LOGIN_DENIED;
-            }
         }
     }
 
@@ -1651,21 +1651,17 @@ fn smtp_perform_command(data: ?*anyopaque) CURLcode {
     const smtp_raw = Curl_meta_get(data, CURL_META_SMTP_EASY) orelse return CURLE_FAILED_INIT;
     const smtp: *SMTP = @ptrCast(@alignCast(smtp_raw));
 
-    const rcpt = Curl_pop3_smtp_get_mail_rcpt(data);
-    if (rcpt != null) {
+    if (smtp.rcpt) |rcpt| {
         var utf8: bool = false;
         const custom_str = smtp.custom;
         const custom_empty = (custom_str == null or custom_str.?[0] == 0);
 
-        if (custom_empty or
-            primitives.curl_strnequal(custom_str.?, "VRFY", 4) != 0 or
-            primitives.curl_strnequal(custom_str.?, "EXPN", 4) != 0)
-        {
+        if (custom_empty) {
             var address: ?[*:0]u8 = null;
             var host: netrc_addr_idn.Hostname = std.mem.zeroes(netrc_addr_idn.Hostname);
             var suffix: [*:0]const u8 = "";
 
-            const rcpt_data: [*:0]const u8 = rcpt.?.data orelse "";
+            const rcpt_data: [*:0]const u8 = rcpt.data orelse "";
             result = smtp_parse_address(data, rcpt_data, &address, &host, &suffix);
             if (result != CURLE_OK)
                 return result;
@@ -1675,35 +1671,21 @@ fn smtp_perform_command(data: ?*anyopaque) CURLcode {
                     !netrc_addr_idn.Curl_is_ASCII_name(address) or
                     !netrc_addr_idn.Curl_is_ASCII_name(host.name));
 
-            const cmd_name: [*:0]const u8 = if (!custom_empty) custom_str.? else "VRFY";
             const addr_str: [*:0]const u8 = address orelse "";
-            if (host.name != null) {
-                result = Curl_pp_sendf(
-                    data,
-                    &smtpc.pp,
-                    "%s %s@%s%s%s",
-                    cmd_name,
-                    addr_str,
-                    host.dispname,
-                    suffix,
-                    @as([*:0]const u8, if (utf8) " SMTPUTF8" else ""),
-                );
-            } else {
-                result = Curl_pp_sendf(
-                    data,
-                    &smtpc.pp,
-                    "%s %s%s%s",
-                    cmd_name,
-                    addr_str,
-                    suffix,
-                    @as([*:0]const u8, if (utf8) " SMTPUTF8" else ""),
-                );
-            }
+            result = Curl_pp_sendf(
+                data,
+                &smtpc.pp,
+                "VRFY %s%s%s%s",
+                addr_str,
+                @as([*:0]const u8, if (host.name != null) "@" else ""),
+                @as([*:0]const u8, if (host.name) |hn| hn else ""),
+                @as([*:0]const u8, if (utf8) " SMTPUTF8" else ""),
+            );
 
             netrc_addr_idn.Curl_free_idnconverted_hostname(&host);
             if (address) |a| mem.free(@ptrCast(a));
         } else {
-            const rcpt_data: [*:0]const u8 = rcpt.?.data orelse "";
+            const rcpt_data: [*:0]const u8 = rcpt.data orelse "";
             utf8 = smtpc.utf8_supported and (std.mem.eql(u8, std.mem.span(custom_str.?), "EXPN"));
             result = Curl_pp_sendf(
                 data,
@@ -1755,8 +1737,8 @@ fn smtp_perform_mail(data: ?*anyopaque) CURLcode {
                 !netrc_addr_idn.Curl_is_ASCII_name(host.name));
 
         const addr_str: [*:0]const u8 = address orelse "";
-        if (host.name != null) {
-            from = curl_maprintf("<%s@%s>%s", addr_str, host.dispname, suffix);
+        if (host.name) |hn| {
+            from = curl_maprintf("<%s@%s>%s", addr_str, hn, suffix);
             netrc_addr_idn.Curl_free_idnconverted_hostname(&host);
         } else {
             from = curl_maprintf("<%s>%s", addr_str, suffix);
@@ -1791,8 +1773,8 @@ fn smtp_perform_mail(data: ?*anyopaque) CURLcode {
             }
 
             const addr_str: [*:0]const u8 = address orelse "";
-            if (host.name != null) {
-                auth = curl_maprintf("<%s@%s>%s", addr_str, host.dispname, suffix);
+            if (host.name) |hn| {
+                auth = curl_maprintf("<%s@%s>%s", addr_str, hn, suffix);
                 netrc_addr_idn.Curl_free_idnconverted_hostname(&host);
             } else {
                 auth = curl_maprintf("<%s>%s", addr_str, suffix);
@@ -1892,8 +1874,8 @@ fn smtp_perform_rcpt_to(data: ?*anyopaque) CURLcode {
         return result;
 
     const addr_str: [*:0]const u8 = address orelse "";
-    if (host.name != null) {
-        result = Curl_pp_sendf(data, &smtpc.pp, "RCPT TO:<%s@%s>%s", addr_str, host.dispname, suffix);
+    if (host.name) |hn| {
+        result = Curl_pp_sendf(data, &smtpc.pp, "RCPT TO:<%s@%s>%s", addr_str, hn, suffix);
     } else {
         result = Curl_pp_sendf(data, &smtpc.pp, "RCPT TO:<%s>%s", addr_str, suffix);
     }
@@ -1950,16 +1932,16 @@ fn smtp_state_ehlo_resp(
         }
     } else if (len >= 4) {
         if (line_opt) |base| {
-            var line: [*]const u8 = base + 4;
+            var line: [*:0]const u8 = @ptrCast(base + 4);
             len -= 4;
 
-            if (len >= 8 and std.mem.eql(u8, line[0..8], "STARTTLS")) {
+            if (len >= 8 and primitives.curl_strnequal(line, "STARTTLS", 8) != 0) {
                 smtpc.tls_supported = true;
-            } else if (len >= 4 and std.mem.eql(u8, line[0..4], "SIZE")) {
+            } else if (len >= 4 and primitives.curl_strnequal(line, "SIZE", 4) != 0) {
                 smtpc.size_supported = true;
-            } else if (len >= 8 and std.mem.eql(u8, line[0..8], "SMTPUTF8")) {
+            } else if (len >= 8 and primitives.curl_strnequal(line, "SMTPUTF8", 8) != 0) {
                 smtpc.utf8_supported = true;
-            } else if (len >= 5 and std.mem.eql(u8, line[0..5], "AUTH ")) {
+            } else if (len >= 5 and primitives.curl_strnequal(line, "AUTH ", 5) != 0) {
                 smtpc.auth_supported = true;
                 line += 5;
                 len -= 5;
@@ -2075,15 +2057,15 @@ fn smtp_state_command_resp(data: ?*anyopaque, smtpc: *smtp_conn, smtpcode: c_int
     const line_opt = containers.curlx_dyn_ptr(&smtpc.pp.recvbuf);
     const len = smtpc.pp.nfinal;
 
-    if (smtp.rcpt != null and @divTrunc(smtpcode, 100) != 2 and smtpcode != 553 and smtpcode != 1) {
+    if ((smtp.rcpt != null and @divTrunc(smtpcode, 100) != 2 and smtpcode != 553 and smtpcode != 1) or
+        (smtp.rcpt == null and @divTrunc(smtpcode, 100) != 2 and smtpcode != 1))
+    {
         Curl_pop3_smtp_failf_int(data, "Command failed: %d", smtpcode);
-        result = CURLE_RECV_ERROR;
+        result = CURLE_WEIRD_SERVER_REPLY;
     } else {
         if (!Curl_pop3_smtp_get_req_no_body(data)) {
             if (line_opt) |line| {
-                line[len] = '\n';
-                result = Curl_client_write(data, CLIENTWRITE_BODY, line, len + 1);
-                line[len] = 0;
+                result = Curl_client_write(data, CLIENTWRITE_BODY, line, len);
             }
         }
 
@@ -2512,33 +2494,23 @@ fn smtp_parse_address(
     host: *netrc_addr_idn.Hostname,
     suffix: *[*:0]const u8,
 ) CURLcode {
-    var result: CURLcode = CURLE_OK;
-    var length: usize = 0;
-
-    if (std.mem.indexOfAny(u8, std.mem.span(fqma), "\r\n") != null) {
+    const fqma_slice = std.mem.span(fqma);
+    if (std.mem.indexOfAny(u8, fqma_slice, "\r\n") != null) {
         Curl_pop3_smtp_failf_msg(data, "Refusing to send email address with a CR or LF");
         return CURLE_BAD_FUNCTION_ARGUMENT;
     }
 
     const start: [*:0]const u8 = if (fqma[0] == '<') fqma + 1 else fqma;
-    var dup: ?[*:0]u8 = null;
-    result = Curl_urldecode(start, 0, &dup, &length, 0);
-    if (result != CURLE_OK)
-        return result;
+    const d = mem.strdup(start) orelse return CURLE_OUT_OF_MEMORY;
+    const length = std.mem.len(d);
 
-    const d = dup orelse return CURLE_OUT_OF_MEMORY;
-    if (length != 0) {
-        if (fqma[0] != '<') {
-            if (d[length - 1] == '>')
-                d[length - 1] = 0;
-        } else {
-            if (std.mem.lastIndexOfScalar(u8, d[0..length], '>')) |end_idx| {
-                d[end_idx] = 0;
-                suffix.* = @ptrCast(d + end_idx + 1);
-            } else {
-                mem.free(@ptrCast(d));
-                return CURLE_URL_MALFORMAT;
-            }
+    if (fqma[0] != '<') {
+        if (length != 0 and d[length - 1] == '>')
+            d[length - 1] = 0;
+    } else {
+        if (std.mem.lastIndexOfScalar(u8, d[0..length], '>')) |end_idx| {
+            d[end_idx] = 0;
+            suffix.* = @ptrCast(d + end_idx + 1);
         }
     }
 
@@ -2550,7 +2522,7 @@ fn smtp_parse_address(
     }
 
     address.* = d;
-    return result;
+    return CURLE_OK;
 }
 
 pub export const Curl_protocol_smtp = Curl_protocol{
@@ -2606,7 +2578,7 @@ test "Curl_protocol_pop3 and Curl_protocol_smtp table layout" {
     try std.testing.expect(Curl_protocol_pop3.doing_pollset != null);
     try std.testing.expect(Curl_protocol_pop3.disconnect != null);
     try std.testing.expect(Curl_protocol_pop3.write_resp != null);
-    try std.testing.expect(Curl_protocol_pop3.write_resp_hd != null);
+    try std.testing.expect(Curl_protocol_pop3.write_resp_hd == null);
 
     try std.testing.expect(Curl_protocol_smtp.setup_connection != null);
     try std.testing.expect(Curl_protocol_smtp.do_it != null);
@@ -2646,5 +2618,5 @@ test "smtp_parse_address angle brackets, host, and suffix" {
     addr = null;
     host = std.mem.zeroes(netrc_addr_idn.Hostname);
     suffix = "";
-    try std.testing.expectEqual(CURLE_URL_MALFORMAT, smtp_parse_address(null, "<unclosed@example.com", &addr, &host, &suffix));
+    try std.testing.expectEqual(CURLE_BAD_FUNCTION_ARGUMENT, smtp_parse_address(null, "<bad\r\n@example.com>", &addr, &host, &suffix));
 }

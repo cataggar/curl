@@ -546,12 +546,15 @@ pub export fn Curl_sasl_decode_mech(
 ) callconv(.c) c_ushort {
     for (mechtable) |entry| {
         const l = entry.name.len;
-        if (maxlen >= l and std.mem.eql(u8, ptr[0..l], entry.name)) {
+        if (maxlen >= l and primitives.curl_strnequal(ptr, entry.name.ptr, l) != 0) {
+            if (len) |out_len| {
+                out_len.* = l;
+            }
+            if (maxlen == l) {
+                return entry.bit;
+            }
             const c = ptr[l];
             if (!primitives.curlx_isupper(c) and !primitives.curlx_isdigit(c) and c != '-' and c != '_') {
-                if (len) |out_len| {
-                    out_len.* = l;
-                }
                 return entry.bit;
             }
         }
@@ -574,7 +577,7 @@ pub export fn Curl_sasl_parse_url_auth_option(
         sasl.prefmech = SASL_AUTH_NONE;
     }
 
-    if (len == 1 and value[0] == '*') {
+    if (std.mem.eql(u8, value[0..len], "*"[0..@min(len, 1)])) {
         sasl.prefmech = SASL_AUTH_DEFAULT;
         return CURLE_OK;
     }
@@ -607,7 +610,6 @@ pub export fn Curl_sasl_init_zig(
 
     if (httpauth != CURLAUTH_BASIC) {
         var mechs: c_ushort = SASL_AUTH_NONE;
-        saslSetResetPrefs(sasl, false);
         if ((httpauth & CURLAUTH_BASIC) != 0)
             mechs |= SASL_MECH_PLAIN | SASL_MECH_LOGIN;
         if ((httpauth & CURLAUTH_DIGEST) != 0)
@@ -618,7 +620,8 @@ pub export fn Curl_sasl_init_zig(
             mechs |= SASL_MECH_OAUTHBEARER | SASL_MECH_XOAUTH2;
         if ((httpauth & CURLAUTH_NEGOTIATE) != 0)
             mechs |= SASL_MECH_GSSAPI;
-        sasl.prefmech = mechs;
+        if (mechs != SASL_AUTH_NONE)
+            sasl.prefmech = mechs;
     }
 }
 
@@ -666,7 +669,7 @@ fn getServerMessage(sasl: *SASL, data: ?*Curl_easy, out: *bufref) CURLcode {
         var msg: ?[*]u8 = null;
         var msglen: usize = 0;
         const serverdata = io_buffers.Curl_bufref_ptr(out) orelse "";
-        if (serverdata[0] == 0 or serverdata[0] == '=') {
+        if (serverdata[0] == 0) {
             io_buffers.Curl_bufref_set(out, null, 0, null);
         } else {
             result = curlx_base64_decode(serverdata, &msg, &msglen);
@@ -686,9 +689,7 @@ fn buildMessage(sasl: *SASL, msg: *bufref) CURLcode {
         var base64len: usize = 0;
         if (io_buffers.Curl_bufref_ptr(msg) == null) {
             io_buffers.Curl_bufref_set(msg, "", 0, null);
-        } else if (io_buffers.Curl_bufref_len(msg) == 0) {
-            io_buffers.Curl_bufref_set(msg, "=", 1, null);
-        } else {
+        } else if (io_buffers.Curl_bufref_len(msg) != 0) {
             result = curlx_base64_encode(
                 io_buffers.Curl_bufref_uptr(msg),
                 io_buffers.Curl_bufref_len(msg),
@@ -1158,21 +1159,9 @@ pub export fn Curl_sasl_continue_zig(
             } else if (code == params.contcode) {
                 io_buffers.Curl_bufref_set(&resp, "\x01", 1, null);
             } else {
-                sasl.authmechs &= ~sasl.authused;
-                sasl.authused = SASL_AUTH_NONE;
-                sasl.curmech = null;
-                return Curl_sasl_start_zig(
-                    sasl,
-                    data,
-                    saslGetForceIr(sasl),
-                    progress,
-                    conn,
-                    conn_creds,
-                    state_creds,
-                    conn_hostname,
-                    conn_port,
-                    sasl_ir,
-                );
+                progress.* = SASL_DONE;
+                saslState(sasl, data, SASL_STOP);
+                return CURLE_LOGIN_DENIED;
             }
         },
         SASL_CANCEL => {
@@ -1235,32 +1224,17 @@ pub export fn Curl_sasl_is_blocked_zig(
     data: ?*Curl_easy,
     conn_creds: ?*Curl_creds,
 ) callconv(.c) CURLcode {
+    _ = conn_creds;
     const enabledmechs = sasl.authmechs & sasl.prefmech;
 
-    if (sasl.authmechs == 0)
-        return CURLE_OK;
-
-    if ((enabledmechs & SASL_MECH_EXTERNAL) != 0 or
-        containers.Curl_creds_has_user(conn_creds))
-    {
-        if ((enabledmechs & SASL_MECH_GSSAPI) != 0 and use_kerberos5) {
-            if (krb5_ext.Curl_auth_is_gssapi_supported() and
-                Curl_auth_user_contains_domain(conn_creds))
-            {
-                return CURLE_OK;
-            }
-        }
-        const other_mechs: c_ushort = SASL_MECH_DIGEST_MD5 |
-            SASL_MECH_CRAM_MD5 |
-            SASL_MECH_OAUTHBEARER |
-            SASL_MECH_XOAUTH2 |
-            SASL_MECH_PLAIN |
-            SASL_MECH_LOGIN;
-        if ((enabledmechs & other_mechs) != 0)
-            return CURLE_OK;
+    if (sasl.authmechs == 0) {
+        infof0(data, "SASL: no auth mechanism was offered or recognized");
+    } else if (enabledmechs == 0) {
+        infof0(data, "SASL: no overlap between offered and configured auth mechanisms");
+    } else {
+        infof0(data, "SASL: no auth mechanism offered could be selected");
     }
 
-    failf0(data, "No known authentication mechanisms supported");
     return CURLE_LOGIN_DENIED;
 }
 
