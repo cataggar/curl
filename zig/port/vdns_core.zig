@@ -22,7 +22,7 @@ const curlx_parse = struct {
     pub extern fn curlx_str_single(linep: *[*:0]const u8, byte: u8) callconv(.c) c_int;
     pub extern fn curlx_str_number(linep: *[*:0]const u8, nump: *i64, max: i64) callconv(.c) c_int;
     pub extern fn curlx_str_casecompare(str: *Curl_str, check: ?[*:0]const u8) callconv(.c) c_int;
-    pub extern fn curlx_memdup(src: ?[*]const u8, length: usize) callconv(.c) ?*anyopaque;
+    pub extern fn curlx_memdup(src: ?[*]const u8, length: usize) callconv(.c) ?[*]u8;
 
     pub inline fn curlx_strlen(s: *const Curl_str) usize {
         return s.len;
@@ -33,10 +33,14 @@ const curlx_parse = struct {
     }
 };
 
+inline fn fromOpaque(comptime T: type, raw: anytype) if (@typeInfo(T) == .pointer) ?T else ?*T {
+    const p = mem.toRawPtr(raw) orelse return null;
+    return @ptrCast(@alignCast(p));
+}
+
 fn memdupBytes(src: ?[*]const u8, len: usize) ?[*]u8 {
     if (src == null) return null;
-    const raw = curlx_parse.curlx_memdup(src, len) orelse return null;
-    return @ptrCast(raw);
+    return curlx_parse.curlx_memdup(src, len);
 }
 
 pub const CURLcode = c_uint;
@@ -363,17 +367,17 @@ fn httpsrr_print_addr(
     addr: [*]const u8,
     total_len: usize,
 ) CURLcode {
-    var buf: [MAX_IPADR_LEN]u8 = undefined;
+    var buf: [MAX_IPADR_LEN - 1:0]u8 = undefined;
     const alen: usize = if (ai_family == AF_INET6) 16 else 4;
     var sep: [*:0]const u8 = "";
     var result: CURLcode = CURLE_OK;
     var i: usize = 0;
 
     while (i < (total_len / alen) and result == CURLE_OK) : (i += 1) {
-        if (curlx_time_net.curlx_inet_ntop(ai_family, addr + (i * alen), &buf, buf.len) != CURLE_OK) {
+        if (curlx_time_net.curlx_inet_ntop(ai_family, addr + (i * alen), &buf, @sizeOf(@TypeOf(buf))) != CURLE_OK) {
             result = containers.curlx_dyn_add(dyn, "<error parsing address>");
         } else {
-            result = curlx_dyn_addf(dyn, "%s%s", sep, @as([*:0]const u8, @ptrCast(&buf)));
+            result = curlx_dyn_addf(dyn, "%s%s", sep, @as([*:0]const u8, &buf));
         }
         sep = ",";
     }
@@ -477,32 +481,32 @@ pub export fn Curl_httpsrr_set(
         },
         HTTPS_RR_CODE_IPV4 => {
             if (vlen == 0 or (vlen & 3) != 0) return CURLE_BAD_FUNCTION_ARGUMENT;
-            mem.free(@ptrCast(rr.ipv4hints));
+            mem.free(rr.ipv4hints);
             rr.ipv4hints = null;
             rr.ipv4hints_len = 0;
             const dup = memdupBytes(val, vlen) orelse return CURLE_OUT_OF_MEMORY;
-            rr.ipv4hints = @ptrCast(dup);
+            rr.ipv4hints = dup;
             rr.ipv4hints_len = vlen;
         },
         HTTPS_RR_CODE_ECH => {
             if (vlen == 0) return CURLE_BAD_FUNCTION_ARGUMENT;
             if (rr.echconfiglist) |ech| {
-                mem.secureZero(@ptrCast(ech), rr.echconfiglist_len);
-                mem.free(@ptrCast(ech));
+                mem.secureZero(ech, rr.echconfiglist_len);
+                mem.free(ech);
             }
             rr.echconfiglist = null;
             rr.echconfiglist_len = 0;
             const dup = memdupBytes(val, vlen) orelse return CURLE_OUT_OF_MEMORY;
-            rr.echconfiglist = @ptrCast(dup);
+            rr.echconfiglist = dup;
             rr.echconfiglist_len = vlen;
         },
         HTTPS_RR_CODE_IPV6 => {
             if (vlen == 0 or (vlen & 15) != 0) return CURLE_BAD_FUNCTION_ARGUMENT;
-            mem.free(@ptrCast(rr.ipv6hints));
+            mem.free(rr.ipv6hints);
             rr.ipv6hints = null;
             rr.ipv6hints_len = 0;
             const dup = memdupBytes(val, vlen) orelse return CURLE_OUT_OF_MEMORY;
-            rr.ipv6hints = @ptrCast(dup);
+            rr.ipv6hints = dup;
             rr.ipv6hints_len = vlen;
         },
         HTTPS_RR_CODE_PORT => {
@@ -518,14 +522,14 @@ pub export fn Curl_httpsrr_set(
 
 pub export fn Curl_httpsrr_destroy(rrinfo_opt: ?*Curl_https_rrinfo) callconv(.c) void {
     if (rrinfo_opt) |rrinfo| {
-        mem.free(@ptrCast(rrinfo.target));
+        mem.free(rrinfo.target);
         if (rrinfo.echconfiglist) |ech| {
-            mem.secureZero(@ptrCast(ech), rrinfo.echconfiglist_len);
-            mem.free(@ptrCast(ech));
+            mem.secureZero(ech, rrinfo.echconfiglist_len);
+            mem.free(ech);
         }
-        mem.free(@ptrCast(rrinfo.ipv4hints));
-        mem.free(@ptrCast(rrinfo.ipv6hints));
-        mem.freeSized(@ptrCast(rrinfo), @sizeOf(Curl_https_rrinfo));
+        mem.free(rrinfo.ipv4hints);
+        mem.free(rrinfo.ipv6hints);
+        mem.destroy(rrinfo);
     }
 }
 
@@ -585,16 +589,12 @@ fn httpsrr_opt(
     return Curl_httpsrr_set(hinfo, code, val, len);
 }
 
-pub fn Curl_httpsrr_from_ares(
-    dnsrec: ?*const anyopaque,
-    phinfo: *?*Curl_https_rrinfo,
-) callconv(.c) CURLcode {
-    const raw = mem.calloc(1, @sizeOf(Curl_https_rrinfo)) orelse {
-        phinfo.* = null;
-        return CURLE_OUT_OF_MEMORY;
+fn httpsrrFromAresInner(dnsrec: ?*const anyopaque, out_result: *CURLcode) error{DecodeFailed}!*Curl_https_rrinfo {
+    const hinfo = mem.create(Curl_https_rrinfo) orelse {
+        out_result.* = CURLE_OUT_OF_MEMORY;
+        return error.DecodeFailed;
     };
-    const hinfo: *Curl_https_rrinfo = @ptrCast(@alignCast(raw));
-    var result: CURLcode = CURLE_OUT_OF_MEMORY;
+    errdefer Curl_httpsrr_destroy(hinfo);
 
     const rr_cnt = ares_dns_c.ares_dns_record_rr_cnt(dnsrec, ARES_SECTION_ANSWER);
     for (0..rr_cnt) |i| {
@@ -603,28 +603,34 @@ pub fn Curl_httpsrr_from_ares(
             continue;
         if (ares_dns_c.ares_dns_rr_get_str(rr, ARES_RR_HTTPS_TARGET)) |target| {
             if (target[0] != 0) {
-                mem.free(@ptrCast(hinfo.target));
-                hinfo.target = mem.strdup(target);
-                if (hinfo.target == null) {
-                    phinfo.* = null;
-                    Curl_httpsrr_destroy(hinfo);
-                    return CURLE_OUT_OF_MEMORY;
-                }
+                mem.free(hinfo.target);
+                hinfo.target = mem.strdup(target) orelse {
+                    out_result.* = CURLE_OUT_OF_MEMORY;
+                    return error.DecodeFailed;
+                };
             }
         }
         hinfo.priority = ares_dns_c.ares_dns_rr_get_u16(rr, ARES_RR_HTTPS_PRIORITY);
         const opt_cnt = ares_dns_c.ares_dns_rr_get_opt_cnt(rr, ARES_RR_HTTPS_PARAMS);
         for (0..opt_cnt) |opt| {
-            result = httpsrr_opt(rr, ARES_RR_HTTPS_PARAMS, opt, hinfo);
+            const result = httpsrr_opt(rr, ARES_RR_HTTPS_PARAMS, opt, hinfo);
             if (result != CURLE_OK) {
-                phinfo.* = null;
-                Curl_httpsrr_destroy(hinfo);
-                return result;
+                out_result.* = result;
+                return error.DecodeFailed;
             }
         }
     }
-    phinfo.* = hinfo;
-    return CURLE_OK;
+    out_result.* = CURLE_OK;
+    return hinfo;
+}
+
+pub fn Curl_httpsrr_from_ares(
+    dnsrec: ?*const anyopaque,
+    phinfo: *?*Curl_https_rrinfo,
+) callconv(.c) CURLcode {
+    var result: CURLcode = CURLE_OK;
+    phinfo.* = httpsrrFromAresInner(dnsrec, &result) catch null;
+    return result;
 }
 
 comptime {
@@ -668,7 +674,7 @@ pub const Curl_dns_entry = if (builtin.os.tag == .windows)
         dns_responses: u8,
         _pad0: u8 = 0,
         flags: u32,
-        hostname: [1]u8,
+        hostname: [0:0]u8,
 
         pub inline fn permanent(self: *const Curl_dns_entry) bool {
             return (self.flags & 1) != 0;
@@ -687,7 +693,7 @@ pub const Curl_dns_entry = if (builtin.os.tag == .windows)
         }
 
         pub inline fn hostnamePtr(self: anytype) [*:0]u8 {
-            return @ptrCast(@constCast(&self.hostname));
+            return @constCast(&self.hostname);
         }
     } else extern struct {
         addr: ?*Curl_addrinfo,
@@ -700,7 +706,7 @@ pub const Curl_dns_entry = if (builtin.os.tag == .windows)
         dns_responses: u8,
         _pad0: u8 = 0,
         flags: u32,
-        hostname: [1]u8,
+        hostname: [0:0]u8,
 
         pub inline fn permanent(self: *const Curl_dns_entry) bool {
             return (self.flags & 1) != 0;
@@ -717,7 +723,7 @@ pub const Curl_dns_entry = if (builtin.os.tag == .windows)
         pub inline fn setHinfo(_: *Curl_dns_entry, _: ?*Curl_https_rrinfo) void {}
 
         pub inline fn hostnamePtr(self: anytype) [*:0]u8 {
-            return @ptrCast(@constCast(&self.hostname));
+            return @constCast(&self.hostname);
         }
     })
 else if (use_httpsrr) extern struct {
@@ -731,7 +737,7 @@ else if (use_httpsrr) extern struct {
     dns_queries: u8,
     dns_responses: u8,
     flags: u8,
-    hostname: [1]u8,
+    hostname: [0:0]u8,
 
     pub inline fn permanent(self: *const Curl_dns_entry) bool {
         return (self.flags & 1) != 0;
@@ -750,7 +756,7 @@ else if (use_httpsrr) extern struct {
     }
 
     pub inline fn hostnamePtr(self: anytype) [*:0]u8 {
-        return @ptrCast(@constCast(&self.hostname));
+        return @constCast(&self.hostname);
     }
 } else extern struct {
     addr: ?*Curl_addrinfo,
@@ -762,7 +768,7 @@ else if (use_httpsrr) extern struct {
     dns_queries: u8,
     dns_responses: u8,
     flags: u8,
-    hostname: [1]u8,
+    hostname: [0:0]u8,
 
     pub inline fn permanent(self: *const Curl_dns_entry) bool {
         return (self.flags & 1) != 0;
@@ -779,7 +785,7 @@ else if (use_httpsrr) extern struct {
     pub inline fn setHinfo(_: *Curl_dns_entry, _: ?*Curl_https_rrinfo) void {}
 
     pub inline fn hostnamePtr(self: anytype) [*:0]u8 {
-        return @ptrCast(@constCast(&self.hostname));
+        return @constCast(&self.hostname);
     }
 };
 
@@ -810,7 +816,7 @@ pub export fn dnsc_id2key(key: *dnsc_key, id: *dnsc_id) callconv(.c) void {
     key.data[2] = @intCast(id.port & 0xff);
     if (namelen > 0) {
         if (curlx_parse.curlx_str(&id.name)) |s| {
-            primitives.Curl_strntolower(@ptrCast(key.data[3..].ptr), s, namelen);
+            primitives.Curl_strntolower(key.data[3..].ptr, s, namelen);
         }
     }
     key.len = namelen + 3;
@@ -841,7 +847,7 @@ fn dnscache_entry_free(dns: *Curl_dns_entry) void {
     if (dns.getHinfo()) |hinfo| {
         Curl_httpsrr_destroy(hinfo);
     }
-    mem.free(@ptrCast(dns));
+    mem.free(dns);
 }
 
 const DnscachePruneData = extern struct {
@@ -851,8 +857,8 @@ const DnscachePruneData = extern struct {
 };
 
 fn dnscache_entry_is_stale(datap: ?*anyopaque, hc: ?*anyopaque) callconv(.c) c_int {
-    const prune: *DnscachePruneData = @ptrCast(@alignCast(datap orelse return 0));
-    const dns: *Curl_dns_entry = @ptrCast(@alignCast(hc orelse return 0));
+    const prune = fromOpaque(DnscachePruneData, datap) orelse return 0;
+    const dns = fromOpaque(Curl_dns_entry, hc) orelse return 0;
 
     if (!dns.permanent()) {
         var age_ms = curlx_time_net.curlx_ptimediff_ms(prune.pnow, &dns.added);
@@ -889,7 +895,7 @@ fn dnscache_prune(
         .oldest_ms = 0,
         .max_age_ms = cache_timeout_ms,
     };
-    Curl_hash_clean_with_criterium(hostcache, @ptrCast(&user), dnscache_entry_is_stale);
+    Curl_hash_clean_with_criterium(hostcache, &user, dnscache_entry_is_stale);
     return user.oldest_ms;
 }
 
@@ -941,7 +947,7 @@ fn fetch_entry(
     dnsc_peer2id(&id, dtype, peer);
     dnsc_id2key(&key, &id);
 
-    dns = @ptrCast(@alignCast(Curl_hash_pick(&dnscache.entries, &key.data, key.len)));
+    dns = collections.hashPickTyped(Curl_dns_entry, &dnscache.entries, &key.data, key.len);
 
     if (dns != null and !dnsc_id_matches_entry(&id, dns)) {
         dns = null;
@@ -952,7 +958,7 @@ fn fetch_entry(
         curlx_parse.curlx_str_assign(&wildname, "*", 1);
         dnsc_str2id(&id, CURL_DNST_ADDR, &wildname, peer.port);
         dnsc_id2key(&key, &id);
-        dns = @ptrCast(@alignCast(Curl_hash_pick(&dnscache.entries, &key.data, key.len)));
+        dns = collections.hashPickTyped(Curl_dns_entry, &dnscache.entries, &key.data, key.len);
     }
 
     const timeout_ms = Curl_vdns_data_dns_cache_timeout_ms(data);
@@ -962,7 +968,7 @@ fn fetch_entry(
             .oldest_ms = 0,
             .max_age_ms = timeout_ms,
         };
-        if (dnscache_entry_is_stale(@ptrCast(&user), @ptrCast(dns)) != 0) {
+        if (dnscache_entry_is_stale(&user, dns) != 0) {
             Curl_infof(data, "Hostname in DNS cache was stale, zapped");
             dns = null;
             _ = Curl_hash_delete(&dnscache.entries, &key.data, key.len);
@@ -1048,9 +1054,8 @@ pub export fn dns_shuffle_addr(
             Curl_trc_dns(data, "Shuffling %d addresses", @as(c_int, @intCast(num_addrs)));
         }
 
-        const nodes_raw = mem.malloc(num_addrs * @sizeOf(*Curl_addrinfo)) orelse return CURLE_OUT_OF_MEMORY;
-        defer mem.free(nodes_raw);
-        const nodes: [*]*Curl_addrinfo = @ptrCast(@alignCast(nodes_raw));
+        const nodes = mem.allocMany(*Curl_addrinfo, num_addrs) orelse return CURLE_OUT_OF_MEMORY;
+        defer mem.destroy(nodes);
 
         nodes[0] = addr.*.?;
         for (1..num_addrs) |i| {
@@ -1058,11 +1063,10 @@ pub export fn dns_shuffle_addr(
         }
 
         const rnd_size = num_addrs * @sizeOf(c_uint);
-        const rnd_raw = mem.malloc(rnd_size) orelse return CURLE_OUT_OF_MEMORY;
-        defer mem.free(rnd_raw);
-        const rnd: [*]c_uint = @ptrCast(@alignCast(rnd_raw));
+        const rnd = mem.allocMany(c_uint, num_addrs) orelse return CURLE_OUT_OF_MEMORY;
+        defer mem.free(rnd);
 
-        if (Curl_rand_bytes(data, rnd_raw, rnd_size) == CURLE_OK) {
+        if (Curl_rand_bytes(data, fromOpaque([*]u8, rnd).?, rnd_size) == CURLE_OK) {
             var i: usize = num_addrs - 1;
             while (i > 0) : (i -= 1) {
                 const j: usize = @intCast(rnd[i] % @as(c_uint, @intCast(i + 1)));
@@ -1096,7 +1100,7 @@ fn dnsc_entry_create(pid: *const dnsc_id, permanent: bool) ?*Curl_dns_entry {
     if (namelen > std.math.maxInt(u16)) return null;
 
     const raw = mem.calloc(1, @sizeOf(Curl_dns_entry) + namelen) orelse return null;
-    const dns: *Curl_dns_entry = @ptrCast(@alignCast(raw));
+    const dns = fromOpaque(Curl_dns_entry, raw).?;
 
     dns.refcount = 1;
     dns.port = pid.port;
@@ -1215,7 +1219,7 @@ fn dnsc_add_entry(
     entry: *Curl_dns_entry,
 ) ?*Curl_dns_entry {
     entry.added = Curl_pgrs_now(data).*;
-    return @ptrCast(@alignCast(Curl_hash_add(&dnscache.entries, &key.data, key.len, entry)));
+    return collections.hashAddTyped(Curl_dns_entry, &dnscache.entries, &key.data, key.len, entry);
 }
 
 fn dnsc_entry_assign_https(
@@ -1416,7 +1420,7 @@ pub export fn Curl_dns_entry_unlink(
 }
 
 fn dnscache_entry_dtor(entry: ?*anyopaque) callconv(.c) void {
-    const dns: *Curl_dns_entry = @ptrCast(@alignCast(entry orelse return));
+    const dns = fromOpaque(Curl_dns_entry, entry) orelse return;
     dns.refcount -= 1;
     if (dns.refcount == 0) {
         dnscache_entry_free(dns);
@@ -1557,7 +1561,7 @@ pub export fn Curl_loadhostpairs(data: ?*Curl_easy) callconv(.c) CURLcode {
                     }
                     address[tlen] = 0;
 
-                    const addr_str: [*:0]const u8 = @ptrCast(&address);
+                    const addr_str: [*:0]const u8 = address[0..tlen :0].ptr;
                     if (Curl_str2addr(addr_str, port, &ai) != CURLE_OK) {
                         Curl_infof(data, "Resolve IP address '%s' found is illegal", addr_str);
                         break :parse_blk;
@@ -1592,7 +1596,7 @@ pub export fn Curl_loadhostpairs(data: ?*Curl_easy) callconv(.c) CURLcode {
             dnsc_id2key(&key, &id);
             Curl_vdns_dnscache_lock(data, dnscache);
 
-            var dns: ?*Curl_dns_entry = @ptrCast(@alignCast(Curl_hash_pick(&dnscache.entries, &key.data, key.len)));
+            var dns = collections.hashPickTyped(Curl_dns_entry, &dnscache.entries, &key.data, key.len);
             if (dns != null) {
                 Curl_infof(
                     data,
@@ -1659,8 +1663,7 @@ fn cf_dns_ctx_create(
     transport: u8,
     for_proxy: bool,
 ) ?*CfDnsCtx {
-    const raw = mem.calloc(1, @sizeOf(CfDnsCtx)) orelse return null;
-    const ctx: *CfDnsCtx = @ptrCast(@alignCast(raw));
+    const ctx = mem.create(CfDnsCtx) orelse return null;
     ctx.* = .{
         .dns_queries = dns_queries,
         .transport = transport,
@@ -1686,7 +1689,7 @@ fn cf_dns_ctx_destroy(data: ?*Curl_easy, ctx_opt: ?*CfDnsCtx) void {
     if (ctx_opt) |ctx| {
         Curl_peer_unlink(&ctx.peer);
         Curl_dns_entry_unlink(data, &ctx.dns);
-        mem.free(@ptrCast(ctx));
+        mem.destroy(ctx);
     }
 }
 
@@ -1697,15 +1700,15 @@ fn cf_dns_report_addr(
     ai_family: c_int,
     ai_in: ?*const Curl_addrinfo,
 ) void {
-    var buf: [MAX_IPADR_LEN]u8 = undefined;
+    var buf: [MAX_IPADR_LEN - 1:0]u8 = undefined;
     var sep: [*:0]const u8 = "";
 
     containers.curlx_dyn_reset(tmp);
     var ai = ai_in;
     while (ai) |a| : (ai = a.ai_next) {
         if (a.ai_family == ai_family) {
-            Curl_printable_address(a, &buf, buf.len);
-            const result = curlx_dyn_addf(tmp, "%s%s", sep, @as([*:0]const u8, @ptrCast(&buf)));
+            Curl_printable_address(a, &buf, @sizeOf(@TypeOf(buf)));
+            const result = curlx_dyn_addf(tmp, "%s%s", sep, @as([*:0]const u8, &buf));
             if (result != CURLE_OK) {
                 Curl_infof(data, "too many IP, cannot show");
                 return;
@@ -1726,7 +1729,7 @@ fn cf_dns_report(
     data: ?*Curl_easy,
     dns: *Curl_dns_entry,
 ) void {
-    const ctx: *CfDnsCtx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctxAs(CfDnsCtx).?;
     const host_str = dns.hostnamePtr();
 
     if (!Curl_vdns_trc_is_verbose(data) or host_str[0] == 0 or Curl_host_is_ipnum(host_str)) {
@@ -1778,7 +1781,7 @@ fn cf_dns_start(
     data: ?*Curl_easy,
     pdns: *?*Curl_dns_entry,
 ) CURLcode {
-    const ctx: *CfDnsCtx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctxAs(CfDnsCtx).?;
     const timeout_ms = Curl_timeleft_ms(data);
     var result: CURLcode = CURLE_OK;
 
@@ -1855,7 +1858,7 @@ fn cf_dns_start(
 }
 
 fn cf_dns_ready_to_connect(cf: *Curl_cfilter, data: ?*Curl_easy) bool {
-    const ctx: *CfDnsCtx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctxAs(CfDnsCtx).?;
     if (ctx.resolv_result != CURLE_OK) {
         return true;
     } else if (ctx.dns != null) {
@@ -1894,7 +1897,7 @@ fn cf_dns_connect(
     data: ?*Curl_easy,
     done: *bool,
 ) callconv(.c) CURLcode {
-    const ctx: *CfDnsCtx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctxAs(CfDnsCtx).?;
     const ip_query = (ctx.dns_queries & (CURL_DNSQ_A | CURL_DNSQ_AAAA)) != 0;
 
     if (cf.isConnected()) {
@@ -1958,7 +1961,7 @@ fn cf_dns_connect(
 }
 
 fn cf_dns_destroy(cf: *Curl_cfilter, data: ?*Curl_easy) callconv(.c) void {
-    const ctx: ?*CfDnsCtx = if (cf.ctx) |p| @ptrCast(@alignCast(p)) else null;
+    const ctx = cf.ctxAs(CfDnsCtx);
     if (Curl_trc_cf_is_verbose(cf, data)) {
         Curl_trc_cf_infof(data, cf, "destroy");
     }
@@ -1973,7 +1976,7 @@ fn cf_dns_adjust_pollset(
 ) callconv(.c) CURLcode {
     if (use_curl_async) {
         if (!cf.isConnected()) {
-            const ctx: *CfDnsCtx = @ptrCast(@alignCast(cf.ctx.?));
+            const ctx = cf.ctxAs(CfDnsCtx).?;
             if (!ctx.started) {
                 if (Curl_trc_cf_is_verbose(cf, data)) {
                     const peer = ctx.peer.?;
@@ -2007,7 +2010,7 @@ fn cf_dns_cntrl(
 ) callconv(.c) CURLcode {
     _ = arg1;
     _ = arg2;
-    const ctx: *CfDnsCtx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctxAs(CfDnsCtx).?;
     switch (event) {
         CF_CTRL_DATA_DONE => {
             if (ctx.dns != null) {
@@ -2036,6 +2039,27 @@ pub export var Curl_cft_dns: Curl_cftype = .{
     .query = Curl_cf_def_query,
 };
 
+fn createDnsFilter(
+    data: ?*Curl_easy,
+    peer: *CurlPeer,
+    dns_queries: u8,
+    transport: u8,
+    for_proxy: bool,
+    out_result: *CURLcode,
+) error{CreateFailed}!*Curl_cfilter {
+    const ctx = cf_dns_ctx_create(data, peer, dns_queries, transport, for_proxy) orelse {
+        out_result.* = CURLE_OUT_OF_MEMORY;
+        return error.CreateFailed;
+    };
+    errdefer cf_dns_ctx_destroy(data, ctx);
+
+    var cf: ?*Curl_cfilter = null;
+    const result = Curl_cf_create(&cf, &Curl_cft_dns, ctx);
+    out_result.* = result;
+    if (result != CURLE_OK) return error.CreateFailed;
+    return cf.?;
+}
+
 fn cf_dns_create(
     pcf: *?*Curl_cfilter,
     data: ?*Curl_easy,
@@ -2044,20 +2068,9 @@ fn cf_dns_create(
     transport: u8,
     for_proxy: bool,
 ) CURLcode {
-    var cf: ?*Curl_cfilter = null;
-    const ctx = cf_dns_ctx_create(data, peer, dns_queries, transport, for_proxy) orelse {
-        pcf.* = null;
-        return CURLE_OUT_OF_MEMORY;
-    };
-
-    const result = Curl_cf_create(&cf, &Curl_cft_dns, ctx);
-    if (result != CURLE_OK) {
-        cf_dns_ctx_destroy(data, ctx);
-        pcf.* = null;
-        return result;
-    }
-    pcf.* = cf;
-    return CURLE_OK;
+    var result: CURLcode = CURLE_OK;
+    pcf.* = createDnsFilter(data, peer, dns_queries, transport, for_proxy, &result) catch null;
+    return result;
 }
 
 fn cf_dns_add(
@@ -2114,7 +2127,7 @@ fn cf_dns_add_resolve(
     while (cf != null and dns_queries != 0) : (cf = cf.?.next) {
         const cur = cf.?;
         if (cur.cft == &Curl_cft_dns) {
-            const ctx: *CfDnsCtx = @ptrCast(@alignCast(cur.ctx.?));
+            const ctx = cur.ctxAs(CfDnsCtx).?;
             cf_dns = cur;
             if (Curl_peer_same_destination(ctx.peer, peer)) {
                 dns_queries = ~ctx.dns_queries & dns_queries;
@@ -2167,7 +2180,7 @@ pub export fn Curl_conn_dns_addr_result(
     var cf = Curl_vdns_conn_cfilter(conn, sockindex);
     while (cf) |cur| : (cf = cur.next) {
         if (cur.cft == &Curl_cft_dns) {
-            const ctx: *CfDnsCtx = @ptrCast(@alignCast(cur.ctx.?));
+            const ctx = cur.ctxAs(CfDnsCtx).?;
             if (Curl_peer_same_destination(ctx.peer, peer) and
                 (ctx.dns_queries & (CURL_DNSQ_A | CURL_DNSQ_AAAA)) != 0)
             {
@@ -2194,7 +2207,7 @@ pub export fn Curl_conn_dns_get_ai(
 
     while (cf) |cur| : (cf = cur.next) {
         if (cur.cft == &Curl_cft_dns) {
-            const ctx: *CfDnsCtx = @ptrCast(@alignCast(cur.ctx.?));
+            const ctx = cur.ctxAs(CfDnsCtx).?;
             if (Curl_peer_same_destination(ctx.peer, peer) and
                 (ctx.dns_queries & (CURL_DNSQ_A | CURL_DNSQ_AAAA)) != 0)
             {
@@ -2256,7 +2269,7 @@ pub export fn Curl_conn_dns_get_https(
     var cf = Curl_vdns_conn_cfilter(conn, sockindex);
     while (cf) |cur| : (cf = cur.next) {
         if (cur.cft == &Curl_cft_dns) {
-            const ctx: *CfDnsCtx = @ptrCast(@alignCast(cur.ctx.?));
+            const ctx = cur.ctxAs(CfDnsCtx).?;
             if (Curl_peer_same_destination(ctx.peer, peer) and
                 (ctx.dns_queries & CURL_DNSQ_HTTPS) != 0)
             {
@@ -2280,7 +2293,7 @@ pub export fn Curl_conn_dns_resolved_https(
     var cf = Curl_vdns_conn_cfilter(conn, sockindex);
     while (cf) |cur| : (cf = cur.next) {
         if (cur.cft == &Curl_cft_dns) {
-            const ctx: *CfDnsCtx = @ptrCast(@alignCast(cur.ctx.?));
+            const ctx = cur.ctxAs(CfDnsCtx).?;
             if (Curl_peer_same_destination(ctx.peer, peer) and
                 (ctx.dns_queries & CURL_DNSQ_HTTPS) != 0)
             {
@@ -2463,7 +2476,7 @@ fn async_ares_set_dns_local_ip4(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_asyn
     var a4: u32 = 0;
     if (asyn_ares_c.Curl_zig_easy_get_dns_local_ip4(data)) |local_ip4| {
         if (local_ip4[0] != 0) {
-            if (curlx_time_net.curlx_inet_pton(AF_INET, local_ip4, @ptrCast(&a4)) != 1) {
+            if (curlx_time_net.curlx_inet_pton(AF_INET, local_ip4, &a4) != 1) {
                 return CURLE_BAD_FUNCTION_ARGUMENT;
             }
         }
@@ -2481,7 +2494,7 @@ fn async_ares_set_dns_local_ip6(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_asyn
     var a6: [16]u8 = @splat(0);
     if (asyn_ares_c.Curl_zig_easy_get_dns_local_ip6(data)) |local_ip6| {
         if (local_ip6[0] != 0) {
-            if (curlx_time_net.curlx_inet_pton(AF_INET6, local_ip6, @ptrCast(&a6)) != 1) {
+            if (curlx_time_net.curlx_inet_pton(AF_INET6, local_ip6, &a6) != 1) {
                 return CURLE_BAD_FUNCTION_ARGUMENT;
             }
         }
@@ -2720,11 +2733,10 @@ fn async_ares_addr_seen(
     addr: *const anyopaque,
 ) bool {
     var ca = cafirst;
-    const addr_bytes: [*]const u8 = @ptrCast(addr);
+    const addr_bytes = fromOpaque([*]const u8, addr).?;
     while (ca) |cur| : (ca = cur.ai_next) {
         if (cur.ai_family == family and @as(usize, cur.ai_addrlen) == ss_size) {
-            if (cur.ai_addr) |cur_addr| {
-                const cur_bytes: [*]const u8 = @ptrCast(cur_addr);
+            if (fromOpaque([*]const u8, cur.ai_addr)) |cur_bytes| {
                 if (std.mem.eql(u8, cur_bytes[0..ss_size], addr_bytes[0..ss_size])) {
                     return true;
                 }
@@ -2734,11 +2746,11 @@ fn async_ares_addr_seen(
     return false;
 }
 
-fn async_ares_node2addr(node: ?*ares_addrinfo_node) ?*Curl_addrinfo {
+fn asyncAresNode2AddrInner(node: ?*ares_addrinfo_node) error{OutOfMemory}!?*Curl_addrinfo {
     var ai = node;
     var cafirst: ?*Curl_addrinfo = null;
     var calast: ?*Curl_addrinfo = null;
-    var had_error = false;
+    errdefer Curl_freeaddrinfo(cafirst);
     var naddrs: c_uint = 0;
 
     while (ai != null and naddrs < CARES_MAX_ADDRS) : (ai = ai.?.ai_next) {
@@ -2757,20 +2769,17 @@ fn async_ares_node2addr(node: ?*ares_addrinfo_node) ?*Curl_addrinfo {
         if (async_ares_addr_seen(cafirst, cur.ai_family, ss_size, cur_addr))
             continue;
 
-        const raw = mem.malloc(@sizeOf(Curl_addrinfo) + ss_size) orelse {
-            had_error = true;
-            break;
-        };
-        const ca: *Curl_addrinfo = @ptrCast(@alignCast(raw));
+        const raw = mem.malloc(@sizeOf(Curl_addrinfo) + ss_size) orelse return error.OutOfMemory;
+        const ca = fromOpaque(Curl_addrinfo, raw).?;
         const addr_dst = raw + @sizeOf(Curl_addrinfo);
-        const addr_src: [*]const u8 = @ptrCast(cur_addr);
+        const addr_src = fromOpaque([*]const u8, cur_addr).?;
 
         ca.ai_flags = cur.ai_flags;
         ca.ai_family = cur.ai_family;
         ca.ai_socktype = cur.ai_socktype;
         ca.ai_protocol = cur.ai_protocol;
         ca.ai_addrlen = @intCast(ss_size);
-        ca.ai_addr = @ptrCast(addr_dst);
+        ca.ai_addr = addr_dst;
         ca.ai_canonname = null;
         ca.ai_next = null;
         @memcpy(addr_dst[0..ss_size], addr_src[0..ss_size]);
@@ -2785,11 +2794,11 @@ fn async_ares_node2addr(node: ?*ares_addrinfo_node) ?*Curl_addrinfo {
         naddrs += 1;
     }
 
-    if (had_error) {
-        Curl_freeaddrinfo(cafirst);
-        cafirst = null;
-    }
     return cafirst;
+}
+
+fn async_ares_node2addr(node: ?*ares_addrinfo_node) ?*Curl_addrinfo {
+    return asyncAresNode2AddrInner(node) catch null;
 }
 
 fn async_ares_A_cb(
@@ -2799,7 +2808,7 @@ fn async_ares_A_cb(
     ares_ai: ?*ares_addrinfo,
 ) callconv(.c) void {
     _ = timeouts;
-    const a: *Curl_resolv_async = @ptrCast(@alignCast(user_data orelse return));
+    const a = fromOpaque(Curl_resolv_async, user_data) orelse return;
     const ares = &a.ares;
 
     a.dns_responses |= CURL_DNSQ_A;
@@ -2828,7 +2837,7 @@ fn async_ares_AAAA_cb(
     ares_ai: ?*ares_addrinfo,
 ) callconv(.c) void {
     _ = timeouts;
-    const a: *Curl_resolv_async = @ptrCast(@alignCast(user_data orelse return));
+    const a = fromOpaque(Curl_resolv_async, user_data) orelse return;
     const ares = &a.ares;
 
     a.dns_responses |= CURL_DNSQ_AAAA;
@@ -2858,7 +2867,7 @@ fn async_ares_rr_done(
 ) callconv(.c) void {
     _ = timeouts;
     if (!use_httpsrr) return;
-    const a: *Curl_resolv_async = @ptrCast(@alignCast(user_data orelse return));
+    const a = fromOpaque(Curl_resolv_async, user_data) orelse return;
     const ares = &a.ares;
 
     a.dns_responses |= CURL_DNSQ_HTTPS;
@@ -2896,7 +2905,7 @@ fn ares_getaddrinfo_fn(
 ) callconv(.c) CURLcode {
     const a = async_ctx orelse return CURLE_FAILED_INIT;
     const ares = &a.ares;
-    var service: [12]u8 = undefined;
+    var service: [11:0]u8 = undefined;
     var result: CURLcode = CURLE_OK;
 
     out: {
@@ -2914,14 +2923,14 @@ fn ares_getaddrinfo_fn(
         if (Curl_vdns_trc_dns_is_verbose(data)) {
             if (asyn_ares_c.ares_get_servers_csv(ares.channel)) |csv| {
                 Curl_trc_dns(data, "ares: servers=%s", csv);
-                asyn_ares_c.ares_free_string(@ptrCast(csv));
+                asyn_ares_c.ares_free_string(csv);
             }
         }
 
         const peer = a.peer.?;
         const hostname = peer.hostname.?;
-        _ = asyn_ares_c.curl_msnprintf(&service, service.len, "%d", @as(c_int, peer.port));
-        const service_str: [*:0]const u8 = @ptrCast(&service);
+        _ = asyn_ares_c.curl_msnprintf(&service, @sizeOf(@TypeOf(service)), "%d", @as(c_int, peer.port));
+        const service_str: [*:0]const u8 = &service;
         const socktype: c_int = if (asyn_ares_c.Curl_conn_get_transport(data, Curl_vdns_data_conn(data)) == TRNSPRT_TCP)
             vdns_cfilters.SOCK_STREAM
         else
@@ -2988,7 +2997,7 @@ fn ares_getaddrinfo_fn(
                 async_ares_rr_query_cb,
                 a,
             );
-            mem.free(@ptrCast(https_name));
+            mem.free(https_name);
         }
     }
 
@@ -3017,8 +3026,7 @@ comptime {
 // ============================================================================
 
 test "Curl_httpsrr_set and Curl_httpsrr_print" {
-    const raw = mem.calloc(1, @sizeOf(Curl_https_rrinfo)) orelse return error.OutOfMemory;
-    const rr: *Curl_https_rrinfo = @ptrCast(@alignCast(raw));
+    const rr = mem.create(Curl_https_rrinfo) orelse return error.OutOfMemory;
     defer Curl_httpsrr_destroy(rr);
 
     rr.priority = 1;
@@ -3201,8 +3209,7 @@ test "Curl_httpsrr_from_ares decodes c-ares HTTPS DNS record" {
 }
 
 test "Curl_httpsrr_set resets lengths before replacement failure and Curl_httpsrr_destroy scrubs ECH" {
-    const raw = mem.calloc(1, @sizeOf(Curl_https_rrinfo)) orelse return error.OutOfMemory;
-    const rr: *Curl_https_rrinfo = @ptrCast(@alignCast(raw));
+    const rr = mem.create(Curl_https_rrinfo) orelse return error.OutOfMemory;
     defer Curl_httpsrr_destroy(rr);
 
     const ipv4_wire = [_]u8{ 192, 0, 2, 1 };

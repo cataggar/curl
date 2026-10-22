@@ -34,6 +34,11 @@ const EAI_NONAME: c_int = switch (builtin.os.tag) {
     else => -2,
 };
 
+inline fn fromOpaque(comptime T: type, raw: anytype) if (@typeInfo(T) == .pointer) ?T else ?*T {
+    const p = mem.toRawPtr(raw) orelse return null;
+    return @ptrCast(@alignCast(p));
+}
+
 // ============================================================================
 // 1. lib/idn.c (lib/idn.h)
 // ============================================================================
@@ -148,7 +153,7 @@ const winidn = struct {
             if (WideCharToMultiByte(CP_UTF8, 0, str_w, chars, str_utf8, bytes, null, null) == 0) {
                 return error.OutOfMemory;
             }
-            return @ptrCast(str_utf8);
+            return str_utf8[0 .. alloc_len - 1 :0].ptr;
         }
         return error.OutOfMemory;
     }
@@ -268,18 +273,18 @@ const appleidn = struct {
                 if (err <= U_ZERO_ERROR) {
                     defer uidna_close(idna);
                     var info: UIDNAInfo = .{};
-                    var buffer: [MAX_HOST_LENGTH]u8 = @splat(0);
+                    var buffer: [MAX_HOST_LENGTH - 1:0]u8 = @splat(0);
                     _ = uidna_nameToASCII_UTF8(
                         idna,
                         &iconv_buffer,
                         @intCast(iconv_outlen),
                         &buffer,
-                        @intCast(buffer.len - 1),
+                        @intCast(buffer.len),
                         &info,
                         &err,
                     );
                     if (err <= U_ZERO_ERROR and info.errors == 0) {
-                        out.* = mem.strdup(@ptrCast(&buffer)) orelse return CURLE_OUT_OF_MEMORY;
+                        out.* = mem.strdup(&buffer) orelse return CURLE_OUT_OF_MEMORY;
                         return CURLE_OK;
                     }
                 }
@@ -299,18 +304,18 @@ const appleidn = struct {
             if (err <= U_ZERO_ERROR) {
                 defer uidna_close(idna);
                 var info: UIDNAInfo = .{};
-                var buffer: [MAX_HOST_LENGTH]u8 = @splat(0);
+                var buffer: [MAX_HOST_LENGTH - 1:0]u8 = @splat(0);
                 _ = uidna_nameToUnicodeUTF8(
                     idna,
                     in_slice.ptr,
                     @intCast(inlen),
                     &buffer,
-                    @intCast(buffer.len - 1),
+                    @intCast(buffer.len),
                     &info,
                     &err,
                 );
                 if (err <= U_ZERO_ERROR) {
-                    out.* = mem.strdup(@ptrCast(&buffer)) orelse return CURLE_OUT_OF_MEMORY;
+                    out.* = mem.strdup(&buffer) orelse return CURLE_OUT_OF_MEMORY;
                     return CURLE_OK;
                 }
             }
@@ -573,7 +578,7 @@ pub export fn Curl_freeaddrinfo(cahead: ?*Curl_addrinfo) callconv(.c) void {
     var ca = cahead;
     while (ca) |curr| {
         const canext = curr.ai_next;
-        mem.free(@ptrCast(curr));
+        mem.free(curr);
         ca = canext;
     }
 }
@@ -590,23 +595,22 @@ pub export fn Curl_addrinfo_get(ai_head: ?*Curl_addrinfo, ai_family: c_int, n: c
     return null;
 }
 
-pub export fn Curl_getaddrinfo_ex(
-    nodename: ?[*:0]const u8,
-    servname: ?[*:0]const u8,
-    hints: ?*const SysAddrinfo,
-    result: *?*Curl_addrinfo,
-) callconv(.c) c_int {
-    var aihead: ?*SysAddrinfo = null;
+inline fn sockaddrIn(ptr: anytype) *SockaddrIn {
+    return fromOpaque(SockaddrIn, ptr).?;
+}
+
+inline fn sockaddrIn6(ptr: anytype) *SockaddrIn6 {
+    return fromOpaque(SockaddrIn6, ptr).?;
+}
+
+inline fn sockaddrUn(ptr: anytype) *SockaddrUn {
+    return fromOpaque(SockaddrUn, ptr).?;
+}
+
+fn copySysAddrinfoChain(aihead: ?*SysAddrinfo) error{OutOfMemory}!?*Curl_addrinfo {
     var cafirst: ?*Curl_addrinfo = null;
     var calast: ?*Curl_addrinfo = null;
-
-    result.* = null;
-
-    var err: c_int = if (builtin.os.tag == .windows)
-        win32_net.getaddrinfo(nodename, servname, hints, &aihead)
-    else
-        posix_net.getaddrinfo(nodename, servname, hints, &aihead);
-    if (err != 0) return err;
+    errdefer Curl_freeaddrinfo(cafirst);
 
     var ai_opt = aihead;
     while (ai_opt) |ai| : (ai_opt = ai.ai_next) {
@@ -623,11 +627,8 @@ pub export fn Curl_getaddrinfo_ex(
         if (@as(usize, @intCast(ai.ai_addrlen)) < ss_size) continue;
 
         const total_size = @sizeOf(Curl_addrinfo) + ss_size + namelen;
-        const raw = mem.malloc(total_size) orelse {
-            err = EAI_MEMORY;
-            break;
-        };
-        const ca: *Curl_addrinfo = @ptrCast(@alignCast(raw));
+        const raw = mem.malloc(total_size) orelse return error.OutOfMemory;
+        const ca = fromOpaque(Curl_addrinfo, raw).?;
 
         ca.ai_flags = ai.ai_flags;
         ca.ai_family = ai.ai_family;
@@ -639,15 +640,14 @@ pub export fn Curl_getaddrinfo_ex(
         ca.ai_next = null;
 
         const addr_ptr = raw + @sizeOf(Curl_addrinfo);
-        ca.ai_addr = @ptrCast(addr_ptr);
-        const src_addr: [*]const u8 = @ptrCast(ai_addr);
+        ca.ai_addr = addr_ptr;
+        const src_addr = fromOpaque([*]const u8, ai_addr).?;
         @memcpy(addr_ptr[0..ss_size], src_addr[0..ss_size]);
 
         if (namelen > 0) {
             const cn_ptr = addr_ptr + ss_size;
-            ca.ai_canonname = @ptrCast(cn_ptr);
-            const src_cn: [*]const u8 = @ptrCast(ai.ai_canonname.?);
-            @memcpy(cn_ptr[0..namelen], src_cn[0..namelen]);
+            @memcpy(cn_ptr[0..namelen], ai.ai_canonname.?[0..namelen]);
+            ca.ai_canonname = cn_ptr[0 .. namelen - 1 :0].ptr;
         }
 
         if (cafirst == null) {
@@ -659,17 +659,32 @@ pub export fn Curl_getaddrinfo_ex(
         calast = ca;
     }
 
-    if (aihead) |head| {
+    return cafirst;
+}
+
+pub export fn Curl_getaddrinfo_ex(
+    nodename: ?[*:0]const u8,
+    servname: ?[*:0]const u8,
+    hints: ?*const SysAddrinfo,
+    result: *?*Curl_addrinfo,
+) callconv(.c) c_int {
+    var aihead: ?*SysAddrinfo = null;
+    result.* = null;
+
+    var err: c_int = if (builtin.os.tag == .windows)
+        win32_net.getaddrinfo(nodename, servname, hints, &aihead)
+    else
+        posix_net.getaddrinfo(nodename, servname, hints, &aihead);
+    if (err != 0) return err;
+    defer if (aihead) |head| {
         if (builtin.os.tag == .windows)
             win32_net.freeaddrinfo(head)
         else
             posix_net.freeaddrinfo(head);
-    }
+    };
 
-    if (err != 0) {
-        Curl_freeaddrinfo(cafirst);
-        cafirst = null;
-    } else if (cafirst == null) {
+    const cafirst = copySysAddrinfoChain(aihead) catch return EAI_MEMORY;
+    if (cafirst == null) {
         err = EAI_NONAME;
         if (builtin.os.tag == .windows) {
             win32_net.WSASetLastError(err);
@@ -698,27 +713,27 @@ fn ip2addr(
         return CURLE_BAD_FUNCTION_ARGUMENT;
 
     const raw = mem.calloc(1, @sizeOf(Curl_addrinfo) + addrsize + namelen) orelse return CURLE_OUT_OF_MEMORY;
-    const ai: *Curl_addrinfo = @ptrCast(@alignCast(raw));
+    const ai = fromOpaque(Curl_addrinfo, raw).?;
     const addr_ptr = raw + @sizeOf(Curl_addrinfo);
     const cn_ptr = addr_ptr + addrsize;
 
-    ai.ai_addr = @ptrCast(addr_ptr);
-    ai.ai_canonname = @ptrCast(cn_ptr);
+    ai.ai_addr = addr_ptr;
     @memcpy(cn_ptr[0..namelen], hostname[0..namelen]);
+    ai.ai_canonname = cn_ptr[0 .. namelen - 1 :0].ptr;
     ai.ai_family = af;
     ai.ai_socktype = SOCK_STREAM;
     ai.ai_addrlen = @intCast(addrsize);
 
     const net_port = std.mem.nativeToBig(u16, port);
-    const in_bytes: [*]const u8 = @ptrCast(inaddr);
+    const in_bytes = fromOpaque([*]const u8, inaddr).?;
 
     if (af == AF_INET) {
-        const addr: *SockaddrIn = @ptrCast(@alignCast(addr_ptr));
+        const addr = sockaddrIn(addr_ptr);
         @memcpy(&addr.sin_addr, in_bytes[0..4]);
         addr.sin_family = @intCast(af);
         addr.sin_port = net_port;
     } else if (af == AF_INET6) {
-        const addr6: *SockaddrIn6 = @ptrCast(@alignCast(addr_ptr));
+        const addr6 = sockaddrIn6(addr_ptr);
         @memcpy(&addr6.sin6_addr, in_bytes[0..16]);
         addr6.sin6_family = @intCast(af);
         addr6.sin6_port = net_port;
@@ -824,11 +839,11 @@ pub export fn Curl_unix2addr(path: [*:0]const u8, abstract: bool, paddr: *?*Curl
         return CURLE_TOO_LARGE;
 
     const raw = mem.calloc(1, @sizeOf(Curl_addrinfo) + @sizeOf(SockaddrUn)) orelse return CURLE_OUT_OF_MEMORY;
-    const ai: *Curl_addrinfo = @ptrCast(@alignCast(raw));
+    const ai = fromOpaque(Curl_addrinfo, raw).?;
     const addr_ptr = raw + @sizeOf(Curl_addrinfo);
 
-    ai.ai_addr = @ptrCast(addr_ptr);
-    const sa_un: *SockaddrUn = @ptrCast(@alignCast(addr_ptr));
+    ai.ai_addr = addr_ptr;
+    const sa_un = sockaddrUn(addr_ptr);
     sa_un.sun_family = @intCast(AF_UNIX);
 
     ai.ai_family = AF_UNIX;
@@ -853,10 +868,10 @@ pub export fn Curl_addrinfo_set_port(addrinfo: ?*Curl_addrinfo, port: c_int) cal
     while (ca) |curr| : (ca = curr.ai_next) {
         const addr_ptr = curr.ai_addr orelse continue;
         if (curr.ai_family == AF_INET) {
-            const addr: *SockaddrIn = @ptrCast(@alignCast(addr_ptr));
+            const addr = sockaddrIn(addr_ptr);
             addr.sin_port = net_port;
         } else if (curr.ai_family == AF_INET6) {
-            const addr6: *SockaddrIn6 = @ptrCast(@alignCast(addr_ptr));
+            const addr6 = sockaddrIn6(addr_ptr);
             addr6.sin6_port = net_port;
         }
     }
@@ -1080,7 +1095,7 @@ fn netrcLexerQuoted(lexer: *NetrcLexer) c_uint {
             rc = curl2netrc(result);
             break;
         }
-        const result = curlx_dyn_addn(&lexer.literal, @ptrCast(&c), 1);
+        const result = curlx_dyn_addn(&lexer.literal, &c, 1);
         if (result != CURLE_OK) {
             rc = curl2netrc(result);
             break;
@@ -1167,11 +1182,11 @@ const NetrcScanner = struct {
 
 fn netrcScanReset(sc: *NetrcScanner) void {
     if (sc.login) |l| {
-        mem.free(@ptrCast(l));
+        mem.free(l);
         sc.login = null;
     }
     if (sc.passwd) |p| {
-        mem.free(@ptrCast(p));
+        mem.free(p);
         sc.passwd = null;
     }
     sc.matches_host = false;
@@ -1210,7 +1225,7 @@ fn netrcScanLiteral(sc: *NetrcScanner, pdest: ?*?[*:0]u8) c_uint {
             if (pdest != null and sc.matches_host) {
                 const dest = pdest.?;
                 if (dest.*) |old| {
-                    mem.free(@ptrCast(old));
+                    mem.free(old);
                 }
                 const lit_ptr = curlx_dyn_ptr(&sc.lexer.literal) orelse "";
                 dest.* = mem.strdup(lit_ptr);
@@ -1405,7 +1420,7 @@ fn netrcScanFile(
             return ret;
         }
         if (store.filename) |old_fn| {
-            mem.free(@ptrCast(old_fn));
+            mem.free(old_fn);
         }
         store.filename = mem.strdup(netrcfile);
         if (store.filename == null) {
@@ -1431,7 +1446,64 @@ fn joinNetrcPath(home: [*:0]const u8, suffix: []const u8) ?[*:0]u8 {
     @memcpy(buf[home_len .. home_len + dir_char.len], dir_char);
     @memcpy(buf[home_len + dir_char.len .. total], suffix);
     buf[total] = 0;
-    return @ptrCast(buf);
+    return buf[0..total :0].ptr;
+}
+
+fn scanDefaultNetrcPath(
+    data: ?*anyopaque,
+    store: *StoreNetrc,
+    hostname: [*:0]const u8,
+    user: ?[*:0]const u8,
+    pcreds: *?*anyopaque,
+) error{ FileMissing, OutOfMemory }!c_uint {
+    var home: ?[*:0]const u8 = null;
+    var homea: ?[*:0]u8 = null;
+    defer if (homea) |ha| mem.free(ha);
+
+    var filealloc: ?[*:0]u8 = null;
+    errdefer if (filealloc) |fa| mem.free(fa);
+
+    var pwbuf: [1024]u8 = undefined;
+
+    filealloc = os_leaf.curl_getenv("NETRC");
+    if (filealloc == null) {
+        homea = os_leaf.curl_getenv("HOME");
+        if (homea) |h| {
+            home = h;
+        } else if (builtin.os.tag == .windows) {
+            homea = os_leaf.curl_getenv("USERPROFILE");
+            if (homea) |h| {
+                home = h;
+            }
+        } else {
+            var pw: Passwd = undefined;
+            var pw_res: ?*Passwd = null;
+            if (netrc_posix_c.getpwuid_r(netrc_posix_c.geteuid(), &pw, &pwbuf, pwbuf.len, &pw_res) == 0 and pw_res != null) {
+                home = pw.pw_dir;
+            }
+        }
+
+        if (home == null) {
+            return error.FileMissing;
+        }
+
+        filealloc = joinNetrcPath(home.?, ".netrc") orelse return error.OutOfMemory;
+    }
+
+    var retcode = netrcScanFile(data, store, hostname, user, filealloc.?, pcreds);
+    mem.free(filealloc.?);
+    filealloc = null;
+
+    if (builtin.os.tag == .windows) {
+        if (retcode == NETRC_FILE_MISSING and home != null) {
+            filealloc = joinNetrcPath(home.?, "_netrc") orelse return error.OutOfMemory;
+            retcode = netrcScanFile(data, store, hostname, user, filealloc.?, pcreds);
+            mem.free(filealloc.?);
+            filealloc = null;
+        }
+    }
+
+    return retcode;
 }
 
 pub export fn Curl_netrc_scan(
@@ -1450,57 +1522,10 @@ pub export fn Curl_netrc_scan(
     if (netrcfile_opt) |netrcfile| {
         retcode = netrcScanFile(data, store, hostname, user, netrcfile, pcreds);
     } else {
-        var home: ?[*:0]const u8 = null;
-        var homea: ?[*:0]u8 = null;
-        var filealloc: ?[*:0]u8 = null;
-        var pwbuf: [1024]u8 = undefined;
-
-        filealloc = os_leaf.curl_getenv("NETRC");
-        if (filealloc == null) {
-            homea = os_leaf.curl_getenv("HOME");
-            if (homea) |h| {
-                home = h;
-            } else if (builtin.os.tag == .windows) {
-                homea = os_leaf.curl_getenv("USERPROFILE");
-                if (homea) |h| {
-                    home = h;
-                }
-            } else {
-                var pw: Passwd = undefined;
-                var pw_res: ?*Passwd = null;
-                if (netrc_posix_c.getpwuid_r(netrc_posix_c.geteuid(), &pw, &pwbuf, pwbuf.len, &pw_res) == 0 and pw_res != null) {
-                    home = pw.pw_dir;
-                }
-            }
-
-            if (home == null) {
-                return NETRC_FILE_MISSING;
-            }
-
-            filealloc = joinNetrcPath(home.?, ".netrc");
-            if (filealloc == null) {
-                if (homea) |ha| mem.free(@ptrCast(ha));
-                Curl_creds_unlink(pcreds);
-                return NETRC_OUT_OF_MEMORY;
-            }
-        }
-
-        retcode = netrcScanFile(data, store, hostname, user, filealloc.?, pcreds);
-        mem.free(@ptrCast(filealloc.?));
-
-        if (builtin.os.tag == .windows) {
-            if (retcode == NETRC_FILE_MISSING and home != null) {
-                filealloc = joinNetrcPath(home.?, "_netrc");
-                if (filealloc == null) {
-                    if (homea) |ha| mem.free(@ptrCast(ha));
-                    return NETRC_OUT_OF_MEMORY;
-                }
-                retcode = netrcScanFile(data, store, hostname, user, filealloc.?, pcreds);
-                mem.free(@ptrCast(filealloc.?));
-            }
-        }
-
-        if (homea) |ha| mem.free(@ptrCast(ha));
+        retcode = scanDefaultNetrcPath(data, store, hostname, user, pcreds) catch |err| switch (err) {
+            error.FileMissing => NETRC_FILE_MISSING,
+            error.OutOfMemory => NETRC_OUT_OF_MEMORY,
+        };
     }
 
     if (retcode != NETRC_OK) {
@@ -1518,7 +1543,7 @@ pub export fn Curl_netrc_init(store: *StoreNetrc) callconv(.c) void {
 pub export fn Curl_netrc_cleanup(store: *StoreNetrc) callconv(.c) void {
     curlx_dyn_free(&store.filebuf);
     if (store.filename) |f| {
-        mem.free(@ptrCast(f));
+        mem.free(f);
         store.filename = null;
     }
     store.loaded_bits &= ~@as(c_uint, 1);
@@ -1603,9 +1628,9 @@ test "idn: Curl_is_ASCII_name, Curl_is_ASCII_str, Curl_idnconvert_hostname" {
     try std.testing.expectEqual(CURLE_URL_MALFORMAT, Curl_idn_encode("bad\x0ahost.example", &bad_out));
     try std.testing.expectEqual(CURLE_URL_MALFORMAT, Curl_idn_encode("bad\x7fhost.example", &bad_out));
 
-    var overlong_buf: [257]u8 = @splat('a');
+    var overlong_buf: [256:0]u8 = @splat('a');
     overlong_buf[256] = 0;
-    const overlong_cstr: [*:0]const u8 = @ptrCast(&overlong_buf);
+    const overlong_cstr: [*:0]const u8 = &overlong_buf;
     try std.testing.expectEqual(CURLE_URL_MALFORMAT, Curl_idn_decode(overlong_cstr, &bad_out));
     try std.testing.expectEqual(CURLE_URL_MALFORMAT, Curl_idn_encode(overlong_cstr, &bad_out));
     try std.testing.expect(bad_out == null);
@@ -1644,7 +1669,7 @@ test "curl_addrinfo: Curl_str2addr, Curl_addrinfo_get, Curl_addrinfo_set_port, C
     try std.testing.expect(Curl_addrinfo_get(ai4, AF_INET6, 0) == null);
 
     Curl_addrinfo_set_port(ai4, 9090);
-    const sin: *const SockaddrIn = @ptrCast(@alignCast(ai4.?.ai_addr.?));
+    const sin = sockaddrIn(ai4.?.ai_addr);
     try std.testing.expectEqual(std.mem.nativeToBig(u16, 9090), sin.sin_port);
 
     var ai6: ?*Curl_addrinfo = null;

@@ -393,9 +393,13 @@ extern fn Curl_u32_ptrset_visit(set: *UintHash, cb: collections.Curl_u32_ptrset_
 
 pub const CURLEASY_MAGIC_NUMBER: c_uint = 0xc0dedbad;
 
+inline fn fromOpaque(comptime T: type, raw: anytype) if (@typeInfo(T) == .pointer) ?T else ?*T {
+    const p = mem.toRawPtr(raw) orelse return null;
+    return @ptrCast(@alignCast(p));
+}
+
 inline fn goodEasyHandle(data: ?*const CurlEasy) bool {
-    const ptr = data orelse return false;
-    const magic_ptr: *const c_uint = @ptrCast(@alignCast(ptr));
+    const magic_ptr = fromOpaque(*const c_uint, data) orelse return false;
     return magic_ptr.* == CURLEASY_MAGIC_NUMBER;
 }
 
@@ -508,8 +512,7 @@ pub const CfQuicheCtx = struct {
 
 inline fn cfToQuicheCtx(cf: ?*CurlCfilter) ?*CfQuicheCtx {
     const f = cf orelse return null;
-    const raw = f.ctx orelse return null;
-    return @ptrCast(@alignCast(raw));
+    return fromOpaque(CfQuicheCtx, f.ctx);
 }
 
 inline fn H3_STREAM_CTX(ctx: *CfQuicheCtx, data: ?*const CurlEasy) ?*H3StreamCtx {
@@ -517,8 +520,7 @@ inline fn H3_STREAM_CTX(ctx: *CfQuicheCtx, data: ?*const CurlEasy) ?*H3StreamCtx
     if (!goodEasyHandle(d)) return null;
     const mid = easyMid(d);
     if (mid == std.math.maxInt(u32)) return null;
-    const raw = Curl_u32_ptrset_get(&ctx.streams, mid) orelse return null;
-    const stream: *H3StreamCtx = @ptrCast(@alignCast(raw));
+    const stream = fromOpaque(H3StreamCtx, Curl_u32_ptrset_get(&ctx.streams, mid)) orelse return null;
     if (stream.mid != mid or stream.xfer_id != easyId(d)) return null;
     return stream;
 }
@@ -549,9 +551,7 @@ fn h3_stream_ctx_free(stream: ?*H3StreamCtx) void {
 
 fn h3_stream_hash_free(id: u32, stream_ptr: ?*anyopaque) callconv(.c) void {
     _ = id;
-    if (stream_ptr) |p| {
-        h3_stream_ctx_free(@ptrCast(@alignCast(p)));
-    }
+    h3_stream_ctx_free(fromOpaque(H3StreamCtx, stream_ptr));
 }
 
 fn cf_quiche_expire_timeout(cf: *CurlCfilter, data: ?*CurlEasy) void {
@@ -568,6 +568,31 @@ fn cf_quiche_expire_timeout(cf: *CurlCfilter, data: ?*CurlEasy) void {
         timeout_ms = 1;
     }
     Curl_expire(d, timeout_ms, EXPIRE_QUIC);
+}
+
+fn openH3StreamInner(
+    ctx: *CfQuicheCtx,
+    mid: u32,
+    xfer_id: i64,
+) error{OutOfMemory}!*H3StreamCtx {
+    const stream = mem.create(H3StreamCtx) orelse return error.OutOfMemory;
+    errdefer h3_stream_ctx_free(stream);
+    stream.* = .{};
+    stream.id = -1;
+    stream.mid = mid;
+    stream.xfer_id = xfer_id;
+    io_buffers.Curl_bufq_initp(
+        &stream.sendbuf,
+        &ctx.stream_bufcp,
+        1,
+        BUFQ_OPT_NONE,
+    );
+    http1_options.Curl_h1_req_parse_init(&stream.h1, H3_SEND_SIZE);
+
+    if (Curl_u32_ptrset_set(&ctx.streams, mid, stream) != CURLE_OK) {
+        return error.OutOfMemory;
+    }
+    return stream;
 }
 
 fn h3_stream_open(
@@ -588,30 +613,10 @@ fn h3_stream_open(
     }
     std.debug.assert(H3_STREAM_CTX(ctx, data) == null);
 
-    const raw = mem.calloc(1, @sizeOf(H3StreamCtx)) orelse {
+    pstream.* = openH3StreamInner(ctx, mid, xfer_id) catch {
         pstream.* = null;
         return CURLE_OUT_OF_MEMORY;
     };
-    const stream: *H3StreamCtx = @ptrCast(@alignCast(raw));
-    stream.* = .{};
-    stream.id = -1;
-    stream.mid = mid;
-    stream.xfer_id = xfer_id;
-    io_buffers.Curl_bufq_initp(
-        &stream.sendbuf,
-        &ctx.stream_bufcp,
-        1,
-        BUFQ_OPT_NONE,
-    );
-    http1_options.Curl_h1_req_parse_init(&stream.h1, H3_SEND_SIZE);
-
-    if (Curl_u32_ptrset_set(&ctx.streams, mid, stream) != CURLE_OK) {
-        h3_stream_ctx_free(stream);
-        pstream.* = null;
-        return CURLE_OUT_OF_MEMORY;
-    }
-
-    pstream.* = stream;
     return CURLE_OK;
 }
 
@@ -672,7 +677,7 @@ fn cb_each_header(
     value_len: usize,
     argp: ?*anyopaque,
 ) callconv(.c) c_int {
-    const pair: *CbCtx = @ptrCast(@alignCast(argp orelse return 1));
+    const pair = fromOpaque(CbCtx, argp) orelse return 1;
     const ctx = cfToQuicheCtx(pair.cf) orelse return 1;
     const stream = H3_STREAM_CTX(ctx, pair.data) orelse return 1;
     var result: CURLcode = CURLE_OK;
@@ -711,10 +716,10 @@ fn stream_resp_read(
         err.* = CURLE_NOT_BUILT_IN;
         return 0;
     }
-    const pair: *CbCtx = @ptrCast(@alignCast(userp orelse {
+    const pair = fromOpaque(CbCtx, userp) orelse {
         err.* = CURLE_RECV_ERROR;
         return 0;
-    }));
+    };
     const ctx = cfToQuicheCtx(pair.cf) orelse {
         err.* = CURLE_RECV_ERROR;
         return 0;
@@ -854,8 +859,8 @@ const H3EventNode = struct {
 };
 
 fn h3_stream_match_process(mid: u32, value: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) bool {
-    const stream: *H3StreamCtx = @ptrCast(@alignCast(value orelse return true));
-    const node: *H3EventNode = @ptrCast(@alignCast(user_data orelse return false));
+    const stream = fromOpaque(H3StreamCtx, value) orelse return true;
+    const node = fromOpaque(H3EventNode, user_data) orelse return false;
     if (stream.id == node.stream_id) {
         if (mid == std.math.maxInt(u32) or mid != stream.mid or stream.xfer_id < 0) return false;
         const call_data = node.ctx.call_data.data orelse return false;
@@ -943,13 +948,13 @@ fn recv_pkt(
 ) CURLcode {
     if (comptime !use_quiche) return CURLE_NOT_BUILT_IN;
     _ = ecn;
-    const rctx: *RecvPktCtx = @ptrCast(@alignCast(userp orelse return CURLE_RECV_ERROR));
+    const rctx = fromOpaque(RecvPktCtx, userp) orelse return CURLE_RECV_ERROR;
     const qconn = rctx.ctx.qconn orelse return CURLE_RECV_ERROR;
 
     var recv_info = QuicheRecvInfo{
-        .to = @ptrCast(&rctx.ctx.q.local_addr),
+        .to = &rctx.ctx.q.local_addr,
         .to_len = rctx.ctx.q.local_addrlen,
-        .from = @ptrCast(remote_addr),
+        .from = remote_addr,
         .from_len = remote_addrlen,
     };
 
@@ -1022,7 +1027,7 @@ fn read_pkt_to_send(
 ) callconv(.c) CURLcode {
     pnread.* = 0;
     if (comptime !use_quiche) return CURLE_NOT_BUILT_IN;
-    const x: *ReadPktCtx = @ptrCast(@alignCast(userp orelse return CURLE_SEND_ERROR));
+    const x = fromOpaque(ReadPktCtx, userp) orelse return CURLE_SEND_ERROR;
     const ctx = cfToQuicheCtx(x.cf) orelse return CURLE_SEND_ERROR;
     const qconn = ctx.qconn orelse return CURLE_SEND_ERROR;
 
@@ -1112,8 +1117,8 @@ const NotifyCtx = struct {
 };
 
 fn notify_blocked_stream(mid: u32, value: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) bool {
-    const stream: *H3StreamCtx = @ptrCast(@alignCast(value orelse return true));
-    const nctx: *NotifyCtx = @ptrCast(@alignCast(user_data orelse return false));
+    const stream = fromOpaque(H3StreamCtx, value) orelse return true;
+    const nctx = fromOpaque(NotifyCtx, user_data) orelse return false;
     const call_data = nctx.ctx.call_data.data orelse return false;
     if (!goodEasyHandle(call_data)) return false;
     const qconn = nctx.ctx.qconn orelse return false;
@@ -1225,7 +1230,7 @@ fn cf_quiche_send_body(
 ) callconv(.c) CURLcode {
     pwritten.* = 0;
     if (comptime !use_quiche) return CURLE_NOT_BUILT_IN;
-    const sctx: *SendBodyCtx = @ptrCast(@alignCast(userp orelse return CURLE_SEND_ERROR));
+    const sctx = fromOpaque(SendBodyCtx, userp) orelse return CURLE_SEND_ERROR;
     const ctx = cfToQuicheCtx(sctx.cf) orelse return CURLE_SEND_ERROR;
     const h3c = ctx.h3c orelse return CURLE_SEND_ERROR;
     const qconn = ctx.qconn orelse return CURLE_SEND_ERROR;
@@ -1346,10 +1351,9 @@ fn h3_open_stream(
     http1_options.Curl_h1_req_parse_free(&s.h1);
 
     const nheaders = io_buffers.Curl_dynhds_count(&h2_headers);
-    const nva_raw = mem.calloc(if (nheaders > 0) nheaders else 1, @sizeOf(QuicheH3Header)) orelse
+    const nva = mem.callocMany(QuicheH3Header, if (nheaders > 0) nheaders else 1) orelse
         return CURLE_OUT_OF_MEMORY;
-    defer mem.free(nva_raw);
-    const nva: [*]QuicheH3Header = @ptrCast(@alignCast(nva_raw));
+    defer mem.destroy(nva);
 
     var i: usize = 0;
     while (i < nheaders) : (i += 1) {
@@ -1421,7 +1425,7 @@ fn cf_quiche_send(
 ) callconv(.c) CURLcode {
     pnwritten.* = 0;
     if (comptime !use_quiche) return CURLE_NOT_BUILT_IN;
-    const buf: [*]const u8 = @ptrCast(buf_raw orelse return CURLE_BAD_FUNCTION_ARGUMENT);
+    const buf = fromOpaque([*]const u8, buf_raw) orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     const d = data orelse return CURLE_SEND_ERROR;
     const ctx = cfToQuicheCtx(cf) orelse return CURLE_SEND_ERROR;
 
@@ -1680,23 +1684,23 @@ fn cf_quiche_ctx_open(
         ctx.q.no_gso = true;
     }
 
-    var local_ptr: *const anyopaque = @ptrCast(&ctx.q.local_addr);
+    var local_ptr: *const anyopaque = &ctx.q.local_addr;
     var local_len: socklen_t = ctx.q.local_addrlen;
-    var remote_ptr: *const anyopaque = @ptrCast(&ctx.q.local_addr);
+    var remote_ptr: *const anyopaque = &ctx.q.local_addr;
     var remote_len: socklen_t = ctx.q.local_addrlen;
 
     if (ctx.q.sockfd != CURL_SOCKET_BAD and addr != null) {
         ctx.q.local_addrlen = @sizeOf(SockaddrStorage);
         if (posix_io.getsockname(
             ctx.q.sockfd,
-            @ptrCast(&ctx.q.local_addr),
+            &ctx.q.local_addr,
             &ctx.q.local_addrlen,
         ) == -1) {
             return CURLE_QUIC_CONNECT_ERROR;
         }
-        local_ptr = @ptrCast(&ctx.q.local_addr);
+        local_ptr = &ctx.q.local_addr;
         local_len = ctx.q.local_addrlen;
-        remote_ptr = @ptrCast(&addr.?.sa_addr);
+        remote_ptr = &addr.?.sa_addr;
         remote_len = addr.?.addrlen;
     }
 
@@ -1965,7 +1969,7 @@ fn cf_quiche_adjust_pollset(
         if (sock != CURL_SOCKET_BAD) {
             return headers_sock.Curl_pollset_change(
                 data,
-                @ptrCast(@alignCast(ps)),
+                fromOpaque(headers_sock.EasyPollset, ps).?,
                 sock,
                 (if (want_recv) headers_sock.CURL_POLL_IN else 0) |
                     (if (want_send) headers_sock.CURL_POLL_OUT else 0),
@@ -2113,8 +2117,7 @@ fn cf_quiche_query(
             return CURLE_OK;
         },
         CF_QUERY_TIMER_CONNECT => {
-            if (pres2) |p2| {
-                const ts: *Curltime = @ptrCast(@alignCast(p2));
+            if (fromOpaque(Curltime, pres2)) |ts| {
                 if (ctx.q.got_first_byte) {
                     ts.* = ctx.q.first_byte_at;
                 }
@@ -2122,8 +2125,7 @@ fn cf_quiche_query(
             return CURLE_OK;
         },
         CF_QUERY_TIMER_APPCONNECT => {
-            if (pres2) |p2| {
-                const ts: *Curltime = @ptrCast(@alignCast(p2));
+            if (fromOpaque(Curltime, pres2)) |ts| {
                 if (cf.isConnected()) {
                     ts.* = ctx.handshake_at;
                 }
@@ -2137,8 +2139,7 @@ fn cf_quiche_query(
             return CURLE_OK;
         },
         CF_QUERY_SSL_INFO, CF_QUERY_SSL_CTX_INFO => {
-            if (pres2) |p2| {
-                const info: *CurlTlsSessionInfo = @ptrCast(@alignCast(p2));
+            if (fromOpaque(CurlTlsSessionInfo, pres2)) |info| {
                 if (vquic_core.Curl_vquic_tls_get_ssl_info(
                     &ctx.tls,
                     query == CF_QUERY_SSL_CTX_INFO,
@@ -2150,8 +2151,7 @@ fn cf_quiche_query(
             return Curl_cf_def_query(cf, data, query, pres1, pres2);
         },
         CF_QUERY_ALPN_NEGOTIATED => {
-            if (pres2) |p2| {
-                const palpn: *?[*:0]const u8 = @ptrCast(@alignCast(p2));
+            if (fromOpaque(?[*:0]const u8, pres2)) |palpn| {
                 palpn.* = if (cf.isConnected()) "h3" else null;
             }
             return CURLE_OK;
@@ -2183,6 +2183,55 @@ pub var Curl_cft_http3 = CurlCftype{
     .query = cf_quiche_query,
 };
 
+fn createQuicheFilterInner(
+    data: ?*CurlEasy,
+    origin: ?*CurlPeer,
+    peer: ?*CurlPeer,
+    conn: ?*ConnectData,
+    addr: ?*CurlSockaddrEx,
+    out_result: *CURLcode,
+) error{CreateFailed}!*CurlCfilter {
+    const ctx = mem.create(CfQuicheCtx) orelse {
+        out_result.* = CURLE_OUT_OF_MEMORY;
+        return error.CreateFailed;
+    };
+    ctx.* = .{};
+
+    var cf_quiche: ?*CurlCfilter = null;
+    errdefer {
+        if (cf_quiche) |cf| {
+            cf_quiche_destroy(cf, data);
+            mem.freeTyped(cf);
+        } else {
+            cf_quiche_ctx_free(ctx);
+        }
+    }
+
+    var result = vquic_core.Curl_vquic_tls_peer_init(origin, peer, null, &ctx.ssl_peer);
+    if (result != CURLE_OK) {
+        out_result.* = result;
+        return error.CreateFailed;
+    }
+
+    result = Curl_cf_create(&cf_quiche, &Curl_cft_http3, ctx);
+    if (result != CURLE_OK or cf_quiche == null) {
+        out_result.* = result;
+        return error.CreateFailed;
+    }
+    cf_quiche.?.conn = conn;
+
+    var cf_udp: ?*CurlCfilter = null;
+    result = Curl_cf_udp_create(&cf_udp, data, origin, peer, TRNSPRT_QUIC, conn, addr, null, TRNSPRT_QUIC);
+    if (result != CURLE_OK or cf_udp == null) {
+        out_result.* = result;
+        return error.CreateFailed;
+    }
+
+    cf_quiche.?.next = cf_udp;
+    out_result.* = CURLE_OK;
+    return cf_quiche.?;
+}
+
 pub fn Curl_cf_quiche_create(
     pcf: *?*CurlCfilter,
     data: ?*CurlEasy,
@@ -2194,36 +2243,40 @@ pub fn Curl_cf_quiche_create(
     pcf.* = null;
     if (comptime !use_quiche) return CURLE_NOT_BUILT_IN;
 
-    const ctx_raw = mem.calloc(1, @sizeOf(CfQuicheCtx)) orelse
-        return CURLE_OUT_OF_MEMORY;
-    const ctx: *CfQuicheCtx = @ptrCast(@alignCast(ctx_raw));
+    var result: CURLcode = CURLE_OK;
+    pcf.* = createQuicheFilterInner(data, origin, peer, conn, addr, &result) catch null;
+    return result;
+}
+
+fn insertQuicheFilterAfterInner(
+    cf_at: *CurlCfilter,
+    origin: ?*CurlPeer,
+    peer: ?*CurlPeer,
+    out_result: *CURLcode,
+) error{CreateFailed}!*CurlCfilter {
+    const ctx = mem.create(CfQuicheCtx) orelse {
+        out_result.* = CURLE_OUT_OF_MEMORY;
+        return error.CreateFailed;
+    };
     ctx.* = .{};
+    errdefer cf_quiche_ctx_free(ctx);
 
     var result = vquic_core.Curl_vquic_tls_peer_init(origin, peer, null, &ctx.ssl_peer);
     if (result != CURLE_OK) {
-        cf_quiche_ctx_free(ctx);
-        return result;
+        out_result.* = result;
+        return error.CreateFailed;
     }
 
-    var cf_quiche: ?*CurlCfilter = null;
-    result = Curl_cf_create(&cf_quiche, &Curl_cft_http3, ctx);
-    if (result != CURLE_OK or cf_quiche == null) {
-        cf_quiche_ctx_free(ctx);
-        return result;
-    }
-    cf_quiche.?.conn = conn;
-
-    var cf_udp: ?*CurlCfilter = null;
-    result = Curl_cf_udp_create(&cf_udp, data, origin, peer, TRNSPRT_QUIC, conn, addr, null, TRNSPRT_QUIC);
-    if (result != CURLE_OK or cf_udp == null) {
-        cf_quiche_destroy(cf_quiche.?, data);
-        mem.freeTyped(cf_quiche);
-        return result;
+    var cf: ?*CurlCfilter = null;
+    result = Curl_cf_create(&cf, &Curl_cft_http3, ctx);
+    if (result != CURLE_OK or cf == null) {
+        out_result.* = result;
+        return error.CreateFailed;
     }
 
-    cf_quiche.?.next = cf_udp;
-    pcf.* = cf_quiche;
-    return CURLE_OK;
+    Curl_conn_cf_insert_after(cf_at, cf.?);
+    out_result.* = CURLE_OK;
+    return cf.?;
 }
 
 pub fn Curl_cf_quiche_insert_after(
@@ -2235,27 +2288,9 @@ pub fn Curl_cf_quiche_insert_after(
     pcf.* = null;
     if (comptime !use_quiche) return CURLE_NOT_BUILT_IN;
 
-    const ctx_raw = mem.calloc(1, @sizeOf(CfQuicheCtx)) orelse
-        return CURLE_OUT_OF_MEMORY;
-    const ctx: *CfQuicheCtx = @ptrCast(@alignCast(ctx_raw));
-    ctx.* = .{};
-
-    var result = vquic_core.Curl_vquic_tls_peer_init(origin, peer, null, &ctx.ssl_peer);
-    if (result != CURLE_OK) {
-        cf_quiche_ctx_free(ctx);
-        return result;
-    }
-
-    var cf: ?*CurlCfilter = null;
-    result = Curl_cf_create(&cf, &Curl_cft_http3, ctx);
-    if (result != CURLE_OK or cf == null) {
-        cf_quiche_ctx_free(ctx);
-        return result;
-    }
-
-    Curl_conn_cf_insert_after(cf_at, cf.?);
-    pcf.* = cf;
-    return CURLE_OK;
+    var result: CURLcode = CURLE_OK;
+    pcf.* = insertQuicheFilterAfterInner(cf_at, origin, peer, &result) catch null;
+    return result;
 }
 
 comptime {
@@ -2330,7 +2365,7 @@ test "vquic_quiche detached easyMid, magic/xfer_id stream validation, and H3Stre
 
         fn mockFree(ptr: ?*anyopaque) callconv(.c) void {
             if (ptr != null and ptr == expected_free_ptr) {
-                const src: [*]const u8 = @ptrCast(ptr.?);
+                const src = fromOpaque([*]const u8, ptr).?;
                 @memcpy(&captured_free_bytes, src[0..@sizeOf(H3StreamCtx)]);
                 captured_stream_free = true;
             }
@@ -2389,18 +2424,18 @@ test "vquic_quiche detached easyMid, magic/xfer_id stream validation, and H3Stre
         .cf = &dummy_cf,
         .ctx = &ctx,
         .stream_id = 8,
-        .ev = if (comptime !use_quiche) @ptrCast(&dummy_ev) else null,
+        .ev = if (comptime !use_quiche) fromOpaque(quiche_h3_event, &dummy_ev) else null,
     };
     try std.testing.expect(!h3_stream_match_process(orig_mid, stream, &node));
 
     // 3. Reject when xfer_id mismatches (simulating mid slot reuse after transfer teardown)
     var dummy_qconn: u8 = 0;
-    ctx.qconn = @ptrCast(&dummy_qconn);
+    ctx.qconn = fromOpaque(quiche_conn, &dummy_qconn);
     var nctx = NotifyCtx{ .cf = &dummy_cf, .ctx = &ctx };
 
     test_ext.Curl_zig_url_data_set_i64(easy, 2, 777);
     try std.testing.expectEqual(@as(?*H3StreamCtx, null), H3_STREAM_CTX(&ctx, easy));
-    node.ev = @ptrCast(&dummy_ev);
+    node.ev = fromOpaque(quiche_h3_event, &dummy_ev);
     _ = h3_stream_match_process(orig_mid, stream, &node);
     try std.testing.expect(node.ev != null);
 
@@ -2414,7 +2449,7 @@ test "vquic_quiche detached easyMid, magic/xfer_id stream validation, and H3Stre
     try std.testing.expect(!goodEasyHandle(easy));
     try std.testing.expectEqual(std.math.maxInt(u32), easyMid(easy));
     try std.testing.expectEqual(@as(?*H3StreamCtx, null), H3_STREAM_CTX(&ctx, easy));
-    node.ev = @ptrCast(&dummy_ev);
+    node.ev = fromOpaque(quiche_h3_event, &dummy_ev);
     _ = h3_stream_match_process(orig_mid, stream, &node);
     try std.testing.expect(node.ev != null);
 
@@ -2432,8 +2467,7 @@ test "vquic_quiche detached easyMid, magic/xfer_id stream validation, and H3Stre
     test_ext.Curl_cfree = test_ext.mockFree;
     defer test_ext.Curl_cfree = saved_cfree;
 
-    const raw_s = mem.calloc(1, @sizeOf(H3StreamCtx)) orelse return error.OutOfMemory;
-    const temp_s: *H3StreamCtx = @ptrCast(@alignCast(raw_s));
+    const temp_s = mem.create(H3StreamCtx) orelse return error.OutOfMemory;
     temp_s.* = .{};
     temp_s.id = 12;
     temp_s.mid = 5;
@@ -2442,7 +2476,7 @@ test "vquic_quiche detached easyMid, magic/xfer_id stream validation, and H3Stre
     http1_options.Curl_h1_req_parse_init(&temp_s.h1, H3_SEND_SIZE);
 
     @memset(&test_ext.captured_free_bytes, 0);
-    test_ext.expected_free_ptr = @ptrCast(temp_s);
+    test_ext.expected_free_ptr = temp_s;
     test_ext.captured_stream_free = false;
     h3_stream_ctx_free(temp_s);
     try std.testing.expect(test_ext.captured_stream_free);

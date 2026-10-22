@@ -198,6 +198,11 @@ inline fn sockerrno() c_int {
     return std.c._errno().*;
 }
 
+inline fn fromOpaque(comptime T: type, raw: anytype) if (@typeInfo(T) == .pointer) ?T else ?*T {
+    const p = mem.toRawPtr(raw) orelse return null;
+    return @ptrCast(@alignCast(p));
+}
+
 fn cmsgAlign(len: usize) usize {
     const a: usize = @sizeOf(usize);
     return (len + a - 1) & ~(a - 1);
@@ -212,23 +217,21 @@ fn cmsgLen(len: usize) usize {
 }
 
 fn cmsgData(cmsg: *Cmsghdr) [*]u8 {
-    const base: [*]u8 = @ptrCast(cmsg);
-    return base + cmsgAlign(@sizeOf(Cmsghdr));
+    return fromOpaque([*]u8, cmsg).? + cmsgAlign(@sizeOf(Cmsghdr));
 }
 
 fn cmsgFirstHdr(msg: *const Msghdr) ?*Cmsghdr {
     if (msg.msg_controllen < @sizeOf(Cmsghdr)) return null;
-    const ctrl = msg.msg_control orelse return null;
-    return @ptrCast(@alignCast(ctrl));
+    return fromOpaque(Cmsghdr, msg.msg_control);
 }
 
 fn cmsgNxtHdr(msg: *const Msghdr, cmsg: *Cmsghdr) ?*Cmsghdr {
     if (cmsg.cmsg_len < @sizeOf(Cmsghdr)) return null;
-    const ctrl_base: [*]u8 = @ptrCast(msg.msg_control orelse return null);
-    const cur_base: [*]u8 = @ptrCast(cmsg);
+    const ctrl_base = fromOpaque([*]u8, msg.msg_control) orelse return null;
+    const cur_base = fromOpaque([*]u8, cmsg).?;
     const next_offset = (@intFromPtr(cur_base) - @intFromPtr(ctrl_base)) + cmsgAlign(cmsg.cmsg_len);
     if (next_offset + @sizeOf(Cmsghdr) > msg.msg_controllen) return null;
-    return @ptrCast(@alignCast(ctrl_base + next_offset));
+    return fromOpaque(Cmsghdr, ctrl_base + next_offset);
 }
 
 const ProxyInfo = extern struct {
@@ -317,7 +320,7 @@ const quiche_ext = if (backend_options.quic == .quiche) struct {
 
 fn quic_malloc(size: usize, user_data: ?*anyopaque) callconv(.c) ?*anyopaque {
     _ = user_data;
-    return if (mem.malloc(size)) |p| @ptrCast(p) else null;
+    return mem.malloc(size);
 }
 
 fn quic_free(ptr: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) void {
@@ -327,12 +330,12 @@ fn quic_free(ptr: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) void {
 
 fn quic_calloc(nmemb: usize, size: usize, user_data: ?*anyopaque) callconv(.c) ?*anyopaque {
     _ = user_data;
-    return if (mem.calloc(nmemb, size)) |p| @ptrCast(p) else null;
+    return mem.calloc(nmemb, size);
 }
 
 fn quic_realloc(ptr: ?*anyopaque, size: usize, user_data: ?*anyopaque) callconv(.c) ?*anyopaque {
     _ = user_data;
-    return if (mem.realloc(ptr, size)) |p| @ptrCast(p) else null;
+    return mem.realloc(ptr, size);
 }
 
 const curl_ngtcp2_mem_instance = ngtcp2_mem{
@@ -452,7 +455,7 @@ pub export fn Curl_qlogdir(
     qlogfdp: *c_int,
 ) callconv(.c) void {
     const qlog_dir = os_leaf.curl_getenv("QLOGDIR") orelse return;
-    defer mem.free(@ptrCast(qlog_dir));
+    defer mem.free(qlog_dir);
 
     var fname: dynbuf = undefined;
     containers.curlx_dyn_init(&fname, DYN_QLOG_NAME);
@@ -556,7 +559,7 @@ pub fn vquic_ctx_init(data: ?*anyopaque, qctx: *CfQuicCtx) callconv(.c) CURLcode
     );
     qctx.has_gso = is_linux;
     if (os_leaf.curl_getenv("CURL_DBG_QUIC_WBLOCK")) |p| {
-        defer mem.free(@ptrCast(p));
+        defer mem.free(p);
         var l: i64 = 0;
         var ptr: ?[*:0]const u8 = p;
         if (curlx_str_number(&ptr, &l, 100) == 0 and l >= 0 and l <= 100) {
@@ -625,7 +628,7 @@ fn do_sendmsg(
         return send_packet_no_gso(cf, data, qctx, pkt, pktlen, gsolen, psent);
     } else {
         var msg_iov = [1]Iovec{.{
-            .iov_base = @ptrCast(@constCast(pkt)),
+            .iov_base = @constCast(pkt),
             .iov_len = pktlen,
         }};
         var msg: Msghdr = .{
@@ -698,7 +701,7 @@ fn send_packet_no_gso(
         var sent: usize = 0;
         if (comptime has_sendmsg) {
             var msg_iov = [1]Iovec{.{
-                .iov_base = @ptrCast(@constCast(pkt + offset)),
+                .iov_base = @constCast(pkt + offset),
                 .iov_len = len,
             }};
             var msg: Msghdr = .{
@@ -751,9 +754,9 @@ pub fn vquic_send_packets(
 ) callconv(.c) CURLcode {
     vquic_ctx_update_time(qctx, data);
     if (qctx.wblock_percent > 0) {
-        var r: u8 = 0;
-        _ = Curl_rand_bytes(data, @ptrCast(&r), 1);
-        if (r >= (@as(u16, 100 - qctx.wblock_percent) * 256) / 100) {
+        var r: [1]u8 = .{0};
+        _ = Curl_rand_bytes(data, &r, 1);
+        if (r[0] >= (@as(u16, 100 - qctx.wblock_percent) * 256) / 100) {
             return CURLE_AGAIN;
         }
     }
@@ -993,7 +996,7 @@ pub fn vquic_recv_packets(
                             var pktinfo: InPktinfo = undefined;
                             @memcpy(std.mem.asBytes(&pktinfo), payload[0..@sizeOf(InPktinfo)]);
                             ifindex = pktinfo.ipi_ifindex;
-                            var sa4: *SockaddrIn = @ptrCast(@alignCast(&qctx.local_addr));
+                            var sa4 = fromOpaque(SockaddrIn, &qctx.local_addr).?;
                             sa4.sin_family = AF_INET;
                             sa4.sin_addr = pktinfo.ipi_addr;
                             qctx.local_addrlen = @sizeOf(SockaddrIn);
@@ -1008,7 +1011,7 @@ pub fn vquic_recv_packets(
                             var pktinfo6: In6Pktinfo = undefined;
                             @memcpy(std.mem.asBytes(&pktinfo6), payload[0..@sizeOf(In6Pktinfo)]);
                             ifindex = @intCast(pktinfo6.ipi6_ifindex);
-                            var sa6: *SockaddrIn6 = @ptrCast(@alignCast(&qctx.local_addr));
+                            var sa6 = fromOpaque(SockaddrIn6, &qctx.local_addr).?;
                             sa6.sin6_family = AF_INET6;
                             sa6.sin6_addr = pktinfo6.ipi6_addr;
                             qctx.local_addrlen = @sizeOf(SockaddrIn6);
@@ -1056,8 +1059,7 @@ pub export fn Curl_conn_may_http3(
     }
 
     if (data) |d| {
-        if (Curl_zig_url_data_get_ptr(d, DATA_PTR_STATE_ORIGIN)) |origin_raw| {
-            const origin: *const CurlPeer = @ptrCast(@alignCast(origin_raw));
+        if (fromOpaque(*const CurlPeer, Curl_zig_url_data_get_ptr(d, DATA_PTR_STATE_ORIGIN))) |origin| {
             const scheme_flags = if (origin.scheme) |sc| sc.flags else 0;
             if ((scheme_flags & PROTOPT_SSL) == 0) {
                 Curl_failf(data, "HTTP/3 requested for non-HTTPS URL");
@@ -1066,8 +1068,7 @@ pub export fn Curl_conn_may_http3(
         }
     }
 
-    if (Curl_zig_url_conn_get_ptr(c, CONN_PTR_REF_SOCKS_PROXY)) |sp_raw| {
-        const sp: *const ProxyInfo = @ptrCast(@alignCast(sp_raw));
+    if (fromOpaque(*const ProxyInfo, Curl_zig_url_conn_get_ptr(c, CONN_PTR_REF_SOCKS_PROXY))) |sp| {
         if (sp.peer != null) {
             Curl_failf(data, "HTTP/3 is not supported over a SOCKS proxy");
             return CURLE_URL_MALFORMAT;
@@ -1217,8 +1218,8 @@ pub fn Curl_vquic_tls_peer_init(
     sslc: ?*SslFilterConfig,
     ssl_peer: *SslPeer,
 ) CURLcode {
-    var tls_id: [80]u8 = @splat(0);
-    _ = vtls_backends.vtls_impl.Curl_ssl_version(&tls_id, tls_id.len);
+    var tls_id: [79:0]u8 = @splat(0);
+    _ = vtls_backends.vtls_impl.Curl_ssl_version(&tls_id, @sizeOf(@TypeOf(tls_id)));
     if (ssl_peer.origin != null or ssl_peer.peer != null) {
         vtls_backends.vtls_impl.Curl_ssl_peer_cleanup(ssl_peer);
     }
@@ -1226,10 +1227,10 @@ pub fn Curl_vquic_tls_peer_init(
     var dummy_sslc = std.mem.zeroes(SslFilterConfig);
     return vtls_backends.vtls_impl.Curl_ssl_peer_init(
         ssl_peer,
-        @ptrCast(@alignCast(origin)),
-        @ptrCast(@alignCast(peer)),
+        fromOpaque(vtls_scache_asn1.CurlPeer, origin),
+        fromOpaque(vtls_scache_asn1.CurlPeer, peer),
         sslc orelse &dummy_sslc,
-        @ptrCast(&tls_id),
+        &tls_id,
         TRNSPRT_QUIC,
     );
 }
@@ -1246,15 +1247,33 @@ pub fn Curl_vquic_tls_init(
     ssl_user_data: ?*anyopaque,
     session_reuse_cb: ?Curl_vquic_session_reuse_cb,
 ) CURLcode {
-    switch (comptime backend_options.ssl) {
-        .openssl => {
+    var result: CURLcode = CURLE_OK;
+    initVquicTlsInner(ctx, cf, data, ssl_peer, alpns, cb_setup, cb_user_data, ssl_user_data, session_reuse_cb, &result) catch return result;
+    return CURLE_OK;
+}
+
+fn initVquicTlsInner(
+    ctx: *CurlTlsCtx,
+    cf: *CurlCfilter,
+    data: ?*CurlEasy,
+    ssl_peer: *SslPeer,
+    alpns: ?*const AlpnSpec,
+    cb_setup: ?Curl_vquic_tls_ctx_setup,
+    cb_user_data: ?*anyopaque,
+    ssl_user_data: ?*anyopaque,
+    session_reuse_cb: ?Curl_vquic_session_reuse_cb,
+    out_result: *CURLcode,
+) error{InitFailed}!void {
+    errdefer Curl_vquic_tls_cleanup(ctx);
+    const rc: CURLcode = switch (comptime backend_options.ssl) {
+        .openssl => blk: {
             if (comptime backend_options.bundled) {
                 if (cb_setup) |cb| {
-                    return cb(cf, data, cb_user_data);
+                    break :blk cb(cf, data, cb_user_data);
                 }
-                return CURLE_OK;
+                break :blk CURLE_OK;
             }
-            return ossl_backend.Curl_ossl_ctx_init(
+            break :blk ossl_backend.Curl_ossl_ctx_init(
                 &ctx.ossl,
                 cf,
                 data,
@@ -1267,33 +1286,33 @@ pub fn Curl_vquic_tls_init(
                 session_reuse_cb,
             );
         },
-        .gnutls => {
-            return vtls_gtls.Curl_gtls_ctx_init(
-                &ctx.gtls,
-                cf,
-                data,
-                ssl_peer,
-                alpns,
-                cb_setup,
-                cb_user_data,
-                ssl_user_data,
-                @ptrCast(session_reuse_cb),
-            );
-        },
-        .wolfssl => {
-            return vtls_wolfssl.Curl_wssl_ctx_init(
-                &ctx.wssl,
-                cf,
-                data,
-                ssl_peer,
-                alpns,
-                cb_setup,
-                cb_user_data,
-                ssl_user_data,
-                @ptrCast(session_reuse_cb),
-            );
-        },
-        else => return CURLE_NOT_BUILT_IN,
+        .gnutls => vtls_gtls.Curl_gtls_ctx_init(
+            &ctx.gtls,
+            cf,
+            data,
+            ssl_peer,
+            alpns,
+            cb_setup,
+            cb_user_data,
+            ssl_user_data,
+            fromOpaque(vtls_gtls.Curl_vquic_session_reuse_cb, session_reuse_cb),
+        ),
+        .wolfssl => vtls_wolfssl.Curl_wssl_ctx_init(
+            &ctx.wssl,
+            cf,
+            data,
+            ssl_peer,
+            alpns,
+            cb_setup,
+            cb_user_data,
+            ssl_user_data,
+            fromOpaque(vtls_wolfssl.Curl_vquic_session_reuse_cb, session_reuse_cb),
+        ),
+        else => CURLE_NOT_BUILT_IN,
+    };
+    if (rc != CURLE_OK) {
+        out_result.* = rc;
+        return error.InitFailed;
     }
 }
 
@@ -1444,7 +1463,7 @@ pub fn Curl_vquic_tls_get_ssl_info(
     switch (comptime backend_options.ssl) {
         .openssl => {
             info.backend = vtls_backends.CURLSSLBACKEND_OPENSSL;
-            info.internals = if (give_ssl_ctx) @ptrCast(ctx.ossl.ssl_ctx) else @ptrCast(ctx.ossl.ssl);
+            info.internals = if (give_ssl_ctx) ctx.ossl.ssl_ctx else ctx.ossl.ssl;
             return true;
         },
         .gnutls => {
@@ -1454,7 +1473,7 @@ pub fn Curl_vquic_tls_get_ssl_info(
         },
         .wolfssl => {
             info.backend = vtls_backends.CURLSSLBACKEND_WOLFSSL;
-            info.internals = if (give_ssl_ctx) @ptrCast(ctx.wssl.ssl_ctx) else @ptrCast(ctx.wssl.ssl);
+            info.internals = if (give_ssl_ctx) ctx.wssl.ssl_ctx else ctx.wssl.ssl;
             return true;
         },
         else => return false,
@@ -1550,11 +1569,10 @@ test "vquic_ctx_init, vquic_push_blocked_pkt, and vquic_ctx_free" {
     try std.testing.expectEqual(pkt2.len, qctx.blocked_pkt[1].pktlen);
     try std.testing.expectEqual(@as(usize, 600), qctx.blocked_pkt[1].gsolen);
 
-    const raw = mem.calloc(1, @sizeOf(CfQuicCtx)) orelse return error.OutOfMemory;
-    const heap_qctx: *CfQuicCtx = @ptrCast(@alignCast(raw));
+    const heap_qctx = mem.create(CfQuicCtx) orelse return error.OutOfMemory;
     try std.testing.expectEqual(CURLE_OK, vquic_ctx_init(null, heap_qctx));
     vquic_ctx_free(heap_qctx);
-    mem.freeTyped(heap_qctx);
+    mem.destroy(heap_qctx);
 }
 
 test "Curl_qlogdir creates sqlog file when QLOGDIR is set" {

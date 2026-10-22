@@ -68,6 +68,11 @@ pub const CURL_CW_CONTENT_DECODE: c_uint = 4;
 
 pub const MAX_IPADR_LEN: usize = 46;
 
+inline fn fromOpaque(comptime T: type, raw: anytype) if (@typeInfo(T) == .pointer) ?T else ?*T {
+    const p = mem.toRawPtr(raw) orelse return null;
+    return @ptrCast(@alignCast(p));
+}
+
 // ============================================================================
 // Shared C ABI Struct Layouts & External Declarations
 // ============================================================================
@@ -216,7 +221,7 @@ pub const CURL_ASYN_ITEM_DESC_LEN: usize = 64;
 
 pub const async_thrdd_item = extern struct {
     res: ?*Curl_addrinfo = null,
-    description: [CURL_ASYN_ITEM_DESC_LEN]u8 = @splat(0),
+    description: [CURL_ASYN_ITEM_DESC_LEN - 1:0]u8 = @splat(0),
     sockerr: c_int = 0,
     mid: u32 = 0,
     resolv_id: u32 = 0,
@@ -224,18 +229,18 @@ pub const async_thrdd_item = extern struct {
     transport: u8 = 0,
     dns_queries: u8 = 0,
     negative: bool = false,
-    hostname: [1]u8 = .{0},
+    hostname: [0:0]u8 = .{},
 
     pub inline fn hostnamePtr(self: *async_thrdd_item) [*:0]u8 {
-        return @ptrCast(&self.hostname);
+        return &self.hostname;
     }
 
     pub inline fn hostnameConstPtr(self: *const async_thrdd_item) [*:0]const u8 {
-        return @ptrCast(&self.hostname);
+        return &self.hostname;
     }
 
     pub inline fn descriptionPtr(self: *async_thrdd_item) [*:0]u8 {
-        return @ptrCast(&self.description);
+        return &self.description;
     }
 };
 
@@ -484,6 +489,10 @@ pub const Curl_cfilter = if (builtin.os.tag == .windows)
                 self.flags &= ~@as(c_uint, 0x02);
             }
         }
+
+        pub inline fn ctxAs(self: *const @This(), comptime T: type) ?*T {
+            return fromOpaque(T, self.ctx);
+        }
     }
 else
     extern struct {
@@ -517,6 +526,10 @@ else
             } else {
                 self.flags &= ~@as(u8, 0x02);
             }
+        }
+
+        pub inline fn ctxAs(self: *const @This(), comptime T: type) ?*T {
+            return fromOpaque(T, self.ctx);
         }
     };
 
@@ -554,8 +567,8 @@ extern fn curlx_dyn_addf(s: *containers.dynbuf, fmt: [*:0]const u8, ...) callcon
 extern fn Curl_u8_strset_get(set: *collections.u8_strset, id: u8) callconv(.c) ?[*:0]const u8;
 
 pub const ip_quadruple = extern struct {
-    remote_ip: [MAX_IPADR_LEN]u8,
-    local_ip: [MAX_IPADR_LEN]u8,
+    remote_ip: [MAX_IPADR_LEN - 1:0]u8,
+    local_ip: [MAX_IPADR_LEN - 1:0]u8,
     remote_port: u16,
     local_port: u16,
     transport: u8,
@@ -646,12 +659,12 @@ export fn Curl_ipv4_resolve_r(hostname: ?[*:0]const u8, port: u16) callconv(.c) 
         .ai_family = PF_INET,
         .ai_socktype = SOCK_STREAM,
     };
-    var sbuf: [12]u8 = undefined;
+    var sbuf: [11:0]u8 = undefined;
     var sbufptr: ?[*:0]const u8 = null;
 
     if (port != 0) {
-        _ = curl_msnprintf(&sbuf, sbuf.len, "%d", @as(c_int, port));
-        sbufptr = @ptrCast(&sbuf);
+        _ = curl_msnprintf(&sbuf, @sizeOf(@TypeOf(sbuf)), "%d", @as(c_int, port));
+        sbufptr = &sbuf;
     }
 
     _ = Curl_getaddrinfo_ex(hostname, sbufptr, &hints, &ai);
@@ -691,7 +704,7 @@ export fn Curl_sync_getaddrinfo(
         .ai_socktype = if (transport == TRNSPRT_TCP) SOCK_STREAM else SOCK_DGRAM,
     };
     var res: ?*Curl_addrinfo = null;
-    var sbuf: [12]u8 = undefined;
+    var sbuf: [11:0]u8 = undefined;
     var sbufptr: ?[*:0]const u8 = null;
     var addrbuf: [128]u8 = undefined;
 
@@ -702,8 +715,8 @@ export fn Curl_sync_getaddrinfo(
     }
 
     if (port != 0) {
-        _ = curl_msnprintf(&sbuf, sbuf.len, "%d", @as(c_int, port));
-        sbufptr = @ptrCast(&sbuf);
+        _ = curl_msnprintf(&sbuf, @sizeOf(@TypeOf(sbuf)), "%d", @as(c_int, port));
+        sbufptr = &sbuf;
     }
 
     const err = Curl_getaddrinfo_ex(hostname, sbufptr, &hints, &res);
@@ -887,7 +900,7 @@ export fn Curl_async_destroy(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) 
         a.httpsrr = null;
     }
     Curl_peer_unlink(&a.peer);
-    mem.freeSized(a, @sizeOf(Curl_resolv_async));
+    mem.destroy(a);
 }
 
 export fn Curl_async_failed(
@@ -926,10 +939,9 @@ const cf_recvbuf_ctx = extern struct {
 
 fn cf_recvbuf_destroy(cf: *Curl_cfilter, data: ?*Curl_easy) callconv(.c) void {
     trcCf(data, cf, "destroy", .{});
-    if (cf.ctx) |raw| {
-        const ctx: *cf_recvbuf_ctx = @ptrCast(@alignCast(raw));
+    if (cf.ctxAs(cf_recvbuf_ctx)) |ctx| {
         io_buffers.Curl_bufq_free(&ctx.recvbuf);
-        mem.freeSized(ctx, @sizeOf(cf_recvbuf_ctx));
+        mem.destroy(ctx);
         cf.ctx = null;
     }
 }
@@ -941,7 +953,7 @@ fn cf_recvbuf_recv(
     len: usize,
     pnread: *usize,
 ) callconv(.c) CURLcode {
-    const ctx: *cf_recvbuf_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctxAs(cf_recvbuf_ctx).?;
     if (!io_buffers.Curl_bufq_is_empty(&ctx.recvbuf)) {
         return io_buffers.Curl_bufq_cread(&ctx.recvbuf, buf, len, pnread);
     } else if (cf.next) |next| {
@@ -952,7 +964,7 @@ fn cf_recvbuf_recv(
 }
 
 fn cf_recvbuf_data_pending(cf: *Curl_cfilter, data: ?*const Curl_easy) callconv(.c) bool {
-    const ctx: *cf_recvbuf_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctxAs(cf_recvbuf_ctx).?;
     if (!io_buffers.Curl_bufq_is_empty(&ctx.recvbuf)) {
         return true;
     }
@@ -976,6 +988,36 @@ pub export var Curl_cft_recvbuf: Curl_cftype = .{
     .query = Curl_cf_def_query,
 };
 
+fn createRecvbufFilter(buf: [*]const u8, blen: usize, out_result: *CURLcode) error{CreateFailed}!*Curl_cfilter {
+    const ctx = mem.create(cf_recvbuf_ctx) orelse {
+        out_result.* = CURLE_OUT_OF_MEMORY;
+        return error.CreateFailed;
+    };
+    io_buffers.Curl_bufq_init2(
+        &ctx.recvbuf,
+        CURL_CF_RECVBUF_CHUNK,
+        (blen / CURL_CF_RECVBUF_CHUNK) + 1,
+        io_buffers.BUFQ_OPT_SOFT_LIMIT | io_buffers.BUFQ_OPT_NO_SPARES,
+    );
+    errdefer {
+        io_buffers.Curl_bufq_free(&ctx.recvbuf);
+        mem.destroy(ctx);
+    }
+
+    var nwritten: usize = 0;
+    var result = io_buffers.Curl_bufq_write(&ctx.recvbuf, buf, blen, &nwritten);
+    if (result == CURLE_OK and nwritten != blen) {
+        result = CURLE_FAILED_INIT;
+    }
+    var cf: ?*Curl_cfilter = null;
+    if (result == CURLE_OK) {
+        result = Curl_cf_create(&cf, &Curl_cft_recvbuf, ctx);
+    }
+    out_result.* = result;
+    if (result != CURLE_OK) return error.CreateFailed;
+    return cf.?;
+}
+
 export fn Curl_cf_recvbuf_add(
     data: ?*Curl_easy,
     conn: ?*connectdata,
@@ -986,32 +1028,8 @@ export fn Curl_cf_recvbuf_add(
     if (blen == 0)
         return CURLE_OK;
 
-    var cf: ?*Curl_cfilter = null;
-    var nwritten: usize = 0;
-
-    const raw = mem.calloc(1, @sizeOf(cf_recvbuf_ctx)) orelse return CURLE_OUT_OF_MEMORY;
-    const ctx: *cf_recvbuf_ctx = @ptrCast(@alignCast(raw));
-
-    io_buffers.Curl_bufq_init2(
-        &ctx.recvbuf,
-        CURL_CF_RECVBUF_CHUNK,
-        (blen / CURL_CF_RECVBUF_CHUNK) + 1,
-        io_buffers.BUFQ_OPT_SOFT_LIMIT | io_buffers.BUFQ_OPT_NO_SPARES,
-    );
-    var result = io_buffers.Curl_bufq_write(&ctx.recvbuf, buf, blen, &nwritten);
-    if (result == CURLE_OK and nwritten != blen) {
-        result = CURLE_FAILED_INIT;
-    }
-    if (result == CURLE_OK) {
-        result = Curl_cf_create(&cf, &Curl_cft_recvbuf, ctx);
-    }
-    if (result != CURLE_OK) {
-        io_buffers.Curl_bufq_free(&ctx.recvbuf);
-        mem.freeSized(ctx, @sizeOf(cf_recvbuf_ctx));
-        return result;
-    }
-
-    const filter = cf.?;
+    var result: CURLcode = CURLE_OK;
+    const filter = createRecvbufFilter(buf, blen, &result) catch return result;
     filter.setConnected(Curl_conn_is_connected(conn, sockindex));
     Curl_conn_cf_add(data, conn, sockindex, filter);
     trcCf(data, filter, "added with %zu bytes", .{blen});
@@ -1039,12 +1057,12 @@ fn cf_haproxy_ctx_reset(ctx: *cf_haproxy_ctx) void {
 fn cf_haproxy_ctx_free(ctx: ?*cf_haproxy_ctx) void {
     if (ctx) |c| {
         curlx_dyn_free(&c.data_out);
-        mem.freeSized(c, @sizeOf(cf_haproxy_ctx));
+        mem.destroy(c);
     }
 }
 
 fn cf_haproxy_date_out_set(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
-    const ctx: *cf_haproxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctxAs(cf_haproxy_ctx).?;
     var ipquad: ip_quadruple = std.mem.zeroes(ip_quadruple);
     var is_ipv6: bool = false;
 
@@ -1066,8 +1084,8 @@ fn cf_haproxy_date_out_set(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
         client_dest_ip = custom_ip;
         is_ipv6 = !Curl_is_ipv4addr(client_source_ip);
     } else {
-        client_source_ip = @ptrCast(&ipquad.local_ip[0]);
-        client_dest_ip = @ptrCast(&ipquad.remote_ip[0]);
+        client_source_ip = &ipquad.local_ip;
+        client_dest_ip = &ipquad.remote_ip;
     }
 
     return curlx_dyn_addf(
@@ -1082,7 +1100,7 @@ fn cf_haproxy_date_out_set(cf: *Curl_cfilter, data: ?*Curl_easy) CURLcode {
 }
 
 fn cf_haproxy_connect(cf: *Curl_cfilter, data: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
-    const ctx: *cf_haproxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctxAs(cf_haproxy_ctx).?;
 
     if (cf.isConnected()) {
         done.* = true;
@@ -1165,8 +1183,8 @@ fn cf_haproxy_connect(cf: *Curl_cfilter, data: ?*Curl_easy, done: *bool) callcon
 
 fn cf_haproxy_destroy(cf: *Curl_cfilter, data: ?*Curl_easy) callconv(.c) void {
     trcCf(data, cf, "destroy", .{});
-    if (cf.ctx) |raw| {
-        cf_haproxy_ctx_free(@ptrCast(@alignCast(raw)));
+    if (cf.ctxAs(cf_haproxy_ctx)) |ctx| {
+        cf_haproxy_ctx_free(ctx);
     }
 }
 
@@ -1206,25 +1224,27 @@ pub export var Curl_cft_haproxy: Curl_cftype = .{
     .query = Curl_cf_def_query,
 };
 
-fn cf_haproxy_create(pcf: *?*Curl_cfilter, data: ?*Curl_easy) CURLcode {
-    _ = data;
-    var cf: ?*Curl_cfilter = null;
-    const raw = mem.calloc(1, @sizeOf(cf_haproxy_ctx)) orelse {
-        pcf.* = null;
-        return CURLE_OUT_OF_MEMORY;
+fn createHaproxyFilter(out_result: *CURLcode) error{CreateFailed}!*Curl_cfilter {
+    const ctx = mem.create(cf_haproxy_ctx) orelse {
+        out_result.* = CURLE_OUT_OF_MEMORY;
+        return error.CreateFailed;
     };
-    const ctx: *cf_haproxy_ctx = @ptrCast(@alignCast(raw));
     cf_haproxy_ctx_reset(ctx);
     curlx_dyn_init(&ctx.data_out, DYN_HAXPROXY);
+    errdefer cf_haproxy_ctx_free(ctx);
 
+    var cf: ?*Curl_cfilter = null;
     const result = Curl_cf_create(&cf, &Curl_cft_haproxy, ctx);
-    if (result != CURLE_OK) {
-        cf_haproxy_ctx_free(ctx);
-        pcf.* = null;
-        return result;
-    }
-    pcf.* = cf;
-    return CURLE_OK;
+    out_result.* = result;
+    if (result != CURLE_OK) return error.CreateFailed;
+    return cf.?;
+}
+
+fn cf_haproxy_create(pcf: *?*Curl_cfilter, data: ?*Curl_easy) CURLcode {
+    _ = data;
+    var result: CURLcode = CURLE_OK;
+    pcf.* = createHaproxyFilter(&result) catch null;
+    return result;
 }
 
 export fn Curl_cf_haproxy_insert_after(cf_at: *Curl_cfilter, data: ?*Curl_easy) callconv(.c) CURLcode {
@@ -1258,8 +1278,7 @@ const cw_pause_ctx = extern struct {
 };
 
 fn cw_pause_buf_create(wtype: c_int, buflen: usize) ?*cw_pause_buf {
-    const raw = mem.calloc(1, @sizeOf(cw_pause_buf)) orelse return null;
-    const cwbuf: *cw_pause_buf = @ptrCast(@alignCast(raw));
+    const cwbuf = mem.create(cw_pause_buf) orelse return null;
     cwbuf.wtype = wtype;
     if ((wtype & CLIENTWRITE_BODY) != 0) {
         io_buffers.Curl_bufq_init2(
@@ -1277,15 +1296,15 @@ fn cw_pause_buf_create(wtype: c_int, buflen: usize) ?*cw_pause_buf {
 fn cw_pause_buf_free(cwbuf: ?*cw_pause_buf) void {
     if (cwbuf) |b| {
         io_buffers.Curl_bufq_free(&b.b);
-        mem.freeSized(b, @sizeOf(cw_pause_buf));
+        mem.destroy(b);
     }
 }
 
 inline fn cwriterCtx(writer: *Curl_cwriter) *cw_pause_ctx {
-    if (writer.ctx) |p| {
-        return @ptrCast(@alignCast(p));
+    if (fromOpaque(cw_pause_ctx, writer.ctx)) |p| {
+        return p;
     }
-    return @ptrCast(@alignCast(writer));
+    return fromOpaque(cw_pause_ctx, writer).?;
 }
 
 fn cw_pause_init(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) CURLcode {
@@ -1490,11 +1509,10 @@ fn cf_capsule_ctx_clear(ctx: *cf_capsule_ctx) void {
 }
 
 fn cf_capsule_destroy(cf: *Curl_cfilter, data: ?*Curl_easy) callconv(.c) void {
-    const ctx: ?*cf_capsule_ctx = if (cf.ctx) |raw| @ptrCast(@alignCast(raw)) else null;
     trcCf(data, cf, "destroy", .{});
-    if (ctx) |c| {
+    if (cf.ctxAs(cf_capsule_ctx)) |c| {
         cf_capsule_ctx_clear(c);
-        mem.freeSized(c, @sizeOf(cf_capsule_ctx));
+        mem.destroy(c);
         cf.ctx = null;
     }
 }
@@ -1514,7 +1532,7 @@ fn cf_capsule_connect(cf: *Curl_cfilter, data: ?*Curl_easy, done: *bool) callcon
 }
 
 fn cf_capsule_out_flush(cf: *Curl_cfilter, data: ?*Curl_easy, pempty: *bool) CURLcode {
-    const ctx: *cf_capsule_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctxAs(cf_capsule_ctx).?;
     var nwritten: usize = 0;
 
     if (io_buffers.Curl_bufq_is_empty(&ctx.sendbuf)) {
@@ -1551,7 +1569,7 @@ fn cf_capsule_adjust_pollset(
     data: ?*Curl_easy,
     ps: *easy_pollset,
 ) callconv(.c) CURLcode {
-    const ctx: *cf_capsule_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctxAs(cf_capsule_ctx).?;
     const next = cf.next orelse return CURLE_OK;
     var result = next.cft.adjust_pollset(next, data, ps);
     if (result == CURLE_OK and !io_buffers.Curl_bufq_is_empty(&ctx.sendbuf)) {
@@ -1564,7 +1582,7 @@ fn cf_capsule_adjust_pollset(
 }
 
 fn cf_capsule_data_pending(cf: *Curl_cfilter, data: ?*const Curl_easy) callconv(.c) bool {
-    const ctx: *cf_capsule_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctxAs(cf_capsule_ctx).?;
     if (!io_buffers.Curl_bufq_is_empty(&ctx.recvbuf))
         return true;
     return if (cf.next) |next| next.cft.has_data_pending(next, data) else false;
@@ -1578,7 +1596,7 @@ fn cf_capsule_send(
     eos: bool,
     pnwritten: *usize,
 ) callconv(.c) CURLcode {
-    const ctx: *cf_capsule_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctxAs(cf_capsule_ctx).?;
     var flushed: bool = false;
 
     _ = eos;
@@ -1617,7 +1635,7 @@ fn cf_capsule_recv(
     len: usize,
     pnread: *usize,
 ) callconv(.c) CURLcode {
-    const ctx: *cf_capsule_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctxAs(cf_capsule_ctx).?;
     var result: CURLcode = CURLE_OK;
     var nread: usize = 0;
 
@@ -1670,7 +1688,7 @@ fn cf_capsule_query(
     pres1: ?*c_int,
     pres2: ?*anyopaque,
 ) callconv(.c) CURLcode {
-    const ctx: *cf_capsule_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctxAs(cf_capsule_ctx).?;
     if (query_id == CF_QUERY_NEED_FLUSH) {
         if (!io_buffers.Curl_bufq_is_empty(&ctx.sendbuf)) {
             if (pres1) |p| p.* = 1;
@@ -1697,20 +1715,27 @@ pub export var Curl_cft_capsule: Curl_cftype = .{
     .query = cf_capsule_query,
 };
 
-export fn Curl_cf_capsule_insert_after(cf_at: *Curl_cfilter, data: ?*Curl_easy) callconv(.c) CURLcode {
-    var cf: ?*Curl_cfilter = null;
-    const raw = mem.calloc(1, @sizeOf(cf_capsule_ctx)) orelse return CURLE_OUT_OF_MEMORY;
-    const ctx: *cf_capsule_ctx = @ptrCast(@alignCast(raw));
+fn createCapsuleFilter(out_result: *CURLcode) error{CreateFailed}!*Curl_cfilter {
+    const ctx = mem.create(cf_capsule_ctx) orelse {
+        out_result.* = CURLE_OUT_OF_MEMORY;
+        return error.CreateFailed;
+    };
     cf_capsule_ctx_init(ctx);
-
-    const result = Curl_cf_create(&cf, &Curl_cft_capsule, ctx);
-    if (result != CURLE_OK) {
+    errdefer {
         cf_capsule_ctx_clear(ctx);
-        mem.freeSized(ctx, @sizeOf(cf_capsule_ctx));
-        return result;
+        mem.destroy(ctx);
     }
 
-    const filter = cf.?;
+    var cf: ?*Curl_cfilter = null;
+    const result = Curl_cf_create(&cf, &Curl_cft_capsule, ctx);
+    out_result.* = result;
+    if (result != CURLE_OK) return error.CreateFailed;
+    return cf.?;
+}
+
+export fn Curl_cf_capsule_insert_after(cf_at: *Curl_cfilter, data: ?*Curl_easy) callconv(.c) CURLcode {
+    var result: CURLcode = CURLE_OK;
+    const filter = createCapsuleFilter(&result) catch return result;
     Curl_conn_cf_insert_after(cf_at, filter);
     trcCf(data, filter, "created", .{});
     return CURLE_OK;
@@ -1762,8 +1787,7 @@ test "Curl_async_failed host and proxy error codes" {
 }
 
 test "Curl_cfilter recvbuf read and data_pending" {
-    const raw_ctx = mem.calloc(1, @sizeOf(cf_recvbuf_ctx)).?;
-    const ctx: *cf_recvbuf_ctx = @ptrCast(@alignCast(raw_ctx));
+    const ctx = mem.create(cf_recvbuf_ctx).?;
     const payload = "hello recvbuf";
     var nwritten: usize = 0;
     io_buffers.Curl_bufq_init2(
@@ -1818,7 +1842,7 @@ test "Curl_cwt_pause init, write, flush, and close" {
 
     const raw = mem.calloc(1, Curl_cwt_pause.cwriter_size).?;
     defer mem.free(raw);
-    const writer: *Curl_cwriter = @ptrCast(@alignCast(raw));
+    const writer = fromOpaque(Curl_cwriter, raw).?;
     writer.cwt = &Curl_cwt_pause;
     writer.ctx = raw;
 
@@ -1830,7 +1854,7 @@ test "Curl_cwt_pause init, write, flush, and close" {
             return CURLE_OK;
         }
         fn doWrite(_: ?*Curl_easy, w: *Curl_cwriter, _: c_int, _: [*]const u8, nbytes: usize) callconv(.c) CURLcode {
-            const counter: *usize = @ptrCast(@alignCast(w.ctx.?));
+            const counter = fromOpaque(usize, w.ctx).?;
             counter.* += nbytes;
             return CURLE_OK;
         }
@@ -1881,7 +1905,7 @@ test "Curl_cft_capsule insert_after, encap, process_udp_raw, and destroy" {
     try std.testing.expectEqual(&Curl_cft_capsule, cap_cf.cft);
     try std.testing.expect(!Curl_cft_capsule.has_data_pending(cap_cf, null));
 
-    const ctx: *cf_capsule_ctx = @ptrCast(@alignCast(cap_cf.ctx.?));
+    const ctx = cap_cf.ctxAs(cf_capsule_ctx).?;
     const msg = "ping";
     try std.testing.expectEqual(CURLE_OK, Curl_capsule_encap_udp_datagram(&ctx.recvbuf, msg.ptr, msg.len));
     try std.testing.expect(Curl_cft_capsule.has_data_pending(cap_cf, null));
