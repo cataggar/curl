@@ -630,11 +630,25 @@ fn imap_matchresp(line_in: [*:0]const u8, len_in: usize, cmd: [*:0]const u8) boo
         (line[cmd_len] == ' ' or cmd_len + 2 == len));
 }
 
+fn is_custom_fetch_listing_match(params: ?[*:0]const u8) bool {
+    const p = params orelse return false;
+    var i: usize = 0;
+    if (p[i] != ' ') return false;
+    i += 1;
+    if (!std.ascii.isDigit(p[i])) return false;
+    i += 1;
+    while (std.ascii.isDigit(p[i])) : (i += 1) {}
+    return p[i] == ':' or p[i] == ',';
+}
+
 fn is_custom_fetch_listing(imap: *const IMAP) bool {
     const custom = imap.custom orelse return false;
     const params = imap.custom_params orelse return false;
-    return primitives.curl_strequal(custom, "FETCH") != 0 and
-        std.mem.indexOf(u8, std.mem.span(params), " BODY[") == null;
+    return (primitives.curl_strequal(custom, "FETCH") != 0 and
+        is_custom_fetch_listing_match(params)) or
+        (primitives.curl_strequal(custom, "UID") != 0 and
+            primitives.curl_strnequal(params, " FETCH ", 7) != 0 and
+            is_custom_fetch_listing_match(params + 6));
 }
 
 fn imap_endofresp(data: ?*Curl_easy, conn: ?*connectdata, line: [*:0]const u8, len: usize, resp: *c_int) callconv(.c) bool {
@@ -668,7 +682,6 @@ fn imap_endofresp(data: ?*Curl_easy, conn: ?*connectdata, line: [*:0]const u8, l
             .IMAP_LIST => {
                 if ((imap.custom == null and !imap_matchresp(line, len, "LIST")) or
                     (imap.custom != null and !imap_matchresp(line, len, imap.custom.?) and
-                        !is_custom_fetch_listing(imap) and
                         (primitives.curl_strequal(imap.custom.?, "STORE") == 0 or !imap_matchresp(line, len, "FETCH")) and
                         primitives.curl_strequal(imap.custom.?, "SELECT") == 0 and
                         primitives.curl_strequal(imap.custom.?, "EXAMINE") == 0 and
@@ -1187,28 +1200,28 @@ pub fn imap_parse_literal(line_slice: []const u8) ?curl_off_t {
 fn imap_state_listsearch_resp(data: ?*Curl_easy, imap: *IMAP, imapc: *imap_conn, imapcode: c_int, line_in: [*:0]const u8) CURLcode {
     var result: CURLcode = CURLE_OK;
 
-    if (imapcode == '*') {
+    if (imapcode == '*' and is_custom_fetch_listing(imap)) {
+        // listing reply without explicit body requested
+    } else if (imapcode == '*') {
         const line: [*:0]const u8 = line_in;
-        const len = std.mem.len(line);
+        const len = imapc.pp.nfinal;
+        const after_header = containers.curlx_dyn_len(&imapc.pp.recvbuf) - len;
         var size: curl_off_t = 0;
-
-        if (!is_custom_fetch_listing(imap)) {
-            return Curl_client_write(data, CLIENTWRITE_BODY, line, len);
-        }
 
         if (imap_parse_literal(line[0..len])) |parsed_size| {
             size = parsed_size;
         }
 
         if (size > 0) {
+            infofFmt(data, "Found {d} bytes to download", .{size});
+
             result = Curl_client_write(data, CLIENTWRITE_BODY, line, len);
             if (result != CURLE_OK) return result;
 
-            infofFmt(data, "Found {d} bytes to download", .{size});
-
-            if (imapc.pp.overflow > 0) {
-                var chunk = imapc.pp.overflow;
+            if (after_header > 0) {
+                var chunk = after_header;
                 _ = curlx_dyn_tail(&imapc.pp.recvbuf, chunk);
+                imapc.pp.nfinal = 0;
                 imapc.pp.overflow = 0;
 
                 const size_uz = std.math.cast(usize, size) orelse std.math.maxInt(usize);
@@ -1216,30 +1229,33 @@ fn imap_state_listsearch_resp(data: ?*Curl_easy, imap: *IMAP, imapc: *imap_conn,
                     chunk = size_uz;
                 }
 
-                const recv_ptr = containers.curlx_dyn_ptr(&imapc.pp.recvbuf) orelse return CURLE_WEIRD_SERVER_REPLY;
-                result = Curl_client_write(data, CLIENTWRITE_BODY, recv_ptr, chunk);
-                if (result != CURLE_OK) return result;
+                if (chunk > 0) {
+                    const recv_ptr = containers.curlx_dyn_ptr(&imapc.pp.recvbuf) orelse return CURLE_WEIRD_SERVER_REPLY;
+                    result = Curl_client_write(data, CLIENTWRITE_BODY, recv_ptr, chunk);
+                    if (result != CURLE_OK) return result;
 
-                const chunk_off = std.math.cast(curl_off_t, chunk) orelse return CURLE_WEIRD_SERVER_REPLY;
-                size -= chunk_off;
-                infofFmt(data, "Written {d} bytes, {d} bytes are left for transfer", .{ chunk, size });
+                    const chunk_off = std.math.cast(curl_off_t, chunk) orelse return CURLE_WEIRD_SERVER_REPLY;
+                    infofFmt(data, "Written {d} bytes, {d} bytes are left for transfer", .{ chunk, size - chunk_off });
+                }
 
-                if (containers.curlx_dyn_len(&imapc.pp.recvbuf) > chunk) {
-                    imapc.pp.overflow = containers.curlx_dyn_len(&imapc.pp.recvbuf) - chunk;
+                if (after_header > chunk) {
+                    imapc.pp.overflow = after_header - chunk;
                     _ = curlx_dyn_tail(&imapc.pp.recvbuf, imapc.pp.overflow);
                 } else {
                     containers.curlx_dyn_reset(&imapc.pp.recvbuf);
                 }
             }
 
-            if (size == 0) {
-                result = Curl_client_write(data, CLIENTWRITE_BODY, ")\r\n", 3);
+            size += std.math.cast(curl_off_t, len) orelse 0;
+            Curl_pgrsSetDownloadSize(data, size);
+            Curl_imap_ws_set_req_maxdownload(data, size);
+
+            if (Curl_imap_ws_get_req_bytecount(data) == size) {
+                Curl_xfer_setup_nop(data);
             } else {
-                Curl_pgrsSetDownloadSize(data, size);
-                Curl_imap_ws_set_req_maxdownload(data, size);
                 Curl_xfer_setup_recv(data, FIRSTSOCKET, size);
-                imap_state(data, imapc, .IMAP_STOP);
             }
+            imap_state(data, imapc, .IMAP_STOP);
         } else {
             result = Curl_client_write(data, CLIENTWRITE_BODY, line, len);
         }
@@ -1304,7 +1320,7 @@ fn imap_state_fetch_resp(data: ?*Curl_easy, imap: *IMAP, imapc: *imap_conn, imap
         return CURLE_REMOTE_FILE_NOT_FOUND;
     }
 
-    const len = std.mem.len(line);
+    const len = imapc.pp.nfinal;
     if (imap_parse_literal(line[0..len])) |parsed_size| {
         size = parsed_size;
         parsed = true;
@@ -1317,6 +1333,7 @@ fn imap_state_fetch_resp(data: ?*Curl_easy, imap: *IMAP, imapc: *imap_conn, imap
         if (imapc.pp.overflow > 0) {
             var chunk = imapc.pp.overflow;
             _ = curlx_dyn_tail(&imapc.pp.recvbuf, chunk);
+            imapc.pp.nfinal = 0;
             imapc.pp.overflow = 0;
 
             const size_uz = std.math.cast(usize, size) orelse std.math.maxInt(usize);
@@ -1325,7 +1342,7 @@ fn imap_state_fetch_resp(data: ?*Curl_easy, imap: *IMAP, imapc: *imap_conn, imap
             }
 
             if (chunk == 0) {
-                imap_state(data, imapc, .IMAP_FETCH_FINAL);
+                imap_state(data, imapc, .IMAP_STOP);
                 return result;
             }
 
@@ -1334,8 +1351,7 @@ fn imap_state_fetch_resp(data: ?*Curl_easy, imap: *IMAP, imapc: *imap_conn, imap
             if (result != CURLE_OK) return result;
 
             const chunk_off = std.math.cast(curl_off_t, chunk) orelse return CURLE_WEIRD_SERVER_REPLY;
-            size -= chunk_off;
-            infofFmt(data, "Written {d} bytes, {d} bytes are left for transfer", .{ chunk, size });
+            infofFmt(data, "Written {d} bytes, {d} bytes are left for transfer", .{ chunk, size - chunk_off });
 
             if (containers.curlx_dyn_len(&imapc.pp.recvbuf) > chunk) {
                 imapc.pp.overflow = containers.curlx_dyn_len(&imapc.pp.recvbuf) - chunk;
@@ -1343,18 +1359,15 @@ fn imap_state_fetch_resp(data: ?*Curl_easy, imap: *IMAP, imapc: *imap_conn, imap
             } else {
                 containers.curlx_dyn_reset(&imapc.pp.recvbuf);
             }
-        } else if (size == 0) {
-            result = Curl_client_write(data, CLIENTWRITE_BODY, "", 0);
-            if (result != CURLE_OK) return result;
         }
 
-        if (size == 0) {
-            imap_state(data, imapc, .IMAP_FETCH_FINAL);
+        if (Curl_imap_ws_get_req_bytecount(data) == size) {
+            Curl_xfer_setup_nop(data);
         } else {
             Curl_imap_ws_set_req_maxdownload(data, size);
             Curl_xfer_setup_recv(data, FIRSTSOCKET, size);
-            imap_state(data, imapc, .IMAP_STOP);
         }
+        imap_state(data, imapc, .IMAP_STOP);
     } else {
         failfFmt(data, "Failed to parse FETCH response.", .{});
         result = CURLE_WEIRD_SERVER_REPLY;
