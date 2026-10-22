@@ -47,20 +47,42 @@ pub fn curl_free_fn(ptr: ?*anyopaque) callconv(.c) void {
     c.free(ptr);
 }
 
+fn bytesToMany(comptime T: type, raw: anytype) ?[*]T {
+    const p = raw orelse return null;
+    return @ptrCast(@alignCast(p));
+}
+
+fn rawToBytes(raw: ?*anyopaque) ?[*]u8 {
+    return bytesToMany(u8, raw);
+}
+
+pub fn toRawPtr(ptr: anytype) ?*anyopaque {
+    const Ptr = @TypeOf(ptr);
+    if (Ptr == @TypeOf(null)) return null;
+    const raw = switch (@typeInfo(Ptr)) {
+        .optional => ptr orelse return null,
+        .pointer => ptr,
+        else => @compileError("expected a pointer, slice, or null"),
+    };
+    const pinfo = @typeInfo(@TypeOf(raw)).pointer;
+    const addr = if (pinfo.size == .slice) raw.ptr else raw;
+    return @ptrCast(@constCast(addr));
+}
+
 pub fn curl_strdup_fn(s: [*:0]const u8) callconv(.c) ?[*:0]u8 {
     const len = std.mem.len(s);
     if (len >= max_alloc_size) return null;
     const total = len + 1;
-    const raw = c.malloc(total) orelse return null;
-    const dst: [*]u8 = @ptrCast(raw);
-    @memcpy(dst[0..total], s[0..total]);
-    return @ptrCast(dst);
+    const dst = rawToBytes(c.malloc(total)) orelse return null;
+    @memcpy(dst[0..len], s[0..len]);
+    dst[len] = 0;
+    return dst[0..len :0].ptr;
 }
 
 pub fn malloc(size: usize) ?[*]u8 {
     if (size == 0 or size > max_alloc_size) return null;
     const raw = if (use_libcurl_callbacks) libcurl_cb.Curl_cmalloc(size) else c.malloc(size);
-    return if (raw) |p| @ptrCast(p) else null;
+    return rawToBytes(raw);
 }
 
 pub fn calloc(nmemb: usize, size: usize) ?[*]u8 {
@@ -68,13 +90,13 @@ pub fn calloc(nmemb: usize, size: usize) ?[*]u8 {
     const total = std.math.mul(usize, nmemb, size) catch return null;
     if (total > max_alloc_size) return null;
     const raw = if (use_libcurl_callbacks) libcurl_cb.Curl_ccalloc(nmemb, size) else c.calloc(nmemb, size);
-    return if (raw) |p| @ptrCast(p) else null;
+    return rawToBytes(raw);
 }
 
 pub fn realloc(ptr: ?*anyopaque, size: usize) ?[*]u8 {
     if (size > max_alloc_size) return null;
     const raw = if (use_libcurl_callbacks) libcurl_cb.Curl_crealloc(ptr, size) else c.realloc(ptr, size);
-    return if (raw) |p| @ptrCast(p) else null;
+    return rawToBytes(raw);
 }
 
 pub fn free(ptr: ?*anyopaque) void {
@@ -91,30 +113,85 @@ pub fn strdup(s: [*:0]const u8) ?[*:0]u8 {
     if (use_libcurl_callbacks) {
         return libcurl_cb.Curl_cstrdup(s);
     }
-    const total = len + 1;
-    const raw = c.malloc(total) orelse return null;
-    const dst: [*]u8 = @ptrCast(raw);
-    @memcpy(dst[0..total], s[0..total]);
-    return @ptrCast(dst);
+    return curl_strdup_fn(s);
+}
+
+pub fn create(comptime T: type) ?*T {
+    const many = callocMany(T, 1) orelse return null;
+    return &many[0];
+}
+
+pub fn alloc(comptime T: type) ?*T {
+    const many = allocMany(T, 1) orelse return null;
+    return &many[0];
+}
+
+pub const allocTyped = alloc;
+pub const callocTyped = create;
+
+pub fn memdup(src: [*]const u8, len: usize) ?*anyopaque {
+    const dst = allocMany(u8, len) orelse return null;
+    if (len > 0) {
+        @memcpy(dst[0..len], src[0..len]);
+    }
+    return dst;
+}
+
+pub fn memdup0(src: [*]const u8, len: usize) ?[*:0]u8 {
+    if (len >= max_alloc_size) return null;
+    const dst = allocMany(u8, len + 1) orelse return null;
+    if (len > 0) {
+        @memcpy(dst[0..len], src[0..len]);
+    }
+    dst[len] = 0;
+    return dst[0..len :0].ptr;
+}
+
+pub fn allocMany(comptime T: type, n: usize) ?[*]T {
+    const total = std.math.mul(usize, n, @sizeOf(T)) catch return null;
+    return bytesToMany(T, malloc(total));
+}
+
+pub fn callocMany(comptime T: type, n: usize) ?[*]T {
+    return bytesToMany(T, calloc(n, @sizeOf(T)));
+}
+
+pub fn reallocMany(comptime T: type, ptr: anytype, n: usize) ?[*]T {
+    const total = std.math.mul(usize, n, @sizeOf(T)) catch return null;
+    return bytesToMany(T, realloc(toRawPtr(ptr), total));
+}
+
+pub fn allocSlice(comptime T: type, n: usize) ?[]T {
+    const many = allocMany(T, n) orelse return null;
+    return many[0..n];
+}
+
+pub fn callocSlice(comptime T: type, n: usize) ?[]T {
+    const many = callocMany(T, n) orelse return null;
+    return many[0..n];
+}
+
+pub fn reallocSlice(comptime T: type, ptr: anytype, n: usize) ?[]T {
+    const many = reallocMany(T, ptr, n) orelse return null;
+    return many[0..n];
 }
 
 pub fn secureZero(ptr: ?*anyopaque, len: usize) void {
-    if (ptr) |p| {
+    if (rawToBytes(ptr)) |bytes| {
         if (len > 0) {
-            const bytes: [*]u8 = @ptrCast(p);
             std.crypto.secureZero(u8, bytes[0..len]);
         }
     }
 }
 
 pub fn poison(ptr: ?*anyopaque, len: usize) void {
-    if (ptr) |p| {
+    if (rawToBytes(ptr)) |bytes| {
         if (len > 0) {
             const fill_byte: u8 = switch (builtin.mode) {
                 .Debug, .ReleaseSafe => 0xaa,
                 .ReleaseFast, .ReleaseSmall => 0x00,
             };
-            const vbytes: [*]volatile u8 = @ptrCast(p);
+            const vbytes: []volatile u8 = bytes[0..len];
             for (0..len) |i| {
                 vbytes[i] = fill_byte;
             }
@@ -131,26 +208,40 @@ pub fn freeSized(ptr: ?*anyopaque, len: usize) void {
 
 pub fn freeTyped(ptr: anytype) void {
     const T = @TypeOf(ptr);
+    if (T == @TypeOf(null)) return;
     switch (@typeInfo(T)) {
         .optional => {
             if (ptr) |p| freeTyped(p);
         },
         .pointer => |pinfo| {
-            if (pinfo.size != .one) {
-                @compileError("freeTyped requires a single-item pointer (*T or ?*T)");
-            }
             const Child = pinfo.child;
-            freeSized(@ptrCast(@constCast(ptr)), @sizeOf(Child));
+            const elem_size = if (@typeInfo(Child) == .@"opaque") 0 else @sizeOf(Child);
+            if (pinfo.size == .slice) {
+                const byte_len = std.math.mul(usize, ptr.len, elem_size) catch 0;
+                freeSized(toRawPtr(ptr.ptr), byte_len);
+            } else if (pinfo.size == .one and elem_size > 0) {
+                freeSized(toRawPtr(ptr), elem_size);
+            } else {
+                free(toRawPtr(ptr));
+            }
         },
-        else => @compileError("freeTyped requires a single-item pointer (*T or ?*T)"),
+        else => @compileError("freeTyped requires a pointer or optional pointer"),
     }
+}
+
+pub fn destroy(ptr: anytype) void {
+    freeTyped(ptr);
+}
+
+pub fn freeSlice(slice: anytype) void {
+    freeTyped(slice);
 }
 
 pub fn freeSecretZ(ptr: ?[*:0]u8) void {
     if (ptr) |s| {
         const len = std.mem.len(s);
-        secureZero(@ptrCast(s), len);
-        free(@ptrCast(s));
+        secureZero(s, len);
+        free(s);
     }
 }
 
@@ -201,10 +292,9 @@ const mock_mem_cb = struct {
 
     fn mockFree(ptr: ?*anyopaque) callconv(.c) void {
         free_calls += 1;
-        if (ptr) |p| {
+        if (rawToBytes(ptr)) |src| {
             if (last_freed_capture_len > 0) {
                 const n = @min(last_freed_capture_len, last_freed_bytes.len);
-                const src: [*]const u8 = @ptrCast(p);
                 @memcpy(last_freed_bytes[0..n], src[0..n]);
             }
         }
@@ -401,8 +491,7 @@ test "mem freeTyped poisons full struct size and handles null optional pointers"
     }
 
     mock_mem_cb.reset();
-    const raw = calloc(1, @sizeOf(TestStruct)) orelse return error.OutOfMemory;
-    const item: *TestStruct = @ptrCast(@alignCast(raw));
+    const item = create(TestStruct) orelse return error.OutOfMemory;
     item.* = .{
         .id = 0x1122334455667788,
         .mid = 0xdeadbeef,
@@ -418,8 +507,7 @@ test "mem freeTyped poisons full struct size and handles null optional pointers"
         try std.testing.expectEqual(expected_poison, b);
     }
 
-    const opt_raw = calloc(1, @sizeOf(TestStruct)) orelse return error.OutOfMemory;
-    const opt_item: ?*TestStruct = @ptrCast(@alignCast(opt_raw));
+    const opt_item: ?*TestStruct = create(TestStruct) orelse return error.OutOfMemory;
     opt_item.?.* = .{
         .id = -1,
         .mid = 42,
@@ -438,4 +526,58 @@ test "mem freeTyped poisons full struct size and handles null optional pointers"
     const null_ptr: ?*TestStruct = null;
     freeTyped(null_ptr);
     try std.testing.expectEqual(@as(usize, 2), mock_mem_cb.free_calls);
+}
+
+test "mem create, alloc, destroy, allocSlice, callocSlice, allocMany, callocMany, reallocMany, freeSlice" {
+    const Entry = extern struct {
+        a: u64,
+        b: u32,
+        c: u32,
+    };
+
+    const created = create(Entry) orelse return error.OutOfMemory;
+    try std.testing.expectEqual(@as(u64, 0), created.a);
+    try std.testing.expectEqual(@as(u32, 0), created.b);
+    try std.testing.expectEqual(@as(u32, 0), created.c);
+    created.a = 12345;
+    destroy(created);
+    destroy(@as(?*Entry, null));
+
+    const allocated = alloc(Entry) orelse return error.OutOfMemory;
+    allocated.* = .{ .a = 99, .b = 7, .c = 8 };
+    try std.testing.expectEqual(@as(u64, 99), allocated.a);
+    destroy(allocated);
+
+    const slice = allocSlice(u32, 4) orelse return error.OutOfMemory;
+    for (slice, 0..) |*v, i| v.* = @intCast(i + 10);
+    try std.testing.expectEqual(@as(usize, 4), slice.len);
+    try std.testing.expectEqual(@as(u32, 13), slice[3]);
+    freeSlice(slice);
+    freeSlice(@as(?[]u32, null));
+
+    const zslice = callocSlice(Entry, 3) orelse return error.OutOfMemory;
+    defer freeSlice(zslice);
+    for (zslice) |e| {
+        try std.testing.expectEqual(@as(u64, 0), e.a);
+        try std.testing.expectEqual(@as(u32, 0), e.b);
+    }
+
+    const many_u64 = allocMany(u64, 2) orelse return error.OutOfMemory;
+    many_u64[0] = 0x1111;
+    many_u64[1] = 0x2222;
+    const grown_u64 = reallocMany(u64, many_u64, 4) orelse {
+        destroy(many_u64);
+        return error.OutOfMemory;
+    };
+    defer destroy(grown_u64);
+    try std.testing.expectEqual(@as(u64, 0x1111), grown_u64[0]);
+    try std.testing.expectEqual(@as(u64, 0x2222), grown_u64[1]);
+    grown_u64[2] = 0x3333;
+    grown_u64[3] = 0x4444;
+
+    const zmany = callocMany(u32, 5) orelse return error.OutOfMemory;
+    defer destroy(zmany);
+    for (0..5) |i| {
+        try std.testing.expectEqual(@as(u32, 0), zmany[i]);
+    }
 }

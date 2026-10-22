@@ -1,29 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const mem = @import("mem.zig");
 
 pub const CURLcode = c_uint;
 pub const CURLE_OK: CURLcode = 0;
 pub const CURLE_FAILED_INIT: CURLcode = 2;
 pub const CURLE_OUT_OF_MEMORY: CURLcode = 27;
 pub const CURLE_BAD_FUNCTION_ARGUMENT: CURLcode = 43;
-
-extern var Curl_cmalloc: *const fn (usize) callconv(.c) ?*anyopaque;
-extern var Curl_cfree: *const fn (?*anyopaque) callconv(.c) void;
-
-inline fn cmalloc(size: usize) ?*anyopaque {
-    if (builtin.is_test) {
-        return std.c.malloc(size);
-    }
-    return Curl_cmalloc(size);
-}
-
-inline fn cfree(ptr: ?*anyopaque) void {
-    if (builtin.is_test) {
-        std.c.free(ptr);
-        return;
-    }
-    Curl_cfree(ptr);
-}
 
 // ============================================================================
 // Generic Hash Context Adapter (unaligned-safe for C callers and HMAC_context)
@@ -33,8 +16,12 @@ fn HashAdapter(comptime Hasher: type) type {
     return struct {
         const ctx_size = @sizeOf(Hasher);
 
+        fn ctxBytes(context: ?*anyopaque) *[ctx_size]u8 {
+            return @ptrCast(context.?);
+        }
+
         fn init(context: ?*anyopaque) callconv(.c) CURLcode {
-            const bytes: *[ctx_size]u8 = @ptrCast(context.?);
+            const bytes = ctxBytes(context);
             const h = Hasher.init(.{});
             @memcpy(bytes, std.mem.asBytes(&h));
             return CURLE_OK;
@@ -43,7 +30,7 @@ fn HashAdapter(comptime Hasher: type) type {
         fn update(context: ?*anyopaque, data: ?[*]const u8, len: c_uint) callconv(.c) void {
             if (len == 0) return;
             const d = data orelse return;
-            const bytes: *[ctx_size]u8 = @ptrCast(context.?);
+            const bytes = ctxBytes(context);
             var h: Hasher = undefined;
             @memcpy(std.mem.asBytes(&h), bytes);
             h.update(d[0..len]);
@@ -51,7 +38,7 @@ fn HashAdapter(comptime Hasher: type) type {
         }
 
         fn final(result: [*]u8, context: ?*anyopaque) callconv(.c) void {
-            const bytes: *[ctx_size]u8 = @ptrCast(context.?);
+            const bytes = ctxBytes(context);
             var h: Hasher = undefined;
             @memcpy(std.mem.asBytes(&h), bytes);
             h.final(result[0..Hasher.digest_length]);
@@ -81,39 +68,41 @@ pub const HMAC_params = extern struct {
 
 pub const HMAC_context = extern struct {
     hash: *const HMAC_params,
-    hashctxt1: ?*anyopaque,
-    hashctxt2: ?*anyopaque,
+    hashctxt1: ?[*]u8,
+    hashctxt2: ?[*]u8,
 };
 
 const hmac_ipad: u8 = 0x36;
 const hmac_opad: u8 = 0x5C;
+const hmac_ipad_arr = [1]u8{hmac_ipad};
+const hmac_opad_arr = [1]u8{hmac_opad};
 
-pub export fn Curl_HMAC_init(
+fn hmacInitInner(
     hashparams: *const HMAC_params,
     key: ?[*]const u8,
     keylen: c_uint,
-) callconv(.c) ?*HMAC_context {
+) error{ InitFailed, OutOfMemory }!*HMAC_context {
     const total_size = @sizeOf(HMAC_context) +
         (@as(usize, 2) * @as(usize, hashparams.ctxtsize)) +
         @as(usize, hashparams.resultlen);
-    const raw = cmalloc(total_size) orelse return null;
-    const ctxt: *HMAC_context = @ptrCast(@alignCast(raw));
-    const base: [*]u8 = @ptrCast(raw);
+    const base = mem.allocMany(u8, total_size) orelse return error.OutOfMemory;
+    errdefer mem.destroy(base);
+
+    const ctxt: *HMAC_context = @ptrCast(@alignCast(base));
     const ctxt1_ptr: [*]u8 = base + @sizeOf(HMAC_context);
     const ctxt2_ptr: [*]u8 = ctxt1_ptr + @as(usize, hashparams.ctxtsize);
     const hkey_ptr: [*]u8 = ctxt2_ptr + @as(usize, hashparams.ctxtsize);
 
     ctxt.hash = hashparams;
-    ctxt.hashctxt1 = @ptrCast(ctxt1_ptr);
-    ctxt.hashctxt2 = @ptrCast(ctxt2_ptr);
+    ctxt.hashctxt1 = ctxt1_ptr;
+    ctxt.hashctxt2 = ctxt2_ptr;
 
     var effective_key = key;
     var effective_keylen = keylen;
 
     if (effective_keylen > hashparams.maxkeylen) {
         if (hashparams.hinit(ctxt.hashctxt1) != CURLE_OK) {
-            cfree(raw);
-            return null;
+            return error.InitFailed;
         }
         hashparams.hupdate(ctxt.hashctxt1, effective_key, effective_keylen);
         hashparams.hfinal(hkey_ptr, ctxt.hashctxt1);
@@ -124,25 +113,32 @@ pub export fn Curl_HMAC_init(
     if (hashparams.hinit(ctxt.hashctxt1) != CURLE_OK or
         hashparams.hinit(ctxt.hashctxt2) != CURLE_OK)
     {
-        cfree(raw);
-        return null;
+        return error.InitFailed;
     }
 
     var i: c_uint = 0;
     while (i < effective_keylen) : (i += 1) {
         const kbyte: u8 = if (effective_key) |k| k[i] else 0;
-        var b: u8 = kbyte ^ hmac_ipad;
-        hashparams.hupdate(ctxt.hashctxt1, @ptrCast(&b), 1);
-        b = kbyte ^ hmac_opad;
-        hashparams.hupdate(ctxt.hashctxt2, @ptrCast(&b), 1);
+        var b = [1]u8{kbyte ^ hmac_ipad};
+        hashparams.hupdate(ctxt.hashctxt1, &b, 1);
+        b[0] = kbyte ^ hmac_opad;
+        hashparams.hupdate(ctxt.hashctxt2, &b, 1);
     }
 
     while (i < hashparams.maxkeylen) : (i += 1) {
-        hashparams.hupdate(ctxt.hashctxt1, @ptrCast(&hmac_ipad), 1);
-        hashparams.hupdate(ctxt.hashctxt2, @ptrCast(&hmac_opad), 1);
+        hashparams.hupdate(ctxt.hashctxt1, &hmac_ipad_arr, 1);
+        hashparams.hupdate(ctxt.hashctxt2, &hmac_opad_arr, 1);
     }
 
     return ctxt;
+}
+
+pub export fn Curl_HMAC_init(
+    hashparams: *const HMAC_params,
+    key: ?[*]const u8,
+    keylen: c_uint,
+) callconv(.c) ?*HMAC_context {
+    return hmacInitInner(hashparams, key, keylen) catch null;
 }
 
 pub export fn Curl_HMAC_update(
@@ -158,12 +154,12 @@ pub export fn Curl_HMAC_final(
     output: ?[*]u8,
 ) callconv(.c) c_int {
     const hashparams = ctxt.hash;
-    const out: [*]u8 = output orelse (@as([*]u8, @ptrCast(ctxt.hashctxt2.?)) + @as(usize, hashparams.ctxtsize));
+    const out: [*]u8 = output orelse (ctxt.hashctxt2.? + @as(usize, hashparams.ctxtsize));
 
     hashparams.hfinal(out, ctxt.hashctxt1);
     hashparams.hupdate(ctxt.hashctxt2, out, hashparams.resultlen);
     hashparams.hfinal(out, ctxt.hashctxt2);
-    cfree(@ptrCast(ctxt));
+    mem.free(ctxt);
     return 0;
 }
 
@@ -423,25 +419,25 @@ pub export fn Curl_md5it(output: [*]u8, input: ?[*]const u8, len: usize) callcon
     return CURLE_OK;
 }
 
-pub export fn Curl_MD5_init(md5params: *const MD5_params) callconv(.c) ?*MD5_context {
-    const raw_ctxt = cmalloc(@sizeOf(MD5_context)) orelse return null;
-    const ctxt: *MD5_context = @ptrCast(@alignCast(raw_ctxt));
+fn md5InitInner(md5params: *const MD5_params) error{ InitFailed, OutOfMemory }!*MD5_context {
+    const ctxt = mem.alloc(MD5_context) orelse return error.OutOfMemory;
+    errdefer mem.destroy(ctxt);
 
-    const hashctx = cmalloc(md5params.md5_ctxtsize) orelse {
-        cfree(raw_ctxt);
-        return null;
-    };
+    const hashctx = mem.malloc(md5params.md5_ctxtsize) orelse return error.OutOfMemory;
+    errdefer mem.destroy(hashctx);
 
     ctxt.md5_hash = md5params;
     ctxt.md5_hashctx = hashctx;
 
     if (md5params.md5_init_func(hashctx) != CURLE_OK) {
-        cfree(hashctx);
-        cfree(raw_ctxt);
-        return null;
+        return error.InitFailed;
     }
 
     return ctxt;
+}
+
+pub export fn Curl_MD5_init(md5params: *const MD5_params) callconv(.c) ?*MD5_context {
+    return md5InitInner(md5params) catch null;
 }
 
 pub export fn Curl_MD5_update(
@@ -458,8 +454,8 @@ pub export fn Curl_MD5_final(
     result: [*]u8,
 ) callconv(.c) CURLcode {
     context.md5_hash.md5_final_func(result, context.md5_hashctx);
-    cfree(context.md5_hashctx);
-    cfree(@ptrCast(context));
+    mem.free(context.md5_hashctx);
+    mem.destroy(context);
     return CURLE_OK;
 }
 

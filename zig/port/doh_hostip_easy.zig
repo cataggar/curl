@@ -218,6 +218,11 @@ pub const StoreNetrc = netrc_addr_idn.StoreNetrc;
 
 pub const Curl_resolv_async = vdns_cfilters.Curl_resolv_async;
 
+inline fn fromOpaque(comptime T: type, raw: anytype) if (@typeInfo(T) == .pointer) ?T else ?*T {
+    const p = mem.toRawPtr(raw) orelse return null;
+    return @ptrCast(@alignCast(p));
+}
+
 pub const Curl_eapi_guard = extern struct {
     data: ?*Curl_easy,
     depth: u16,
@@ -420,8 +425,15 @@ extern fn Curl_hash_clean(h: ?*Curl_hash) callconv(.c) void;
 extern fn Curl_u8_strset_init(s: *anyopaque) callconv(.c) void;
 extern fn Curl_u8_strset_copy(dst: *anyopaque, src: *const anyopaque) callconv(.c) CURLcode;
 extern fn curlx_memdup0(src: ?[*]const u8, length: usize) callconv(.c) ?[*:0]u8;
-extern fn curlx_memdup(src: ?[*]const u8, length: usize) callconv(.c) ?*anyopaque;
+extern fn curlx_memdup(src: ?[*]const u8, length: usize) callconv(.c) ?[*]u8;
 extern fn curl_maprintf(format: [*:0]const u8, ...) callconv(.c) ?[*:0]u8;
+extern fn Curl_conn_meta_set(
+    conn: *connectdata,
+    key: [*:0]const u8,
+    meta_data: ?*anyopaque,
+    meta_dtor: Curl_meta_dtor,
+) callconv(.c) CURLcode;
+extern fn Curl_conn_meta_get(conn: *const connectdata, key: [*:0]const u8) callconv(.c) ?*anyopaque;
 
 extern fn Curl_zig_easy_get_dns_servers(data: ?*const Curl_easy) callconv(.c) ?[*:0]const u8;
 extern fn Curl_zig_easy_get_dns_interface(data: ?*const Curl_easy) callconv(.c) ?[*:0]const u8;
@@ -536,7 +548,7 @@ extern fn curlx_memzero(dest: ?*anyopaque, n: usize) callconv(.c) void;
 
 inline fn goodEasyHandle(data: ?*const Curl_easy) bool {
     const d = data orelse return false;
-    const magic: *const u32 = @ptrCast(@alignCast(d));
+    const magic = fromOpaque(*const u32, @constCast(d)).?;
     return magic.* == CURLEASY_MAGIC_NUMBER;
 }
 extern fn Curl_easy_dupset_init(dst: *Curl_easy, src: *const Curl_easy) callconv(.c) void;
@@ -690,9 +702,8 @@ fn doh_probe_write_cb(
     userp: ?*anyopaque,
 ) callconv(.c) usize {
     const realsize = size * nmemb;
-    const data: *Curl_easy = @ptrCast(userp orelse return CURL_WRITEFUNC_ERROR);
-    const doh_req_raw = Curl_meta_get(data, "ezm:doh-probe") orelse return CURL_WRITEFUNC_ERROR;
-    const doh_req: *doh_request = @ptrCast(@alignCast(doh_req_raw));
+    const data = fromOpaque(Curl_easy, userp) orelse return CURL_WRITEFUNC_ERROR;
+    const doh_req = metaGetTyped(doh_request, data, "ezm:doh-probe") orelse return CURL_WRITEFUNC_ERROR;
 
     if (containers.curlx_dyn_addn(&doh_req.resp_body, contents, realsize) != CURLE_OK)
         return 0;
@@ -703,11 +714,10 @@ fn doh_probe_write_cb(
 fn doh_probe_dtor(key: ?*const anyopaque, klen: usize, e: ?*anyopaque) callconv(.c) void {
     _ = key;
     _ = klen;
-    if (e) |raw| {
-        const doh_req: *doh_request = @ptrCast(@alignCast(raw));
+    if (fromOpaque(doh_request, e)) |doh_req| {
         curl_slist_free_all(doh_req.req_hds);
         containers.curlx_dyn_free(&doh_req.resp_body);
-        mem.free(raw);
+        mem.destroy(doh_req);
     }
 }
 
@@ -717,7 +727,7 @@ fn setoptChecked(doh: *Curl_easy, opt: c_uint, val: anytype, out_result: *CURLco
     return !(rc != CURLE_OK and rc != CURLE_NOT_BUILT_IN and rc != CURLE_UNKNOWN_OPTION);
 }
 
-fn doh_probe_run(
+fn dohProbeRunInner(
     data: *Curl_easy,
     dnstype: DNStype,
     host: [*:0]const u8,
@@ -725,15 +735,16 @@ fn doh_probe_run(
     multi: *Curl_multi,
     resolv_id: u32,
     pmid: *u32,
-) CURLcode {
+    result: *CURLcode,
+) error{DohError}!void {
     var doh: ?*Curl_easy = null;
-    var result: CURLcode = CURLE_OK;
+    errdefer _ = Curl_close(&doh);
     const maybe_https = primitives.curl_strnequal(url, "http:", 5) == 0;
 
     pmid.* = std.math.maxInt(u32);
 
-    const raw_req = mem.calloc(1, @sizeOf(doh_request)) orelse return CURLE_OUT_OF_MEMORY;
-    var doh_req: ?*doh_request = @ptrCast(@alignCast(raw_req));
+    var doh_req: ?*doh_request = mem.create(doh_request) orelse return dohFail(result, CURLE_OUT_OF_MEMORY);
+    errdefer if (doh_req) |req| doh_probe_dtor(null, 0, req);
     doh_req.?.resolv_id = resolv_id;
     doh_req.?.dnstype = dnstype;
     containers.curlx_dyn_init(&doh_req.?.resp_body, DYN_DOH_RESPONSE);
@@ -747,110 +758,105 @@ fn doh_probe_run(
     );
     if (d != DOH_OK) {
         Curl_failf(data, "Failed to encode DoH packet [%d]", @as(c_int, @intCast(d)));
-        result = CURLE_OUT_OF_MEMORY;
-        return doh_probe_run_error(&doh, doh_req, result);
+        return dohFail(result, CURLE_OUT_OF_MEMORY);
     }
 
     const timeout_ms = Curl_timeleft_ms(data);
-    if (timeout_ms < 0) {
-        result = CURLE_OPERATION_TIMEDOUT;
-        return doh_probe_run_error(&doh, doh_req, result);
-    }
+    if (timeout_ms < 0)
+        return dohFail(result, CURLE_OPERATION_TIMEDOUT);
 
     doh_req.?.req_hds = curl_slist_append(null, "Content-Type: application/dns-message");
-    if (doh_req.?.req_hds == null) {
-        result = CURLE_OUT_OF_MEMORY;
-        return doh_probe_run_error(&doh, doh_req, result);
-    }
+    if (doh_req.?.req_hds == null)
+        return dohFail(result, CURLE_OUT_OF_MEMORY);
 
-    result = Curl_open(&doh);
-    if (result != CURLE_OK or doh == null)
-        return doh_probe_run_error(&doh, doh_req, result);
+    result.* = Curl_open(&doh);
+    if (result.* != CURLE_OK or doh == null)
+        return error.DohError;
 
     const doh_h = doh.?;
     Curl_doh_set_feat(doh_h);
 
-    if (!setoptChecked(doh_h, CURLOPT_URL, url, &result)) return doh_probe_run_error(&doh, doh_req, result);
-    if (!setoptChecked(doh_h, CURLOPT_DEFAULT_PROTOCOL, @as([*:0]const u8, "https"), &result)) return doh_probe_run_error(&doh, doh_req, result);
-    if (!setoptChecked(doh_h, CURLOPT_WRITEFUNCTION, &doh_probe_write_cb, &result)) return doh_probe_run_error(&doh, doh_req, result);
-    if (!setoptChecked(doh_h, CURLOPT_WRITEDATA, doh_h, &result)) return doh_probe_run_error(&doh, doh_req, result);
-    if (!setoptChecked(doh_h, CURLOPT_POSTFIELDS, @as([*]const u8, &doh_req.?.req_body), &result)) return doh_probe_run_error(&doh, doh_req, result);
-    if (!setoptChecked(doh_h, CURLOPT_POSTFIELDSIZE, @as(c_long, @intCast(doh_req.?.req_body_len)), &result)) return doh_probe_run_error(&doh, doh_req, result);
-    if (!setoptChecked(doh_h, CURLOPT_HTTPHEADER, doh_req.?.req_hds, &result)) return doh_probe_run_error(&doh, doh_req, result);
+    if (!setoptChecked(doh_h, CURLOPT_URL, url, result)) return error.DohError;
+    if (!setoptChecked(doh_h, CURLOPT_DEFAULT_PROTOCOL, @as([*:0]const u8, "https"), result)) return error.DohError;
+    if (!setoptChecked(doh_h, CURLOPT_WRITEFUNCTION, &doh_probe_write_cb, result)) return error.DohError;
+    if (!setoptChecked(doh_h, CURLOPT_WRITEDATA, doh_h, result)) return error.DohError;
+    if (!setoptChecked(doh_h, CURLOPT_POSTFIELDS, @as([*]const u8, &doh_req.?.req_body), result)) return error.DohError;
+    if (!setoptChecked(doh_h, CURLOPT_POSTFIELDSIZE, @as(c_long, @intCast(doh_req.?.req_body_len)), result)) return error.DohError;
+    if (!setoptChecked(doh_h, CURLOPT_HTTPHEADER, doh_req.?.req_hds, result)) return error.DohError;
 
     if (backend_options.nghttp2 and maybe_https) {
-        if (!setoptChecked(doh_h, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS, &result)) return doh_probe_run_error(&doh, doh_req, result);
-        if (!setoptChecked(doh_h, CURLOPT_PIPEWAIT, @as(c_long, 1), &result)) return doh_probe_run_error(&doh, doh_req, result);
+        if (!setoptChecked(doh_h, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS, result)) return error.DohError;
+        if (!setoptChecked(doh_h, CURLOPT_PIPEWAIT, @as(c_long, 1), result)) return error.DohError;
     }
 
-    if (!setoptChecked(doh_h, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS, &result)) return doh_probe_run_error(&doh, doh_req, result);
-    if (!setoptChecked(doh_h, CURLOPT_TIMEOUT_MS, @as(c_long, @intCast(timeout_ms)), &result)) return doh_probe_run_error(&doh, doh_req, result);
-    if (!setoptChecked(doh_h, CURLOPT_SHARE, Curl_easy_get_share(data), &result)) return doh_probe_run_error(&doh, doh_req, result);
+    if (!setoptChecked(doh_h, CURLOPT_PROTOCOLS, CURLPROTO_HTTP | CURLPROTO_HTTPS, result)) return error.DohError;
+    if (!setoptChecked(doh_h, CURLOPT_TIMEOUT_MS, @as(c_long, @intCast(timeout_ms)), result)) return error.DohError;
+    if (!setoptChecked(doh_h, CURLOPT_SHARE, Curl_easy_get_share(data), result)) return error.DohError;
 
     if (Curl_doh_data_custom_stderr(data)) |custom_err| {
-        if (!setoptChecked(doh_h, CURLOPT_STDERR, custom_err, &result)) return doh_probe_run_error(&doh, doh_req, result);
+        if (!setoptChecked(doh_h, CURLOPT_STDERR, custom_err, result)) return error.DohError;
     }
     if (trcDohVerbose(data)) {
-        if (!setoptChecked(doh_h, CURLOPT_VERBOSE, @as(c_long, 1), &result)) return doh_probe_run_error(&doh, doh_req, result);
+        if (!setoptChecked(doh_h, CURLOPT_VERBOSE, @as(c_long, 1), result)) return error.DohError;
     }
     if (Curl_easy_get_no_signal(data)) {
-        if (!setoptChecked(doh_h, CURLOPT_NOSIGNAL, @as(c_long, 1), &result)) return doh_probe_run_error(&doh, doh_req, result);
+        if (!setoptChecked(doh_h, CURLOPT_NOSIGNAL, @as(c_long, 1), result)) return error.DohError;
     }
     if (Curl_doh_data_fdebug(data)) |fdebug| {
-        if (!setoptChecked(doh_h, CURLOPT_DEBUGFUNCTION, fdebug, &result)) return doh_probe_run_error(&doh, doh_req, result);
+        if (!setoptChecked(doh_h, CURLOPT_DEBUGFUNCTION, fdebug, result)) return error.DohError;
     }
     if (Curl_doh_data_debugdata(data)) |debugdata| {
-        if (!setoptChecked(doh_h, CURLOPT_DEBUGDATA, debugdata, &result)) return doh_probe_run_error(&doh, doh_req, result);
+        if (!setoptChecked(doh_h, CURLOPT_DEBUGDATA, debugdata, result)) return error.DohError;
     }
 
     if (use_resolv_ares) {
         if (Curl_zig_easy_get_dns_servers(data)) |dns_servers| {
-            if (!setoptChecked(doh_h, CURLOPT_DNS_SERVERS, dns_servers, &result)) return doh_probe_run_error(&doh, doh_req, result);
+            if (!setoptChecked(doh_h, CURLOPT_DNS_SERVERS, dns_servers, result)) return error.DohError;
         }
         if (Curl_zig_easy_get_dns_interface(data)) |dns_interface| {
-            if (!setoptChecked(doh_h, CURLOPT_DNS_INTERFACE, dns_interface, &result)) return doh_probe_run_error(&doh, doh_req, result);
+            if (!setoptChecked(doh_h, CURLOPT_DNS_INTERFACE, dns_interface, result)) return error.DohError;
         }
         if (Curl_zig_easy_get_dns_local_ip4(data)) |dns_local_ip4| {
-            if (!setoptChecked(doh_h, CURLOPT_DNS_LOCAL_IP4, dns_local_ip4, &result)) return doh_probe_run_error(&doh, doh_req, result);
+            if (!setoptChecked(doh_h, CURLOPT_DNS_LOCAL_IP4, dns_local_ip4, result)) return error.DohError;
         }
         if (Curl_zig_easy_get_dns_local_ip6(data)) |dns_local_ip6| {
-            if (!setoptChecked(doh_h, CURLOPT_DNS_LOCAL_IP6, dns_local_ip6, &result)) return doh_probe_run_error(&doh, doh_req, result);
+            if (!setoptChecked(doh_h, CURLOPT_DNS_LOCAL_IP6, dns_local_ip6, result)) return error.DohError;
         }
     }
 
     if (maybe_https) {
-        if (!setoptChecked(doh_h, CURLOPT_SSL_VERIFYHOST, @as(c_long, if (Curl_doh_data_verifyhost(data)) 2 else 0), &result))
-            return doh_probe_run_error(&doh, doh_req, result);
-        if (!setoptChecked(doh_h, CURLOPT_SSL_VERIFYPEER, @as(c_long, if (Curl_doh_data_verifypeer(data)) 1 else 0), &result))
-            return doh_probe_run_error(&doh, doh_req, result);
-        if (!setoptChecked(doh_h, CURLOPT_SSL_VERIFYSTATUS, @as(c_long, if (Curl_doh_data_verifystatus(data)) 1 else 0), &result))
-            return doh_probe_run_error(&doh, doh_req, result);
+        if (!setoptChecked(doh_h, CURLOPT_SSL_VERIFYHOST, @as(c_long, if (Curl_doh_data_verifyhost(data)) 2 else 0), result))
+            return error.DohError;
+        if (!setoptChecked(doh_h, CURLOPT_SSL_VERIFYPEER, @as(c_long, if (Curl_doh_data_verifypeer(data)) 1 else 0), result))
+            return error.DohError;
+        if (!setoptChecked(doh_h, CURLOPT_SSL_VERIFYSTATUS, @as(c_long, if (Curl_doh_data_verifystatus(data)) 1 else 0), result))
+            return error.DohError;
 
         Curl_doh_copy_ssl_custom_flags(doh_h, data);
 
         if (Curl_easy_str_ssl_cafile(data)) |cafile| {
-            if (!setoptChecked(doh_h, CURLOPT_CAINFO, cafile, &result)) return doh_probe_run_error(&doh, doh_req, result);
+            if (!setoptChecked(doh_h, CURLOPT_CAINFO, cafile, result)) return error.DohError;
         }
         if (Curl_easy_blob_cainfo(data)) |cainfo_blob| {
-            if (!setoptChecked(doh_h, CURLOPT_CAINFO_BLOB, cainfo_blob, &result)) return doh_probe_run_error(&doh, doh_req, result);
+            if (!setoptChecked(doh_h, CURLOPT_CAINFO_BLOB, cainfo_blob, result)) return error.DohError;
         }
         if (Curl_easy_str_ssl_capath(data)) |capath| {
-            if (!setoptChecked(doh_h, CURLOPT_CAPATH, capath, &result)) return doh_probe_run_error(&doh, doh_req, result);
+            if (!setoptChecked(doh_h, CURLOPT_CAPATH, capath, result)) return error.DohError;
         }
         if (Curl_easy_str_ssl_crlfile(data)) |crlfile| {
-            if (!setoptChecked(doh_h, CURLOPT_CRLFILE, crlfile, &result)) return doh_probe_run_error(&doh, doh_req, result);
+            if (!setoptChecked(doh_h, CURLOPT_CRLFILE, crlfile, result)) return error.DohError;
         }
         if (Curl_doh_data_ssl_certinfo(data)) {
-            if (!setoptChecked(doh_h, CURLOPT_CERTINFO, @as(c_long, 1), &result)) return doh_probe_run_error(&doh, doh_req, result);
+            if (!setoptChecked(doh_h, CURLOPT_CERTINFO, @as(c_long, 1), result)) return error.DohError;
         }
         if (Curl_doh_data_ssl_fsslctx(data)) |fsslctx| {
-            if (!setoptChecked(doh_h, CURLOPT_SSL_CTX_FUNCTION, fsslctx, &result)) return doh_probe_run_error(&doh, doh_req, result);
+            if (!setoptChecked(doh_h, CURLOPT_SSL_CTX_FUNCTION, fsslctx, result)) return error.DohError;
         }
         if (Curl_doh_data_ssl_fsslctxp(data)) |fsslctxp| {
-            if (!setoptChecked(doh_h, CURLOPT_SSL_CTX_DATA, fsslctxp, &result)) return doh_probe_run_error(&doh, doh_req, result);
+            if (!setoptChecked(doh_h, CURLOPT_SSL_CTX_DATA, fsslctxp, result)) return error.DohError;
         }
         if (Curl_easy_str_ssl_ec_curves(data)) |ec_curves| {
-            if (!setoptChecked(doh_h, CURLOPT_SSL_EC_CURVES, ec_curves, &result)) return doh_probe_run_error(&doh, doh_req, result);
+            if (!setoptChecked(doh_h, CURLOPT_SSL_EC_CURVES, ec_curves, result)) return error.DohError;
         }
         const ssl_opts: c_long = @as(c_long, Curl_doh_data_ssl_options(data)) & ~CURLSSLOPT_AUTO_CLIENT_CERT;
         _ = curl_easy_setopt(doh_h, CURLOPT_SSL_OPTIONS, ssl_opts);
@@ -858,65 +864,63 @@ fn doh_probe_run(
 
     Curl_doh_init_probe_state(doh_h, data, doh_probe_done);
 
-    result = Curl_meta_set(doh_h, "ezm:doh-probe", @ptrCast(doh_req.?), doh_probe_dtor);
+    result.* = Curl_meta_set(doh_h, "ezm:doh-probe", doh_req.?, doh_probe_dtor);
     doh_req = null;
-    if (result != CURLE_OK)
-        return doh_probe_run_error(&doh, doh_req, result);
+    if (result.* != CURLE_OK)
+        return error.DohError;
 
     if (Curl_multi_add_handle(multi, doh_h) != CURLM_OK)
-        return doh_probe_run_error(&doh, doh_req, result);
+        return error.DohError;
 
     pmid.* = Curl_easy_get_mid(doh_h);
+}
+
+fn doh_probe_run(
+    data: *Curl_easy,
+    dnstype: DNStype,
+    host: [*:0]const u8,
+    url: [*:0]const u8,
+    multi: *Curl_multi,
+    resolv_id: u32,
+    pmid: *u32,
+) CURLcode {
+    var result: CURLcode = CURLE_OK;
+    dohProbeRunInner(data, dnstype, host, url, multi, resolv_id, pmid, &result) catch return result;
     return CURLE_OK;
 }
 
-fn doh_probe_run_error(doh: *?*Curl_easy, doh_req: ?*doh_request, result: CURLcode) CURLcode {
-    _ = Curl_close(doh);
-    if (doh_req) |req|
-        doh_probe_dtor(null, 0, @ptrCast(req));
-    return result;
-}
-
-pub export fn Curl_doh(
+fn dohInner(
     data: *Curl_easy,
     async_ctx: *Curl_resolv_async,
-) callconv(.c) CURLcode {
+    out_rc: *CURLcode,
+) error{DohError}!void {
     if (async_ctx.doh != null) {
         Curl_doh_cleanup(data, async_ctx);
     }
 
     if (async_ctx.dns_queries == 0)
-        return CURLE_BAD_FUNCTION_ARGUMENT;
+        return dohFail(out_rc, CURLE_BAD_FUNCTION_ARGUMENT);
     if (use_httpsrr) {
         if ((async_ctx.dns_queries & CURL_DNSQ_ADDR) != 0 and
             (async_ctx.dns_queries & CURL_DNSQ_HTTPS) != 0)
-            return CURLE_BAD_FUNCTION_ARGUMENT;
+            return dohFail(out_rc, CURLE_BAD_FUNCTION_ARGUMENT);
     } else {
         if ((async_ctx.dns_queries & CURL_DNSQ_HTTPS) != 0)
-            return CURLE_NOT_BUILT_IN;
+            return dohFail(out_rc, CURLE_NOT_BUILT_IN);
     }
 
-    const raw_dohp = mem.calloc(1, @sizeOf(doh_probes)) orelse return CURLE_OUT_OF_MEMORY;
-    const dohp: *doh_probes = @ptrCast(@alignCast(raw_dohp));
-    async_ctx.doh = raw_dohp;
+    const dohp = mem.create(doh_probes) orelse return dohFail(out_rc, CURLE_OUT_OF_MEMORY);
+    async_ctx.doh = dohp;
+    errdefer Curl_doh_cleanup(data, async_ctx);
 
     for (0..DOH_SLOT_COUNT) |i| {
         dohp.probe_rc[i] = DOH_OK;
         dohp.probe_mid[i] = std.math.maxInt(u32);
     }
 
-    const peer = async_ctx.peer orelse {
-        Curl_doh_cleanup(data, async_ctx);
-        return CURLE_BAD_FUNCTION_ARGUMENT;
-    };
-    const doh_url = Curl_easy_str_doh(data) orelse {
-        Curl_doh_cleanup(data, async_ctx);
-        return CURLE_BAD_FUNCTION_ARGUMENT;
-    };
-    const multi = Curl_easy_get_multi(data) orelse {
-        Curl_doh_cleanup(data, async_ctx);
-        return CURLE_FAILED_INIT;
-    };
+    const peer = async_ctx.peer orelse return dohFail(out_rc, CURLE_BAD_FUNCTION_ARGUMENT);
+    const doh_url = Curl_easy_str_doh(data) orelse return dohFail(out_rc, CURLE_BAD_FUNCTION_ARGUMENT);
+    const multi = Curl_easy_get_multi(data) orelse return dohFail(out_rc, CURLE_FAILED_INIT);
 
     if ((async_ctx.dns_queries & CURL_DNSQ_AAAA) != 0) {
         const result = doh_probe_run(
@@ -928,10 +932,8 @@ pub export fn Curl_doh(
             async_ctx.id,
             &dohp.probe_mid[DOH_SLOT_IPV6],
         );
-        if (result != CURLE_OK) {
-            Curl_doh_cleanup(data, async_ctx);
-            return result;
-        }
+        if (result != CURLE_OK)
+            return dohFail(out_rc, result);
         async_ctx.queries_ongoing += 1;
     }
 
@@ -945,21 +947,17 @@ pub export fn Curl_doh(
             async_ctx.id,
             &dohp.probe_mid[DOH_SLOT_IPV4],
         );
-        if (result != CURLE_OK) {
-            Curl_doh_cleanup(data, async_ctx);
-            return result;
-        }
+        if (result != CURLE_OK)
+            return dohFail(out_rc, result);
         async_ctx.queries_ongoing += 1;
     }
 
     if (use_httpsrr and (async_ctx.dns_queries & CURL_DNSQ_HTTPS) != 0) {
         var qname: ?[*:0]u8 = null;
+        defer mem.destroy(qname);
         if (peer.port != PORT_HTTPS) {
-            qname = curl_maprintf("_%u._https.%s", @as(c_uint, peer.port), peer.hostname orelse "");
-            if (qname == null) {
-                Curl_doh_cleanup(data, async_ctx);
-                return CURLE_OUT_OF_MEMORY;
-            }
+            qname = curl_maprintf("_%u._https.%s", @as(c_uint, peer.port), peer.hostname orelse "") orelse
+                return dohFail(out_rc, CURLE_OUT_OF_MEMORY);
         }
         const result = doh_probe_run(
             data,
@@ -970,14 +968,18 @@ pub export fn Curl_doh(
             async_ctx.id,
             &dohp.probe_mid[DOH_SLOT_HTTPS_RR],
         );
-        mem.free(@ptrCast(qname));
-        if (result != CURLE_OK) {
-            Curl_doh_cleanup(data, async_ctx);
-            return result;
-        }
+        if (result != CURLE_OK)
+            return dohFail(out_rc, result);
         async_ctx.queries_ongoing += 1;
     }
+}
 
+pub export fn Curl_doh(
+    data: *Curl_easy,
+    async_ctx: *Curl_resolv_async,
+) callconv(.c) CURLcode {
+    var rc: CURLcode = CURLE_OK;
+    dohInner(data, async_ctx, &rc) catch return rc;
     return CURLE_OK;
 }
 
@@ -1035,8 +1037,7 @@ fn doh_store_https(doh: [*]const u8, index: usize, d: *dohentry, len: u16) DOHco
     if (comptime use_httpsrr) {
         if (d.numhttps_rrs < DOH_MAX_HTTPS) {
             const h = &d.https_rrs[@intCast(d.numhttps_rrs)];
-            const dup_raw = curlx_memdup(doh + index, len) orelse return DOH_OUT_OF_MEM;
-            h.val = @ptrCast(dup_raw);
+            h.val = curlx_memdup(doh + index, len) orelse return DOH_OUT_OF_MEM;
             h.len = len;
             d.numhttps_rrs += 1;
         }
@@ -1189,16 +1190,15 @@ pub export fn doh_resp_decode(
     return DOH_OK;
 }
 
-fn doh2ai(
+fn doh2aiInner(
     de: *const dohentry,
     hostname: [*:0]const u8,
     port: c_int,
-    aip: *?*Curl_addrinfo,
-) CURLcode {
+) error{OutOfMemory}!?*Curl_addrinfo {
     var prevai: ?*Curl_addrinfo = null;
     var firstai: ?*Curl_addrinfo = null;
+    errdefer netrc_addr_idn.Curl_freeaddrinfo(firstai);
     const hostlen = std.mem.len(hostname) + 1;
-    var result: CURLcode = CURLE_OK;
 
     const count: usize = @intCast(@max(de.numaddr, 0));
     for (0..count) |i| {
@@ -1206,17 +1206,14 @@ fn doh2ai(
         const ss_size: usize = if (is_v6) @sizeOf(SockaddrIn6) else @sizeOf(SockaddrIn);
         const addrtype: c_int = if (is_v6) AF_INET6 else AF_INET;
 
-        const raw = mem.calloc(1, @sizeOf(Curl_addrinfo) + ss_size + hostlen) orelse {
-            result = CURLE_OUT_OF_MEMORY;
-            break;
-        };
-        const ai: *Curl_addrinfo = @ptrCast(@alignCast(raw));
+        const raw = mem.calloc(1, @sizeOf(Curl_addrinfo) + ss_size + hostlen) orelse return error.OutOfMemory;
+        const ai = fromOpaque(Curl_addrinfo, raw).?;
         const addr_ptr = raw + @sizeOf(Curl_addrinfo);
         const cn_ptr = addr_ptr + ss_size;
 
-        ai.ai_addr = @ptrCast(addr_ptr);
-        ai.ai_canonname = @ptrCast(cn_ptr);
+        ai.ai_addr = addr_ptr;
         @memcpy(cn_ptr[0..hostlen], hostname[0..hostlen]);
+        ai.ai_canonname = cn_ptr[0 .. hostlen - 1 :0].ptr;
 
         if (firstai == null)
             firstai = ai;
@@ -1229,12 +1226,12 @@ fn doh2ai(
 
         const net_port = std.mem.nativeToBig(u16, @intCast(port & 0xffff));
         if (!is_v6) {
-            const addr: *SockaddrIn = @ptrCast(@alignCast(addr_ptr));
+            const addr = fromOpaque(SockaddrIn, addr_ptr).?;
             @memcpy(&addr.sin_addr, &de.addr[i].ip.v4);
             addr.sin_family = @intCast(addrtype);
             addr.sin_port = net_port;
         } else {
-            const addr6: *SockaddrIn6 = @ptrCast(@alignCast(addr_ptr));
+            const addr6 = fromOpaque(SockaddrIn6, addr_ptr).?;
             @memcpy(&addr6.sin6_addr, &de.addr[i].ip.v6);
             addr6.sin6_family = @intCast(addrtype);
             addr6.sin6_port = net_port;
@@ -1243,19 +1240,27 @@ fn doh2ai(
         prevai = ai;
     }
 
-    if (result != CURLE_OK) {
-        netrc_addr_idn.Curl_freeaddrinfo(firstai);
-        firstai = null;
-    }
-    aip.* = firstai;
-    return result;
+    return firstai;
+}
+
+fn doh2ai(
+    de: *const dohentry,
+    hostname: [*:0]const u8,
+    port: c_int,
+    aip: *?*Curl_addrinfo,
+) CURLcode {
+    aip.* = doh2aiInner(de, hostname, port) catch {
+        aip.* = null;
+        return CURLE_OUT_OF_MEMORY;
+    };
+    return CURLE_OK;
 }
 
 pub export fn de_cleanup(d: *dohentry) callconv(.c) void {
     if (comptime use_httpsrr) {
         const count: usize = @intCast(@max(d.numhttps_rrs, 0));
         for (0..count) |i| {
-            mem.free(@ptrCast(d.https_rrs[i].val));
+            mem.destroy(d.https_rrs[i].val);
             d.https_rrs[i].val = null;
         }
     }
@@ -1352,8 +1357,7 @@ fn doh_resp_decode_httpsrr_inner(
     const cp_start = cp_opt orelse return dohFail(rc_out, CURLE_BAD_FUNCTION_ARGUMENT);
     var rem_slice: []const u8 = cp_start[0..len_in];
 
-    const raw = mem.calloc(1, @sizeOf(vdns_core.Curl_https_rrinfo)) orelse return dohFail(rc_out, CURLE_OUT_OF_MEMORY);
-    const lhrr: *vdns_core.Curl_https_rrinfo = @ptrCast(@alignCast(raw));
+    const lhrr = mem.create(vdns_core.Curl_https_rrinfo) orelse return dohFail(rc_out, CURLE_OUT_OF_MEMORY);
     errdefer vdns_core.Curl_httpsrr_destroy(lhrr);
 
     var dnsname: ?[*:0]u8 = null;
@@ -1399,8 +1403,7 @@ fn doh_probe_done(doh: *Curl_easy, master: *Curl_easy, result_in: CURLcode) call
         Curl_meta_remove(doh, "ezm:doh-probe");
     }
 
-    const doh_req_raw = Curl_meta_get(doh, "ezm:doh-probe") orelse return;
-    const doh_req: *doh_request = @ptrCast(@alignCast(doh_req_raw));
+    const doh_req = metaGetTyped(doh_request, doh, "ezm:doh-probe") orelse return;
 
     const async_ctx = Curl_async_get(master, doh_req.resolv_id) orelse {
         if (trcDnsVerbose(master)) {
@@ -1408,8 +1411,7 @@ fn doh_probe_done(doh: *Curl_easy, master: *Curl_easy, result_in: CURLcode) call
         }
         return;
     };
-    const dohp_raw = async_ctx.doh orelse return;
-    const dohp: *doh_probes = @ptrCast(@alignCast(dohp_raw));
+    const dohp = fromOpaque(doh_probes, async_ctx.doh) orelse return;
 
     const doh_mid = Curl_easy_get_mid(doh);
     var slot: usize = 0;
@@ -1498,7 +1500,7 @@ fn doh_probe_done(doh: *Curl_easy, master: *Curl_easy, result_in: CURLcode) call
             netrc_addr_idn.Curl_freeaddrinfo(existing);
             dest.* = null;
         }
-        const peer: *Curl_peer = @ptrCast(async_ctx.peer.?);
+        const peer = fromOpaque(Curl_peer, async_ctx.peer).?;
         result = doh2ai(&de, peer.hostname, @intCast(peer.port), dest);
         if (result != CURLE_OK) {
             if (trcDnsVerbose(doh)) {
@@ -1545,8 +1547,7 @@ pub export fn Curl_doh_take_result(
     pdns: *?*Curl_dns_entry,
 ) callconv(.c) CURLcode {
     pdns.* = null;
-    const dohp_raw = async_ctx.doh orelse return CURLE_OUT_OF_MEMORY;
-    const dohp: *doh_probes = @ptrCast(@alignCast(dohp_raw));
+    const dohp = fromOpaque(doh_probes, async_ctx.doh) orelse return CURLE_OUT_OF_MEMORY;
     var result: CURLcode = CURLE_OK;
 
     async_ctx.setNegativeAnswer(false);
@@ -1556,7 +1557,7 @@ pub export fn Curl_doh_take_result(
         return result;
     }
 
-    const peer: *Curl_peer = @ptrCast(async_ctx.peer.?);
+    const peer = fromOpaque(Curl_peer, async_ctx.peer).?;
     if ((async_ctx.dns_queries & CURL_DNSQ_ADDR) != 0 and
         dohp.probe_mid[DOH_SLOT_IPV4] == std.math.maxInt(u32) and
         dohp.probe_mid[DOH_SLOT_IPV6] == std.math.maxInt(u32))
@@ -1593,7 +1594,7 @@ pub export fn Curl_doh_take_result(
                 dohp.probe_rc[DOH_SLOT_HTTPS_RR] == DOH_OK)
             {
                 vdns_core.Curl_httpsrr_trace(data, async_ctx.httpsrr);
-                dns = vdns_core.Curl_dnsc_mk_https(data, &async_ctx.httpsrr, @ptrCast(peer));
+                dns = vdns_core.Curl_dnsc_mk_https(data, &async_ctx.httpsrr, fromOpaque(vdns_core.CurlPeer, peer).?);
                 if (dns == null) {
                     Curl_doh_cleanup(data, async_ctx);
                     return CURLE_OUT_OF_MEMORY;
@@ -1626,8 +1627,7 @@ pub export fn Curl_doh_take_result(
 
 fn doh_close(data: ?*Curl_easy, async_ctx: ?*Curl_resolv_async) void {
     const a = async_ctx orelse return;
-    const dohp_raw = a.doh orelse return;
-    const doh: *doh_probes = @ptrCast(@alignCast(dohp_raw));
+    const doh = fromOpaque(doh_probes, a.doh) orelse return;
     const d = data orelse return;
     if (!goodEasyHandle(d))
         return;
@@ -1710,12 +1710,12 @@ pub export fn Curl_printable_address(
     const addr_raw = ai.ai_addr orelse return;
     switch (ai.ai_family) {
         AF_INET => {
-            const sa4: *const SockaddrIn = @ptrCast(@alignCast(addr_raw));
-            _ = curlx_time_net.curlx_inet_ntop(ai.ai_family, @ptrCast(&sa4.sin_addr), buf, bufsize);
+            const sa4 = fromOpaque(*const SockaddrIn, addr_raw).?;
+            _ = curlx_time_net.curlx_inet_ntop(ai.ai_family, &sa4.sin_addr, buf, bufsize);
         },
         AF_INET6 => {
-            const sa6: *const SockaddrIn6 = @ptrCast(@alignCast(addr_raw));
-            _ = curlx_time_net.curlx_inet_ntop(ai.ai_family, @ptrCast(&sa6.sin6_addr), buf, bufsize);
+            const sa6 = fromOpaque(*const SockaddrIn6, addr_raw).?;
+            _ = curlx_time_net.curlx_inet_ntop(ai.ai_family, &sa6.sin6_addr, buf, bufsize);
         },
         else => {},
     }
@@ -1728,11 +1728,11 @@ fn get_localhost6(port: u16, name: [*:0]const u8) ?*Curl_addrinfo {
     var ipv6: [16]u8 = undefined;
 
     const raw = mem.calloc(1, @sizeOf(Curl_addrinfo) + ss_size + hostlen + 1) orelse return null;
-    const ca: *Curl_addrinfo = @ptrCast(@alignCast(raw));
+    const ca = fromOpaque(Curl_addrinfo, raw).?;
 
     sa6.sin6_family = @intCast(AF_INET6);
     sa6.sin6_port = std.mem.nativeToBig(u16, port);
-    _ = curlx_time_net.curlx_inet_pton(AF_INET6, "::1", @ptrCast(&ipv6));
+    _ = curlx_time_net.curlx_inet_pton(AF_INET6, "::1", &ipv6);
     @memcpy(&sa6.sin6_addr, &ipv6);
 
     const addr_ptr = raw + @sizeOf(Curl_addrinfo);
@@ -1744,10 +1744,10 @@ fn get_localhost6(port: u16, name: [*:0]const u8) ?*Curl_addrinfo {
     ca.ai_protocol = IPPROTO_TCP;
     ca.ai_addrlen = @intCast(ss_size);
     ca.ai_next = null;
-    ca.ai_addr = @ptrCast(addr_ptr);
+    ca.ai_addr = addr_ptr;
     @memcpy(addr_ptr[0..ss_size], std.mem.asBytes(&sa6));
-    ca.ai_canonname = @ptrCast(cn_ptr);
     primitives.curlx_strcopy(cn_ptr, hostlen + 1, name, hostlen);
+    ca.ai_canonname = cn_ptr[0..hostlen :0].ptr;
     return ca;
 }
 
@@ -1759,12 +1759,12 @@ fn get_localhost(port: u16, name: [*:0]const u8) ?*Curl_addrinfo {
 
     sa.sin_family = @intCast(AF_INET);
     sa.sin_port = std.mem.nativeToBig(u16, port);
-    if (curlx_time_net.curlx_inet_pton(AF_INET, "127.0.0.1", @ptrCast(&ipv4)) < 1)
+    if (curlx_time_net.curlx_inet_pton(AF_INET, "127.0.0.1", &ipv4) < 1)
         return null;
     @memcpy(&sa.sin_addr, &ipv4);
 
     const raw = mem.calloc(1, @sizeOf(Curl_addrinfo) + ss_size + hostlen + 1) orelse return null;
-    const ca: *Curl_addrinfo = @ptrCast(@alignCast(raw));
+    const ca = fromOpaque(Curl_addrinfo, raw).?;
     const addr_ptr = raw + @sizeOf(Curl_addrinfo);
     const cn_ptr = addr_ptr + ss_size;
 
@@ -1773,10 +1773,10 @@ fn get_localhost(port: u16, name: [*:0]const u8) ?*Curl_addrinfo {
     ca.ai_socktype = SOCK_STREAM;
     ca.ai_protocol = IPPROTO_TCP;
     ca.ai_addrlen = @intCast(ss_size);
-    ca.ai_addr = @ptrCast(addr_ptr);
+    ca.ai_addr = addr_ptr;
     @memcpy(addr_ptr[0..ss_size], std.mem.asBytes(&sa));
-    ca.ai_canonname = @ptrCast(cn_ptr);
     primitives.curlx_strcopy(cn_ptr, hostlen + 1, name, hostlen);
+    ca.ai_canonname = cn_ptr[0..hostlen :0].ptr;
 
     const ca6 = get_localhost6(port, name) orelse return ca;
     ca6.ai_next = ca;
@@ -1816,8 +1816,8 @@ pub export fn Curl_probeipv6(multi: *Curl_multi) callconv(.c) CURLcode {
 pub export fn Curl_host_is_ipnum(hostname: [*:0]const u8) callconv(.c) bool {
     var in4: [4]u8 = undefined;
     var in6: [16]u8 = undefined;
-    if (curlx_time_net.curlx_inet_pton(AF_INET, hostname, @ptrCast(&in4)) > 0 or
-        curlx_time_net.curlx_inet_pton(AF_INET6, hostname, @ptrCast(&in6)) > 0)
+    if (curlx_time_net.curlx_inet_pton(AF_INET, hostname, &in4) > 0 or
+        curlx_time_net.curlx_inet_pton(AF_INET6, hostname, &in6) > 0)
     {
         return true;
     }
@@ -1873,11 +1873,10 @@ fn hostip_async_new(
     timeout_ms: timediff_t,
 ) ?*Curl_resolv_async {
     const multi = Curl_easy_get_multi(data) orelse return null;
-    const raw = mem.calloc(1, @sizeOf(Curl_resolv_async)) orelse return null;
-    const async_ctx: *Curl_resolv_async = @ptrCast(@alignCast(raw));
+    const async_ctx = mem.create(Curl_resolv_async) orelse return null;
 
     async_ctx.id = Curl_multi_next_resolv_id(multi);
-    altsvc_hsts_peer.Curl_peer_link(@ptrCast(&async_ctx.peer), peer);
+    altsvc_hsts_peer.Curl_peer_link(fromOpaque(?*Curl_peer, &async_ctx.peer).?, peer);
     async_ctx.dns_queries = dns_queries;
     async_ctx.transport = transport;
     async_ctx.setForProxy(for_proxy);
@@ -2260,15 +2259,14 @@ pub export fn Curl_resolv_blocking(
 
     var result = altsvc_hsts_peer.Curl_peer_create(
         data,
-        @ptrCast(@alignCast(Curl_easy_get_conn_scheme(data))),
+        fromOpaque(*const altsvc_hsts_peer.CurlScheme, Curl_easy_get_conn_scheme(data)),
         hostname,
         port,
         &peer,
     );
-    if (result != CURLE_OK) {
-        altsvc_hsts_peer.Curl_peer_unlink(&peer);
+    defer altsvc_hsts_peer.Curl_peer_unlink(&peer);
+    if (result != CURLE_OK)
         return result;
-    }
 
     result = hostip_resolv(data, dns_queries, peer.?, transport, false, 0, false, &resolv_id, pdns);
     if (result == CURLE_AGAIN) {
@@ -2276,7 +2274,6 @@ pub export fn Curl_resolv_blocking(
         Curl_resolv_destroy(data, resolv_id);
     }
 
-    altsvc_hsts_peer.Curl_peer_unlink(&peer);
     return result;
 }
 
@@ -2354,7 +2351,7 @@ pub export fn Curl_resolv_take_result(
     pdns: *?*Curl_dns_entry,
 ) callconv(.c) CURLcode {
     const async_ctx = Curl_async_get(data, resolv_id) orelse return CURLE_FAILED_INIT;
-    const peer: *const Curl_peer = @ptrCast(async_ctx.peer.?);
+    const peer = fromOpaque(*const Curl_peer, async_ctx.peer).?;
 
     var result = Curl_dnscache_get(data, async_ctx.dns_queries, peer, pdns);
     if (pdns.* != null) {
@@ -2491,7 +2488,10 @@ const win_wsa = if (builtin.os.tag == .windows) struct {
 
 fn registerSslTrcCfts() void {
     if (backend_options.ssl != .none) {
-        cookie_getinfo_trc.Curl_trc_register_ssl_cfts(@ptrCast(&Curl_cft_ssl), @ptrCast(&Curl_cft_ssl_proxy));
+        cookie_getinfo_trc.Curl_trc_register_ssl_cfts(
+            mem.toRawPtr(&Curl_cft_ssl),
+            mem.toRawPtr(&Curl_cft_ssl_proxy),
+        );
     } else {
         cookie_getinfo_trc.Curl_trc_register_ssl_cfts(null, null);
     }
@@ -2528,7 +2528,7 @@ fn global_init(flags: c_long, memoryfuncs: bool) CURLcode {
     if (builtin.os.tag == .windows) {
         if ((flags & CURL_GLOBAL_WINSOCK) != 0) {
             var wsa_buf: [512]u8 align(8) = undefined;
-            if (win_wsa.WSAStartup(0x0202, @ptrCast(&wsa_buf)) != 0)
+            if (win_wsa.WSAStartup(0x0202, &wsa_buf) != 0)
                 return global_init_fail();
             winsock_initialized = true;
         }
@@ -2742,13 +2742,13 @@ fn easy_perform(data_opt: ?*Curl_easy, events: bool) CURLcode {
 
     Curl_easy_set_multi_easy(data, multi);
 
-    Curl_easy_sigpipe_ignore(data, @ptrCast(&sigpipe_ctx));
+    Curl_easy_sigpipe_ignore(data, &sigpipe_ctx);
 
     const result = if (events) CURLE_NOT_BUILT_IN else easy_transfer(multi);
 
     _ = Curl_multi_remove_handle(multi, data);
 
-    Curl_easy_sigpipe_restore(@ptrCast(&sigpipe_ctx));
+    Curl_easy_sigpipe_restore(&sigpipe_ctx);
 
     return result;
 }
@@ -2782,9 +2782,9 @@ pub export fn curl_easy_cleanup(curl: ?*Curl_easy) callconv(.c) void {
         var data = curl;
         var sigpipe_ctx: Curl_sigpipe_buf = .{};
         if (data) |d| {
-            Curl_easy_sigpipe_ignore(d, @ptrCast(&sigpipe_ctx));
+            Curl_easy_sigpipe_ignore(d, &sigpipe_ctx);
             _ = Curl_close(&data);
-            Curl_easy_sigpipe_restore(@ptrCast(&sigpipe_ctx));
+            Curl_easy_sigpipe_restore(&sigpipe_ctx);
         }
     }
     Curl_eapi_leave(&guard);
@@ -2856,7 +2856,7 @@ fn dupset(dst: *Curl_easy, src: *const Curl_easy) CURLcode {
     if (Curl_easy_get_mimepostp(src)) |src_mp| {
         const mp_size = Curl_easy_mimepart_sizeof();
         const raw_mp = mem.malloc(mp_size) orelse return CURLE_OUT_OF_MEMORY;
-        const dst_mp: *protocol_version_mime.curl_mimepart = @ptrCast(@alignCast(raw_mp));
+        const dst_mp = fromOpaque(protocol_version_mime.curl_mimepart, raw_mp).?;
         Curl_easy_set_mimepostp(dst, dst_mp);
         protocol_version_mime.Curl_mime_initpart(dst_mp);
         result = protocol_version_mime.Curl_mime_duppart(dst, dst_mp, src_mp);
@@ -2872,105 +2872,102 @@ fn dupeasy_meta_freeentry(p: ?*anyopaque) callconv(.c) void {
     _ = p;
 }
 
+fn duphandleInner(data: *const Curl_easy) error{DupFailed}!*Curl_easy {
+    const raw = mem.calloc(1, Curl_easy_sizeof()) orelse return error.DupFailed;
+    const out = fromOpaque(Curl_easy, raw).?;
+    errdefer {
+        if (Curl_easy_get_cookies(out)) |ci| {
+            mem.destroy(ci);
+        }
+        containers.curlx_dyn_free(Curl_easy_get_headerb(out));
+        altsvc_hsts_peer.Curl_altsvc_cleanup(Curl_easy_get_asi_slot(out));
+        altsvc_hsts_peer.Curl_hsts_cleanup(Curl_easy_get_hsts_slot(out));
+        Curl_freeset(out);
+        curlx_memzero(out, Curl_zig_url_easy_sizeof());
+        mem.destroy(out);
+    }
+
+    Curl_easy_dup_copy_buffer_size(out, data);
+
+    Curl_hash_init(
+        Curl_easy_get_meta_hash(out).?,
+        23,
+        collections.CURL_HASH_TYPE_BYTES,
+        dupeasy_meta_freeentry,
+    );
+    containers.curlx_dyn_init(Curl_easy_get_headerb(out), CURL_MAX_HTTP_HEADER);
+    Curl_bufref_init(Curl_easy_get_state_url(out));
+    Curl_bufref_init(Curl_easy_get_state_referer(out));
+    netrc_addr_idn.Curl_netrc_init(Curl_easy_get_state_netrc(out));
+
+    Curl_easy_dup_init_ids(out);
+
+    if (Curl_easy_get_state_httphdrs(out)) |httphdrs| {
+        containers.Curl_llist_init(httphdrs, null);
+    }
+    _ = Curl_initinfo(out);
+
+    if (dupset(out, data) != CURLE_OK)
+        return error.DupFailed;
+
+    Curl_easy_dup_copy_progress(out, data);
+
+    if (Curl_easy_has_cookie_engine(data)) {
+        const ci = cookie_getinfo_trc.Curl_cookie_init() orelse return error.DupFailed;
+        Curl_easy_set_cookies_enabled(out, ci);
+    }
+
+    if (Curl_easy_get_state_cookielist(data)) |src_cl| {
+        const dup_cl = Curl_slist_duplicate(src_cl) orelse return error.DupFailed;
+        Curl_easy_set_state_cookielist(out, dup_cl);
+    }
+
+    const data_url = Curl_easy_get_state_url(@constCast(data));
+    if (Curl_bufref_ptr(data_url)) |url_ptr| {
+        const out_url = Curl_easy_get_state_url(out);
+        if (Curl_bufref_memdup0(out_url, url_ptr, Curl_bufref_len(data_url)) != CURLE_OK)
+            return error.DupFailed;
+    }
+
+    const data_ref = Curl_easy_get_state_referer(@constCast(data));
+    if (Curl_bufref_ptr(data_ref)) |ref_ptr| {
+        const out_ref = Curl_easy_get_state_referer(out);
+        if (Curl_bufref_memdup0(out_ref, ref_ptr, Curl_bufref_len(data_ref)) != CURLE_OK)
+            return error.DupFailed;
+    }
+
+    if (Curl_easy_get_asi(data) != null) {
+        const asi = altsvc_hsts_peer.Curl_altsvc_init() orelse return error.DupFailed;
+        Curl_easy_get_asi_slot(out).* = asi;
+        if (Curl_easy_str_altsvc(out)) |str| {
+            _ = altsvc_hsts_peer.Curl_altsvc_load(asi, str);
+        }
+    }
+
+    if (Curl_easy_get_hsts(data)) |src_hsts| {
+        const hsts = altsvc_hsts_peer.Curl_hsts_init() orelse return error.DupFailed;
+        Curl_easy_get_hsts_slot(out).* = hsts;
+        if (Curl_easy_str_hsts(out)) |str| {
+            _ = altsvc_hsts_peer.Curl_hsts_loadfile(out, hsts, str);
+        }
+        _ = Curl_easy_hsts_loadcb(out, hsts);
+        if (altsvc_hsts_peer.Curl_hsts_copy(hsts, src_hsts) != CURLE_OK)
+            return error.DupFailed;
+    }
+
+    Curl_easy_set_magic(out, CURLEASY_MAGIC_NUMBER);
+    return out;
+}
+
 pub export fn curl_easy_duphandle(curl: ?*Curl_easy) callconv(.c) ?*Curl_easy {
     var guard: Curl_eapi_guard = .{ .data = null, .depth = 0 };
     var outcurl: ?*Curl_easy = null;
 
     if (Curl_eapi_enter(&guard, curl, CURL_EAPI_FN_easy_duphandle, null)) {
-        const data = curl.?;
-        const raw = mem.calloc(1, Curl_easy_sizeof()) orelse {
-            Curl_eapi_leave(&guard);
-            return null;
-        };
-        const out: *Curl_easy = @ptrCast(raw);
-        outcurl = out;
-
-        Curl_easy_dup_copy_buffer_size(out, data);
-
-        Curl_hash_init(
-            Curl_easy_get_meta_hash(out).?,
-            23,
-            collections.CURL_HASH_TYPE_BYTES,
-            dupeasy_meta_freeentry,
-        );
-        containers.curlx_dyn_init(Curl_easy_get_headerb(out), CURL_MAX_HTTP_HEADER);
-        Curl_bufref_init(Curl_easy_get_state_url(out));
-        Curl_bufref_init(Curl_easy_get_state_referer(out));
-        netrc_addr_idn.Curl_netrc_init(Curl_easy_get_state_netrc(out));
-
-        Curl_easy_dup_init_ids(out);
-
-        if (Curl_easy_get_state_httphdrs(out)) |httphdrs| {
-            containers.Curl_llist_init(httphdrs, null);
-        }
-        _ = Curl_initinfo(out);
-
-        if (dupset(out, data) != CURLE_OK)
-            return duphandle_fail(out, &guard);
-
-        Curl_easy_dup_copy_progress(out, data);
-
-        if (Curl_easy_has_cookie_engine(data)) {
-            const ci = cookie_getinfo_trc.Curl_cookie_init() orelse return duphandle_fail(out, &guard);
-            Curl_easy_set_cookies_enabled(out, ci);
-        }
-
-        if (Curl_easy_get_state_cookielist(data)) |src_cl| {
-            const dup_cl = Curl_slist_duplicate(src_cl) orelse return duphandle_fail(out, &guard);
-            Curl_easy_set_state_cookielist(out, dup_cl);
-        }
-
-        const data_url = Curl_easy_get_state_url(data);
-        if (Curl_bufref_ptr(data_url)) |url_ptr| {
-            const out_url = Curl_easy_get_state_url(out);
-            if (Curl_bufref_memdup0(out_url, url_ptr, Curl_bufref_len(data_url)) != CURLE_OK)
-                return duphandle_fail(out, &guard);
-        }
-
-        const data_ref = Curl_easy_get_state_referer(data);
-        if (Curl_bufref_ptr(data_ref)) |ref_ptr| {
-            const out_ref = Curl_easy_get_state_referer(out);
-            if (Curl_bufref_memdup0(out_ref, ref_ptr, Curl_bufref_len(data_ref)) != CURLE_OK)
-                return duphandle_fail(out, &guard);
-        }
-
-        if (Curl_easy_get_asi(data) != null) {
-            const asi = altsvc_hsts_peer.Curl_altsvc_init() orelse return duphandle_fail(out, &guard);
-            Curl_easy_get_asi_slot(out).* = asi;
-            if (Curl_easy_str_altsvc(out)) |str| {
-                _ = altsvc_hsts_peer.Curl_altsvc_load(asi, str);
-            }
-        }
-
-        if (Curl_easy_get_hsts(data)) |src_hsts| {
-            const hsts = altsvc_hsts_peer.Curl_hsts_init() orelse return duphandle_fail(out, &guard);
-            Curl_easy_get_hsts_slot(out).* = hsts;
-            if (Curl_easy_str_hsts(out)) |str| {
-                _ = altsvc_hsts_peer.Curl_hsts_loadfile(out, hsts, str);
-            }
-            _ = Curl_easy_hsts_loadcb(out, hsts);
-            if (altsvc_hsts_peer.Curl_hsts_copy(hsts, src_hsts) != CURLE_OK)
-                return duphandle_fail(out, &guard);
-        }
-
-        Curl_easy_set_magic(out, CURLEASY_MAGIC_NUMBER);
+        outcurl = duphandleInner(curl.?) catch null;
     }
     Curl_eapi_leave(&guard);
     return outcurl;
-}
-
-fn duphandle_fail(out: *Curl_easy, guard: *Curl_eapi_guard) ?*Curl_easy {
-    if (Curl_easy_get_cookies(out)) |ci| {
-        mem.free(@ptrCast(ci));
-    }
-    containers.curlx_dyn_free(Curl_easy_get_headerb(out));
-    altsvc_hsts_peer.Curl_altsvc_cleanup(Curl_easy_get_asi_slot(out));
-    altsvc_hsts_peer.Curl_hsts_cleanup(Curl_easy_get_hsts_slot(out));
-    Curl_freeset(out);
-    curlx_memzero(@ptrCast(out), Curl_zig_url_easy_sizeof());
-    mem.free(@ptrCast(out));
-    Curl_eapi_leave(guard);
-    return null;
 }
 
 pub export fn curl_easy_reset(curl: ?*Curl_easy) callconv(.c) void {
@@ -3131,9 +3128,9 @@ pub export fn Curl_senddata(
     if (Curl_vdns_data_conn(d) == null)
         Curl_attach_connection(d, c.?, true);
 
-    Curl_easy_sigpipe_ignore(d, @ptrCast(&sigpipe_ctx));
+    Curl_easy_sigpipe_ignore(d, &sigpipe_ctx);
     result = Curl_conn_send(d, FIRSTSOCKET, buffer, buflen, false, n);
-    Curl_easy_sigpipe_restore(@ptrCast(&sigpipe_ctx));
+    Curl_easy_sigpipe_restore(&sigpipe_ctx);
 
     if (result != CURLE_OK and result != CURLE_AGAIN)
         return CURLE_SEND_ERROR;
@@ -3209,8 +3206,8 @@ pub export fn Curl_meta_set(
 ) callconv(.c) CURLcode {
     const key_len = std.mem.len(key);
     const mh = Curl_easy_get_meta_hash(data).?;
-    if (Curl_hash_add2(mh, @ptrCast(key), key_len + 1, meta_data, meta_dtor) == null) {
-        meta_dtor(@ptrCast(key), key_len + 1, meta_data);
+    if (Curl_hash_add2(mh, key, key_len + 1, meta_data, meta_dtor) == null) {
+        meta_dtor(key, key_len + 1, meta_data);
         return CURLE_OUT_OF_MEMORY;
     }
     return CURLE_OK;
@@ -3218,17 +3215,73 @@ pub export fn Curl_meta_set(
 
 pub export fn Curl_meta_remove(data: *Curl_easy, key: [*:0]const u8) callconv(.c) void {
     const key_len = std.mem.len(key);
-    _ = Curl_hash_delete(Curl_easy_get_meta_hash(data).?, @ptrCast(key), key_len + 1);
+    _ = Curl_hash_delete(Curl_easy_get_meta_hash(data).?, key, key_len + 1);
 }
 
 pub export fn Curl_meta_get(data: *Curl_easy, key: [*:0]const u8) callconv(.c) ?*anyopaque {
     const key_len = std.mem.len(key);
-    return Curl_hash_pick(Curl_easy_get_meta_hash(data), @ptrCast(key), key_len + 1);
+    return Curl_hash_pick(Curl_easy_get_meta_hash(data), key, key_len + 1);
 }
 
 pub export fn Curl_meta_reset(data: *Curl_easy) callconv(.c) void {
     Curl_hash_clean(Curl_easy_get_meta_hash(data));
 }
+
+inline fn toEasyPtr(data: anytype) ?*Curl_easy {
+    const D = @TypeOf(data);
+    if (D == *Curl_easy or D == ?*Curl_easy) return data;
+    if (D == *const Curl_easy or D == ?*const Curl_easy) return @constCast(data);
+    return fromOpaque(Curl_easy, @constCast(data));
+}
+
+inline fn toConnPtr(conn: anytype) ?*connectdata {
+    const C = @TypeOf(conn);
+    if (C == *connectdata or C == ?*connectdata) return conn;
+    if (C == *const connectdata or C == ?*const connectdata) return @constCast(conn);
+    return fromOpaque(connectdata, @constCast(conn));
+}
+
+inline fn toMetaKey(key: anytype) [*:0]const u8 {
+    const K = @TypeOf(key);
+    if (K == c_uint or K == comptime_int) return @ptrFromInt(@as(usize, @intCast(key)));
+    return key;
+}
+
+pub fn metaDtorTyped(comptime T: type) Curl_meta_dtor {
+    const S = struct {
+        fn dtor(key: ?*const anyopaque, key_len: usize, meta_data: ?*anyopaque) callconv(.c) void {
+            _ = key;
+            _ = key_len;
+            mem.freeTyped(fromOpaque(T, meta_data));
+        }
+    };
+    return &S.dtor;
+}
+pub const Curl_meta_dtor_typed = metaDtorTyped;
+
+pub fn metaGetTyped(comptime T: type, data: anytype, key: anytype) ?*T {
+    const d = toEasyPtr(data) orelse return null;
+    return fromOpaque(T, Curl_meta_get(d, toMetaKey(key)));
+}
+pub const Curl_meta_get_typed = metaGetTyped;
+
+pub fn connMetaGetTyped(comptime T: type, conn: anytype, key: anytype) ?*T {
+    const c = toConnPtr(conn) orelse return null;
+    return fromOpaque(T, Curl_conn_meta_get(c, toMetaKey(key)));
+}
+pub const Curl_conn_meta_get_typed = connMetaGetTyped;
+
+pub fn metaSetTyped(comptime T: type, data: anytype, key: anytype, item: *T) CURLcode {
+    const d = toEasyPtr(data) orelse return CURLE_BAD_FUNCTION_ARGUMENT;
+    return Curl_meta_set(d, toMetaKey(key), item, metaDtorTyped(T));
+}
+pub const Curl_meta_set_typed = metaSetTyped;
+
+pub fn connMetaSetTyped(comptime T: type, conn: anytype, key: anytype, item: *T) CURLcode {
+    const c = toConnPtr(conn) orelse return CURLE_BAD_FUNCTION_ARGUMENT;
+    return Curl_conn_meta_set(c, toMetaKey(key), item, metaDtorTyped(T));
+}
+pub const Curl_conn_meta_set_typed = connMetaSetTyped;
 
 // ============================================================================
 // Unit Tests
@@ -3408,8 +3461,7 @@ test "Curl_resolv_query_str, Curl_host_is_ipnum, and Curl_printable_address" {
 fn testMetaDtor(key: ?*const anyopaque, key_len: usize, meta_data: ?*anyopaque) callconv(.c) void {
     _ = key;
     _ = key_len;
-    if (meta_data) |p| {
-        const flag: *bool = @ptrCast(@alignCast(p));
+    if (fromOpaque(bool, meta_data)) |flag| {
         flag.* = true;
     }
 }
@@ -3424,12 +3476,20 @@ test "curl_easy_init, curl_easy_duphandle, curl_easy_reset, and Curl_meta_*" {
     var dtor_called = false;
     try std.testing.expectEqual(
         CURLE_OK,
-        Curl_meta_set(easy, "test-meta-key", @ptrCast(&dtor_called), testMetaDtor),
+        Curl_meta_set(easy, "test-meta-key", &dtor_called, testMetaDtor),
     );
-    try std.testing.expectEqual(@as(?*anyopaque, @ptrCast(&dtor_called)), Curl_meta_get(easy, "test-meta-key"));
+    try std.testing.expectEqual(@as(?*bool, &dtor_called), metaGetTyped(bool, easy, "test-meta-key"));
     Curl_meta_remove(easy, "test-meta-key");
     try std.testing.expect(dtor_called);
     try std.testing.expectEqual(@as(?*anyopaque, null), Curl_meta_get(easy, "test-meta-key"));
+
+    const typed_item = mem.create(u64) orelse return error.OutOfMemory;
+    typed_item.* = 0x1122334455667788;
+    try std.testing.expectEqual(CURLE_OK, metaSetTyped(u64, easy, "typed-meta-key", typed_item));
+    try std.testing.expectEqual(@as(?*u64, typed_item), Curl_meta_get_typed(u64, easy, "typed-meta-key"));
+    try std.testing.expectEqual(@as(u64, 0x1122334455667788), metaGetTyped(u64, easy, "typed-meta-key").?.*);
+    Curl_meta_remove(easy, "typed-meta-key");
+    try std.testing.expectEqual(@as(?*u64, null), metaGetTyped(u64, easy, "typed-meta-key"));
 
     const dup = curl_easy_duphandle(easy) orelse return error.OutOfMemory;
     defer curl_easy_cleanup(dup);

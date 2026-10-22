@@ -15,25 +15,25 @@ pub const CURLE_TOO_LARGE: CURLcode = 100;
 // lib/curlx/strdup.c
 // ============================================================================
 
-export fn curlx_memdup(src: ?[*]const u8, length: usize) callconv(.c) ?*anyopaque {
-    const buffer = mem.malloc(length) orelse return null;
+export fn curlx_memdup(src: ?[*]const u8, length: usize) callconv(.c) ?[*]u8 {
+    const buffer = mem.allocMany(u8, length) orelse return null;
     if (length > 0) {
         if (src) |s| {
             @memcpy(buffer[0..length], s[0..length]);
         }
     }
-    return @ptrCast(buffer);
+    return buffer;
 }
 
-export fn curlx_memdup0(src: ?[*]const u8, length: usize) callconv(.c) ?*anyopaque {
+export fn curlx_memdup0(src: ?[*]const u8, length: usize) callconv(.c) ?[*:0]u8 {
     if (length >= std.math.maxInt(usize)) return null;
-    const buf = mem.malloc(length + 1) orelse return null;
+    const buf = mem.allocMany(u8, length + 1) orelse return null;
     if (length > 0) {
         const s = src orelse unreachable;
         @memcpy(buf[0..length], s[0..length]);
     }
     buf[length] = 0;
-    return @ptrCast(buf);
+    return buf[0..length :0].ptr;
 }
 
 export fn curlx_wcsdup(src: [*:0]const u16) callconv(.c) ?[*:0]u16 {
@@ -41,9 +41,9 @@ export fn curlx_wcsdup(src: [*:0]const u16) callconv(.c) ?[*:0]u16 {
     if (length > (std.math.maxInt(usize) / @sizeOf(u16)) - 1) {
         return null;
     }
-    const byte_len = (length + 1) * @sizeOf(u16);
-    const raw = curlx_memdup(@ptrCast(src), byte_len) orelse return null;
-    return @ptrCast(@alignCast(raw));
+    const dst = mem.allocMany(u16, length + 1) orelse return null;
+    @memcpy(dst[0 .. length + 1], src[0 .. length + 1]);
+    return dst[0..length :0].ptr;
 }
 
 export fn curlx_memzero_low(buf: ?[*]u8, size: usize) callconv(.c) void {
@@ -415,26 +415,19 @@ const decodetable = [256]u8{
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 };
 
-pub export fn curlx_base64_decode(
-    src_in: [*:0]const u8,
-    outptr: *?[*:0]u8,
-    outlen: *usize,
-) callconv(.c) CURLcode {
-    outptr.* = null;
-    outlen.* = 0;
-
+fn base64DecodeInner(src_in: [*:0]const u8) error{ OutOfMemory, BadContentEncoding }![:0]u8 {
     var src: [*]const u8 = src_in;
     const srclen = std.mem.len(src_in);
 
     if (srclen == 0 or (srclen % 4) != 0) {
-        return CURLE_BAD_CONTENT_ENCODING;
+        return error.BadContentEncoding;
     }
 
     var padding: usize = 0;
     while (src[srclen - 1 - padding] == '=') {
         padding += 1;
         if (padding > 2) {
-            return CURLE_BAD_CONTENT_ENCODING;
+            return error.BadContentEncoding;
         }
     }
 
@@ -442,7 +435,8 @@ pub export fn curlx_base64_decode(
     const full_quantums = num_quantums - (if (padding != 0) @as(usize, 1) else 0);
     const rawlen = (num_quantums * 3) - padding;
 
-    const newstr = mem.malloc(rawlen + 1) orelse return CURLE_OUT_OF_MEMORY;
+    const newstr = mem.allocMany(u8, rawlen + 1) orelse return error.OutOfMemory;
+    errdefer mem.destroy(newstr);
     var pos: [*]u8 = newstr;
 
     var i: usize = 0;
@@ -452,8 +446,7 @@ pub export fn curlx_base64_decode(
         const v2 = decodetable[src[2]];
         const v3 = decodetable[src[3]];
         if (((v0 | v1 | v2 | v3) & 0x80) != 0) {
-            mem.free(newstr);
-            return CURLE_BAD_CONTENT_ENCODING;
+            return error.BadContentEncoding;
         }
         pos[0] = (v0 << 2) | (v1 >> 4);
         pos[1] = (v1 << 4) | (v2 >> 2);
@@ -472,15 +465,13 @@ pub export fn curlx_base64_decode(
                 src += 1;
                 padc += 1;
                 if (padc > padding) {
-                    mem.free(newstr);
-                    return CURLE_BAD_CONTENT_ENCODING;
+                    return error.BadContentEncoding;
                 }
             } else {
                 const val = decodetable[src[0]];
                 src += 1;
                 if (val == 0xff) {
-                    mem.free(newstr);
-                    return CURLE_BAD_CONTENT_ENCODING;
+                    return error.BadContentEncoding;
                 }
                 x = (x << 6) | val;
             }
@@ -493,8 +484,23 @@ pub export fn curlx_base64_decode(
     }
 
     pos[0] = 0;
-    outptr.* = @ptrCast(newstr);
-    outlen.* = rawlen;
+    return newstr[0..rawlen :0];
+}
+
+pub export fn curlx_base64_decode(
+    src_in: [*:0]const u8,
+    outptr: *?[*:0]u8,
+    outlen: *usize,
+) callconv(.c) CURLcode {
+    outptr.* = null;
+    outlen.* = 0;
+
+    const decoded = base64DecodeInner(src_in) catch |err| return switch (err) {
+        error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+        error.BadContentEncoding => CURLE_BAD_CONTENT_ENCODING,
+    };
+    outptr.* = decoded.ptr;
+    outlen.* = decoded.len;
     return CURLE_OK;
 }
 
@@ -557,8 +563,9 @@ fn base64Encode(
     }
 
     output[0] = 0;
-    outptr.* = @ptrCast(base64data);
-    outlen.* = @intFromPtr(output) - @intFromPtr(base64data);
+    const encoded_len = @intFromPtr(output) - @intFromPtr(base64data);
+    outptr.* = base64data[0..encoded_len :0].ptr;
+    outlen.* = encoded_len;
     return CURLE_OK;
 }
 
@@ -586,19 +593,16 @@ export fn curlx_base64url_encode(
 
 test "curlx_memdup, curlx_memdup0, curlx_wcsdup, curlx_memzero, curlx_strzero" {
     const src = "abcdef";
-    const dup_raw = curlx_memdup(src.ptr, src.len) orelse return error.OutOfMemory;
-    defer mem.free(dup_raw);
-    const dup_bytes: [*]u8 = @ptrCast(dup_raw);
+    const dup_bytes = curlx_memdup(src.ptr, src.len) orelse return error.OutOfMemory;
+    defer mem.free(dup_bytes);
     try std.testing.expectEqualStrings("abcdef", dup_bytes[0..src.len]);
 
-    const dup0_raw = curlx_memdup0(src.ptr, 3) orelse return error.OutOfMemory;
-    defer mem.free(dup0_raw);
-    const dup0_str: [*:0]u8 = @ptrCast(dup0_raw);
+    const dup0_str = curlx_memdup0(src.ptr, 3) orelse return error.OutOfMemory;
+    defer mem.free(dup0_str);
     try std.testing.expectEqualStrings("abc", std.mem.span(dup0_str));
 
-    const empty0_raw = curlx_memdup0(null, 0) orelse return error.OutOfMemory;
-    defer mem.free(empty0_raw);
-    const empty0_str: [*:0]u8 = @ptrCast(empty0_raw);
+    const empty0_str = curlx_memdup0(null, 0) orelse return error.OutOfMemory;
+    defer mem.free(empty0_str);
     try std.testing.expectEqualStrings("", std.mem.span(empty0_str));
 
     try std.testing.expect(curlx_memdup0(src.ptr, std.math.maxInt(usize)) == null);

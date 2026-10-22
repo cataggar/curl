@@ -583,6 +583,12 @@ pub export fn curlx_inet_pton(af: c_int, src: [*:0]const u8, dst: *anyopaque) c_
 // 7. strerr.c: curlx_strerror
 // ============================================================================
 
+fn bufToZSlice(buf: [*]u8, max_len: usize) [:0]u8 {
+    const len = std.mem.indexOfScalar(u8, buf[0..max_len], 0) orelse 0;
+    buf[len] = 0;
+    return buf[0..len :0];
+}
+
 fn getWinsockError(err: c_int, buf: [*]u8, len: usize) ?[*:0]const u8 {
     if (len == 0) return null;
     buf[0] = 0;
@@ -642,7 +648,7 @@ fn getWinsockError(err: c_int, buf: [*]u8, len: usize) ?[*:0]const u8 {
     };
 
     strcopySlice(buf, len, p);
-    return @ptrCast(buf);
+    return bufToZSlice(buf, len).ptr;
 }
 
 fn getWinapiError(err: u32, buf: [*]u8, buflen: usize) ?[*:0]const u8 {
@@ -660,8 +666,7 @@ fn getWinapiError(err: u32, buf: [*]u8, buflen: usize) ?[*:0]const u8 {
         return null;
     }
 
-    const cstr: [*:0]u8 = @ptrCast(buf);
-    const slice = std.mem.span(cstr);
+    const slice = bufToZSlice(buf, buflen);
     if (std.mem.indexOfScalar(u8, slice, '\n')) |nl_idx| {
         if (nl_idx > 0 and buf[nl_idx - 1] == '\r') {
             buf[nl_idx - 1] = 0;
@@ -670,7 +675,7 @@ fn getWinapiError(err: u32, buf: [*]u8, buflen: usize) ?[*:0]const u8 {
         }
     }
 
-    return if (buf[0] != 0) @ptrCast(buf) else null;
+    return if (buf[0] != 0) bufToZSlice(buf, buflen).ptr else null;
 }
 
 fn writeTruncated(buf: [*]u8, buflen: usize, src: []const u8) void {
@@ -706,7 +711,7 @@ pub export fn curlx_strerror(err: c_int, buf: [*]u8, buflen: usize) ?[*:0]const 
 
     if (builtin.os.tag == .windows) {
         const crt_failed = win32.strerror_s(buf, buflen, err) != 0 or
-            std.mem.eql(u8, std.mem.span(@as([*:0]const u8, @ptrCast(buf))), "Unknown error");
+            std.mem.eql(u8, bufToZSlice(buf, buflen), "Unknown error");
         if (crt_failed and
             getWinsockError(err, buf, buflen) == null and
             getWinapiError(@bitCast(err), buf, buflen) == null)
@@ -734,14 +739,13 @@ pub export fn curlx_strerror(err: c_int, buf: [*]u8, buflen: usize) ?[*:0]const 
     }
 
     // Strip trailing '\r\n' or '\n' matching strerr.c
-    const cstr: [*:0]u8 = @ptrCast(buf);
-    const slice1 = std.mem.span(cstr);
+    const slice1 = bufToZSlice(buf, buflen);
     if (std.mem.lastIndexOfScalar(u8, slice1, '\n')) |nl_idx| {
         if (nl_idx >= 2) {
             buf[nl_idx] = 0;
         }
     }
-    const slice2 = std.mem.span(cstr);
+    const slice2 = bufToZSlice(buf, buflen);
     if (std.mem.lastIndexOfScalar(u8, slice2, '\r')) |cr_idx| {
         if (cr_idx >= 1) {
             buf[cr_idx] = 0;
@@ -757,7 +761,7 @@ pub export fn curlx_strerror(err: c_int, buf: [*]u8, buflen: usize) ?[*:0]const 
         }
     }
 
-    return @ptrCast(buf);
+    return bufToZSlice(buf, buflen).ptr;
 }
 
 // ============================================================================
@@ -827,7 +831,7 @@ test "curlx_inet_pton and curlx_inet_ntop IPv4 and IPv6 (unit1961)" {
     var ipv4res: [16]u8 = @splat(0);
     var ipv4a = [5]u8{ 0xc0, 0xa8, 0x64, 0x01, 0x01 };
     try std.testing.expectEqual(CURLE_OK, curlx_inet_ntop(AF_INET, &ipv4a, &ipv4res, ipv4res.len));
-    try std.testing.expectEqualStrings("192.168.100.1", std.mem.span(@as([*:0]const u8, @ptrCast(&ipv4res))));
+    try std.testing.expectEqualStrings("192.168.100.1", std.mem.sliceTo(&ipv4res, 0));
 
     var ipv6res: [46]u8 = @splat(0);
     var ipv6a: [26]u8 = @splat(0);
@@ -843,13 +847,13 @@ test "curlx_inet_pton and curlx_inet_ntop IPv4 and IPv6 (unit1961)" {
     ipv6a[15] = 0xc8;
     ipv6a[25] = 0x01;
     try std.testing.expectEqual(CURLE_OK, curlx_inet_ntop(AF_INET6, &ipv6a, &ipv6res, ipv6res.len));
-    try std.testing.expectEqualStrings("fe80::214:4fff:fe0b:76c8", std.mem.span(@as([*:0]const u8, @ptrCast(&ipv6res))));
+    try std.testing.expectEqualStrings("fe80::214:4fff:fe0b:76c8", std.mem.sliceTo(&ipv6res, 0));
 
     @memset(&ipv6a, 0);
     ipv6a[12] = 0x7f;
     ipv6a[15] = 0x01;
     try std.testing.expectEqual(CURLE_OK, curlx_inet_ntop(AF_INET6, &ipv6a, &ipv6res, ipv6res.len));
-    try std.testing.expectEqualStrings("::127.0.0.1", std.mem.span(@as([*:0]const u8, @ptrCast(&ipv6res))));
+    try std.testing.expectEqualStrings("::127.0.0.1", std.mem.sliceTo(&ipv6res, 0));
 
     // pton + roundtrip
     var parsed4 = [5]u8{ 1, 1, 1, 1, 1 };
