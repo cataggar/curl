@@ -539,6 +539,7 @@ pub fn createDigestMd5MessageHostRfc(
 pub fn decodeDigestHttpMessageRfc(chlg_in: [*:0]const u8, digest: *DigestDataRfc) callconv(.c) CURLcode {
     var chlg = chlg_in;
     const before = (digest.nonce != null);
+    digestCleanupRfc(digest);
     var foundAuth = false;
     var foundAuthInt = false;
     var content: [DIGEST_MAX_CONTENT_LENGTH]u8 = undefined;
@@ -3128,20 +3129,44 @@ pub fn socks5GssapiNegotiateGss(
     return CURLE_OK;
 }
 
+pub fn curlAuthCreateDigestHttpMessageRfc(
+    data: ?*anyopaque,
+    creds: *Curl_creds,
+    request: [*:0]const u8,
+    uripath: [*:0]const u8,
+    digest: *DigestDataRfc,
+    outptr: *?[*:0]u8,
+    outlen: *usize,
+) callconv(.c) CURLcode {
+    return createDigestHttpMessageRfc(data, creds, uripath, request, null, 0, digest, outptr, outlen);
+}
+
+fn curlAuthCreateDigestHttpMessageSspi(
+    data: ?*anyopaque,
+    creds: *Curl_creds,
+    request: [*:0]const u8,
+    uripath: [*:0]const u8,
+    digest: *DigestDataSspi,
+    outptr: *?[*:0]u8,
+    outlen: *usize,
+) callconv(.c) CURLcode {
+    return createDigestHttpMessageSspi(data, creds, uripath, request, null, 0, digest, outptr, outlen);
+}
+
 comptime {
     if (builtin.os.tag == .windows) {
         @export(&isDigestSupportedSspi, .{ .name = "Curl_auth_is_digest_supported" });
         @export(&createDigestMd5MessageHostSspi, .{ .name = "Curl_auth_create_digest_md5_message_host" });
         @export(&overrideSspiHttpRealm, .{ .name = "Curl_override_sspi_http_realm" });
         @export(&decodeDigestHttpMessageSspi, .{ .name = "Curl_auth_decode_digest_http_message" });
-        @export(&createDigestHttpMessageSspi, .{ .name = "Curl_auth_create_digest_http_message" });
+        @export(&curlAuthCreateDigestHttpMessageSspi, .{ .name = "Curl_auth_create_digest_http_message" });
         @export(&digestCleanupSspi, .{ .name = "Curl_auth_digest_cleanup" });
         @export(&socks5GssapiNegotiateSspi, .{ .name = "Curl_SOCKS5_gssapi_negotiate_ex" });
     } else {
         @export(&isDigestSupportedRfc, .{ .name = "Curl_auth_is_digest_supported" });
         @export(&createDigestMd5MessageHostRfc, .{ .name = "Curl_auth_create_digest_md5_message_host" });
         @export(&decodeDigestHttpMessageRfc, .{ .name = "Curl_auth_decode_digest_http_message" });
-        @export(&createDigestHttpMessageRfc, .{ .name = "Curl_auth_create_digest_http_message" });
+        @export(&curlAuthCreateDigestHttpMessageRfc, .{ .name = "Curl_auth_create_digest_http_message" });
         @export(&digestCleanupRfc, .{ .name = "Curl_auth_digest_cleanup" });
     }
     if (have_gssapi) {

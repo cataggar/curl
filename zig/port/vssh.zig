@@ -69,7 +69,7 @@ pub const PROTO_FAMILY_SSH: curl_prot_t = CURLPROTO_SCP | CURLPROTO_SFTP;
 
 pub const FIRSTSOCKET: c_int = 0;
 pub const CLIENTWRITE_BODY: c_int = 1 << 0;
-pub const CLIENTWRITE_HEADER: c_int = 1 << 1;
+pub const CLIENTWRITE_HEADER: c_int = 1 << 2;
 
 pub const CURL_POLL_IN: c_int = 1;
 pub const CURL_POLL_OUT: c_int = 2;

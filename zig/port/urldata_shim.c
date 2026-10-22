@@ -707,7 +707,7 @@ void Curl_setopt_set_bit(struct Curl_easy *data, int bit_id, bool val)
   switch(bit_id) {
   case 1: s->reuse_forbid = val; break;
   case 2: s->reuse_fresh = val; break;
-  case 3: s->verbose = val; break;
+  case 3: s->verbose = val; (void)CURL_TRC_BIND(data); break;
   case 4: s->include_header = val; break;
   case 5: data->progress.hide = val; break;
   case 6: s->opt_no_body = val; break;
@@ -1492,6 +1492,11 @@ bool Curl_chunked_set_download_done(struct Curl_easy *data)
     return FALSE;
   data->req.download_done = TRUE;
   return (bool)data->req.no_body;
+}
+
+bool Curl_chunked_no_body(const struct Curl_easy *data)
+{
+  return data ? (bool)data->req.no_body : FALSE;
 }
 
 int Curl_chunked_call_trailer_cb(struct Curl_easy *data,

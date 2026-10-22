@@ -96,10 +96,10 @@ const CURLPROXY_HTTPS3: u8 = 8;
 
 const PROTO_FAMILY_HTTP: u32 = (1 << 0) | (1 << 1);
 const PROTOPT_SSL: u32 = 1 << 0;
-const PROTOPT_NONETWORK: u32 = 1 << 10;
-const PROTOPT_NOTCPPROXY: u32 = 1 << 13;
-const PROTOPT_HTTP_PROXY_TUNNEL: u32 = 1 << 14;
-const PROTOPT_PROXY_AS_HTTP: u32 = 1 << 15;
+const PROTOPT_NONETWORK: u32 = 1 << 4;
+const PROTOPT_PROXY_AS_HTTP: u32 = 1 << 11;
+const PROTOPT_NOTCPPROXY: u32 = 1 << 14;
+const PROTOPT_HTTP_PROXY_TUNNEL: u32 = 1 << 18;
 
 const CREDS_NONE: u8 = 0;
 const CREDS_URL: u8 = 1;
@@ -124,10 +124,10 @@ const CURLINFO_HEADER_IN: c_uint = 1;
 const CURLINFO_HEADER_OUT: c_uint = 2;
 
 const CLIENTWRITE_BODY: c_int = 1 << 0;
-const CLIENTWRITE_HEADER: c_int = 1 << 1;
-const CLIENTWRITE_STATUS: c_int = 1 << 2;
-const CLIENTWRITE_CONNECT: c_int = 1 << 3;
-const CLIENTWRITE_EOS: c_int = 1 << 5;
+const CLIENTWRITE_HEADER: c_int = 1 << 2;
+const CLIENTWRITE_STATUS: c_int = 1 << 3;
+const CLIENTWRITE_CONNECT: c_int = 1 << 4;
+const CLIENTWRITE_EOS: c_int = 1 << 7;
 
 const HTTPREQ_GET: c_uint = 0;
 const HTTPREQ_POST_FORM: u8 = 2;

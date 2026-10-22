@@ -2235,8 +2235,8 @@ pub const CURL_RTSPREQ_RECEIVE: u8 = 11;
 pub const CURL_RTSPREQ_LAST: u8 = 12;
 
 const HTTPREQ_GET: u8 = 0;
-const HTTPREQ_PUT: u8 = 3;
-const HTTPREQ_HEAD: u8 = 4;
+const HTTPREQ_PUT: u8 = 4;
+const HTTPREQ_HEAD: u8 = 5;
 
 const CLIENTWRITE_BODY: c_int = 1 << 0;
 const CLIENTWRITE_EOS: c_int = 1 << 7;

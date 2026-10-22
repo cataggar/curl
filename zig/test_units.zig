@@ -96,6 +96,15 @@ pub const tunit_names = [_][]const u8{
     "tool1720",
 };
 
+pub const UnitsBuild = struct {
+    units_exe: *std.Build.Step.Compile,
+    tunits_exe: *std.Build.Step.Compile,
+    stage_units: *std.Build.Step.UpdateSourceFiles,
+    stage_tunits: *std.Build.Step.UpdateSourceFiles,
+    test_unit_step: *std.Build.Step,
+    test_tunit_step: *std.Build.Step,
+};
+
 pub fn setupUnitTests(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -105,7 +114,7 @@ pub fn setupUnitTests(
     backend_opts: backends.Options,
     backend_options_step: *std.Build.Step.Options,
     is_static_libcurl: bool,
-) void {
+) UnitsBuild {
     const os_tag = target.result.os.tag;
     const flags = if (os_tag != .windows) &libcurl.c_flags_posix else &libcurl.c_flags;
 
@@ -301,4 +310,13 @@ pub fn setupUnitTests(
         _ = run_tunit.captureStdErr(.{});
         test_tunit_step.dependOn(&run_tunit.step);
     }
+
+    return .{
+        .units_exe = units_exe,
+        .tunits_exe = tunits_exe,
+        .stage_units = stage_units,
+        .stage_tunits = stage_tunits,
+        .test_unit_step = test_unit_step,
+        .test_tunit_step = test_tunit_step,
+    };
 }
