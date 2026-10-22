@@ -15,7 +15,7 @@ pub fn addConformanceStep(
         "./runtests.pl",
         "-a",
         "-n",
-        "-j4",
+        "-j2",
     });
     if (test_range) |range| {
         var it = std.mem.tokenizeAny(u8, range, " \t");
