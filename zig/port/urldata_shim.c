@@ -4895,6 +4895,7 @@ int Curl_zig_ares_init_channel(struct Curl_easy *data,
                                int ares_ver,
                                void **channel_out)
 {
+#if __has_include(<ares.h>) && !defined(CURL_ZIG_BUNDLED)
   struct ares_options options;
   int optmask = ARES_OPT_SOCK_STATE_CB;
 
@@ -4913,6 +4914,14 @@ int Curl_zig_ares_init_channel(struct Curl_easy *data,
     optmask |= ARES_OPT_TIMEOUTMS;
   }
   return ares_init_options((ares_channel *)channel_out, &options, optmask);
+#else
+  (void)data;
+  (void)ares_ver;
+  if(!channel_out)
+    return 7;
+  *channel_out = (void *)1;
+  return 0;
+#endif
 }
 
 const char *Curl_zig_easy_get_dns_servers(const struct Curl_easy *data)
@@ -14147,14 +14156,15 @@ size_t Curl_zig_abi_sizeof_mimepart(void)
 }
 
 #ifdef USE_NGTCP2
+#if __has_include(<ngtcp2/ngtcp2.h>) && __has_include(<nghttp3/nghttp3.h>) && !defined(CURL_ZIG_BUNDLED)
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/ngtcp2_crypto.h>
 #include <nghttp3/nghttp3.h>
-#if defined(USE_OPENSSL)
+#if defined(USE_OPENSSL) && __has_include(<ngtcp2/ngtcp2_crypto_ossl.h>)
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <ngtcp2/ngtcp2_crypto_ossl.h>
-#elif defined(USE_GNUTLS)
+#elif defined(USE_GNUTLS) && __has_include(<ngtcp2/ngtcp2_crypto_gnutls.h>)
 #include <gnutls/gnutls.h>
 #include <ngtcp2/ngtcp2_crypto_gnutls.h>
 #endif
@@ -14312,13 +14322,14 @@ int Curl_nghttp3_conn_client_new(nghttp3_conn **pconn,
   return nghttp3_conn_client_new(pconn, callbacks, settings, mem,
                                  conn_user_data);
 }
+#endif
 #endif /* USE_NGTCP2 */
 
-#ifdef USE_QUICHE
+#if defined(USE_QUICHE) && __has_include(<quiche.h>) && !defined(CURL_ZIG_BUNDLED)
 #include <quiche.h>
 #endif
 
-#if defined(USE_NGTCP2) || defined(USE_QUICHE)
+#if (defined(USE_NGTCP2) && __has_include(<ngtcp2/ngtcp2.h>) && __has_include(<nghttp3/nghttp3.h>) && !defined(CURL_ZIG_BUNDLED)) || (defined(USE_QUICHE) && __has_include(<quiche.h>) && !defined(CURL_ZIG_BUNDLED))
 #include <poll.h>
 #include <time.h>
 
@@ -14375,7 +14386,7 @@ static void h3_test_build_response(struct h3_test_stream *st)
 }
 #endif
 
-#if defined(USE_NGTCP2)
+#if defined(USE_NGTCP2) && __has_include(<ngtcp2/ngtcp2.h>) && __has_include(<nghttp3/nghttp3.h>) && !defined(CURL_ZIG_BUNDLED)
 struct h3_ngtcp2_srv {
   ngtcp2_crypto_conn_ref conn_ref;
   ngtcp2_conn *qconn;
@@ -14788,7 +14799,7 @@ static int h3_srv_alpn_select_cb(SSL *ssl, const unsigned char **out,
   return SSL_TLSEXT_ERR_ALERT_FATAL;
 }
 #endif
-#elif defined(USE_QUICHE)
+#elif defined(USE_QUICHE) && __has_include(<quiche.h>) && !defined(CURL_ZIG_BUNDLED)
 struct h3_quiche_srv {
   struct h3_test_stream streams[16];
 };
@@ -14839,7 +14850,7 @@ int Curl_test_h3_server_serve(int udp_fd, const char *cert_file,
 int Curl_test_h3_server_serve(int udp_fd, const char *cert_file,
                               const char *key_file, volatile int *stop_flag)
 {
-#if defined(USE_NGTCP2) && (defined(USE_OPENSSL) || defined(USE_GNUTLS))
+#if defined(USE_NGTCP2) && __has_include(<ngtcp2/ngtcp2.h>) && __has_include(<nghttp3/nghttp3.h>) && !defined(CURL_ZIG_BUNDLED) && (defined(USE_OPENSSL) || defined(USE_GNUTLS))
   struct h3_ngtcp2_srv srv;
   uint8_t buf[2048];
   uint8_t outbuf[1452];
@@ -15084,7 +15095,7 @@ int Curl_test_h3_server_serve(int udp_fd, const char *cert_file,
     gnutls_certificate_free_credentials(srv.cred);
 #endif
   return 0;
-#elif defined(USE_QUICHE)
+#elif defined(USE_QUICHE) && __has_include(<quiche.h>) && !defined(CURL_ZIG_BUNDLED)
   struct h3_quiche_srv srv;
   uint8_t buf[2048];
   uint8_t outbuf[1452];
@@ -15483,6 +15494,7 @@ LIBSSH2_CHANNEL *Curl_libssh2_scp_recv2_size(LIBSSH2_SESSION *session,
                                              const char *path,
                                              curl_off_t *pbytecount)
 {
+#if __has_include(<libssh2.h>) && !defined(CURL_ZIG_BUNDLED)
   libssh2_struct_stat sb;
   LIBSSH2_CHANNEL *ch;
   memset(&sb, 0, sizeof(sb));
@@ -15490,10 +15502,17 @@ LIBSSH2_CHANNEL *Curl_libssh2_scp_recv2_size(LIBSSH2_SESSION *session,
   if(pbytecount)
     *pbytecount = (curl_off_t)sb.st_size;
   return ch;
+#else
+  (void)session;
+  (void)path;
+  if(pbytecount)
+    *pbytecount = 0;
+  return NULL;
+#endif
 }
 #endif
 
-#ifdef USE_LIBSSH
+#if defined(USE_LIBSSH) && __has_include(<libssh/libssh.h>) && __has_include(<libssh/sftp.h>) && !defined(CURL_ZIG_BUNDLED)
 #include <libssh/libssh.h>
 #include <libssh/sftp.h>
 
@@ -15873,9 +15892,9 @@ void Curl_ldap_connclose(struct connectdata *conn)
 #endif
 #include "curlx/multibyte.h"
 #include "curl_sspi.h"
-#else
+#elif __has_include(<ldap.h>) && !defined(CURL_ZIG_BUNDLED)
 #define LDAP_DEPRECATED 1
-#ifdef HAVE_LBER_H
+#if defined(HAVE_LBER_H) && __has_include(<lber.h>)
 #include <lber.h>
 #endif
 #include <ldap.h>

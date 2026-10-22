@@ -25,7 +25,11 @@
  ***************************************************************************/
 #ifdef USE_LIBPSL
 
+#if __has_include(<libpsl.h>) && !defined(CURL_ZIG_BUNDLED)
 #include <libpsl.h>
+#else
+typedef struct psl_ctx_st psl_ctx_t;
+#endif
 
 struct Curl_easy;
 

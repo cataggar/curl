@@ -99,22 +99,59 @@ typedef CURLcode (Curl_recv)(struct Curl_easy *data,   /* transfer */
 #include "cf-socket.h"
 
 #ifdef HAVE_GSSAPI
-#  ifdef HAVE_GSSAPPLE
+#  if defined(HAVE_GSSAPPLE) && __has_include(<GSS/gssapi.h>) && !defined(CURL_ZIG_BUNDLED)
 #    include <GSS/gssapi.h>
 #    include <GSS/gssapi_oid.h>
-#  elif defined(HAVE_GSSGNU)
+#  elif defined(HAVE_GSSGNU) && __has_include(<gss.h>) && !defined(CURL_ZIG_BUNDLED)
 #    include <gss.h>
-#  elif defined(HAVE_GSSAPI_H)
+#  elif defined(HAVE_GSSAPI_H) && __has_include(<gssapi.h>) && !defined(CURL_ZIG_BUNDLED)
 #    include <gssapi.h>
-#  else /* MIT Kerberos */
+#  elif __has_include(<gssapi/gssapi.h>) && !defined(CURL_ZIG_BUNDLED) /* MIT Kerberos */
 #    include <gssapi/gssapi.h>
-#    include <gssapi/gssapi_krb5.h> /* for GSS_C_CHANNEL_BOUND_FLAG in 1.19+ */
+#    if __has_include(<gssapi/gssapi_krb5.h>)
+#      include <gssapi/gssapi_krb5.h> /* for GSS_C_CHANNEL_BOUND_FLAG in 1.19+ */
+#    endif
+#  else
+typedef uint32_t OM_uint32;
+typedef void *gss_ctx_id_t;
+typedef void *gss_name_t;
+typedef void *gss_cred_id_t;
+typedef struct gss_buffer_desc_struct {
+  size_t length;
+  void *value;
+} gss_buffer_desc, *gss_buffer_t;
 #  endif
 #endif
 
 #ifdef USE_LIBSSH2
+#if __has_include(<libssh2.h>) && __has_include(<libssh2_sftp.h>) && !defined(CURL_ZIG_BUNDLED)
 #include <libssh2.h>
 #include <libssh2_sftp.h>
+#else
+#ifndef CURL_ZIG_LIBSSH2_FALLBACK_DEFINED
+#define CURL_ZIG_LIBSSH2_FALLBACK_DEFINED
+typedef struct _LIBSSH2_SESSION LIBSSH2_SESSION;
+typedef struct _LIBSSH2_CHANNEL LIBSSH2_CHANNEL;
+typedef struct _LIBSSH2_SFTP LIBSSH2_SFTP;
+typedef struct _LIBSSH2_SFTP_HANDLE LIBSSH2_SFTP_HANDLE;
+typedef struct _LIBSSH2_KNOWNHOSTS LIBSSH2_KNOWNHOSTS;
+typedef struct _LIBSSH2_AGENT LIBSSH2_AGENT;
+typedef struct _LIBSSH2_SFTP_ATTRIBUTES {
+  unsigned long flags;
+  curl_uint64_t filesize;
+  unsigned long uid, gid;
+  unsigned long permissions;
+  unsigned long atime, mtime;
+} LIBSSH2_SFTP_ATTRIBUTES;
+struct libssh2_agent_publickey {
+  unsigned int magic;
+  void *node;
+  unsigned char *blob;
+  size_t blob_len;
+  char *comment;
+};
+#endif
+#endif
 #endif /* USE_LIBSSH2 */
 
 #define READBUFFER_SIZE CURL_MAX_WRITE_SIZE
