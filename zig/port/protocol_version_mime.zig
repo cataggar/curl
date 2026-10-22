@@ -1551,8 +1551,11 @@ fn encoder_base64_read(buffer: [*]u8, size: usize, ateof: bool, part: *curl_mime
 
     while (st.bufbeg < st.bufend) {
         if (st.pos > MAX_ENCODED_LINE_LENGTH - 4) {
-            if (size - cursize < 2)
+            if (size - cursize < 2) {
+                if (cursize == 0)
+                    return STOP_FILLING;
                 break;
+            }
             buffer[ptr] = '\r';
             buffer[ptr + 1] = '\n';
             ptr += 2;
@@ -1560,8 +1563,11 @@ fn encoder_base64_read(buffer: [*]u8, size: usize, ateof: bool, part: *curl_mime
             st.pos = 0;
         }
 
-        if (size - cursize < 4)
+        if (size - cursize < 4) {
+            if (cursize == 0)
+                return STOP_FILLING;
             break;
+        }
         if (st.bufend - st.bufbeg < 3)
             break;
 
@@ -1581,31 +1587,27 @@ fn encoder_base64_read(buffer: [*]u8, size: usize, ateof: bool, part: *curl_mime
     }
 
     if (ateof) {
-        if (size - cursize >= 4) {
+        if (size - cursize < 4) {
+            if (cursize == 0)
+                return STOP_FILLING;
+        } else {
             buffer[ptr + 2] = '=';
             buffer[ptr + 3] = '=';
             var i: c_int = 0;
-            switch (st.bufend - st.bufbeg) {
-                2 => {
-                    i = @intCast(st.buf[st.bufbeg + 1] & 0xFF);
-                    buffer[ptr + 2] = base64enc[@intCast((i << 2) & 0x3F)];
-                    i = (i << 8) | @as(c_int, @intCast(st.buf[st.bufbeg] & 0xFF));
-                    buffer[ptr + 1] = base64enc[@intCast((i >> 4) & 0x3F)];
-                    buffer[ptr] = base64enc[@intCast((i >> 10) & 0x3F)];
-                    st.bufbeg = st.bufend;
-                    st.pos += 4;
-                    cursize += 4;
-                },
-                1 => {
-                    i = @intCast(st.buf[st.bufbeg] & 0xFF);
-                    i = i << 8;
-                    buffer[ptr + 1] = base64enc[@intCast((i >> 4) & 0x3F)];
-                    buffer[ptr] = base64enc[@intCast((i >> 10) & 0x3F)];
-                    st.bufbeg = st.bufend;
-                    st.pos += 4;
-                    cursize += 4;
-                },
-                else => {},
+            if (st.bufend != st.bufbeg) {
+                if (st.bufend - st.bufbeg == 2)
+                    i = (@as(c_int, @intCast(st.buf[st.bufbeg + 1] & 0xFF))) << 8;
+
+                i |= (@as(c_int, @intCast(st.buf[st.bufbeg] & 0xFF))) << 16;
+                buffer[ptr] = base64enc[@intCast((i >> 18) & 0x3F)];
+                buffer[ptr + 1] = base64enc[@intCast((i >> 12) & 0x3F)];
+                st.bufbeg += 1;
+                if (st.bufbeg != st.bufend) {
+                    buffer[ptr + 2] = base64enc[@intCast((i >> 6) & 0x3F)];
+                    st.bufbeg += 1;
+                }
+                cursize += 4;
+                st.pos += 4;
             }
         }
     }
@@ -2524,6 +2526,9 @@ pub export fn Curl_mime_set_subparts(part_opt: ?*curl_mimepart, subparts_opt: ?*
                 return CURLE_BAD_FUNCTION_ARGUMENT;
             }
         }
+
+        if (mime_subparts_seek(subparts, 0, SEEK_SET) != CURL_SEEKFUNC_OK)
+            return CURLE_SEND_FAIL_REWIND;
 
         subparts.parent = part;
         part.seekfunc = mime_subparts_seek;

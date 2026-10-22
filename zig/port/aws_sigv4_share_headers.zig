@@ -1733,7 +1733,7 @@ pub const CURLH_CONNECT: c_uint = 1 << 2;
 pub const CURLH_1XX: c_uint = 1 << 3;
 pub const CURLH_PSEUDO: c_uint = 1 << 4;
 
-const MAX_HTTP_RESP_HEADER_COUNT: usize = 300;
+const MAX_HTTP_RESP_HEADER_COUNT: usize = 5000;
 
 const CURLPROTO_HTTP: c_uint = 1 << 0;
 const CURLPROTO_HTTPS: c_uint = 1 << 1;
