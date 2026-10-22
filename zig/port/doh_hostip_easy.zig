@@ -1594,7 +1594,7 @@ pub export fn Curl_doh_take_result(
                 dohp.probe_rc[DOH_SLOT_HTTPS_RR] == DOH_OK)
             {
                 vdns_core.Curl_httpsrr_trace(data, async_ctx.httpsrr);
-                dns = vdns_core.Curl_dnsc_mk_https(data, &async_ctx.httpsrr, fromOpaque(vdns_core.CurlPeer, peer));
+                dns = vdns_core.Curl_dnsc_mk_https(data, &async_ctx.httpsrr, fromOpaque(vdns_core.CurlPeer, peer).?);
                 if (dns == null) {
                     Curl_doh_cleanup(data, async_ctx);
                     return CURLE_OUT_OF_MEMORY;
