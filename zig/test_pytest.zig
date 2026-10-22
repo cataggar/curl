@@ -58,6 +58,8 @@ const run_pytest_py =
     \\import os, sys, time, pytest
     \\sys.path.insert(0, os.getcwd())
     \\try:
+    \\    if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
+    \\        os.environ.setdefault("CURL_CI", "1")
     \\    from testenv.curl import RunTcpDump
     \\    _orig_start = RunTcpDump.start
     \\    def _start_and_wait(self):
