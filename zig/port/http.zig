@@ -114,7 +114,7 @@ pub const CONNCTRL_STREAM_CLOSE: c_int = 2;
 
 pub const FIRSTSOCKET: i8 = 0;
 pub const EXPIRE_100_TIMEOUT: c_uint = 0;
-pub const TIMER_REDIRECT: c_uint = 9;
+pub const TIMER_REDIRECT: c_uint = 10;
 pub const CURLINFO_HEADER_IN: c_uint = 1;
 
 pub const DYN_HTTP_REQUEST: usize = 1024 * 1024;

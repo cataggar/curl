@@ -141,7 +141,7 @@ pub const TRNSPRT_UDP: u8 = 4;
 pub const TRNSPRT_QUIC: u8 = 5;
 pub const FIRSTSOCKET: i8 = 0;
 
-pub const TIMER_APPCONNECT: c_int = 5;
+pub const TIMER_APPCONNECT: c_int = 6;
 pub const CURL_X509_STR_MAX: usize = 100000;
 pub const MAX_PINNED_PUBKEY_SIZE: usize = 1048576;
 pub const CURL_SHA256_DIGEST_LENGTH: usize = 32;

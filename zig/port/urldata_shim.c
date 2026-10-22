@@ -7372,6 +7372,30 @@ const char *Curl_zig_url_default_ca_path(void)
 const char *Curl_zig_url_default_ca_bundle(void);
 const char *Curl_zig_url_default_ca_bundle(void)
 {
+#if defined(__linux__) || defined(__APPLE__)
+  static const char * const fallback_paths[] = {
+#ifdef CURL_CA_BUNDLE
+    CURL_CA_BUNDLE,
+#endif
+#ifdef __APPLE__
+    "/etc/ssl/cert.pem",
+    "/etc/ssl/certs/ca-certificates.crt",
+#else
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/ssl/ca-bundle.pem",
+    "/etc/pki/tls/cacert.pem",
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+    "/etc/ssl/cert.pem",
+#endif
+    NULL
+  };
+  for(size_t i = 0; fallback_paths[i]; ++i) {
+    struct stat st;
+    if(stat(fallback_paths[i], &st) == 0)
+      return fallback_paths[i];
+  }
+#endif
   return CURL_ZIG_DEFAULT_CA_BUNDLE;
 }
 

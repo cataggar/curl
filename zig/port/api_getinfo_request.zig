@@ -404,12 +404,7 @@ pub export fn Curl_eapi_hcode(result: CURLcode) callconv(.c) CURLHcode {
 
 fn mapiInNtfyCb(multi: *const CurlMultiPrefix) bool {
     const count: usize = multi.callstack.count;
-    for (0..count) |i| {
-        if (multi.callstack.calls[i] == CURL_CBAPI_FN_multi_ntfy_cb) {
-            return true;
-        }
-    }
-    return false;
+    return count > 0 and multi.callstack.calls[count - 1] == CURL_CBAPI_FN_multi_ntfy_cb;
 }
 
 pub export fn Curl_mapi_enter(
@@ -1887,7 +1882,7 @@ fn mevShEntryDtor(freethis: ?*anyopaque) callconv(.c) void {
     const raw = freethis orelse return;
     const entry: *MevShEntry = @ptrCast(@alignCast(raw));
     Curl_uint32_spbset_destroy(&entry.xfers);
-    mem.free(raw);
+    mem.freeTyped(entry);
 }
 
 fn mevShEntryGet(sh: *CurlHash, s: curl_socket_t) ?*MevShEntry {
@@ -1939,7 +1934,7 @@ fn mevPollsetDtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callc
     if (entry) |raw| {
         const ps: *EasyPollset = @ptrCast(@alignCast(raw));
         Curl_pollset_cleanup(ps);
-        mem.free(raw);
+        mem.freeTyped(ps);
     }
 }
 
@@ -2103,6 +2098,7 @@ fn mevPollsetDiff(
     ps: *EasyPollset,
     prev_ps: *EasyPollset,
 ) CURLMcode {
+    const mid = data.mid;
     const ps_sockets = ps.sockets.?;
     const ps_actions = ps.actions.?;
     const prev_sockets = prev_ps.sockets.?;
@@ -2144,6 +2140,9 @@ fn mevPollsetDiff(
 
         const mresult = mevShEntryUpdate(multi, ev, data, e, s, last_action, ps_actions[i]);
         if (mresult != CURLM_OK) return mresult;
+        if (Curl_multi_get_easy(multi, mid) != data or mevGetLastPollset(data, conn) != prev_ps) {
+            return CURLM_OK;
+        }
     }
 
     i = 0;
@@ -2175,6 +2174,9 @@ fn mevPollsetDiff(
         } else {
             const mresult = mevForgetSocket(multi, ev, data, s);
             if (mresult != CURLM_OK) return mresult;
+        }
+        if (Curl_multi_get_easy(multi, mid) != data or mevGetLastPollset(data, conn) != prev_ps) {
+            return CURLM_OK;
         }
     }
 
@@ -2679,4 +2681,31 @@ test "C-Zig ABI struct sizes in api_getinfo_request" {
     try std.testing.expectEqual(@sizeOf(CurlGetinfoCtx), Curl_zig_abi_sizeof_getinfo_ctx());
     try std.testing.expectEqual(@sizeOf(SingleRequest), Curl_zig_abi_sizeof_singlerequest());
     try std.testing.expectEqual(@sizeOf(CurlMultiEv), Curl_zig_abi_sizeof_multi_ev());
+}
+
+test "mapiInNtfyCb only allows add/remove when multi_ntfy_cb is innermost frame (#128)" {
+    var multi: CurlMultiPrefix = std.mem.zeroes(CurlMultiPrefix);
+    multi.magic = CURL_MULTI_HANDLE;
+
+    var ntfy_guard: CurlMapiGuard = undefined;
+    Curl_cbapi_enter(&ntfy_guard, null, &multi, CURL_CBAPI_FN_multi_ntfy_cb);
+
+    // Direct call from multi_ntfy_cb is permitted.
+    var add_guard: CurlMapiGuard = undefined;
+    var mresult: CURLMcode = CURLM_OK;
+    try std.testing.expect(Curl_mapi_enter(&add_guard, &multi, CURL_MAPI_FN_multi_add_handle, &mresult));
+    try std.testing.expectEqual(CURLM_OK, mresult);
+
+    // Nested socket_cb inside curl_multi_add_handle must NOT inherit ntfy_cb exemption.
+    var sock_guard: CurlMapiGuard = undefined;
+    Curl_cbapi_enter(&sock_guard, null, &multi, CURL_CBAPI_FN_multi_socket_cb);
+
+    var rem_guard: CurlMapiGuard = undefined;
+    var rem_result: CURLMcode = CURLM_OK;
+    try std.testing.expect(!Curl_mapi_enter(&rem_guard, &multi, CURL_MAPI_FN_multi_remove_handle, &rem_result));
+    try std.testing.expectEqual(CURLM_RECURSIVE_API_CALL, rem_result);
+
+    Curl_cbapi_leave(&sock_guard);
+    Curl_mapi_leave(&add_guard);
+    Curl_cbapi_leave(&ntfy_guard);
 }
