@@ -3803,7 +3803,7 @@ const schannel_backend = struct {
             const sspi_status = sec_fn.QueryContextAttributesA(
                 &backend.ctxt.?.ctxt_handle,
                 SECPKG_ATTR_REMOTE_CERT_CONTEXT,
-                &pCertContextServer,
+                mem.toRawPtr(&pCertContextServer).?,
             );
             if (sspi_status != SEC_E_OK or pCertContextServer == null) {
                 var buffer: [STRERROR_LEN]u8 = undefined;
@@ -4260,7 +4260,7 @@ const schannel_backend = struct {
             const sspi_status = sec_fn.QueryContextAttributesA(
                 &backend.ctxt.?.ctxt_handle,
                 SECPKG_ATTR_REMOTE_CERT_CONTEXT,
-                &ccert_context,
+                mem.toRawPtr(&ccert_context).?,
             );
             if (sspi_status != SEC_E_OK or ccert_context == null) {
                 c_ext.Curl_failf(data, "schannel: failed to retrieve remote cert context");

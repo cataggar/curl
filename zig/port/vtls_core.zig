@@ -1600,7 +1600,7 @@ const apple = struct {
                 const size = api.CFStringGetMaximumSizeForEncoding(api.CFStringGetLength(eref), kCFStringEncodingUTF8);
                 if (size >= 0) {
                     const usize_cap: usize = @intCast(size + 1);
-                    if (mem.allocMany(u8, usize_cap)) |buf_ptr| {
+                    if (mem.callocMany(u8, usize_cap)) |buf_ptr| {
                         if (api.CFStringGetCString(eref, buf_ptr, size, kCFStringEncodingUTF8) != 0) {
                             err_desc = buf_ptr[0..@intCast(size) :0].ptr;
                         } else {
@@ -2443,7 +2443,7 @@ const schannel_verify = struct {
         const sspi_status = Curl_pSecFn.QueryContextAttributesA(
             &connssl.backend.ctxt.ctxt_handle,
             SECPKG_ATTR_REMOTE_CERT_CONTEXT,
-            &pCertContextServer,
+            mem.toRawPtr(&pCertContextServer).?,
         );
 
         if (sspi_status != SEC_E_OK or pCertContextServer == null) {
@@ -2585,7 +2585,7 @@ const schannel_verify = struct {
         const sspi_status = Curl_pSecFn.QueryContextAttributesA(
             &connssl.backend.ctxt.ctxt_handle,
             SECPKG_ATTR_REMOTE_CERT_CONTEXT,
-            &pCertContextServer,
+            mem.toRawPtr(&pCertContextServer).?,
         );
 
         if (sspi_status != SEC_E_OK or pCertContextServer == null) {
