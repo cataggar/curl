@@ -29,6 +29,24 @@ pub const ZigTlsBackendSlot = extern struct {
     state: ?*ZigTlsState = null,
 };
 
+inline fn cfCtx(cf: *CurlCfilter) ?*SslConnectData {
+    return @ptrCast(@alignCast(cf.ctx orelse return null));
+}
+
+inline fn connsslSlot(connssl: *const SslConnectData) ?*ZigTlsBackendSlot {
+    return @ptrCast(@alignCast(connssl.backend orelse return null));
+}
+
+inline fn cfSlot(cf: *CurlCfilter) ?*ZigTlsBackendSlot {
+    const connssl = cfCtx(cf) orelse return null;
+    return connsslSlot(connssl);
+}
+
+inline fn cfState(cf: *CurlCfilter) ?*ZigTlsState {
+    const slot = cfSlot(cf) orelse return null;
+    return slot.state;
+}
+
 const ZigTlsState = struct {
     cf: *CurlCfilter,
     transfer_data: ?*CurlEasy,
@@ -554,7 +572,7 @@ fn zigTlsSha256sum(input: [*]const u8, inputlen: usize, sha256sum: [*]u8, sha256
 
 fn zigTlsConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CURLcode {
     done.* = false;
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
+    const connssl = cfCtx(cf) orelse return CURLE_SSL_CONNECT_ERROR;
     if (connssl.state == vtls_backends.ssl_connection_complete) {
         done.* = true;
         return CURLE_OK;
@@ -575,7 +593,7 @@ fn zigTlsConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) C
         return CURLE_SSL_CONNECT_ERROR;
     }
 
-    const slot: *ZigTlsBackendSlot = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+    const slot = connsslSlot(connssl) orelse return CURLE_SSL_CONNECT_ERROR;
     const state = if (slot.state) |s| s else blk: {
         const s = std.heap.c_allocator.create(ZigTlsState) catch return CURLE_OUT_OF_MEMORY;
         s.initSelf(cf, data);
@@ -746,9 +764,7 @@ fn zigTlsConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) C
 fn zigTlsRecv(cf: *CurlCfilter, data: ?*CurlEasy, buf: [*]u8, len: usize, pnread: *usize) callconv(.c) CURLcode {
     pnread.* = 0;
     if (len == 0) return CURLE_OK;
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_RECV_ERROR));
-    const slot: *ZigTlsBackendSlot = @ptrCast(@alignCast(connssl.backend orelse return CURLE_RECV_ERROR));
-    const state = slot.state orelse return CURLE_RECV_ERROR;
+    const state = cfState(cf) orelse return CURLE_RECV_ERROR;
     if (!state.client_initialized) return CURLE_RECV_ERROR;
 
     state.cf = cf;
@@ -775,9 +791,7 @@ fn zigTlsSend(cf: *CurlCfilter, data: ?*CurlEasy, mem_ptr: ?*const anyopaque, le
     pnwritten.* = 0;
     if (len == 0) return CURLE_OK;
     const src_ptr: [*]const u8 = @ptrCast(mem_ptr orelse return CURLE_SEND_ERROR);
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SEND_ERROR));
-    const slot: *ZigTlsBackendSlot = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SEND_ERROR));
-    const state = slot.state orelse return CURLE_SEND_ERROR;
+    const state = cfState(cf) orelse return CURLE_SEND_ERROR;
     if (!state.client_initialized) return CURLE_SEND_ERROR;
 
     state.cf = cf;
@@ -804,9 +818,7 @@ fn zigTlsSend(cf: *CurlCfilter, data: ?*CurlEasy, mem_ptr: ?*const anyopaque, le
 
 fn zigTlsDataPending(cf: *CurlCfilter, data: ?*const CurlEasy) callconv(.c) bool {
     _ = data;
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return false));
-    const slot: *ZigTlsBackendSlot = @ptrCast(@alignCast(connssl.backend orelse return false));
-    const state = slot.state orelse return false;
+    const state = cfState(cf) orelse return false;
     if (!state.client_initialized) return false;
     if (state.client.reader.end > state.client.reader.seek) return true;
     const net_buffered = state.net_reader.end -| state.net_reader.seek;
@@ -819,9 +831,7 @@ fn zigTlsDataPending(cf: *CurlCfilter, data: ?*const CurlEasy) callconv(.c) bool
 
 fn zigTlsShutdown(cf: *CurlCfilter, data: ?*CurlEasy, send_shutdown: bool, done: *bool) callconv(.c) CURLcode {
     done.* = true;
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_OK));
-    const slot: *ZigTlsBackendSlot = @ptrCast(@alignCast(connssl.backend orelse return CURLE_OK));
-    const state = slot.state orelse return CURLE_OK;
+    const state = cfState(cf) orelse return CURLE_OK;
     if (send_shutdown and state.client_initialized) {
         state.cf = cf;
         state.transfer_data = data;
@@ -834,8 +844,7 @@ fn zigTlsShutdown(cf: *CurlCfilter, data: ?*CurlEasy, send_shutdown: bool, done:
 
 fn zigTlsClose(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) void {
     _ = data;
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return));
-    const slot: *ZigTlsBackendSlot = @ptrCast(@alignCast(connssl.backend orelse return));
+    const slot = cfSlot(cf) orelse return;
     if (slot.state) |state| {
         state.deinitSelf();
         std.heap.c_allocator.destroy(state);
@@ -845,8 +854,8 @@ fn zigTlsClose(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) void {
 
 fn zigTlsGetInternals(connssl: *SslConnectData, info: c_uint) callconv(.c) ?*anyopaque {
     _ = info;
-    const slot: *ZigTlsBackendSlot = @ptrCast(@alignCast(connssl.backend orelse return null));
-    return @ptrCast(slot.state);
+    const slot = connsslSlot(connssl) orelse return null;
+    return mem.toRawPtr(slot.state);
 }
 
 pub const Curl_ssl_zig_tls = CurlSsl{
@@ -923,77 +932,73 @@ const SimSsl = struct {
 
 var dummy_method: u8 = 1;
 
-fn simTLS_server_method() callconv(.c) ?*const anyopaque {
-    return @ptrCast(&dummy_method);
+fn simTLS_server_method() callconv(.c) ?*const u8 {
+    return &dummy_method;
 }
 
-fn simSSL_CTX_new(method: ?*const anyopaque) callconv(.c) ?*anyopaque {
+fn simSSL_CTX_new(method: ?*const anyopaque) callconv(.c) ?*SimSslCtx {
     _ = method;
     const ctx = std.heap.c_allocator.create(SimSslCtx) catch return null;
     ctx.* = .{};
-    return @ptrCast(ctx);
+    return ctx;
 }
 
-fn simSSL_CTX_free(ctx_raw: ?*anyopaque) callconv(.c) void {
-    const ctx: *SimSslCtx = @ptrCast(@alignCast(ctx_raw orelse return));
+fn simSSL_CTX_free(ctx_opt: ?*SimSslCtx) callconv(.c) void {
+    const ctx = ctx_opt orelse return;
     if (ctx.cert_der) |d| std.heap.c_allocator.free(d);
     std.heap.c_allocator.destroy(ctx);
 }
 
-fn simBIO_new_mem_buf(buf: ?*const anyopaque, len: c_int) callconv(.c) ?*anyopaque {
-    const ptr: [*]const u8 = @ptrCast(buf orelse return null);
-    const slice_len: usize = if (len < 0) std.mem.len(@as([*:0]const u8, @ptrCast(ptr))) else @intCast(len);
+fn simBIO_new_mem_buf(buf: ?[*:0]const u8, len: c_int) callconv(.c) ?*SimBio {
+    const ptr = buf orelse return null;
+    const slice_len: usize = if (len < 0) std.mem.len(ptr) else @intCast(len);
     const bio = std.heap.c_allocator.create(SimBio) catch return null;
     bio.* = .{ .data = ptr[0..slice_len] };
-    return @ptrCast(bio);
+    return bio;
 }
 
-fn simBIO_free(bio_raw: ?*anyopaque) callconv(.c) c_int {
-    const bio: *SimBio = @ptrCast(@alignCast(bio_raw orelse return 0));
+fn simBIO_free(bio_opt: ?*SimBio) callconv(.c) c_int {
+    const bio = bio_opt orelse return 0;
     std.heap.c_allocator.destroy(bio);
     return 1;
 }
 
-fn simPEM_read_bio_X509(bio_raw: ?*anyopaque, x: ?*?*anyopaque, cb: ?*const anyopaque, u: ?*anyopaque) callconv(.c) ?*anyopaque {
+fn parsePemX509(bio: *SimBio) !*SimX509 {
+    const begin_marker = "-----BEGIN CERTIFICATE-----";
+    const end_marker = "-----END CERTIFICATE-----";
+    const start = (std.mem.indexOf(u8, bio.data, begin_marker) orelse return error.InvalidPem) + begin_marker.len;
+    const end = std.mem.indexOfPos(u8, bio.data, start, end_marker) orelse return error.InvalidPem;
+    const b64 = std.mem.trim(u8, bio.data[start..end], " \t\r\n");
+    const max_len = (b64.len / 4 + 1) * 3;
+    const buf = try std.heap.c_allocator.alloc(u8, max_len);
+    defer std.heap.c_allocator.free(buf);
+    const dec_len = try base64_decoder.decode(buf, b64);
+    const der = try std.heap.c_allocator.dupe(u8, buf[0..dec_len]);
+    errdefer std.heap.c_allocator.free(der);
+    const cert = try std.heap.c_allocator.create(SimX509);
+    cert.* = .{ .der = der };
+    return cert;
+}
+
+fn simPEM_read_bio_X509(bio_opt: ?*SimBio, x: ?*?*anyopaque, cb: ?*const anyopaque, u: ?*anyopaque) callconv(.c) ?*SimX509 {
     _ = x;
     _ = cb;
     _ = u;
-    const bio: *SimBio = @ptrCast(@alignCast(bio_raw orelse return null));
-    const begin_marker = "-----BEGIN CERTIFICATE-----";
-    const end_marker = "-----END CERTIFICATE-----";
-    const start = (std.mem.indexOf(u8, bio.data, begin_marker) orelse return null) + begin_marker.len;
-    const end = std.mem.indexOfPos(u8, bio.data, start, end_marker) orelse return null;
-    const b64 = std.mem.trim(u8, bio.data[start..end], " \t\r\n");
-    const max_len = (b64.len / 4 + 1) * 3;
-    const buf = std.heap.c_allocator.alloc(u8, max_len) catch return null;
-    const dec_len = base64_decoder.decode(buf, b64) catch {
-        std.heap.c_allocator.free(buf);
-        return null;
-    };
-    const der = std.heap.c_allocator.dupe(u8, buf[0..dec_len]) catch {
-        std.heap.c_allocator.free(buf);
-        return null;
-    };
-    std.heap.c_allocator.free(buf);
-    const cert = std.heap.c_allocator.create(SimX509) catch {
-        std.heap.c_allocator.free(der);
-        return null;
-    };
-    cert.* = .{ .der = der };
-    return @ptrCast(cert);
+    const bio = bio_opt orelse return null;
+    return parsePemX509(bio) catch null;
 }
 
-fn simX509_free(x_raw: ?*anyopaque) callconv(.c) void {
-    const cert: *SimX509 = @ptrCast(@alignCast(x_raw orelse return));
+fn simX509_free(cert_opt: ?*SimX509) callconv(.c) void {
+    const cert = cert_opt orelse return;
     std.heap.c_allocator.free(cert.der);
     std.heap.c_allocator.destroy(cert);
 }
 
-fn simPEM_read_bio_PrivateKey(bio_raw: ?*anyopaque, x: ?*?*anyopaque, cb: ?*const anyopaque, u: ?*anyopaque) callconv(.c) ?*anyopaque {
+fn simPEM_read_bio_PrivateKey(bio_opt: ?*SimBio, x: ?*?*anyopaque, cb: ?*const anyopaque, u: ?*anyopaque) callconv(.c) ?*SimPkey {
     _ = x;
     _ = cb;
     _ = u;
-    const bio: *SimBio = @ptrCast(@alignCast(bio_raw orelse return null));
+    const bio = bio_opt orelse return null;
     const ec_begin = "-----BEGIN EC PRIVATE KEY-----";
     const ec_end = "-----END EC PRIVATE KEY-----";
     const pk_begin = "-----BEGIN PRIVATE KEY-----";
@@ -1016,43 +1021,43 @@ fn simPEM_read_bio_PrivateKey(bio_raw: ?*anyopaque, x: ?*?*anyopaque, cb: ?*cons
     if (pos + 2 + 32 > der.len) return null;
     const pkey = std.heap.c_allocator.create(SimPkey) catch return null;
     @memcpy(&pkey.scalar, der[pos + 2 .. pos + 2 + 32]);
-    return @ptrCast(pkey);
+    return pkey;
 }
 
-fn simEVP_PKEY_free(pkey_raw: ?*anyopaque) callconv(.c) void {
-    const pkey: *SimPkey = @ptrCast(@alignCast(pkey_raw orelse return));
+fn simEVP_PKEY_free(pkey_opt: ?*SimPkey) callconv(.c) void {
+    const pkey = pkey_opt orelse return;
     std.heap.c_allocator.destroy(pkey);
 }
 
-fn simSSL_CTX_use_certificate(ctx_raw: ?*anyopaque, x_raw: ?*anyopaque) callconv(.c) c_int {
-    const ctx: *SimSslCtx = @ptrCast(@alignCast(ctx_raw orelse return 0));
-    const cert: *SimX509 = @ptrCast(@alignCast(x_raw orelse return 0));
+fn simSSL_CTX_use_certificate(ctx_opt: ?*SimSslCtx, cert_opt: ?*SimX509) callconv(.c) c_int {
+    const ctx = ctx_opt orelse return 0;
+    const cert = cert_opt orelse return 0;
     if (ctx.cert_der) |old| std.heap.c_allocator.free(old);
     ctx.cert_der = std.heap.c_allocator.dupe(u8, cert.der) catch return 0;
     return 1;
 }
 
-fn simSSL_CTX_use_PrivateKey(ctx_raw: ?*anyopaque, pkey_raw: ?*anyopaque) callconv(.c) c_int {
-    const ctx: *SimSslCtx = @ptrCast(@alignCast(ctx_raw orelse return 0));
-    const pkey: *SimPkey = @ptrCast(@alignCast(pkey_raw orelse return 0));
+fn simSSL_CTX_use_PrivateKey(ctx_opt: ?*SimSslCtx, pkey_opt: ?*SimPkey) callconv(.c) c_int {
+    const ctx = ctx_opt orelse return 0;
+    const pkey = pkey_opt orelse return 0;
     ctx.pkey_scalar = pkey.scalar;
     return 1;
 }
 
-fn simSSL_new(ctx_raw: ?*anyopaque) callconv(.c) ?*anyopaque {
-    const ctx: *SimSslCtx = @ptrCast(@alignCast(ctx_raw orelse return null));
+fn simSSL_new(ctx_opt: ?*SimSslCtx) callconv(.c) ?*SimSsl {
+    const ctx = ctx_opt orelse return null;
     const ssl = std.heap.c_allocator.create(SimSsl) catch return null;
     ssl.* = .{ .ctx = ctx };
-    return @ptrCast(ssl);
+    return ssl;
 }
 
-fn simSSL_free(ssl_raw: ?*anyopaque) callconv(.c) void {
-    const ssl: *SimSsl = @ptrCast(@alignCast(ssl_raw orelse return));
+fn simSSL_free(ssl_opt: ?*SimSsl) callconv(.c) void {
+    const ssl = ssl_opt orelse return;
     std.heap.c_allocator.destroy(ssl);
 }
 
-fn simSSL_set_fd(ssl_raw: ?*anyopaque, fd: c_int) callconv(.c) c_int {
-    const ssl: *SimSsl = @ptrCast(@alignCast(ssl_raw orelse return 0));
+fn simSSL_set_fd(ssl_opt: ?*SimSsl, fd: c_int) callconv(.c) c_int {
+    const ssl = ssl_opt orelse return 0;
     ssl.fd = fd;
     return 1;
 }
@@ -1077,27 +1082,25 @@ fn fdWriteAll(fd: c_int, buf: []const u8) bool {
     return true;
 }
 
-fn encryptTls13Record(
+fn encryptTls13RecordImpl(
     gpa: std.mem.Allocator,
     key: [16]u8,
     iv: [12]u8,
     seq: u64,
     inner_ct: u8,
     plaintext: []const u8,
-) ?[]u8 {
+) ![]u8 {
     const Aead = std.crypto.aead.aes_gcm.Aes128Gcm;
     const inner_len = plaintext.len + 1;
     const rec_len: u16 = @intCast(inner_len + Aead.tag_length);
-    const out = gpa.alloc(u8, 5 + rec_len) catch return null;
+    const out = try gpa.alloc(u8, 5 + rec_len);
+    errdefer gpa.free(out);
     out[0] = 23; // application_data
     out[1] = 0x03;
     out[2] = 0x03;
     std.mem.writeInt(u16, out[3..5], rec_len, .big);
 
-    const inner = gpa.alloc(u8, inner_len) catch {
-        gpa.free(out);
-        return null;
-    };
+    const inner = try gpa.alloc(u8, inner_len);
     defer gpa.free(inner);
     @memcpy(inner[0..plaintext.len], plaintext);
     inner[plaintext.len] = inner_ct;
@@ -1112,8 +1115,19 @@ fn encryptTls13Record(
     return out;
 }
 
-fn simSSL_accept(ssl_raw: ?*anyopaque) callconv(.c) c_int {
-    const ssl: *SimSsl = @ptrCast(@alignCast(ssl_raw orelse return -1));
+fn encryptTls13Record(
+    gpa: std.mem.Allocator,
+    key: [16]u8,
+    iv: [12]u8,
+    seq: u64,
+    inner_ct: u8,
+    plaintext: []const u8,
+) ?[]u8 {
+    return encryptTls13RecordImpl(gpa, key, iv, seq, inner_ct, plaintext) catch null;
+}
+
+fn simSSL_accept(ssl_opt: ?*SimSsl) callconv(.c) c_int {
+    const ssl = ssl_opt orelse return -1;
     const cert_der = ssl.ctx.cert_der orelse return -1;
     const pkey_scalar = ssl.ctx.pkey_scalar orelse return -1;
     const gpa = std.heap.c_allocator;
@@ -1359,10 +1373,10 @@ fn simSSL_accept(ssl_raw: ?*anyopaque) callconv(.c) c_int {
     return 1;
 }
 
-fn simSSL_read(ssl_raw: ?*anyopaque, buf_raw: ?*anyopaque, num: c_int) callconv(.c) c_int {
-    const ssl: *SimSsl = @ptrCast(@alignCast(ssl_raw orelse return -1));
+fn simSSL_read(ssl_opt: ?*SimSsl, buf_opt: ?[*]u8, num: c_int) callconv(.c) c_int {
+    const ssl = ssl_opt orelse return -1;
     if (!ssl.handshake_ok or num <= 0) return -1;
-    const out_buf: [*]u8 = @ptrCast(buf_raw orelse return -1);
+    const out_buf = buf_opt orelse return -1;
     const gpa = std.heap.c_allocator;
 
     if (ssl.pending_pos < ssl.pending_len) {
@@ -1424,10 +1438,10 @@ fn simSSL_read(ssl_raw: ?*anyopaque, buf_raw: ?*anyopaque, num: c_int) callconv(
     }
 }
 
-fn simSSL_write(ssl_raw: ?*anyopaque, buf_raw: ?*const anyopaque, num: c_int) callconv(.c) c_int {
-    const ssl: *SimSsl = @ptrCast(@alignCast(ssl_raw orelse return -1));
+fn simSSL_write(ssl_opt: ?*SimSsl, buf_opt: ?[*]const u8, num: c_int) callconv(.c) c_int {
+    const ssl = ssl_opt orelse return -1;
     if (!ssl.handshake_ok or num <= 0) return -1;
-    const in_buf: [*]const u8 = @ptrCast(buf_raw orelse return -1);
+    const in_buf = buf_opt orelse return -1;
     const len: usize = @intCast(num);
     const gpa = std.heap.c_allocator;
 
@@ -1438,8 +1452,8 @@ fn simSSL_write(ssl_raw: ?*anyopaque, buf_raw: ?*const anyopaque, num: c_int) ca
     return num;
 }
 
-fn simSSL_shutdown(ssl_raw: ?*anyopaque) callconv(.c) c_int {
-    const ssl: *SimSsl = @ptrCast(@alignCast(ssl_raw orelse return 0));
+fn simSSL_shutdown(ssl_opt: ?*SimSsl) callconv(.c) c_int {
+    const ssl = ssl_opt orelse return 0;
     if (!ssl.handshake_ok) return 1;
     const gpa = std.heap.c_allocator;
     const alert = [_]u8{ 1, 0 }; // warning, close_notify

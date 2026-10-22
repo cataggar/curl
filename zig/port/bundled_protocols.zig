@@ -1,8 +1,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const backend_options = @import("backend_options");
+const mem = @import("mem.zig");
 
 const is_bundled = if (@hasDecl(backend_options, "bundled")) backend_options.bundled else false;
+
+fn cStrdupSlice(s: []const u8) ?[*:0]u8 {
+    return mem.memdup0(s.ptr, s.len);
+}
 
 // ============================================================================
 // 1. Pure-Zig IDNA2008 / RFC 3492 Punycode (idn2_*)
@@ -287,10 +292,7 @@ pub fn idn2_lookup_u8(src: ?[*:0]const u8, lookupname: ?*?[*:0]u8, flags: c_int)
     const in_slice = std.mem.span(src_ptr);
     if (in_slice.len == 0) {
         if (lookupname) |out| {
-            const raw = std.c.malloc(1) orelse return IDN2_MALLOC;
-            const p: [*]u8 = @ptrCast(raw);
-            p[0] = 0;
-            out.* = @ptrCast(p);
+            out.* = cStrdupSlice("") orelse return IDN2_MALLOC;
         }
         return IDN2_OK;
     }
@@ -354,11 +356,7 @@ pub fn idn2_lookup_u8(src: ?[*:0]const u8, lookupname: ?*?[*:0]u8, flags: c_int)
     }
 
     if (lookupname) |out| {
-        const raw = std.c.malloc(out_pos + 1) orelse return IDN2_MALLOC;
-        const p: [*]u8 = @ptrCast(raw);
-        @memcpy(p[0..out_pos], out_domain[0..out_pos]);
-        p[out_pos] = 0;
-        out.* = @ptrCast(p);
+        out.* = cStrdupSlice(out_domain[0..out_pos]) orelse return IDN2_MALLOC;
     }
     return IDN2_OK;
 }
@@ -384,10 +382,7 @@ pub fn idn2_to_unicode_8z8z(input: ?[*:0]const u8, output: ?*?[*:0]u8, flags: c_
     const in_slice = std.mem.span(in_ptr);
     if (in_slice.len == 0) {
         if (output) |out| {
-            const raw = std.c.malloc(1) orelse return IDN2_MALLOC;
-            const p: [*]u8 = @ptrCast(raw);
-            p[0] = 0;
-            out.* = @ptrCast(p);
+            out.* = cStrdupSlice("") orelse return IDN2_MALLOC;
         }
         return IDN2_OK;
     }
@@ -419,17 +414,13 @@ pub fn idn2_to_unicode_8z8z(input: ?[*:0]const u8, output: ?*?[*:0]u8, flags: c_
     }
 
     if (output) |out| {
-        const raw = std.c.malloc(out_pos + 1) orelse return IDN2_MALLOC;
-        const p: [*]u8 = @ptrCast(raw);
-        @memcpy(p[0..out_pos], out_buf[0..out_pos]);
-        p[out_pos] = 0;
-        out.* = @ptrCast(p);
+        out.* = cStrdupSlice(out_buf[0..out_pos]) orelse return IDN2_MALLOC;
     }
     return IDN2_OK;
 }
 
 pub fn idn2_free(ptr: ?*anyopaque) callconv(.c) void {
-    std.c.free(ptr);
+    mem.free(ptr);
 }
 
 pub fn idn2_strerror(rc: c_int) callconv(.c) [*:0]const u8 {
@@ -890,16 +881,11 @@ pub fn ares_set_servers_ports_csv(channel: ?*anyopaque, servers: ?[*:0]const u8)
 
 pub fn ares_get_servers_csv(channel: ?*anyopaque) callconv(.c) ?[*:0]u8 {
     _ = channel;
-    const default_srv = "127.0.0.1";
-    const raw = std.c.malloc(default_srv.len + 1) orelse return null;
-    const p: [*]u8 = @ptrCast(raw);
-    @memcpy(p[0..default_srv.len], default_srv);
-    p[default_srv.len] = 0;
-    return @ptrCast(p);
+    return cStrdupSlice("127.0.0.1");
 }
 
 pub fn ares_free_string(str: ?*anyopaque) callconv(.c) void {
-    std.c.free(str);
+    mem.free(str);
 }
 
 pub fn ares_getaddrinfo(
@@ -955,32 +941,36 @@ pub fn ares_send(
     }
 }
 
-pub fn ares_dns_record_create(
-    dnsrec: ?*?*anyopaque,
-    id: u16,
-    flags: u16,
-    opcode: c_uint,
-    rcode: c_uint,
-) callconv(.c) c_int {
-    const out = dnsrec orelse return ARES_EBADQUERY;
-    const raw = std.c.calloc(1, @sizeOf(AresDnsRecord)) orelse return ARES_ENOMEM;
-    const rec: *AresDnsRecord = @ptrCast(@alignCast(raw));
+fn createAresDnsRecord(id: u16, flags: u16, opcode: c_uint, rcode: c_uint) !*AresDnsRecord {
+    const rec = mem.create(AresDnsRecord) orelse return error.OutOfMemory;
+    errdefer mem.freeTyped(rec);
     rec.* = .{
         .id = id,
         .flags = flags,
         .opcode = opcode,
         .rcode = rcode,
     };
-    out.* = rec;
+    return rec;
+}
+
+pub fn ares_dns_record_create(
+    dnsrec: ?*?*AresDnsRecord,
+    id: u16,
+    flags: u16,
+    opcode: c_uint,
+    rcode: c_uint,
+) callconv(.c) c_int {
+    const out = dnsrec orelse return ARES_EBADQUERY;
+    out.* = createAresDnsRecord(id, flags, opcode, rcode) catch return ARES_ENOMEM;
     return ARES_SUCCESS;
 }
 
-pub fn ares_dns_record_destroy(dnsrec: ?*anyopaque) callconv(.c) void {
-    std.c.free(dnsrec);
+pub fn ares_dns_record_destroy(dnsrec: ?*AresDnsRecord) callconv(.c) void {
+    mem.freeTyped(dnsrec);
 }
 
 pub fn ares_dns_record_query_add(
-    dnsrec: ?*anyopaque,
+    dnsrec: ?*AresDnsRecord,
     name: ?[*:0]const u8,
     qtype: c_uint,
     qclass: c_uint,
@@ -993,15 +983,15 @@ pub fn ares_dns_record_query_add(
 }
 
 pub fn ares_dns_write(
-    dnsrec: ?*const anyopaque,
+    dnsrec: ?*const AresDnsRecord,
     buf: ?*?[*]u8,
     buf_len: ?*usize,
 ) callconv(.c) c_int {
     _ = dnsrec;
     const out_buf = buf orelse return ARES_EBADQUERY;
     const out_len = buf_len orelse return ARES_EBADQUERY;
-    const raw = std.c.calloc(1, 12) orelse return ARES_ENOMEM;
-    out_buf.* = @ptrCast(raw);
+    const raw = mem.callocMany(u8, 12) orelse return ARES_ENOMEM;
+    out_buf.* = raw;
     out_len.* = 12;
     return ARES_SUCCESS;
 }
@@ -1010,7 +1000,7 @@ pub fn ares_dns_parse(
     buf: ?[*]const u8,
     buf_len: usize,
     flags: c_uint,
-    dnsrec: ?*?*anyopaque,
+    dnsrec: ?*?*AresDnsRecord,
 ) callconv(.c) c_int {
     _ = flags;
     const out = dnsrec orelse return ARES_EBADQUERY;
@@ -1022,8 +1012,8 @@ pub fn ares_dns_parse(
 }
 
 pub fn ares_dns_record_rr_add(
-    rr_out: ?*?*anyopaque,
-    dnsrec: ?*anyopaque,
+    rr_out: ?*?*AresDnsRr,
+    dnsrec: ?*AresDnsRecord,
     sect: c_uint,
     name: ?[*:0]const u8,
     rtype: c_uint,
@@ -1031,7 +1021,7 @@ pub fn ares_dns_record_rr_add(
     ttl: c_uint,
 ) callconv(.c) c_int {
     _ = name;
-    const rec: *AresDnsRecord = @ptrCast(@alignCast(dnsrec orelse return ARES_EBADQUERY));
+    const rec = dnsrec orelse return ARES_EBADQUERY;
     if (rec.rr_cnt >= rec.rrs.len) return ARES_ENOMEM;
     const rr = &rec.rrs[rec.rr_cnt];
     rr.* = .{
@@ -1047,8 +1037,8 @@ pub fn ares_dns_record_rr_add(
     return ARES_SUCCESS;
 }
 
-pub fn ares_dns_record_rr_cnt(dnsrec: ?*const anyopaque, sect: c_uint) callconv(.c) usize {
-    const rec: *const AresDnsRecord = @ptrCast(@alignCast(dnsrec orelse return 0));
+pub fn ares_dns_record_rr_cnt(dnsrec: ?*const AresDnsRecord, sect: c_uint) callconv(.c) usize {
+    const rec = dnsrec orelse return 0;
     var cnt: usize = 0;
     for (rec.rrs[0..rec.rr_cnt]) |rr| {
         if (rr.sect == sect) cnt += 1;
@@ -1056,8 +1046,8 @@ pub fn ares_dns_record_rr_cnt(dnsrec: ?*const anyopaque, sect: c_uint) callconv(
     return cnt;
 }
 
-pub fn ares_dns_record_rr_get(dnsrec: ?*anyopaque, sect: c_uint, idx: usize) callconv(.c) ?*anyopaque {
-    const rec: *AresDnsRecord = @ptrCast(@alignCast(dnsrec orelse return null));
+pub fn ares_dns_record_rr_get(dnsrec: ?*AresDnsRecord, sect: c_uint, idx: usize) callconv(.c) ?*AresDnsRr {
+    const rec = dnsrec orelse return null;
     var cur: usize = 0;
     for (&rec.rrs, 0..) |*rr, i| {
         if (i >= rec.rr_cnt) break;
@@ -1069,43 +1059,43 @@ pub fn ares_dns_record_rr_get(dnsrec: ?*anyopaque, sect: c_uint, idx: usize) cal
     return null;
 }
 
-pub fn ares_dns_rr_get_type(dns_rr: ?*const anyopaque) callconv(.c) c_uint {
-    const rr: *const AresDnsRr = @ptrCast(@alignCast(dns_rr orelse return 0));
+pub fn ares_dns_rr_get_type(dns_rr: ?*const AresDnsRr) callconv(.c) c_uint {
+    const rr = dns_rr orelse return 0;
     return rr.rtype;
 }
 
-pub fn ares_dns_rr_get_ttl(dns_rr: ?*const anyopaque) callconv(.c) c_uint {
-    const rr: *const AresDnsRr = @ptrCast(@alignCast(dns_rr orelse return 0));
+pub fn ares_dns_rr_get_ttl(dns_rr: ?*const AresDnsRr) callconv(.c) c_uint {
+    const rr = dns_rr orelse return 0;
     return rr.ttl;
 }
 
-pub fn ares_dns_rr_get_u16(dns_rr: ?*const anyopaque, key: c_uint) callconv(.c) u16 {
+pub fn ares_dns_rr_get_u16(dns_rr: ?*const AresDnsRr, key: c_uint) callconv(.c) u16 {
     _ = key;
-    const rr: *const AresDnsRr = @ptrCast(@alignCast(dns_rr orelse return 0));
+    const rr = dns_rr orelse return 0;
     return rr.u16_val;
 }
 
-pub fn ares_dns_rr_get_str(dns_rr: ?*const anyopaque, key: c_uint) callconv(.c) ?[*:0]const u8 {
+pub fn ares_dns_rr_get_str(dns_rr: ?*const AresDnsRr, key: c_uint) callconv(.c) ?[*:0]const u8 {
     _ = key;
-    const rr: *const AresDnsRr = @ptrCast(@alignCast(dns_rr orelse return null));
-    return @ptrCast(&rr.str_val);
+    const rr = dns_rr orelse return null;
+    return &rr.str_val;
 }
 
-pub fn ares_dns_rr_get_opt_cnt(dns_rr: ?*const anyopaque, key: c_uint) callconv(.c) usize {
+pub fn ares_dns_rr_get_opt_cnt(dns_rr: ?*const AresDnsRr, key: c_uint) callconv(.c) usize {
     _ = key;
-    const rr: *const AresDnsRr = @ptrCast(@alignCast(dns_rr orelse return 0));
+    const rr = dns_rr orelse return 0;
     return rr.opt_cnt;
 }
 
 pub fn ares_dns_rr_get_opt(
-    dns_rr: ?*const anyopaque,
+    dns_rr: ?*const AresDnsRr,
     key: c_uint,
     idx: usize,
     val: ?*?[*]const u8,
     val_len: ?*usize,
 ) callconv(.c) u16 {
     _ = key;
-    const rr: *const AresDnsRr = @ptrCast(@alignCast(dns_rr orelse return 0xffff));
+    const rr = dns_rr orelse return 0xffff;
     if (idx >= rr.opt_cnt) return 0xffff;
     const entry = &rr.opts[idx];
     if (val) |v| v.* = &entry.val;
@@ -1114,14 +1104,14 @@ pub fn ares_dns_rr_get_opt(
 }
 
 pub fn ares_dns_rr_get_opt_byid(
-    dns_rr: ?*const anyopaque,
+    dns_rr: ?*const AresDnsRr,
     key: c_uint,
     opt: u16,
     val: ?*?[*]const u8,
     val_len: ?*usize,
 ) callconv(.c) bool {
     _ = key;
-    const rr: *const AresDnsRr = @ptrCast(@alignCast(dns_rr orelse return false));
+    const rr = dns_rr orelse return false;
     for (rr.opts[0..rr.opt_cnt]) |*entry| {
         if (entry.opt == opt) {
             if (val) |v| v.* = &entry.val;
@@ -1132,16 +1122,16 @@ pub fn ares_dns_rr_get_opt_byid(
     return false;
 }
 
-pub fn ares_dns_rr_set_u16(dns_rr: ?*anyopaque, key: c_uint, val: u16) callconv(.c) c_int {
+pub fn ares_dns_rr_set_u16(dns_rr: ?*AresDnsRr, key: c_uint, val: u16) callconv(.c) c_int {
     _ = key;
-    const rr: *AresDnsRr = @ptrCast(@alignCast(dns_rr orelse return ARES_EBADQUERY));
+    const rr = dns_rr orelse return ARES_EBADQUERY;
     rr.u16_val = val;
     return ARES_SUCCESS;
 }
 
-pub fn ares_dns_rr_set_str(dns_rr: ?*anyopaque, key: c_uint, val: ?[*:0]const u8) callconv(.c) c_int {
+pub fn ares_dns_rr_set_str(dns_rr: ?*AresDnsRr, key: c_uint, val: ?[*:0]const u8) callconv(.c) c_int {
     _ = key;
-    const rr: *AresDnsRr = @ptrCast(@alignCast(dns_rr orelse return ARES_EBADQUERY));
+    const rr = dns_rr orelse return ARES_EBADQUERY;
     @memset(&rr.str_val, 0);
     if (val) |v| {
         const s = std.mem.span(v);
@@ -1153,14 +1143,14 @@ pub fn ares_dns_rr_set_str(dns_rr: ?*anyopaque, key: c_uint, val: ?[*:0]const u8
 }
 
 pub fn ares_dns_rr_set_opt(
-    dns_rr: ?*anyopaque,
+    dns_rr: ?*AresDnsRr,
     key: c_uint,
     opt: u16,
     val: ?[*]const u8,
     val_len: usize,
 ) callconv(.c) c_int {
     _ = key;
-    const rr: *AresDnsRr = @ptrCast(@alignCast(dns_rr orelse return ARES_EBADQUERY));
+    const rr = dns_rr orelse return ARES_EBADQUERY;
     if (rr.opt_cnt >= rr.opts.len) return ARES_ENOMEM;
     var entry = &rr.opts[rr.opt_cnt];
     entry.* = .{ .opt = opt };
@@ -1267,169 +1257,172 @@ pub fn nghttp2_priority_spec_init(
     }
 }
 
-pub fn nghttp2_option_new(option_ptr: ?*?*anyopaque) callconv(.c) c_int {
+pub fn nghttp2_option_new(option_ptr: ?*?*Nghttp2Option) callconv(.c) c_int {
     const out = option_ptr orelse return -501;
-    const raw = std.c.calloc(1, @sizeOf(Nghttp2Option)) orelse return -901;
-    out.* = raw;
+    const opt = mem.create(Nghttp2Option) orelse return -901;
+    out.* = opt;
     return 0;
 }
 
-pub fn nghttp2_option_del(option: ?*anyopaque) callconv(.c) void {
-    std.c.free(option);
+pub fn nghttp2_option_del(option: ?*Nghttp2Option) callconv(.c) void {
+    mem.freeTyped(option);
 }
 
-pub fn nghttp2_option_set_no_auto_window_update(option: ?*anyopaque, val: c_int) callconv(.c) void {
-    const opt: *Nghttp2Option = @ptrCast(@alignCast(option orelse return));
+pub fn nghttp2_option_set_no_auto_window_update(option: ?*Nghttp2Option, val: c_int) callconv(.c) void {
+    const opt = option orelse return;
     opt.no_auto_window_update = val;
 }
 
-pub fn nghttp2_option_set_no_rfc9113_leading_and_trailing_ws_validation(option: ?*anyopaque, val: c_int) callconv(.c) void {
-    const opt: *Nghttp2Option = @ptrCast(@alignCast(option orelse return));
+pub fn nghttp2_option_set_no_rfc9113_leading_and_trailing_ws_validation(option: ?*Nghttp2Option, val: c_int) callconv(.c) void {
+    const opt = option orelse return;
     opt.no_rfc9113_ws_validation = val;
 }
 
-pub fn nghttp2_session_callbacks_new(callbacks_ptr: ?*?*anyopaque) callconv(.c) c_int {
+pub fn nghttp2_session_callbacks_new(callbacks_ptr: ?*?*Nghttp2Callbacks) callconv(.c) c_int {
     const out = callbacks_ptr orelse return -501;
-    const raw = std.c.calloc(1, @sizeOf(Nghttp2Callbacks)) orelse return -901;
-    out.* = raw;
+    const cbs = mem.create(Nghttp2Callbacks) orelse return -901;
+    out.* = cbs;
     return 0;
 }
 
-pub fn nghttp2_session_callbacks_del(callbacks: ?*anyopaque) callconv(.c) void {
-    std.c.free(callbacks);
+pub fn nghttp2_session_callbacks_del(callbacks: ?*Nghttp2Callbacks) callconv(.c) void {
+    mem.freeTyped(callbacks);
 }
 
-pub fn nghttp2_session_callbacks_set_send_callback(cbs: ?*anyopaque, cb: ?*const anyopaque) callconv(.c) void {
-    const c: *Nghttp2Callbacks = @ptrCast(@alignCast(cbs orelse return));
+pub fn nghttp2_session_callbacks_set_send_callback(cbs: ?*Nghttp2Callbacks, cb: ?*const anyopaque) callconv(.c) void {
+    const c = cbs orelse return;
     c.send_cb = cb;
 }
 
-pub fn nghttp2_session_callbacks_set_on_frame_recv_callback(cbs: ?*anyopaque, cb: ?*const anyopaque) callconv(.c) void {
-    const c: *Nghttp2Callbacks = @ptrCast(@alignCast(cbs orelse return));
+pub fn nghttp2_session_callbacks_set_on_frame_recv_callback(cbs: ?*Nghttp2Callbacks, cb: ?*const anyopaque) callconv(.c) void {
+    const c = cbs orelse return;
     c.on_frame_recv_cb = cb;
 }
 
-pub fn nghttp2_session_callbacks_set_on_invalid_frame_recv_callback(cbs: ?*anyopaque, cb: ?*const anyopaque) callconv(.c) void {
-    const c: *Nghttp2Callbacks = @ptrCast(@alignCast(cbs orelse return));
+pub fn nghttp2_session_callbacks_set_on_invalid_frame_recv_callback(cbs: ?*Nghttp2Callbacks, cb: ?*const anyopaque) callconv(.c) void {
+    const c = cbs orelse return;
     c.on_invalid_frame_recv_cb = cb;
 }
 
-pub fn nghttp2_session_callbacks_set_on_data_chunk_recv_callback(cbs: ?*anyopaque, cb: ?*const anyopaque) callconv(.c) void {
-    const c: *Nghttp2Callbacks = @ptrCast(@alignCast(cbs orelse return));
+pub fn nghttp2_session_callbacks_set_on_data_chunk_recv_callback(cbs: ?*Nghttp2Callbacks, cb: ?*const anyopaque) callconv(.c) void {
+    const c = cbs orelse return;
     c.on_data_chunk_recv_cb = cb;
 }
 
-pub fn nghttp2_session_callbacks_set_before_frame_send_callback(cbs: ?*anyopaque, cb: ?*const anyopaque) callconv(.c) void {
-    const c: *Nghttp2Callbacks = @ptrCast(@alignCast(cbs orelse return));
+pub fn nghttp2_session_callbacks_set_before_frame_send_callback(cbs: ?*Nghttp2Callbacks, cb: ?*const anyopaque) callconv(.c) void {
+    const c = cbs orelse return;
     c.before_frame_send_cb = cb;
 }
 
-pub fn nghttp2_session_callbacks_set_on_frame_send_callback(cbs: ?*anyopaque, cb: ?*const anyopaque) callconv(.c) void {
-    const c: *Nghttp2Callbacks = @ptrCast(@alignCast(cbs orelse return));
+pub fn nghttp2_session_callbacks_set_on_frame_send_callback(cbs: ?*Nghttp2Callbacks, cb: ?*const anyopaque) callconv(.c) void {
+    const c = cbs orelse return;
     c.on_frame_send_cb = cb;
 }
 
-pub fn nghttp2_session_callbacks_set_on_frame_not_send_callback(cbs: ?*anyopaque, cb: ?*const anyopaque) callconv(.c) void {
-    const c: *Nghttp2Callbacks = @ptrCast(@alignCast(cbs orelse return));
+pub fn nghttp2_session_callbacks_set_on_frame_not_send_callback(cbs: ?*Nghttp2Callbacks, cb: ?*const anyopaque) callconv(.c) void {
+    const c = cbs orelse return;
     c.on_frame_not_send_cb = cb;
 }
 
-pub fn nghttp2_session_callbacks_set_on_stream_close_callback(cbs: ?*anyopaque, cb: ?*const anyopaque) callconv(.c) void {
-    const c: *Nghttp2Callbacks = @ptrCast(@alignCast(cbs orelse return));
+pub fn nghttp2_session_callbacks_set_on_stream_close_callback(cbs: ?*Nghttp2Callbacks, cb: ?*const anyopaque) callconv(.c) void {
+    const c = cbs orelse return;
     c.on_stream_close_cb = cb;
 }
 
-pub fn nghttp2_session_callbacks_set_on_begin_headers_callback(cbs: ?*anyopaque, cb: ?*const anyopaque) callconv(.c) void {
-    const c: *Nghttp2Callbacks = @ptrCast(@alignCast(cbs orelse return));
+pub fn nghttp2_session_callbacks_set_on_begin_headers_callback(cbs: ?*Nghttp2Callbacks, cb: ?*const anyopaque) callconv(.c) void {
+    const c = cbs orelse return;
     c.on_begin_headers_cb = cb;
 }
 
-pub fn nghttp2_session_callbacks_set_on_header_callback(cbs: ?*anyopaque, cb: ?*const anyopaque) callconv(.c) void {
-    const c: *Nghttp2Callbacks = @ptrCast(@alignCast(cbs orelse return));
+pub fn nghttp2_session_callbacks_set_on_header_callback(cbs: ?*Nghttp2Callbacks, cb: ?*const anyopaque) callconv(.c) void {
+    const c = cbs orelse return;
     c.on_header_cb = cb;
 }
 
-pub fn nghttp2_session_callbacks_set_error_callback2(cbs: ?*anyopaque, cb: ?*const anyopaque) callconv(.c) void {
-    const c: *Nghttp2Callbacks = @ptrCast(@alignCast(cbs orelse return));
+pub fn nghttp2_session_callbacks_set_error_callback2(cbs: ?*Nghttp2Callbacks, cb: ?*const anyopaque) callconv(.c) void {
+    const c = cbs orelse return;
     c.error_cb2 = cb;
 }
 
-pub fn nghttp2_session_callbacks_set_send_data_callback(cbs: ?*anyopaque, cb: ?*const anyopaque) callconv(.c) void {
-    const c: *Nghttp2Callbacks = @ptrCast(@alignCast(cbs orelse return));
+pub fn nghttp2_session_callbacks_set_send_data_callback(cbs: ?*Nghttp2Callbacks, cb: ?*const anyopaque) callconv(.c) void {
+    const c = cbs orelse return;
     c.send_data_cb = cb;
 }
 
+fn createNghttp2Session(callbacks: ?*const Nghttp2Callbacks, user_data: ?*anyopaque) !*Nghttp2Session {
+    const sess = mem.create(Nghttp2Session) orelse return error.OutOfMemory;
+    errdefer mem.freeTyped(sess);
+    sess.* = .{
+        .user_data = user_data,
+    };
+    if (callbacks) |cbs| {
+        sess.callbacks = cbs.*;
+    }
+    return sess;
+}
+
 pub fn nghttp2_session_client_new3(
-    session_ptr: ?*?*anyopaque,
-    callbacks: ?*const anyopaque,
+    session_ptr: ?*?*Nghttp2Session,
+    callbacks: ?*const Nghttp2Callbacks,
     user_data: ?*anyopaque,
-    option: ?*const anyopaque,
+    option: ?*const Nghttp2Option,
     mem_arg: ?*anyopaque,
 ) callconv(.c) c_int {
     _ = option;
     _ = mem_arg;
     const out = session_ptr orelse return -501;
-    const raw = std.c.calloc(1, @sizeOf(Nghttp2Session)) orelse return -901;
-    const sess: *Nghttp2Session = @ptrCast(@alignCast(raw));
-    sess.* = .{
-        .user_data = user_data,
-    };
-    if (callbacks) |cb_ptr| {
-        const cbs: *const Nghttp2Callbacks = @ptrCast(@alignCast(cb_ptr));
-        sess.callbacks = cbs.*;
-    }
-    out.* = sess;
+    out.* = createNghttp2Session(callbacks, user_data) catch return -901;
     return 0;
 }
 
 pub fn nghttp2_session_client_new2(
-    session_ptr: ?*?*anyopaque,
-    callbacks: ?*const anyopaque,
+    session_ptr: ?*?*Nghttp2Session,
+    callbacks: ?*const Nghttp2Callbacks,
     user_data: ?*anyopaque,
-    option: ?*const anyopaque,
+    option: ?*const Nghttp2Option,
 ) callconv(.c) c_int {
     return nghttp2_session_client_new3(session_ptr, callbacks, user_data, option, null);
 }
 
 pub fn nghttp2_session_client_new(
-    session_ptr: ?*?*anyopaque,
-    callbacks: ?*const anyopaque,
+    session_ptr: ?*?*Nghttp2Session,
+    callbacks: ?*const Nghttp2Callbacks,
     user_data: ?*anyopaque,
 ) callconv(.c) c_int {
     return nghttp2_session_client_new3(session_ptr, callbacks, user_data, null, null);
 }
 
-pub fn nghttp2_session_del(session: ?*anyopaque) callconv(.c) void {
-    std.c.free(session);
+pub fn nghttp2_session_del(session: ?*Nghttp2Session) callconv(.c) void {
+    mem.freeTyped(session);
 }
 
-pub fn nghttp2_session_send(session: ?*anyopaque) callconv(.c) c_int {
+pub fn nghttp2_session_send(session: ?*Nghttp2Session) callconv(.c) c_int {
     _ = session;
     return 0;
 }
 
-pub fn nghttp2_session_mem_recv(session: ?*anyopaque, in_buf: ?[*]const u8, inlen: usize) callconv(.c) isize {
+pub fn nghttp2_session_mem_recv(session: ?*Nghttp2Session, in_buf: ?[*]const u8, inlen: usize) callconv(.c) isize {
     _ = session;
     _ = in_buf;
     return @intCast(inlen);
 }
 
-pub fn nghttp2_session_mem_recv2(session: ?*anyopaque, in_buf: ?[*]const u8, inlen: usize) callconv(.c) isize {
+pub fn nghttp2_session_mem_recv2(session: ?*Nghttp2Session, in_buf: ?[*]const u8, inlen: usize) callconv(.c) isize {
     return nghttp2_session_mem_recv(session, in_buf, inlen);
 }
 
-pub fn nghttp2_session_want_read(session: ?*anyopaque) callconv(.c) c_int {
+pub fn nghttp2_session_want_read(session: ?*Nghttp2Session) callconv(.c) c_int {
     _ = session;
     return 0;
 }
 
-pub fn nghttp2_session_want_write(session: ?*anyopaque) callconv(.c) c_int {
+pub fn nghttp2_session_want_write(session: ?*Nghttp2Session) callconv(.c) c_int {
     _ = session;
     return 0;
 }
 
-pub fn nghttp2_session_get_stream_user_data(session: ?*anyopaque, stream_id: i32) callconv(.c) ?*anyopaque {
-    const sess: *Nghttp2Session = @ptrCast(@alignCast(session orelse return null));
+pub fn nghttp2_session_get_stream_user_data(session: ?*Nghttp2Session, stream_id: i32) callconv(.c) ?*anyopaque {
+    const sess = session orelse return null;
     if (stream_id <= 0) return null;
     for (sess.streams) |entry| {
         if (entry.stream_id == stream_id) return entry.user_data;
@@ -1438,11 +1431,11 @@ pub fn nghttp2_session_get_stream_user_data(session: ?*anyopaque, stream_id: i32
 }
 
 pub fn nghttp2_session_set_stream_user_data(
-    session: ?*anyopaque,
+    session: ?*Nghttp2Session,
     stream_id: i32,
     stream_user_data: ?*anyopaque,
 ) callconv(.c) c_int {
-    const sess: *Nghttp2Session = @ptrCast(@alignCast(session orelse return -501));
+    const sess = session orelse return -501;
     if (stream_id <= 0) return -501;
     for (&sess.streams) |*entry| {
         if (entry.stream_id == stream_id or entry.stream_id == 0) {
@@ -1455,7 +1448,7 @@ pub fn nghttp2_session_set_stream_user_data(
     return 0;
 }
 
-pub fn nghttp2_session_get_remote_settings(session: ?*anyopaque, id: c_int) callconv(.c) u32 {
+pub fn nghttp2_session_get_remote_settings(session: ?*Nghttp2Session, id: c_int) callconv(.c) u32 {
     _ = session;
     return switch (id) {
         2 => 1,
@@ -1466,7 +1459,7 @@ pub fn nghttp2_session_get_remote_settings(session: ?*anyopaque, id: c_int) call
     };
 }
 
-pub fn nghttp2_session_consume(session: ?*anyopaque, stream_id: i32, size: usize) callconv(.c) c_int {
+pub fn nghttp2_session_consume(session: ?*Nghttp2Session, stream_id: i32, size: usize) callconv(.c) c_int {
     _ = session;
     _ = stream_id;
     _ = size;
@@ -1474,7 +1467,7 @@ pub fn nghttp2_session_consume(session: ?*anyopaque, stream_id: i32, size: usize
 }
 
 pub fn nghttp2_session_upgrade2(
-    session: ?*anyopaque,
+    session: ?*Nghttp2Session,
     settings_payload: ?[*]const u8,
     settings_payloadlen: usize,
     head_request: c_int,
@@ -1519,7 +1512,7 @@ pub fn nghttp2_pack_settings_payload2(
 }
 
 pub fn nghttp2_submit_settings(
-    session: ?*anyopaque,
+    session: ?*Nghttp2Session,
     flags: u8,
     iv: ?[*]const nghttp2_settings_entry,
     niv: usize,
@@ -1532,7 +1525,7 @@ pub fn nghttp2_submit_settings(
 }
 
 pub fn nghttp2_submit_request(
-    session: ?*anyopaque,
+    session: ?*Nghttp2Session,
     pri_spec: ?*const nghttp2_priority_spec,
     nva: ?*const anyopaque,
     nvlen: usize,
@@ -1543,15 +1536,15 @@ pub fn nghttp2_submit_request(
     _ = nva;
     _ = nvlen;
     _ = data_prd;
-    const sess: *Nghttp2Session = @ptrCast(@alignCast(session orelse return -501));
+    const sess = session orelse return -501;
     const sid = sess.next_stream_id;
     sess.next_stream_id += 2;
-    _ = nghttp2_session_set_stream_user_data(session, sid, stream_user_data);
+    _ = nghttp2_session_set_stream_user_data(sess, sid, stream_user_data);
     return sid;
 }
 
 pub fn nghttp2_submit_request2(
-    session: ?*anyopaque,
+    session: ?*Nghttp2Session,
     pri_spec: ?*const nghttp2_priority_spec,
     nva: ?*const anyopaque,
     nvlen: usize,
@@ -1562,7 +1555,7 @@ pub fn nghttp2_submit_request2(
 }
 
 pub fn nghttp2_submit_rst_stream(
-    session: ?*anyopaque,
+    session: ?*Nghttp2Session,
     flags: u8,
     stream_id: i32,
     error_code: u32,
@@ -1575,7 +1568,7 @@ pub fn nghttp2_submit_rst_stream(
 }
 
 pub fn nghttp2_submit_ping(
-    session: ?*anyopaque,
+    session: ?*Nghttp2Session,
     flags: u8,
     opaque_data: ?[*]const u8,
 ) callconv(.c) c_int {
@@ -1586,7 +1579,7 @@ pub fn nghttp2_submit_ping(
 }
 
 pub fn nghttp2_submit_goaway(
-    session: ?*anyopaque,
+    session: ?*Nghttp2Session,
     flags: u8,
     last_stream_id: i32,
     error_code: u32,
@@ -1603,7 +1596,7 @@ pub fn nghttp2_submit_goaway(
 }
 
 pub fn nghttp2_submit_priority(
-    session: ?*anyopaque,
+    session: ?*Nghttp2Session,
     flags: u8,
     stream_id: i32,
     pri_spec: ?*const nghttp2_priority_spec,
@@ -1616,7 +1609,7 @@ pub fn nghttp2_submit_priority(
 }
 
 pub fn nghttp2_submit_window_update(
-    session: ?*anyopaque,
+    session: ?*Nghttp2Session,
     flags: u8,
     stream_id: i32,
     window_size_increment: i32,
@@ -1628,58 +1621,58 @@ pub fn nghttp2_submit_window_update(
     return 0;
 }
 
-pub fn nghttp2_session_resume_data(session: ?*anyopaque, stream_id: i32) callconv(.c) c_int {
+pub fn nghttp2_session_resume_data(session: ?*Nghttp2Session, stream_id: i32) callconv(.c) c_int {
     _ = session;
     _ = stream_id;
     return 0;
 }
 
-pub fn nghttp2_session_check_request_allowed(session: ?*anyopaque) callconv(.c) c_int {
+pub fn nghttp2_session_check_request_allowed(session: ?*Nghttp2Session) callconv(.c) c_int {
     _ = session;
     return 1;
 }
 
-pub fn nghttp2_session_get_stream_effective_recv_data_length(session: ?*anyopaque, stream_id: i32) callconv(.c) i32 {
+pub fn nghttp2_session_get_stream_effective_recv_data_length(session: ?*Nghttp2Session, stream_id: i32) callconv(.c) i32 {
     _ = session;
     _ = stream_id;
     return 0;
 }
 
-pub fn nghttp2_session_get_stream_effective_local_window_size(session: ?*anyopaque, stream_id: i32) callconv(.c) i32 {
+pub fn nghttp2_session_get_stream_effective_local_window_size(session: ?*Nghttp2Session, stream_id: i32) callconv(.c) i32 {
     _ = stream_id;
-    const sess: *Nghttp2Session = @ptrCast(@alignCast(session orelse return 65535));
+    const sess = session orelse return 65535;
     return sess.local_window_size;
 }
 
-pub fn nghttp2_session_get_stream_local_window_size(session: ?*anyopaque, stream_id: i32) callconv(.c) i32 {
+pub fn nghttp2_session_get_stream_local_window_size(session: ?*Nghttp2Session, stream_id: i32) callconv(.c) i32 {
     return nghttp2_session_get_stream_effective_local_window_size(session, stream_id);
 }
 
 pub fn nghttp2_session_set_local_window_size(
-    session: ?*anyopaque,
+    session: ?*Nghttp2Session,
     flags: u8,
     stream_id: i32,
     window_size: i32,
 ) callconv(.c) c_int {
     _ = flags;
     _ = stream_id;
-    const sess: *Nghttp2Session = @ptrCast(@alignCast(session orelse return -501));
+    const sess = session orelse return -501;
     sess.local_window_size = window_size;
     return 0;
 }
 
-pub fn nghttp2_session_get_local_window_size(session: ?*anyopaque) callconv(.c) i32 {
-    const sess: *Nghttp2Session = @ptrCast(@alignCast(session orelse return 65535));
+pub fn nghttp2_session_get_local_window_size(session: ?*Nghttp2Session) callconv(.c) i32 {
+    const sess = session orelse return 65535;
     return sess.local_window_size;
 }
 
-pub fn nghttp2_session_get_stream_remote_window_size(session: ?*anyopaque, stream_id: i32) callconv(.c) i32 {
+pub fn nghttp2_session_get_stream_remote_window_size(session: ?*Nghttp2Session, stream_id: i32) callconv(.c) i32 {
     _ = session;
     _ = stream_id;
     return 65535;
 }
 
-pub fn nghttp2_session_get_remote_window_size(session: ?*anyopaque) callconv(.c) i32 {
+pub fn nghttp2_session_get_remote_window_size(session: ?*Nghttp2Session) callconv(.c) i32 {
     _ = session;
     return 65535;
 }
@@ -1726,7 +1719,7 @@ pub const ngtcp2_vec = extern struct {
 };
 
 pub const ngtcp2_addr = extern struct {
-    addr: ?*anyopaque = null,
+    addr: ?[*]u8 = null,
     addrlen: u32 = 0,
 };
 
@@ -1807,23 +1800,23 @@ pub fn ngtcp2_cid_init(cid: ?*ngtcp2_cid, data: ?[*]const u8, datalen: usize) ca
     }
 }
 
-pub fn ngtcp2_settings_default_versioned(settings_version: c_int, settings: ?*anyopaque) callconv(.c) void {
+pub fn ngtcp2_settings_default_versioned(settings_version: c_int, settings: ?*[128]u8) callconv(.c) void {
     _ = settings_version;
-    const ptr: [*]u8 = @ptrCast(settings orelse return);
-    @memset(ptr[0..128], 0);
+    const ptr = settings orelse return;
+    @memset(ptr, 0);
 }
 
-pub fn ngtcp2_settings_default(settings: ?*anyopaque) callconv(.c) void {
+pub fn ngtcp2_settings_default(settings: ?*[128]u8) callconv(.c) void {
     ngtcp2_settings_default_versioned(3, settings);
 }
 
-pub fn ngtcp2_transport_params_default_versioned(transport_params_version: c_int, params: ?*anyopaque) callconv(.c) void {
+pub fn ngtcp2_transport_params_default_versioned(transport_params_version: c_int, params: ?*[256]u8) callconv(.c) void {
     _ = transport_params_version;
-    const ptr: [*]u8 = @ptrCast(params orelse return);
-    @memset(ptr[0..256], 0);
+    const ptr = params orelse return;
+    @memset(ptr, 0);
 }
 
-pub fn ngtcp2_transport_params_default(params: ?*anyopaque) callconv(.c) void {
+pub fn ngtcp2_transport_params_default(params: ?*[256]u8) callconv(.c) void {
     ngtcp2_transport_params_default_versioned(1, params);
 }
 
@@ -1908,31 +1901,57 @@ pub fn ngtcp2_path_storage_zero(ps: ?*ngtcp2_path_storage) callconv(.c) void {
 
 pub fn ngtcp2_path_storage_init(
     ps: ?*ngtcp2_path_storage,
-    local_addr: ?*const anyopaque,
+    local_addr: ?[*]const u8,
     local_addrlen: u32,
-    remote_addr: ?*const anyopaque,
+    remote_addr: ?[*]const u8,
     remote_addrlen: u32,
     user_data: ?*anyopaque,
 ) callconv(.c) void {
     const p = ps orelse return;
     ngtcp2_path_storage_zero(p);
-    if (local_addr) |la| {
+    if (local_addr) |lsrc| {
         const lcopy = @min(@as(usize, local_addrlen), 28);
-        const lsrc: [*]const u8 = @ptrCast(la);
         @memcpy(p.local_addrbuf[0..lcopy], lsrc[0..lcopy]);
         p.path.local.addrlen = @intCast(lcopy);
     }
-    if (remote_addr) |ra| {
+    if (remote_addr) |rsrc| {
         const rcopy = @min(@as(usize, remote_addrlen), 28);
-        const rsrc: [*]const u8 = @ptrCast(ra);
         @memcpy(p.remote_addrbuf[0..rcopy], rsrc[0..rcopy]);
         p.path.remote.addrlen = @intCast(rcopy);
     }
     p.path.user_data = user_data;
 }
 
+fn createNgtcp2Conn(
+    dcid: ?*const ngtcp2_cid,
+    scid: ?*const ngtcp2_cid,
+    path: ?*const ngtcp2_path,
+    user_data: ?*anyopaque,
+) !*Ngtcp2Conn {
+    const conn = mem.create(Ngtcp2Conn) orelse return error.OutOfMemory;
+    errdefer mem.freeTyped(conn);
+    conn.* = .{
+        .user_data = user_data,
+    };
+    if (dcid) |d| conn.dcid = d.*;
+    if (scid) |s| conn.scid = s.*;
+    if (path) |p| {
+        ngtcp2_path_storage_init(
+            &conn.path_storage,
+            p.local.addr,
+            p.local.addrlen,
+            p.remote.addr,
+            p.remote.addrlen,
+            p.user_data,
+        );
+    } else {
+        ngtcp2_path_storage_zero(&conn.path_storage);
+    }
+    return conn;
+}
+
 pub fn ngtcp2_conn_client_new_versioned(
-    pconn: ?*?*anyopaque,
+    pconn: ?*?*Ngtcp2Conn,
     dcid: ?*const ngtcp2_cid,
     scid: ?*const ngtcp2_cid,
     path: ?*const ngtcp2_path,
@@ -1955,31 +1974,12 @@ pub fn ngtcp2_conn_client_new_versioned(
     _ = params;
     _ = mem_arg;
     const out = pconn orelse return -201;
-    const raw = std.c.calloc(1, @sizeOf(Ngtcp2Conn)) orelse return -501;
-    const conn: *Ngtcp2Conn = @ptrCast(@alignCast(raw));
-    conn.* = .{
-        .user_data = user_data,
-    };
-    if (dcid) |d| conn.dcid = d.*;
-    if (scid) |s| conn.scid = s.*;
-    if (path) |p| {
-        ngtcp2_path_storage_init(
-            &conn.path_storage,
-            p.local.addr,
-            p.local.addrlen,
-            p.remote.addr,
-            p.remote.addrlen,
-            p.user_data,
-        );
-    } else {
-        ngtcp2_path_storage_zero(&conn.path_storage);
-    }
-    out.* = conn;
+    out.* = createNgtcp2Conn(dcid, scid, path, user_data) catch return -501;
     return 0;
 }
 
 pub fn ngtcp2_conn_client_new(
-    pconn: ?*?*anyopaque,
+    pconn: ?*?*Ngtcp2Conn,
     dcid: ?*const ngtcp2_cid,
     scid: ?*const ngtcp2_cid,
     path: ?*const ngtcp2_path,
@@ -2008,7 +2008,7 @@ pub fn ngtcp2_conn_client_new(
 }
 
 pub fn ngtcp2_conn_server_new_versioned(
-    pconn: ?*?*anyopaque,
+    pconn: ?*?*Ngtcp2Conn,
     dcid: ?*const ngtcp2_cid,
     scid: ?*const ngtcp2_cid,
     path: ?*const ngtcp2_path,
@@ -2040,7 +2040,7 @@ pub fn ngtcp2_conn_server_new_versioned(
 }
 
 pub fn ngtcp2_conn_server_new(
-    pconn: ?*?*anyopaque,
+    pconn: ?*?*Ngtcp2Conn,
     dcid: ?*const ngtcp2_cid,
     scid: ?*const ngtcp2_cid,
     path: ?*const ngtcp2_path,
@@ -2065,22 +2065,22 @@ pub fn ngtcp2_conn_server_new(
     );
 }
 
-pub fn ngtcp2_conn_del(conn: ?*anyopaque) callconv(.c) void {
-    std.c.free(conn);
+pub fn ngtcp2_conn_del(conn: ?*Ngtcp2Conn) callconv(.c) void {
+    mem.freeTyped(conn);
 }
 
-pub fn ngtcp2_conn_set_tls_native_handle(conn: ?*anyopaque, tls_native_handle: ?*anyopaque) callconv(.c) void {
-    const c: *Ngtcp2Conn = @ptrCast(@alignCast(conn orelse return));
+pub fn ngtcp2_conn_set_tls_native_handle(conn: ?*Ngtcp2Conn, tls_native_handle: ?*anyopaque) callconv(.c) void {
+    const c = conn orelse return;
     c.tls_native_handle = tls_native_handle;
 }
 
-pub fn ngtcp2_conn_get_tls_alert(conn: ?*anyopaque) callconv(.c) u8 {
-    const c: *Ngtcp2Conn = @ptrCast(@alignCast(conn orelse return 0));
+pub fn ngtcp2_conn_get_tls_alert(conn: ?*const Ngtcp2Conn) callconv(.c) u8 {
+    const c = conn orelse return 0;
     return c.tls_alert;
 }
 
-pub fn ngtcp2_conn_get_handshake_completed(conn: ?*anyopaque) callconv(.c) c_int {
-    const c: *Ngtcp2Conn = @ptrCast(@alignCast(conn orelse return 0));
+pub fn ngtcp2_conn_get_handshake_completed(conn: ?*const Ngtcp2Conn) callconv(.c) c_int {
+    const c = conn orelse return 0;
     return c.handshake_completed;
 }
 
@@ -2191,46 +2191,46 @@ pub fn ngtcp2_conn_get_send_quantum(conn: ?*anyopaque) callconv(.c) usize {
     return 1452;
 }
 
-pub fn ngtcp2_conn_get_path(conn: ?*anyopaque) callconv(.c) ?*const ngtcp2_path {
-    const c: *const Ngtcp2Conn = @ptrCast(@alignCast(conn orelse return null));
+pub fn ngtcp2_conn_get_path(conn: ?*const Ngtcp2Conn) callconv(.c) ?*const ngtcp2_path {
+    const c = conn orelse return null;
     return &c.path_storage.path;
 }
 
-pub fn ngtcp2_conn_get_max_tx_udp_payload_size(conn: ?*anyopaque) callconv(.c) usize {
+pub fn ngtcp2_conn_get_max_tx_udp_payload_size(conn: ?*const Ngtcp2Conn) callconv(.c) usize {
     _ = conn;
     return 1200;
 }
 
-pub fn ngtcp2_conn_get_streams_bidi_left(conn: ?*anyopaque) callconv(.c) u64 {
+pub fn ngtcp2_conn_get_streams_bidi_left(conn: ?*const Ngtcp2Conn) callconv(.c) u64 {
     _ = conn;
     return 100;
 }
 
-pub fn ngtcp2_conn_get_streams_uni_left(conn: ?*anyopaque) callconv(.c) u64 {
+pub fn ngtcp2_conn_get_streams_uni_left(conn: ?*const Ngtcp2Conn) callconv(.c) u64 {
     _ = conn;
     return 100;
 }
 
 pub fn ngtcp2_conn_get_remote_transport_params_versioned(
-    conn: ?*anyopaque,
+    conn: ?*const Ngtcp2Conn,
     transport_params_version: c_int,
 ) callconv(.c) ?*const anyopaque {
     _ = transport_params_version;
-    const c: *const Ngtcp2Conn = @ptrCast(@alignCast(conn orelse return null));
+    const c = conn orelse return null;
     return &c.remote_params;
 }
 
-pub fn ngtcp2_conn_get_remote_transport_params(conn: ?*anyopaque) callconv(.c) ?*const anyopaque {
+pub fn ngtcp2_conn_get_remote_transport_params(conn: ?*const Ngtcp2Conn) callconv(.c) ?*const anyopaque {
     return ngtcp2_conn_get_remote_transport_params_versioned(conn, 1);
 }
 
 pub fn ngtcp2_conn_open_bidi_stream(
-    conn: ?*anyopaque,
+    conn: ?*Ngtcp2Conn,
     pstream_id: ?*i64,
     stream_user_data: ?*anyopaque,
 ) callconv(.c) c_int {
     _ = stream_user_data;
-    const c: *Ngtcp2Conn = @ptrCast(@alignCast(conn orelse return -201));
+    const c = conn orelse return -201;
     if (pstream_id) |ps| {
         ps.* = c.next_bidi_stream_id;
     }
@@ -2239,12 +2239,12 @@ pub fn ngtcp2_conn_open_bidi_stream(
 }
 
 pub fn ngtcp2_conn_open_uni_stream(
-    conn: ?*anyopaque,
+    conn: ?*Ngtcp2Conn,
     pstream_id: ?*i64,
     stream_user_data: ?*anyopaque,
 ) callconv(.c) c_int {
     _ = stream_user_data;
-    const c: *Ngtcp2Conn = @ptrCast(@alignCast(conn orelse return -201));
+    const c = conn orelse return -201;
     if (pstream_id) |ps| {
         ps.* = c.next_uni_stream_id;
     }
@@ -2366,7 +2366,7 @@ pub fn ngtcp2_conn_read_pkt(
 }
 
 pub fn ngtcp2_conn_writev_stream_versioned(
-    conn: ?*anyopaque,
+    conn: ?*Ngtcp2Conn,
     path: ?*ngtcp2_path,
     pkt_info_version: c_int,
     pi: ?*ngtcp2_pkt_info,
@@ -2387,7 +2387,7 @@ pub fn ngtcp2_conn_writev_stream_versioned(
     _ = datavcnt;
     _ = ts;
     if (pdatalen) |pd| pd.* = -1;
-    const c: *Ngtcp2Conn = @ptrCast(@alignCast(conn orelse return 0));
+    const c = conn orelse return 0;
     if (!c.initial_pkt_sent) {
         if (dest) |out| {
             if (destlen >= 1200) {
@@ -2413,7 +2413,7 @@ pub fn ngtcp2_conn_writev_stream_versioned(
 }
 
 pub fn ngtcp2_conn_writev_stream(
-    conn: ?*anyopaque,
+    conn: ?*Ngtcp2Conn,
     path: ?*ngtcp2_path,
     pi: ?*ngtcp2_pkt_info,
     dest: ?[*]u8,
@@ -2771,18 +2771,18 @@ pub fn ngtcp2_crypto_wolfssl_configure_server_context(ctx: ?*anyopaque) callconv
     return 0;
 }
 
-pub fn nghttp3_settings_default_versioned(settings_version: c_int, settings: ?*anyopaque) callconv(.c) void {
+pub fn nghttp3_settings_default_versioned(settings_version: c_int, settings: ?*[64]u8) callconv(.c) void {
     _ = settings_version;
-    const ptr: [*]u8 = @ptrCast(settings orelse return);
-    @memset(ptr[0..64], 0);
+    const ptr = settings orelse return;
+    @memset(ptr, 0);
 }
 
-pub fn nghttp3_settings_default(settings: ?*anyopaque) callconv(.c) void {
+pub fn nghttp3_settings_default(settings: ?*[64]u8) callconv(.c) void {
     nghttp3_settings_default_versioned(3, settings);
 }
 
 pub fn nghttp3_conn_client_new_versioned(
-    pconn: ?*?*anyopaque,
+    pconn: ?*?*Nghttp3Conn,
     callbacks_version: c_int,
     callbacks: ?*const anyopaque,
     settings_version: c_int,
@@ -2796,15 +2796,14 @@ pub fn nghttp3_conn_client_new_versioned(
     _ = settings;
     _ = mem_arg;
     const out = pconn orelse return -101;
-    const raw = std.c.calloc(1, @sizeOf(Nghttp3Conn)) orelse return -901;
-    const conn: *Nghttp3Conn = @ptrCast(@alignCast(raw));
+    const conn = mem.create(Nghttp3Conn) orelse return -901;
     conn.* = .{ .user_data = conn_user_data };
     out.* = conn;
     return 0;
 }
 
 pub fn nghttp3_conn_client_new(
-    pconn: ?*?*anyopaque,
+    pconn: ?*?*Nghttp3Conn,
     callbacks: ?*const anyopaque,
     settings: ?*const anyopaque,
     mem_arg: ?*const anyopaque,
@@ -2814,7 +2813,7 @@ pub fn nghttp3_conn_client_new(
 }
 
 pub fn nghttp3_conn_server_new_versioned(
-    pconn: ?*?*anyopaque,
+    pconn: ?*?*Nghttp3Conn,
     callbacks_version: c_int,
     callbacks: ?*const anyopaque,
     settings_version: c_int,
@@ -2826,7 +2825,7 @@ pub fn nghttp3_conn_server_new_versioned(
 }
 
 pub fn nghttp3_conn_server_new(
-    pconn: ?*?*anyopaque,
+    pconn: ?*?*Nghttp3Conn,
     callbacks: ?*const anyopaque,
     settings: ?*const anyopaque,
     mem_arg: ?*const anyopaque,
@@ -2835,8 +2834,8 @@ pub fn nghttp3_conn_server_new(
     return nghttp3_conn_client_new(pconn, callbacks, settings, mem_arg, conn_user_data);
 }
 
-pub fn nghttp3_conn_del(conn: ?*anyopaque) callconv(.c) void {
-    std.c.free(conn);
+pub fn nghttp3_conn_del(conn: ?*Nghttp3Conn) callconv(.c) void {
+    mem.freeTyped(conn);
 }
 
 pub fn nghttp3_conn_bind_control_stream(conn: ?*anyopaque, stream_id: i64) callconv(.c) c_int {
@@ -3049,47 +3048,44 @@ pub fn libssh2_session_init_ex(
     my_free: ?*const anyopaque,
     my_realloc: ?*const anyopaque,
     abstract_ptr: ?*anyopaque,
-) callconv(.c) ?*anyopaque {
+) callconv(.c) ?*Libssh2Session {
     _ = my_alloc;
     _ = my_free;
     _ = my_realloc;
-    const raw = std.c.calloc(1, @sizeOf(Libssh2Session)) orelse return null;
-    const sess: *Libssh2Session = @ptrCast(@alignCast(raw));
+    const sess = mem.create(Libssh2Session) orelse return null;
     sess.* = .{ .abstract_ptr = abstract_ptr };
     return sess;
 }
 
-pub fn libssh2_session_free(session: ?*anyopaque) callconv(.c) c_int {
-    std.c.free(session);
+pub fn libssh2_session_free(session: ?*Libssh2Session) callconv(.c) c_int {
+    mem.freeTyped(session);
     return 0;
 }
 
 var dummy_abstract_ptr: ?*anyopaque = null;
 
-pub fn libssh2_session_abstract(session: ?*anyopaque) callconv(.c) *?*anyopaque {
-    if (session) |ptr| {
-        const sess: *Libssh2Session = @ptrCast(@alignCast(ptr));
+pub fn libssh2_session_abstract(session: ?*Libssh2Session) callconv(.c) *?*anyopaque {
+    if (session) |sess| {
         return &sess.abstract_ptr;
     }
     return &dummy_abstract_ptr;
 }
 
-pub fn libssh2_session_set_blocking(session: ?*anyopaque, blocking: c_int) callconv(.c) void {
-    const sess: *Libssh2Session = @ptrCast(@alignCast(session orelse return));
+pub fn libssh2_session_set_blocking(session: ?*Libssh2Session, blocking: c_int) callconv(.c) void {
+    const sess = session orelse return;
     sess.blocking = blocking;
 }
 
-pub fn libssh2_session_handshake(session: ?*anyopaque, sock: usize) callconv(.c) c_int {
+pub fn libssh2_session_handshake(session: ?*Libssh2Session, sock: usize) callconv(.c) c_int {
     _ = sock;
-    if (session) |ptr| {
-        const sess: *Libssh2Session = @ptrCast(@alignCast(ptr));
+    if (session) |sess| {
         sess.last_errno = -8;
     }
     return -8;
 }
 
 pub fn libssh2_session_last_error(
-    session: ?*anyopaque,
+    session: ?*const Libssh2Session,
     errmsg: ?*[*:0]u8,
     errmsg_len: ?*c_int,
     want_buf: c_int,
@@ -3097,14 +3093,7 @@ pub fn libssh2_session_last_error(
     const msg = "libssh2 bundled error";
     if (errmsg) |em| {
         if (want_buf != 0) {
-            if (std.c.malloc(msg.len + 1)) |raw| {
-                const p: [*]u8 = @ptrCast(raw);
-                @memcpy(p[0..msg.len], msg);
-                p[msg.len] = 0;
-                em.* = @ptrCast(p);
-            } else {
-                em.* = @constCast(msg.ptr);
-            }
+            em.* = cStrdupSlice(msg) orelse @constCast(msg.ptr);
         } else {
             em.* = @constCast(msg.ptr);
         }
@@ -3112,15 +3101,14 @@ pub fn libssh2_session_last_error(
     if (errmsg_len) |el| {
         el.* = @intCast(msg.len);
     }
-    if (session) |ptr| {
-        const sess: *const Libssh2Session = @ptrCast(@alignCast(ptr));
+    if (session) |sess| {
         return sess.last_errno;
     }
     return -1;
 }
 
-pub fn libssh2_session_last_errno(session: ?*anyopaque) callconv(.c) c_int {
-    const sess: *const Libssh2Session = @ptrCast(@alignCast(session orelse return 0));
+pub fn libssh2_session_last_errno(session: ?*const Libssh2Session) callconv(.c) c_int {
+    const sess = session orelse return 0;
     return sess.last_errno;
 }
 
@@ -3716,8 +3704,8 @@ pub const Sockbuf_IO = extern struct {
     sbi_setup: ?*const fn (sbiod: *Sockbuf_IO_Desc, arg: ?*anyopaque) callconv(.c) c_int = null,
     sbi_remove: ?*const fn (sbiod: *Sockbuf_IO_Desc) callconv(.c) c_int = null,
     sbi_ctrl: ?*const fn (sbiod: *Sockbuf_IO_Desc, opt: c_int, arg: ?*anyopaque) callconv(.c) c_int = null,
-    sbi_read: ?*const fn (sbiod: *Sockbuf_IO_Desc, buf: *anyopaque, len: c_ulong) callconv(.c) c_long = null,
-    sbi_write: ?*const fn (sbiod: *Sockbuf_IO_Desc, buf: *anyopaque, len: c_ulong) callconv(.c) c_long = null,
+    sbi_read: ?*const fn (sbiod: *Sockbuf_IO_Desc, buf: [*]u8, len: c_ulong) callconv(.c) c_long = null,
+    sbi_write: ?*const fn (sbiod: *Sockbuf_IO_Desc, buf: [*]const u8, len: c_ulong) callconv(.c) c_long = null,
     sbi_close: ?*const fn (sbiod: *Sockbuf_IO_Desc) callconv(.c) c_int = null,
 };
 
@@ -3735,7 +3723,7 @@ const LdapHandle = struct {
             const rem = data[total..];
             const n: isize = if (self.sbiod.sbiod_io) |io|
                 if (io.sbi_write) |wfn|
-                    @intCast(wfn(&self.sbiod, @ptrCast(@constCast(rem.ptr)), @intCast(rem.len)))
+                    @intCast(wfn(&self.sbiod, rem.ptr, @intCast(rem.len)))
                 else
                     -1
             else if (builtin.os.tag != .windows and self.fd >= 0)
@@ -3756,7 +3744,7 @@ const LdapHandle = struct {
     fn readSome(self: *LdapHandle, dest: []u8) isize {
         if (self.sbiod.sbiod_io) |io| {
             if (io.sbi_read) |rfn| {
-                return @intCast(rfn(&self.sbiod, @ptrCast(dest.ptr), @intCast(dest.len)));
+                return @intCast(rfn(&self.sbiod, dest.ptr, @intCast(dest.len)));
             }
         }
         if (builtin.os.tag != .windows and self.fd >= 0) {
@@ -3877,7 +3865,7 @@ pub fn ldap_get_option(ld: ?*anyopaque, option: c_int, outvalue: ?*anyopaque) ca
 pub fn ldap_memfree(p: ?*anyopaque) callconv(.c) void {
     if (p) |ptr| {
         if (@intFromPtr(ptr) == @intFromPtr(static_openldap_vendor.ptr)) return;
-        std.c.free(ptr);
+        mem.free(ptr);
     }
 }
 
@@ -3886,9 +3874,7 @@ pub fn ber_memfree(p: ?*anyopaque) callconv(.c) void {
 }
 
 pub fn ber_memvfree(vec: ?*?*anyopaque) callconv(.c) void {
-    if (vec) |v| {
-        std.c.free(@ptrCast(v));
-    }
+    mem.freeTyped(vec);
 }
 
 pub fn ber_memvfree_x(vec: ?*?*anyopaque, ctx: ?*anyopaque) callconv(.c) void {
@@ -3898,19 +3884,19 @@ pub fn ber_memvfree_x(vec: ?*?*anyopaque, ctx: ?*anyopaque) callconv(.c) void {
 
 pub fn ber_free(ber: ?*anyopaque, freebuf: c_int) callconv(.c) void {
     _ = freebuf;
-    std.c.free(ber);
+    mem.free(ber);
 }
 
 pub fn ber_sockbuf_add_io(
-    sb: ?*anyopaque,
-    sbio: ?*anyopaque,
+    sb: ?*LdapHandle,
+    sbio: ?*Sockbuf_IO,
     layer: c_int,
     arg: ?*anyopaque,
 ) callconv(.c) c_int {
-    const h: *LdapHandle = @ptrCast(@alignCast(sb orelse return -1));
-    const io: *Sockbuf_IO = @ptrCast(@alignCast(sbio orelse return -1));
+    const h = sb orelse return -1;
+    const io = sbio orelse return -1;
     h.sbiod.sbiod_level = layer;
-    h.sbiod.sbiod_sb = sb;
+    h.sbiod.sbiod_sb = h;
     h.sbiod.sbiod_io = io;
     if (io.sbi_setup) |setup_fn| {
         if (setup_fn(&h.sbiod, arg) != 0) return -1;
@@ -3920,25 +3906,14 @@ pub fn ber_sockbuf_add_io(
     return 0;
 }
 
-fn cStrdupSlice(s: []const u8) ?[*:0]u8 {
-    const raw = std.c.malloc(s.len + 1) orelse return null;
-    const p: [*]u8 = @ptrCast(raw);
-    @memcpy(p[0..s.len], s);
-    p[s.len] = 0;
-    return @ptrCast(p);
-}
-
-pub fn ldap_url_parse(url: ?[*:0]const u8, ludpp: ?*?*LDAPURLDesc) callconv(.c) c_int {
-    const out = ludpp orelse return -9;
-    out.* = null;
-    const url_ptr = url orelse return -9;
-    const s = std.mem.span(url_ptr);
-    const scheme_end = std.mem.indexOf(u8, s, "://") orelse return -9;
+fn parseLdapUrlDesc(s: []const u8) !*LDAPURLDesc {
+    const scheme_end = std.mem.indexOf(u8, s, "://") orelse return error.BadUrl;
     const scheme = s[0..scheme_end];
 
-    const raw = std.c.calloc(1, @sizeOf(LDAPURLDesc)) orelse return -10;
-    const lud: *LDAPURLDesc = @ptrCast(@alignCast(raw));
-    lud.lud_scheme = cStrdupSlice(scheme);
+    const lud = mem.create(LDAPURLDesc) orelse return error.OutOfMemory;
+    errdefer ldap_free_urldesc(lud);
+
+    lud.lud_scheme = cStrdupSlice(scheme) orelse return error.OutOfMemory;
     lud.lud_port = if (std.ascii.eqlIgnoreCase(scheme, "ldaps")) 636 else 389;
 
     const rest = s[scheme_end + 3 ..];
@@ -3946,47 +3921,61 @@ pub fn ldap_url_parse(url: ?[*:0]const u8, ludpp: ?*?*LDAPURLDesc) callconv(.c) 
     const hostport = rest[0..slash_idx];
     if (hostport.len > 0) {
         if (std.mem.lastIndexOfScalar(u8, hostport, ':')) |colon_idx| {
-            lud.lud_host = cStrdupSlice(hostport[0..colon_idx]);
+            lud.lud_host = cStrdupSlice(hostport[0..colon_idx]) orelse return error.OutOfMemory;
             lud.lud_port = std.fmt.parseInt(c_int, hostport[colon_idx + 1 ..], 10) catch lud.lud_port;
         } else {
-            lud.lud_host = cStrdupSlice(hostport);
+            lud.lud_host = cStrdupSlice(hostport) orelse return error.OutOfMemory;
         }
     }
     if (slash_idx < rest.len) {
         const path = rest[slash_idx + 1 ..];
         const q_idx = std.mem.indexOfScalar(u8, path, '?') orelse path.len;
-        lud.lud_dn = cStrdupSlice(path[0..q_idx]);
+        lud.lud_dn = cStrdupSlice(path[0..q_idx]) orelse return error.OutOfMemory;
     }
+    return lud;
+}
 
+pub fn ldap_url_parse(url: ?[*:0]const u8, ludpp: ?*?*LDAPURLDesc) callconv(.c) c_int {
+    const out = ludpp orelse return -9;
+    out.* = null;
+    const url_ptr = url orelse return -9;
+    const lud = parseLdapUrlDesc(std.mem.span(url_ptr)) catch |err| return switch (err) {
+        error.OutOfMemory => -10,
+        error.BadUrl => -9,
+    };
     out.* = lud;
     return 0;
 }
 
 pub fn ldap_free_urldesc(ludp: ?*LDAPURLDesc) callconv(.c) void {
     const lud = ludp orelse return;
-    if (lud.lud_scheme) |p| std.c.free(p);
-    if (lud.lud_host) |p| std.c.free(p);
-    if (lud.lud_dn) |p| std.c.free(p);
-    if (lud.lud_filter) |p| std.c.free(p);
-    if (lud.lud_attrs) |p| std.c.free(@ptrCast(p));
-    if (lud.lud_exts) |p| std.c.free(@ptrCast(p));
-    std.c.free(lud);
+    mem.freeTyped(lud.lud_scheme);
+    mem.freeTyped(lud.lud_host);
+    mem.freeTyped(lud.lud_dn);
+    mem.freeTyped(lud.lud_filter);
+    mem.freeTyped(lud.lud_attrs);
+    mem.freeTyped(lud.lud_exts);
+    mem.freeTyped(lud);
 }
 
-pub fn ldap_init(host: ?[*:0]const u8, port: c_int) callconv(.c) ?*anyopaque {
+fn createLdapHandle(fd: c_int) !*LdapHandle {
+    const h = mem.create(LdapHandle) orelse return error.OutOfMemory;
+    errdefer mem.freeTyped(h);
+    h.* = .{ .fd = fd };
+    h.sbiod.sbiod_sb = h;
+    return h;
+}
+
+pub fn ldap_init(host: ?[*:0]const u8, port: c_int) callconv(.c) ?*LdapHandle {
     _ = host;
     _ = port;
-    const raw = std.c.calloc(1, @sizeOf(LdapHandle)) orelse return null;
-    const h: *LdapHandle = @ptrCast(@alignCast(raw));
-    h.* = .{};
-    h.sbiod.sbiod_sb = raw;
-    return raw;
+    return createLdapHandle(-1) catch null;
 }
 
-pub fn ldap_initialize(ldp: ?*?*anyopaque, url: ?[*:0]const u8) callconv(.c) c_int {
+pub fn ldap_initialize(ldp: ?*?*LdapHandle, url: ?[*:0]const u8) callconv(.c) c_int {
     _ = url;
     const out = ldp orelse return -9;
-    out.* = ldap_init(null, 0) orelse return -10;
+    out.* = createLdapHandle(-1) catch return -10;
     return 0;
 }
 
@@ -3994,20 +3983,17 @@ pub fn ldap_init_fd(
     fd: c_int,
     proto: c_int,
     url: ?[*:0]const u8,
-    ldp: ?*?*anyopaque,
+    ldp: ?*?*LdapHandle,
 ) callconv(.c) c_int {
     _ = proto;
     _ = url;
     const out = ldp orelse return -9;
-    const raw = ldap_init(null, 0) orelse return -10;
-    const h: *LdapHandle = @ptrCast(@alignCast(raw));
-    h.fd = fd;
-    out.* = raw;
+    out.* = createLdapHandle(fd) catch return -10;
     return 0;
 }
 
 pub fn ldap_sasl_bind(
-    ld: ?*anyopaque,
+    ld: ?*LdapHandle,
     dn: ?[*:0]const u8,
     mechanism: ?[*:0]const u8,
     cred: ?*BerValue,
@@ -4018,7 +4004,7 @@ pub fn ldap_sasl_bind(
     _ = mechanism;
     _ = sctrls;
     _ = cctrls;
-    const h: *LdapHandle = @ptrCast(@alignCast(ld orelse return -9));
+    const h = ld orelse return -9;
     const msgid = h.next_msgid;
     h.next_msgid += 1;
     if (msgidp) |m| m.* = msgid;
@@ -4060,7 +4046,7 @@ pub fn ldap_sasl_bind(
 }
 
 pub fn ldap_simple_bind_s(
-    ld: ?*anyopaque,
+    ld: ?*LdapHandle,
     who: ?[*:0]const u8,
     passwd: ?[*:0]const u8,
 ) callconv(.c) c_int {
@@ -4071,13 +4057,13 @@ pub fn ldap_simple_bind_s(
 }
 
 pub fn ldap_unbind_ext(
-    ld: ?*anyopaque,
+    ld: ?*LdapHandle,
     sctrls: ?*?*anyopaque,
     cctrls: ?*?*anyopaque,
 ) callconv(.c) c_int {
     _ = sctrls;
     _ = cctrls;
-    const h: *LdapHandle = @ptrCast(@alignCast(ld orelse return 0));
+    const h = ld orelse return 0;
     const msgid_byte: u8 = @intCast(@min(h.next_msgid, 127));
     const unbind_pkt = [_]u8{ 0x30, 0x05, 0x02, 0x01, msgid_byte, 0x42, 0x00 };
     _ = h.writeAll(&unbind_pkt);
@@ -4086,16 +4072,16 @@ pub fn ldap_unbind_ext(
             _ = close_fn(&h.sbiod);
         }
     }
-    std.c.free(ld);
+    mem.freeTyped(h);
     return 0;
 }
 
-pub fn ldap_unbind_s(ld: ?*anyopaque) callconv(.c) c_int {
+pub fn ldap_unbind_s(ld: ?*LdapHandle) callconv(.c) c_int {
     return ldap_unbind_ext(ld, null, null);
 }
 
 pub fn ldap_abandon_ext(
-    ld: ?*anyopaque,
+    ld: ?*LdapHandle,
     msgid: c_int,
     sctrls: ?*?*anyopaque,
     cctrls: ?*?*anyopaque,
@@ -4108,7 +4094,7 @@ pub fn ldap_abandon_ext(
 }
 
 pub fn ldap_search_ext(
-    ld: ?*anyopaque,
+    ld: ?*LdapHandle,
     base: ?[*:0]const u8,
     scope: c_int,
     filter: ?[*:0]const u8,
@@ -4128,7 +4114,7 @@ pub fn ldap_search_ext(
     _ = cctrls;
     _ = timeout;
     _ = sizelimit;
-    const h: *LdapHandle = @ptrCast(@alignCast(ld orelse return -9));
+    const h = ld orelse return -9;
     const msgid = h.next_msgid;
     h.next_msgid += 1;
     if (msgidp) |m| m.* = msgid;
@@ -4155,13 +4141,13 @@ pub fn ldap_search_ext(
 }
 
 pub fn ldap_search_s(
-    ld: ?*anyopaque,
+    ld: ?*LdapHandle,
     base: ?[*:0]const u8,
     scope: c_int,
     filter: ?[*:0]const u8,
     attrs: ?*[*:0]u8,
     attrsonly: c_int,
-    res: ?*?*anyopaque,
+    res: ?*?*LdapMsg,
 ) callconv(.c) c_int {
     _ = ld;
     _ = base;
@@ -4174,18 +4160,18 @@ pub fn ldap_search_s(
 }
 
 pub fn ldap_result(
-    ld: ?*anyopaque,
+    ld: ?*LdapHandle,
     msgid: c_int,
     all: c_int,
     timeout: ?*anyopaque,
-    result: ?*?*anyopaque,
+    result: ?*?*LdapMsg,
 ) callconv(.c) c_int {
     _ = msgid;
     _ = all;
     _ = timeout;
     const res_out = result orelse return -9;
     res_out.* = null;
-    const h: *LdapHandle = @ptrCast(@alignCast(ld orelse return -9));
+    const h = ld orelse return -9;
 
     while (true) {
         if (berParseSlice(h.rx_buf[0..h.rx_len])) |outer| {
@@ -4194,8 +4180,7 @@ pub fn ldap_result(
             if (id_tlv.tag != 0x02) return -4;
             const op_tlv = berParseSlice(outer.val[id_tlv.total_len..]) orelse return -4;
 
-            const raw_msg = std.c.calloc(1, @sizeOf(LdapMsg)) orelse return -10;
-            const msg: *LdapMsg = @ptrCast(@alignCast(raw_msg));
+            const msg = mem.create(LdapMsg) orelse return -10;
             msg.* = .{
                 .msgtype = op_tlv.tag,
             };
@@ -4261,19 +4246,19 @@ pub fn ldap_result(
     }
 }
 
-pub fn ldap_msgfree(lm: ?*anyopaque) callconv(.c) c_int {
-    std.c.free(lm);
+pub fn ldap_msgfree(lm: ?*LdapMsg) callconv(.c) c_int {
+    mem.freeTyped(lm);
     return 0;
 }
 
-pub fn ldap_msgtype(lm: ?*anyopaque) callconv(.c) c_ulong {
-    const msg: *LdapMsg = @ptrCast(@alignCast(lm orelse return 0));
+pub fn ldap_msgtype(lm: ?*const LdapMsg) callconv(.c) c_ulong {
+    const msg = lm orelse return 0;
     return msg.msgtype;
 }
 
 pub fn ldap_parse_result(
-    ld: ?*anyopaque,
-    res: ?*anyopaque,
+    ld: ?*LdapHandle,
+    res: ?*LdapMsg,
     errcodep: ?*c_int,
     matcheddnp: ?*?[*:0]u8,
     errmsgp: ?*?[*:0]u8,
@@ -4282,31 +4267,31 @@ pub fn ldap_parse_result(
     freeit: c_int,
 ) callconv(.c) c_int {
     _ = ld;
-    const msg: *LdapMsg = @ptrCast(@alignCast(res orelse return -9));
+    const msg = res orelse return -9;
     if (errcodep) |e| e.* = msg.errcode;
     if (matcheddnp) |m| m.* = null;
     if (errmsgp) |em| em.* = null;
     if (referralsp) |r| r.* = null;
     if (serverctrlsp) |s| s.* = null;
-    if (freeit != 0) std.c.free(res);
+    if (freeit != 0) mem.freeTyped(msg);
     return LDAP_SUCCESS;
 }
 
-pub fn ldap_first_entry(ld: ?*anyopaque, chain: ?*anyopaque) callconv(.c) ?*anyopaque {
+pub fn ldap_first_entry(ld: ?*LdapHandle, chain: ?*LdapMsg) callconv(.c) ?*LdapMsg {
     _ = ld;
     _ = chain;
     return null;
 }
 
-pub fn ldap_next_entry(ld: ?*anyopaque, entry: ?*anyopaque) callconv(.c) ?*anyopaque {
+pub fn ldap_next_entry(ld: ?*LdapHandle, entry: ?*LdapMsg) callconv(.c) ?*LdapMsg {
     _ = ld;
     _ = entry;
     return null;
 }
 
 pub fn ldap_first_attribute(
-    ld: ?*anyopaque,
-    entry: ?*anyopaque,
+    ld: ?*LdapHandle,
+    entry: ?*LdapMsg,
     berout: ?*?*anyopaque,
 ) callconv(.c) ?[*:0]u8 {
     _ = ld;
@@ -4316,8 +4301,8 @@ pub fn ldap_first_attribute(
 }
 
 pub fn ldap_next_attribute(
-    ld: ?*anyopaque,
-    entry: ?*anyopaque,
+    ld: ?*LdapHandle,
+    entry: ?*LdapMsg,
     ber: ?*anyopaque,
 ) callconv(.c) ?[*:0]u8 {
     _ = ld;
@@ -4326,23 +4311,23 @@ pub fn ldap_next_attribute(
     return null;
 }
 
-pub fn ldap_get_dn(ld: ?*anyopaque, entry: ?*anyopaque) callconv(.c) ?[*:0]u8 {
+pub fn ldap_get_dn(ld: ?*LdapHandle, entry: ?*LdapMsg) callconv(.c) ?[*:0]u8 {
     _ = ld;
     _ = entry;
     return null;
 }
 
 pub fn ldap_get_dn_ber(
-    ld: ?*anyopaque,
-    entry: ?*anyopaque,
-    berout: ?*?*anyopaque,
+    ld: ?*LdapHandle,
+    entry: ?*LdapMsg,
+    berout: ?*?*usize,
     dn: ?*BerValue,
 ) callconv(.c) c_int {
     _ = ld;
-    const msg: *LdapMsg = @ptrCast(@alignCast(entry orelse return -9));
+    const msg = entry orelse return -9;
     if (berout) |b| {
-        const cursor_raw = std.c.calloc(1, @sizeOf(usize)) orelse return -10;
-        b.* = cursor_raw;
+        const cursor = mem.create(usize) orelse return -10;
+        b.* = cursor;
     }
     if (dn) |d| {
         d.bv_len = @intCast(msg.dn_len);
@@ -4352,15 +4337,15 @@ pub fn ldap_get_dn_ber(
 }
 
 pub fn ldap_get_attribute_ber(
-    ld: ?*anyopaque,
-    entry: ?*anyopaque,
-    ber: ?*anyopaque,
+    ld: ?*LdapHandle,
+    entry: ?*LdapMsg,
+    ber: ?*usize,
     attr: ?*BerValue,
     vals: ?*?[*]BerValue,
 ) callconv(.c) c_int {
     _ = ld;
-    const msg: *LdapMsg = @ptrCast(@alignCast(entry orelse return -9));
-    const cursor: *usize = @ptrCast(@alignCast(ber orelse return -9));
+    const msg = entry orelse return -9;
+    const cursor = ber orelse return -9;
     if (cursor.* >= msg.attr_count) {
         if (attr) |a| a.* = .{ .bv_len = 0, .bv_val = null };
         if (vals) |v| v.* = null;
@@ -4374,8 +4359,7 @@ pub fn ldap_get_attribute_ber(
         a.bv_val = &a_entry.name;
     }
     if (vals) |v| {
-        const arr_raw = std.c.calloc(a_entry.val_count + 1, @sizeOf(BerValue)) orelse return -10;
-        const arr: [*]BerValue = @ptrCast(@alignCast(arr_raw));
+        const arr = mem.callocMany(BerValue, a_entry.val_count + 1) orelse return -10;
         for (0..a_entry.val_count) |vi| {
             arr[vi] = .{
                 .bv_len = @intCast(a_entry.val_lens[vi]),
@@ -4389,8 +4373,8 @@ pub fn ldap_get_attribute_ber(
 }
 
 pub fn ldap_get_values_len(
-    ld: ?*anyopaque,
-    entry: ?*anyopaque,
+    ld: ?*LdapHandle,
+    entry: ?*LdapMsg,
     target: ?[*:0]const u8,
 ) callconv(.c) ?*?*BerValue {
     _ = ld;
@@ -4400,7 +4384,7 @@ pub fn ldap_get_values_len(
 }
 
 pub fn ldap_value_free_len(vals: ?*?*BerValue) callconv(.c) void {
-    if (vals) |v| std.c.free(@ptrCast(v));
+    mem.freeTyped(vals);
 }
 
 pub fn ldap_pvt_url_scheme2proto(scheme: ?[*:0]const u8) callconv(.c) c_int {
@@ -4420,14 +4404,14 @@ pub fn ber_sockbuf_ctrl(sb: ?*anyopaque, opt: c_int, arg: ?*anyopaque) callconv(
 
 pub fn ber_memfree_x(p: ?*anyopaque, ctx: ?*anyopaque) callconv(.c) void {
     _ = ctx;
-    std.c.free(p);
+    mem.free(p);
 }
 
 pub fn ber_bvfree_x(bv: ?*BerValue, ctx: ?*anyopaque) callconv(.c) void {
     _ = ctx;
     if (bv) |b| {
-        if (b.bv_val) |val| std.c.free(@ptrCast(val));
-        std.c.free(@ptrCast(b));
+        mem.freeTyped(b.bv_val);
+        mem.freeTyped(b);
     }
 }
 
@@ -4437,7 +4421,7 @@ pub fn ber_bvecfree_x(bvec: ?[*]?*BerValue, ctx: ?*anyopaque) callconv(.c) void 
         while (vec[i]) |bv| : (i += 1) {
             ber_bvfree_x(bv, ctx);
         }
-        std.c.free(@ptrCast(vec));
+        mem.freeTyped(vec);
     }
 }
 
@@ -4445,14 +4429,14 @@ pub fn ldap_memvfree(v: ?[*]?*anyopaque) callconv(.c) void {
     if (v) |vec| {
         var i: usize = 0;
         while (vec[i]) |item| : (i += 1) {
-            std.c.free(item);
+            mem.free(item);
         }
-        std.c.free(@ptrCast(vec));
+        mem.freeTyped(vec);
     }
 }
 
 pub fn ldap_extended_operation(
-    ld: ?*anyopaque,
+    ld: ?*LdapHandle,
     reqoid: ?[*:0]const u8,
     reqdata: ?*BerValue,
     sctrls: ?*?*anyopaque,
@@ -4462,7 +4446,7 @@ pub fn ldap_extended_operation(
     _ = reqdata;
     _ = sctrls;
     _ = cctrls;
-    const h: *LdapHandle = @ptrCast(@alignCast(ld orelse return -9));
+    const h = ld orelse return -9;
     const msgid = h.next_msgid;
     h.next_msgid += 1;
     if (msgidp) |m| m.* = msgid;
@@ -4489,8 +4473,8 @@ pub fn ldap_extended_operation(
 }
 
 pub fn ldap_parse_sasl_bind_result(
-    ld: ?*anyopaque,
-    res: ?*anyopaque,
+    ld: ?*LdapHandle,
+    res: ?*LdapMsg,
     servercredp: ?*?*BerValue,
     freeit: c_int,
 ) callconv(.c) c_int {
@@ -4500,7 +4484,7 @@ pub fn ldap_parse_sasl_bind_result(
     return LDAP_SUCCESS;
 }
 
-pub fn ldap_sslinit(host: ?[*:0]const u8, port: c_int, secure: c_int) callconv(.c) ?*anyopaque {
+pub fn ldap_sslinit(host: ?[*:0]const u8, port: c_int, secure: c_int) callconv(.c) ?*LdapHandle {
     _ = secure;
     return ldap_init(host, port);
 }
@@ -4515,20 +4499,20 @@ pub const GSS_S_FAILURE: OM_uint32 = 0x000d0000;
 
 pub const gss_OID_desc = extern struct {
     length: OM_uint32,
-    elements: ?*anyopaque,
+    elements: ?[*]const u8,
 };
 pub const gss_OID = ?*gss_OID_desc;
 
 pub const gss_buffer_desc = extern struct {
     length: usize = 0,
-    value: ?*anyopaque = null,
+    value: ?[*]u8 = null,
 };
 pub const gss_buffer_t = ?*gss_buffer_desc;
 
 const hostbased_oid_bytes = "\x2a\x86\x48\x86\xf7\x12\x01\x02\x01\x04";
 var static_hostbased_oid_desc: gss_OID_desc = .{
     .length = 10,
-    .elements = @ptrCast(@constCast(hostbased_oid_bytes.ptr)),
+    .elements = hostbased_oid_bytes.ptr,
 };
 
 pub var GSS_C_NT_HOSTBASED_SERVICE: gss_OID = &static_hostbased_oid_desc;
@@ -4582,7 +4566,7 @@ pub fn gss_release_buffer(
     if (minor_status) |ms| ms.* = 0;
     if (buffer) |buf| {
         if (buf.value) |val| {
-            std.c.free(val);
+            mem.freeTyped(val);
             buf.value = null;
         }
         buf.length = 0;
@@ -4594,7 +4578,7 @@ pub fn gss_import_name(
     minor_status: ?*OM_uint32,
     input_name_buffer: gss_buffer_t,
     input_name_type: gss_OID,
-    output_name: ?*?*anyopaque,
+    output_name: ?*?[*:0]u8,
 ) callconv(.c) OM_uint32 {
     _ = input_name_type;
     if (minor_status) |ms| ms.* = 0;
@@ -4604,25 +4588,22 @@ pub fn gss_import_name(
         return GSS_S_FAILURE;
     };
     const len = in_buf.length;
-    const raw = std.c.malloc(len + 1) orelse return GSS_S_FAILURE;
-    const p: [*]u8 = @ptrCast(raw);
-    if (len > 0 and in_buf.value != null) {
-        const src: [*]const u8 = @ptrCast(in_buf.value.?);
-        @memcpy(p[0..len], src[0..len]);
-    }
-    p[len] = 0;
-    out.* = raw;
+    const src_slice: []const u8 = if (len > 0 and in_buf.value != null)
+        in_buf.value.?[0..len]
+    else
+        "";
+    out.* = cStrdupSlice(src_slice) orelse return GSS_S_FAILURE;
     return GSS_S_COMPLETE;
 }
 
 pub fn gss_release_name(
     minor_status: ?*OM_uint32,
-    input_name: ?*?*anyopaque,
+    input_name: ?*?[*:0]u8,
 ) callconv(.c) OM_uint32 {
     if (minor_status) |ms| ms.* = 0;
     if (input_name) |in_ptr| {
         if (in_ptr.*) |val| {
-            std.c.free(val);
+            mem.freeTyped(val);
             in_ptr.* = null;
         }
     }
@@ -4644,11 +4625,8 @@ pub fn gss_display_status(
     if (message_context) |mc| mc.* = 0;
     if (status_string) |ss| {
         const msg = "GSS-API error";
-        if (std.c.malloc(msg.len + 1)) |raw| {
-            const p: [*]u8 = @ptrCast(raw);
-            @memcpy(p[0..msg.len], msg);
-            p[msg.len] = 0;
-            ss.value = raw;
+        if (cStrdupSlice(msg)) |dup| {
+            ss.value = dup;
             ss.length = msg.len;
         } else {
             ss.* = .{};
@@ -4718,23 +4696,20 @@ pub fn gss_inquire_context(
 
 pub fn gss_display_name(
     minor_status: ?*OM_uint32,
-    input_name: ?*anyopaque,
+    input_name: ?[*:0]const u8,
     output_name_buffer: gss_buffer_t,
     output_name_type: ?*gss_OID,
 ) callconv(.c) OM_uint32 {
     if (minor_status) |ms| ms.* = 0;
     if (output_name_type) |ont| ont.* = GSS_C_NT_HOSTBASED_SERVICE;
     const out_buf = output_name_buffer orelse return GSS_S_FAILURE;
-    const name_ptr: [*:0]const u8 = @ptrCast(input_name orelse {
+    const name_ptr = input_name orelse {
         out_buf.* = .{};
         return GSS_S_FAILURE;
-    });
+    };
     const slice = std.mem.span(name_ptr);
-    const raw = std.c.malloc(slice.len + 1) orelse return GSS_S_FAILURE;
-    const p: [*]u8 = @ptrCast(raw);
-    @memcpy(p[0..slice.len], slice);
-    p[slice.len] = 0;
-    out_buf.value = raw;
+    const dup = cStrdupSlice(slice) orelse return GSS_S_FAILURE;
+    out_buf.value = dup;
     out_buf.length = slice.len;
     return GSS_S_COMPLETE;
 }
@@ -5285,10 +5260,10 @@ test "ares version, immediate query callback, and DNS record helpers" {
     try std.testing.expect(st2.called);
     try std.testing.expectEqual(ARES_ENOTFOUND, st2.status);
 
-    var dnsrec: ?*anyopaque = null;
+    var dnsrec: ?*AresDnsRecord = null;
     try std.testing.expectEqual(ARES_SUCCESS, ares_dns_record_create(&dnsrec, 1, 0, 0, 0));
     defer ares_dns_record_destroy(dnsrec);
-    var rr: ?*anyopaque = null;
+    var rr: ?*AresDnsRr = null;
     try std.testing.expectEqual(ARES_SUCCESS, ares_dns_record_rr_add(&rr, dnsrec, 1, "example.com", 65, 1, 300));
     try std.testing.expectEqual(ARES_SUCCESS, ares_dns_rr_set_u16(rr, 1, 16));
     try std.testing.expectEqual(ARES_SUCCESS, ares_dns_rr_set_str(rr, 2, "svc.example.com."));
@@ -5330,14 +5305,14 @@ test "bundled protocol versions and option queries (nghttp2, ngtcp2, nghttp3, li
     var minor: OM_uint32 = 0;
     var in_buf: gss_buffer_desc = .{
         .length = 16,
-        .value = @ptrCast(@constCast("HTTP@example.com")),
+        .value = @constCast("HTTP@example.com".ptr),
     };
-    var gss_name: ?*anyopaque = null;
+    var gss_name: ?[*:0]u8 = null;
     try std.testing.expectEqual(GSS_S_COMPLETE, gss_import_name(&minor, &in_buf, GSS_C_NT_HOSTBASED_SERVICE, &gss_name));
     defer _ = gss_release_name(&minor, &gss_name);
     var out_buf: gss_buffer_desc = .{};
     defer _ = gss_release_buffer(&minor, &out_buf);
     try std.testing.expectEqual(GSS_S_COMPLETE, gss_display_name(&minor, gss_name, &out_buf, null));
-    const out_slice = @as([*]const u8, @ptrCast(out_buf.value.?))[0..out_buf.length];
+    const out_slice = out_buf.value.?[0..out_buf.length];
     try std.testing.expectEqualStrings("HTTP@example.com", out_slice);
 }
