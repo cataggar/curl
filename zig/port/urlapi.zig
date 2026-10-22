@@ -1742,7 +1742,7 @@ fn set_url_scheme(u: *Curl_URL, scheme: [*:0]const u8, flags: c_uint) CURLUcode 
     if (plen > MAX_SCHEME_LEN or plen < 1)
         return .CURLUE_BAD_SCHEME;
     const h = Curl_get_scheme(scheme);
-    if ((flags & CURLU_NON_SUPPORT_SCHEME) == 0 and (h == null or h.?.run == null))
+    if ((flags & CURLU_NON_SUPPORT_SCHEME) == 0 and h == null)
         return .CURLUE_UNSUPPORTED_SCHEME;
     if (h == null) {
         var s = scheme;

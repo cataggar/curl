@@ -3,6 +3,7 @@ const libcurl = @import("zig/libcurl.zig");
 const cli = @import("zig/cli.zig");
 const backends = @import("zig/backends.zig");
 const test_servers = @import("zig/test_servers.zig");
+const test_libtests = @import("zig/test_libtests.zig");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -154,6 +155,7 @@ pub fn build(b: *std.Build) void {
         backend_options_step,
         shared,
     );
+    _ = test_libtests.addLibtests(b, target, optimize, lib, config_header, backend_opts, !shared);
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(b.getInstallStep());
