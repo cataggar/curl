@@ -7,6 +7,7 @@ const curlx_parse = @import("curlx_parse.zig");
 const curlx_time_net = @import("curlx_time_net.zig");
 const io_buffers = @import("io_buffers.zig");
 const headers_sock = @import("headers_sock.zig");
+const doh_hostip_easy = @import("doh_hostip_easy.zig");
 
 const CURLcode = c_uint;
 const CURLE_OK: CURLcode = 0;
@@ -185,7 +186,7 @@ const imap_conn = extern struct {
     mailbox: ?[*:0]u8,
     state: imapstate,
     mb_uidvalidity: c_uint,
-    resptag: [5]u8,
+    resptag: [4:0]u8,
     preftype: u8,
     cmdid: u8,
     ssldone: bool,
@@ -196,13 +197,11 @@ const imap_conn = extern struct {
     mb_uidvalidity_set: bool,
 };
 
-const Curl_meta_dtor = *const fn (key: [*:0]const u8, klen: usize, entry: ?*anyopaque) callconv(.c) void;
-
 // C / Zig extern declarations
 extern fn curlx_dyn_addn(s: *dynbuf, mem_ptr: *const anyopaque, len: usize) callconv(.c) CURLcode;
 extern fn curlx_dyn_tail(s: *dynbuf, length: usize) callconv(.c) CURLcode;
 extern fn Curl_bufref_set(br: *bufref, ptr: ?*const anyopaque, len: usize, dtor: ?*const fn (?*anyopaque) callconv(.c) void) callconv(.c) void;
-extern fn Curl_bufref_ptr(br: *const bufref) callconv(.c) ?[*]const u8;
+extern fn Curl_bufref_ptr(br: *const bufref) callconv(.c) ?[*:0]const u8;
 extern fn curlx_str_number(linep: *[*:0]const u8, nump: *curl_off_t, max: curl_off_t) callconv(.c) c_int;
 extern fn curlx_str_single(linep: *[*:0]const u8, byte: u8) callconv(.c) c_int;
 extern fn curlx_strzero(buf: ?[*:0]u8) callconv(.c) void;
@@ -212,11 +211,6 @@ extern fn Curl_pp_flushsend(data: ?*Curl_easy, pp: *pingpong) callconv(.c) CURLc
 extern fn Curl_pp_disconnect(pp: *pingpong) callconv(.c) CURLcode;
 extern fn Curl_pp_moredata(pp: *pingpong) callconv(.c) bool;
 extern fn Curl_pp_needs_flush(data: ?*Curl_easy, pp: *pingpong) callconv(.c) bool;
-
-extern fn Curl_meta_set(data: ?*Curl_easy, key: [*:0]const u8, meta_data: ?*anyopaque, meta_dtor: Curl_meta_dtor) callconv(.c) CURLcode;
-extern fn Curl_meta_get(data: ?*Curl_easy, key: [*:0]const u8) callconv(.c) ?*anyopaque;
-extern fn Curl_conn_meta_set(conn: ?*connectdata, key: [*:0]const u8, meta_data: ?*anyopaque, meta_dtor: Curl_meta_dtor) callconv(.c) CURLcode;
-extern fn Curl_conn_meta_get(conn: ?*connectdata, key: [*:0]const u8) callconv(.c) ?*anyopaque;
 
 extern fn Curl_sasl_init(sasl: *SASL, data: ?*Curl_easy, params: *const SASLproto) callconv(.c) void;
 extern fn Curl_sasl_can_authenticate(sasl: *SASL, data: ?*Curl_easy) callconv(.c) bool;
@@ -228,6 +222,10 @@ extern fn Curl_sasl_is_blocked(sasl: *SASL, data: ?*Curl_easy) callconv(.c) CURL
 
 extern fn Curl_conn_is_ssl(conn: ?*connectdata, sockindex: i8) callconv(.c) bool;
 extern fn Curl_conn_is_connected(conn: ?*connectdata, sockindex: i8) callconv(.c) bool;
+const Curl_meta_dtor = *const fn (key: [*:0]const u8, key_len: usize, meta_data: ?*anyopaque) callconv(.c) void;
+extern fn Curl_meta_set(data: ?*Curl_easy, key: [*:0]const u8, meta_data: ?*anyopaque, meta_dtor: Curl_meta_dtor) callconv(.c) CURLcode;
+extern fn Curl_conn_meta_set(conn: ?*connectdata, key: [*:0]const u8, meta_data: ?*anyopaque, meta_dtor: Curl_meta_dtor) callconv(.c) CURLcode;
+
 extern fn Curl_conn_connect(data: ?*Curl_easy, sockindex: i8, blocking: bool, done: *bool) callconv(.c) CURLcode;
 extern fn Curl_pgrsReset(data: ?*Curl_easy) callconv(.c) void;
 extern fn Curl_pgrsSetUploadSize(data: ?*Curl_easy, size: curl_off_t) callconv(.c) void;
@@ -304,46 +302,65 @@ extern fn Curl_imap_ws_conn_firstsocket(data: ?*const Curl_easy) callconv(.c) cu
 extern fn Curl_imap_ws_setup_http_neg(data: ?*Curl_easy) callconv(.c) void;
 extern fn Curl_imap_ws_good_easy_handle(data: ?*const Curl_easy) callconv(.c) bool;
 
+inline fn imapEasy(data: ?*Curl_easy) ?*IMAP {
+    return doh_hostip_easy.metaGetTyped(IMAP, data, CURL_META_IMAP_EASY);
+}
+
+inline fn imapConn(conn: ?*connectdata) ?*imap_conn {
+    return doh_hostip_easy.connMetaGetTyped(imap_conn, conn, CURL_META_IMAP_CONN);
+}
+
+inline fn wsConn(conn: ?*connectdata) ?*websocket {
+    return doh_hostip_easy.connMetaGetTyped(websocket, conn, CURL_META_PROTO_WS_CONN);
+}
+
+fn bufPrintZ(buf: []u8, comptime fmt: []const u8, args: anytype) ![:0]u8 {
+    if (buf.len == 0) return error.NoSpaceLeft;
+    const slice = try std.fmt.bufPrint(buf[0 .. buf.len - 1], fmt, args);
+    buf[slice.len] = 0;
+    return buf[0..slice.len :0];
+}
+
 fn failfFmt(data: ?*Curl_easy, comptime fmt: []const u8, args: anytype) void {
     if (data == null) return;
     var buf: [512]u8 = undefined;
-    const slice = std.fmt.bufPrint(&buf, fmt ++ "\x00", args) catch return;
-    Curl_imap_ws_failf_str(data, @ptrCast(slice.ptr));
+    const slice = bufPrintZ(&buf, fmt, args) catch return;
+    Curl_imap_ws_failf_str(data, slice.ptr);
 }
 
 fn infofFmt(data: ?*Curl_easy, comptime fmt: []const u8, args: anytype) void {
     if (!Curl_imap_ws_infof_enabled(data)) return;
     var buf: [512]u8 = undefined;
-    const slice = std.fmt.bufPrint(&buf, fmt ++ "\x00", args) catch return;
-    Curl_imap_ws_infof_str(data, @ptrCast(slice.ptr));
+    const slice = bufPrintZ(&buf, fmt, args) catch return;
+    Curl_imap_ws_infof_str(data, slice.ptr);
 }
 
 fn trcWsFmt(data: ?*Curl_easy, comptime fmt: []const u8, args: anytype) void {
     if (!Curl_imap_ws_trc_ws_enabled(data)) return;
     var buf: [512]u8 = undefined;
-    const slice = std.fmt.bufPrint(&buf, fmt ++ "\x00", args) catch return;
-    Curl_imap_ws_trc_ws_str(data, @ptrCast(slice.ptr));
+    const slice = bufPrintZ(&buf, fmt, args) catch return;
+    Curl_imap_ws_trc_ws_str(data, slice.ptr);
 }
 
 fn trcMFmt(data: ?*Curl_easy, comptime fmt: []const u8, args: anytype) void {
     if (!Curl_imap_ws_trc_m_enabled(data)) return;
     var buf: [512]u8 = undefined;
-    const slice = std.fmt.bufPrint(&buf, fmt ++ "\x00", args) catch return;
-    Curl_imap_ws_trc_m_str(data, @ptrCast(slice.ptr));
+    const slice = bufPrintZ(&buf, fmt, args) catch return;
+    Curl_imap_ws_trc_m_str(data, slice.ptr);
 }
 
 fn trcWriteFmt(data: ?*Curl_easy, comptime fmt: []const u8, args: anytype) void {
     if (!Curl_imap_ws_trc_write_enabled(data)) return;
     var buf: [512]u8 = undefined;
-    const slice = std.fmt.bufPrint(&buf, fmt ++ "\x00", args) catch return;
-    Curl_imap_ws_trc_write_str(data, @ptrCast(slice.ptr));
+    const slice = bufPrintZ(&buf, fmt, args) catch return;
+    Curl_imap_ws_trc_write_str(data, slice.ptr);
 }
 
 fn trcReadFmt(data: ?*Curl_easy, comptime fmt: []const u8, args: anytype) void {
     if (!Curl_imap_ws_trc_read_enabled(data)) return;
     var buf: [512]u8 = undefined;
-    const slice = std.fmt.bufPrint(&buf, fmt ++ "\x00", args) catch return;
-    Curl_imap_ws_trc_read_str(data, @ptrCast(slice.ptr));
+    const slice = bufPrintZ(&buf, fmt, args) catch return;
+    Curl_imap_ws_trc_read_str(data, slice.ptr);
 }
 
 fn cStrSlice(s: ?[*:0]const u8) []const u8 {
@@ -353,7 +370,7 @@ fn cStrSlice(s: ?[*:0]const u8) []const u8 {
 
 fn freeOptStr(ptr: *?[*:0]u8) void {
     if (ptr.*) |p| {
-        mem.free(@ptrCast(p));
+        mem.free(p);
         ptr.* = null;
     }
 }
@@ -381,33 +398,57 @@ fn imap_sendf(data: ?*Curl_easy, imapc: *imap_conn, comptime fmt: []const u8, ar
     const rem: i64 = @rem(conn_id, 26);
     const tag_char: u8 = @intCast(@as(i64, 'A') + (if (rem < 0) -rem else rem));
     imapc.cmdid +%= 1;
-    _ = std.fmt.bufPrint(&imapc.resptag, "{c}{d:0>3}\x00", .{ tag_char, imapc.cmdid }) catch unreachable;
+    _ = std.fmt.bufPrint(&imapc.resptag, "{c}{d:0>3}", .{ tag_char, imapc.cmdid }) catch unreachable;
 
     var stack_buf: [1024]u8 = undefined;
-    if (std.fmt.bufPrint(&stack_buf, fmt ++ "\x00", args)) |slice| {
-        return Curl_imap_ws_pp_send_str(data, &imapc.pp, @ptrCast(&imapc.resptag), @ptrCast(slice.ptr));
+    if (bufPrintZ(&stack_buf, fmt, args)) |slice| {
+        return Curl_imap_ws_pp_send_str(data, &imapc.pp, &imapc.resptag, slice.ptr);
     } else |_| {
         const len = std.fmt.count(fmt, args);
-        const heap_ptr = mem.malloc(len + 1) orelse return CURLE_OUT_OF_MEMORY;
-        defer mem.free(heap_ptr);
-        const heap_slice = heap_ptr[0 .. len + 1];
-        _ = std.fmt.bufPrint(heap_slice, fmt ++ "\x00", args) catch return CURLE_OUT_OF_MEMORY;
-        return Curl_imap_ws_pp_send_str(data, &imapc.pp, @ptrCast(&imapc.resptag), @ptrCast(heap_slice.ptr));
+        const heap_slice = mem.allocSlice(u8, len + 1) orelse return CURLE_OUT_OF_MEMORY;
+        defer mem.freeSlice(heap_slice);
+        const z = bufPrintZ(heap_slice, fmt, args) catch return CURLE_OUT_OF_MEMORY;
+        return Curl_imap_ws_pp_send_str(data, &imapc.pp, &imapc.resptag, z.ptr);
     }
 }
 
 fn imap_pp_sendf(data: ?*Curl_easy, pp: *pingpong, comptime fmt: []const u8, args: anytype) CURLcode {
     var stack_buf: [1024]u8 = undefined;
-    if (std.fmt.bufPrint(&stack_buf, fmt ++ "\x00", args)) |slice| {
-        return Curl_imap_ws_pp_send_str(data, pp, null, @ptrCast(slice.ptr));
+    if (bufPrintZ(&stack_buf, fmt, args)) |slice| {
+        return Curl_imap_ws_pp_send_str(data, pp, null, slice.ptr);
     } else |_| {
         const len = std.fmt.count(fmt, args);
-        const heap_ptr = mem.malloc(len + 1) orelse return CURLE_OUT_OF_MEMORY;
-        defer mem.free(heap_ptr);
-        const heap_slice = heap_ptr[0 .. len + 1];
-        _ = std.fmt.bufPrint(heap_slice, fmt ++ "\x00", args) catch return CURLE_OUT_OF_MEMORY;
-        return Curl_imap_ws_pp_send_str(data, pp, null, @ptrCast(heap_slice.ptr));
+        const heap_slice = mem.allocSlice(u8, len + 1) orelse return CURLE_OUT_OF_MEMORY;
+        defer mem.freeSlice(heap_slice);
+        const z = bufPrintZ(heap_slice, fmt, args) catch return CURLE_OUT_OF_MEMORY;
+        return Curl_imap_ws_pp_send_str(data, pp, null, z.ptr);
     }
+}
+
+fn imapAtomInner(s_slice: []const u8, escape_only: bool) !?[*:0]u8 {
+    var line: dynbuf = undefined;
+    containers.curlx_dyn_init(&line, 2000);
+    errdefer containers.curlx_dyn_free(&line);
+
+    if (!escape_only and curlx_dyn_addn(&line, "\"", 1) != CURLE_OK) {
+        return error.OutOfMemory;
+    }
+
+    for (s_slice) |ch| {
+        if ((ch == '\\' or ch == '"') and curlx_dyn_addn(&line, "\\", 1) != CURLE_OK) {
+            return error.OutOfMemory;
+        }
+        const c_arr = [1]u8{ch};
+        if (curlx_dyn_addn(&line, &c_arr, 1) != CURLE_OK) {
+            return error.OutOfMemory;
+        }
+    }
+
+    if (!escape_only and curlx_dyn_addn(&line, "\"", 1) != CURLE_OK) {
+        return error.OutOfMemory;
+    }
+
+    return containers.curlx_dyn_ptr(&line);
 }
 
 fn imap_atom(str: ?[*:0]const u8, escape_only: bool) ?[*:0]u8 {
@@ -417,27 +458,7 @@ fn imap_atom(str: ?[*:0]const u8, escape_only: bool) ?[*:0]u8 {
         return mem.strdup(s);
     }
 
-    var line: dynbuf = undefined;
-    containers.curlx_dyn_init(&line, 2000);
-    if (!escape_only and curlx_dyn_addn(&line, "\"", 1) != CURLE_OK) {
-        return null;
-    }
-
-    for (s_slice) |ch| {
-        if ((ch == '\\' or ch == '"') and curlx_dyn_addn(&line, "\\", 1) != CURLE_OK) {
-            return null;
-        }
-        const c_arr = [1]u8{ch};
-        if (curlx_dyn_addn(&line, &c_arr, 1) != CURLE_OK) {
-            return null;
-        }
-    }
-
-    if (!escape_only and curlx_dyn_addn(&line, "\"", 1) != CURLE_OK) {
-        return null;
-    }
-
-    return containers.curlx_dyn_ptr(&line);
+    return imapAtomInner(s_slice, escape_only) catch null;
 }
 
 fn imap_is_bchar(ch: u8) bool {
@@ -492,11 +513,70 @@ fn imap_parse_url_options(conn: ?*connectdata, imapc: *imap_conn) CURLcode {
     return result;
 }
 
+fn imapParseUrlParam(ptr: *[*:0]const u8, imap: *IMAP) !void {
+    var tname: ?[*:0]u8 = null;
+    var tnamelen: usize = 0;
+    var tval: ?[*:0]u8 = null;
+    var tvallen: usize = 0;
+    defer freeOptStr(&tname);
+    defer freeOptStr(&tval);
+
+    var begin = ptr.* + 1;
+    while (begin[0] != 0 and begin[0] != '=') : (begin += 1) {}
+    if (begin[0] == 0) return error.UrlMalformat;
+
+    const name = ptr.* + 1;
+    const namelen = @intFromPtr(begin) - @intFromPtr(name);
+
+    ptr.* = begin + 1;
+    begin = ptr.*;
+    while (imap_is_bchar(ptr.*[0])) : (ptr.* += 1) {}
+
+    const value = begin;
+    var valuelen = @intFromPtr(ptr.*) - @intFromPtr(begin);
+
+    var result = Curl_urldecode(name, namelen, &tname, &tnamelen, REJECT_CTRL);
+    if (result != CURLE_OK) return if (result == CURLE_OUT_OF_MEMORY) error.OutOfMemory else error.UrlMalformat;
+
+    if (valuelen > 0 and value[valuelen - 1] == '/') {
+        valuelen -= 1;
+    }
+    result = Curl_urldecode(value, valuelen, &tval, &tvallen, REJECT_CTRL);
+    if (result != CURLE_OK) return if (result == CURLE_OUT_OF_MEMORY) error.OutOfMemory else error.UrlMalformat;
+
+    const tname_p = tname.?;
+    const tval_p = tval.?;
+
+    if (tnamelen == 11 and primitives.curl_strnequal(tname_p, "UIDVALIDITY", 11) != 0 and !imap.uidvalidity_set) {
+        var vptr: [*:0]const u8 = tval_p;
+        var uv: curl_off_t = 0;
+        if (curlx_str_number(&vptr, &uv, std.math.maxInt(u32)) != 0 or vptr[0] != 0) {
+            return error.UrlMalformat;
+        }
+        imap.uidvalidity = @intCast(uv);
+        imap.uidvalidity_set = true;
+    } else if (tnamelen == 3 and primitives.curl_strnequal(tname_p, "UID", 3) != 0 and imap.uid == null) {
+        imap.uid = tval;
+        tval = null;
+    } else if (tnamelen == 9 and primitives.curl_strnequal(tname_p, "MAILINDEX", 9) != 0 and imap.mindex == null) {
+        imap.mindex = tval;
+        tval = null;
+    } else if (tnamelen == 7 and primitives.curl_strnequal(tname_p, "SECTION", 7) != 0 and imap.section == null) {
+        imap.section = tval;
+        tval = null;
+    } else if (tnamelen == 7 and primitives.curl_strnequal(tname_p, "PARTIAL", 7) != 0 and imap.partial == null) {
+        imap.partial = tval;
+        tval = null;
+    } else {
+        return error.UrlMalformat;
+    }
+}
+
 fn imap_parse_url_path(data: ?*Curl_easy, imap: *IMAP) CURLcode {
     var result: CURLcode = CURLE_OK;
     const up_path = Curl_imap_ws_get_up_path(data) orelse "/";
     var ptr: [*:0]const u8 = if (up_path[0] != 0) up_path + 1 else up_path;
-    var begin: [*:0]const u8 = ptr;
+    const begin: [*:0]const u8 = ptr;
 
     while (imap_is_bchar(ptr[0])) : (ptr += 1) {}
 
@@ -512,68 +592,10 @@ fn imap_parse_url_path(data: ?*Curl_easy, imap: *IMAP) CURLcode {
     }
 
     while (ptr[0] == ';') {
-        var tname: ?[*:0]u8 = null;
-        var tnamelen: usize = 0;
-        var tval: ?[*:0]u8 = null;
-        var tvallen: usize = 0;
-
-        begin = ptr + 1;
-        while (begin[0] != 0 and begin[0] != '=') : (begin += 1) {}
-        if (begin[0] == 0) return CURLE_URL_MALFORMAT;
-
-        const name = ptr + 1;
-        const namelen = @intFromPtr(begin) - @intFromPtr(name);
-
-        ptr = begin + 1;
-        begin = ptr;
-        while (imap_is_bchar(ptr[0])) : (ptr += 1) {}
-
-        const value = begin;
-        var valuelen = @intFromPtr(ptr) - @intFromPtr(begin);
-
-        result = Curl_urldecode(name, namelen, &tname, &tnamelen, REJECT_CTRL);
-        if (result != CURLE_OK) return result;
-
-        if (valuelen > 0 and value[valuelen - 1] == '/') {
-            valuelen -= 1;
-        }
-        result = Curl_urldecode(value, valuelen, &tval, &tvallen, REJECT_CTRL);
-        if (result != CURLE_OK) {
-            freeOptStr(&tname);
-            return result;
-        }
-
-        const tname_p = tname.?;
-        const tval_p = tval.?;
-
-        if (tnamelen == 11 and primitives.curl_strnequal(tname_p, "UIDVALIDITY", 11) != 0 and !imap.uidvalidity_set) {
-            var vptr: [*:0]const u8 = tval_p;
-            var uv: curl_off_t = 0;
-            if (curlx_str_number(&vptr, &uv, std.math.maxInt(u32)) != 0 or vptr[0] != 0) {
-                result = CURLE_URL_MALFORMAT;
-            } else {
-                imap.uidvalidity = @intCast(uv);
-                imap.uidvalidity_set = true;
-            }
-        } else if (tnamelen == 3 and primitives.curl_strnequal(tname_p, "UID", 3) != 0 and imap.uid == null) {
-            imap.uid = tval;
-            tval = null;
-        } else if (tnamelen == 9 and primitives.curl_strnequal(tname_p, "MAILINDEX", 9) != 0 and imap.mindex == null) {
-            imap.mindex = tval;
-            tval = null;
-        } else if (tnamelen == 7 and primitives.curl_strnequal(tname_p, "SECTION", 7) != 0 and imap.section == null) {
-            imap.section = tval;
-            tval = null;
-        } else if (tnamelen == 7 and primitives.curl_strnequal(tname_p, "PARTIAL", 7) != 0 and imap.partial == null) {
-            imap.partial = tval;
-            tval = null;
-        } else {
-            result = CURLE_URL_MALFORMAT;
-        }
-
-        freeOptStr(&tname);
-        freeOptStr(&tval);
-        if (result != CURLE_OK) return result;
+        imapParseUrlParam(&ptr, imap) catch |err| return switch (err) {
+            error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+            error.UrlMalformat => CURLE_URL_MALFORMAT,
+        };
     }
 
     if (imap.mailbox != null and imap.uid == null and imap.mindex == null) {
@@ -657,12 +679,10 @@ fn is_custom_fetch_listing(imap: *const IMAP) bool {
 }
 
 fn imap_endofresp(data: ?*Curl_easy, conn: ?*connectdata, line: [*:0]const u8, len: usize, resp: *c_int) callconv(.c) bool {
-    const imap_ptr = Curl_meta_get(data, CURL_META_IMAP_EASY) orelse return false;
-    const imap: *IMAP = @ptrCast(@alignCast(imap_ptr));
-    const imapc_ptr = Curl_conn_meta_get(conn, CURL_META_IMAP_CONN) orelse return false;
-    const imapc: *imap_conn = @ptrCast(@alignCast(imapc_ptr));
+    const imap = imapEasy(data) orelse return false;
+    const imapc = imapConn(conn) orelse return false;
 
-    const id: [*:0]const u8 = @ptrCast(&imapc.resptag);
+    const id: [*:0]const u8 = &imapc.resptag;
     const id_len = std.mem.len(id);
 
     if (len >= id_len + 1 and std.mem.eql(u8, line[0..id_len], id[0..id_len]) and line[id_len] == ' ') {
@@ -732,8 +752,7 @@ fn imap_endofresp(data: ?*Curl_easy, conn: ?*connectdata, line: [*:0]const u8, l
 
 fn imap_get_message(data: ?*Curl_easy, out: *bufref) callconv(.c) CURLcode {
     const conn = Curl_imap_ws_easy_conn(data);
-    const imapc_ptr = Curl_conn_meta_get(conn, CURL_META_IMAP_CONN) orelse return CURLE_FAILED_INIT;
-    const imapc: *imap_conn = @ptrCast(@alignCast(imapc_ptr));
+    const imapc = imapConn(conn) orelse return CURLE_FAILED_INIT;
 
     var message = containers.curlx_dyn_ptr(&imapc.pp.recvbuf) orelse {
         Curl_bufref_set(out, "", 0, null);
@@ -821,10 +840,10 @@ fn imap_perform_login(data: ?*Curl_easy, imapc: *imap_conn, conn: ?*connectdata)
     const passwd_s = cStrSlice(passwd);
     const result = imap_sendf(data, imapc, "LOGIN {s} {s}", .{ user_s, passwd_s });
 
-    if (user) |u| mem.free(@ptrCast(u));
+    if (user) |u| mem.free(u);
     if (passwd) |p| {
         curlx_strzero(p);
-        mem.free(@ptrCast(p));
+        mem.free(p);
     }
 
     if (result == CURLE_OK) {
@@ -835,13 +854,11 @@ fn imap_perform_login(data: ?*Curl_easy, imapc: *imap_conn, conn: ?*connectdata)
 
 fn imap_perform_authenticate(data: ?*Curl_easy, mech: [*:0]const u8, initresp: *const bufref) callconv(.c) CURLcode {
     const conn = Curl_imap_ws_easy_conn(data);
-    const imapc_ptr = Curl_conn_meta_get(conn, CURL_META_IMAP_CONN) orelse return CURLE_FAILED_INIT;
-    const imapc: *imap_conn = @ptrCast(@alignCast(imapc_ptr));
+    const imapc = imapConn(conn) orelse return CURLE_FAILED_INIT;
 
     const mech_s = std.mem.span(mech);
     const ir = Curl_bufref_ptr(initresp);
-    if (ir) |ir_ptr| {
-        const ir_z: [*:0]const u8 = @ptrCast(ir_ptr);
+    if (ir) |ir_z| {
         const ir_s = if (ir_z[0] != 0) std.mem.span(ir_z) else "=";
         return imap_sendf(data, imapc, "AUTHENTICATE {s} {s}", .{ mech_s, ir_s });
     } else {
@@ -852,18 +869,16 @@ fn imap_perform_authenticate(data: ?*Curl_easy, mech: [*:0]const u8, initresp: *
 fn imap_continue_authenticate(data: ?*Curl_easy, mech: [*:0]const u8, resp: *const bufref) callconv(.c) CURLcode {
     _ = mech;
     const conn = Curl_imap_ws_easy_conn(data);
-    const imapc_ptr = Curl_conn_meta_get(conn, CURL_META_IMAP_CONN) orelse return CURLE_FAILED_INIT;
-    const imapc: *imap_conn = @ptrCast(@alignCast(imapc_ptr));
+    const imapc = imapConn(conn) orelse return CURLE_FAILED_INIT;
     const ptr = Curl_bufref_ptr(resp);
-    const s = if (ptr) |p| std.mem.span(@as([*:0]const u8, @ptrCast(p))) else "";
+    const s = if (ptr) |p| std.mem.span(p) else "";
     return imap_pp_sendf(data, &imapc.pp, "{s}", .{s});
 }
 
 fn imap_cancel_authenticate(data: ?*Curl_easy, mech: [*:0]const u8) callconv(.c) CURLcode {
     _ = mech;
     const conn = Curl_imap_ws_easy_conn(data);
-    const imapc_ptr = Curl_conn_meta_get(conn, CURL_META_IMAP_CONN) orelse return CURLE_FAILED_INIT;
-    const imapc: *imap_conn = @ptrCast(@alignCast(imapc_ptr));
+    const imapc = imapConn(conn) orelse return CURLE_FAILED_INIT;
     return imap_pp_sendf(data, &imapc.pp, "*", .{});
 }
 
@@ -902,7 +917,7 @@ fn imap_perform_list(data: ?*Curl_easy, imap: *IMAP, imapc: *imap_conn) CURLcode
         else
             mem.strdup("");
         if (mailbox == null) return CURLE_OUT_OF_MEMORY;
-        defer mem.free(@ptrCast(mailbox.?));
+        defer mem.free(mailbox.?);
         const mb_s = std.mem.span(mailbox.?);
         result = imap_sendf(data, imapc, "LIST \"{s}\" *", .{mb_s});
     }
@@ -923,7 +938,7 @@ fn imap_perform_select(data: ?*Curl_easy, imap: *IMAP, imapc: *imap_conn) CURLco
     }
 
     const mailbox = imap_atom(imap.mailbox, false) orelse return CURLE_OUT_OF_MEMORY;
-    defer mem.free(@ptrCast(mailbox));
+    defer mem.free(mailbox);
 
     const mb_s = std.mem.span(mailbox);
     const result = imap_sendf(data, imapc, "SELECT {s}", .{mb_s});
@@ -986,7 +1001,7 @@ fn imap_perform_append(data: ?*Curl_easy, imap: *IMAP, imapc: *imap_conn) CURLco
     }
 
     const mailbox = imap_atom(imap.mailbox, false) orelse return CURLE_OUT_OF_MEMORY;
-    defer mem.free(@ptrCast(mailbox));
+    defer mem.free(mailbox);
 
     const ulbits_table = [_]struct { bit: u8, flag: []const u8 }{
         .{ .bit = CURLULFLAG_ANSWERED, .flag = "Answered" },
@@ -1154,7 +1169,7 @@ fn imap_state_login_resp(data: ?*Curl_easy, imapc: *imap_conn, imapcode: c_int, 
     return CURLE_OK;
 }
 
-fn imap_find_literal(line_in: [*]const u8, len_in: usize) ?[*:0]const u8 {
+fn imap_find_literal(line_in: [*]const u8, len_in: usize) ?[*]const u8 {
     var slice = line_in[0..len_in];
     var quoted: bool = false;
 
@@ -1169,7 +1184,7 @@ fn imap_find_literal(line_in: [*]const u8, len_in: usize) ?[*:0]const u8 {
         } else if (slice[0] == '"') {
             quoted = true;
         } else if (slice[0] == '{') {
-            return @ptrCast(slice.ptr);
+            return slice.ptr;
         }
         slice = slice[1..];
     }
@@ -1421,10 +1436,8 @@ fn imap_pp_statemachine(data: ?*Curl_easy, conn: ?*connectdata) callconv(.c) CUR
     var imapcode: c_int = 0;
     var nread: usize = 0;
 
-    const imap_ptr = Curl_meta_get(data, CURL_META_IMAP_EASY) orelse return CURLE_FAILED_INIT;
-    const imap: *IMAP = @ptrCast(@alignCast(imap_ptr));
-    const imapc_ptr = Curl_conn_meta_get(conn, CURL_META_IMAP_CONN) orelse return CURLE_FAILED_INIT;
-    const imapc: *imap_conn = @ptrCast(@alignCast(imapc_ptr));
+    const imap = imapEasy(data) orelse return CURLE_FAILED_INIT;
+    const imapc = imapConn(conn) orelse return CURLE_FAILED_INIT;
     const pp = &imapc.pp;
 
     if (imapc.state == .IMAP_UPGRADETLS) {
@@ -1442,7 +1455,7 @@ fn imap_pp_statemachine(data: ?*Curl_easy, conn: ?*connectdata) callconv(.c) CUR
         if (imapcode == -1) return CURLE_WEIRD_SERVER_REPLY;
         if (imapcode == 0) break;
 
-        const line: [*:0]const u8 = @ptrCast(containers.curlx_dyn_ptr(&pp.recvbuf) orelse "");
+        const line: [*:0]const u8 = containers.curlx_dyn_ptr(&pp.recvbuf) orelse "";
 
         switch (imapc.state) {
             .IMAP_SERVERGREET => result = imap_state_servergreet_resp(data, imapc, imapcode, line),
@@ -1474,8 +1487,7 @@ fn imap_pp_statemachine(data: ?*Curl_easy, conn: ?*connectdata) callconv(.c) CUR
 
 fn imap_multi_statemach(data: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
     const conn = Curl_imap_ws_easy_conn(data);
-    const imapc_ptr = Curl_conn_meta_get(conn, CURL_META_IMAP_CONN) orelse return CURLE_FAILED_INIT;
-    const imapc: *imap_conn = @ptrCast(@alignCast(imapc_ptr));
+    const imapc = imapConn(conn) orelse return CURLE_FAILED_INIT;
 
     const result = Curl_imap_ws_pp_statemach(data, &imapc.pp, false, false);
     done.* = (imapc.state == .IMAP_STOP);
@@ -1503,7 +1515,7 @@ fn imap_easy_dtor(key: [*:0]const u8, klen: usize, entry: ?*anyopaque) callconv(
     freeOptStr(&imap.query);
     freeOptStr(&imap.custom);
     freeOptStr(&imap.custom_params);
-    mem.freeSized(p, @sizeOf(IMAP));
+    mem.freeTyped(imap);
 }
 
 fn imap_conn_dtor(key: [*:0]const u8, klen: usize, entry: ?*anyopaque) callconv(.c) void {
@@ -1513,20 +1525,18 @@ fn imap_conn_dtor(key: [*:0]const u8, klen: usize, entry: ?*anyopaque) callconv(
     const imapc: *imap_conn = @ptrCast(@alignCast(p));
     _ = Curl_pp_disconnect(&imapc.pp);
     freeOptStr(&imapc.mailbox);
-    mem.freeSized(p, @sizeOf(imap_conn));
+    mem.freeTyped(imapc);
 }
 
 fn imap_pollset(data: ?*Curl_easy, ps: ?*easy_pollset) callconv(.c) CURLcode {
     const conn = Curl_imap_ws_easy_conn(data);
-    const imapc_ptr = Curl_conn_meta_get(conn, CURL_META_IMAP_CONN) orelse return CURLE_FAILED_INIT;
-    const imapc: *imap_conn = @ptrCast(@alignCast(imapc_ptr));
+    const imapc = imapConn(conn) orelse return CURLE_FAILED_INIT;
     return Curl_imap_ws_pp_pollset(data, &imapc.pp, ps);
 }
 
 fn imap_connect(data: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
     const conn = Curl_imap_ws_easy_conn(data);
-    const imapc_ptr = Curl_conn_meta_get(conn, CURL_META_IMAP_CONN) orelse return CURLE_FAILED_INIT;
-    const imapc: *imap_conn = @ptrCast(@alignCast(imapc_ptr));
+    const imapc = imapConn(conn) orelse return CURLE_FAILED_INIT;
 
     done.* = false;
 
@@ -1542,13 +1552,8 @@ fn imap_connect(data: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
 fn imap_done(data: ?*Curl_easy, status: CURLcode, premature: bool) callconv(.c) CURLcode {
     var result: CURLcode = CURLE_OK;
     const conn = Curl_imap_ws_easy_conn(data);
-    const imap_ptr = Curl_meta_get(data, CURL_META_IMAP_EASY);
-    const imapc_ptr = Curl_conn_meta_get(conn, CURL_META_IMAP_CONN);
-
-    if (imap_ptr == null) return CURLE_OK;
-    const imap: *IMAP = @ptrCast(@alignCast(imap_ptr.?));
-    if (imapc_ptr == null) return CURLE_FAILED_INIT;
-    const imapc: *imap_conn = @ptrCast(@alignCast(imapc_ptr.?));
+    const imap = imapEasy(data) orelse return CURLE_OK;
+    const imapc = imapConn(conn) orelse return CURLE_FAILED_INIT;
 
     if (status != CURLE_OK or premature) {
         Curl_imap_ws_connclose(conn);
@@ -1635,11 +1640,9 @@ fn imap_perform(data: ?*Curl_easy, imap: *IMAP, imapc: *imap_conn, connected: *b
 }
 
 fn imap_do(data: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
-    const imap_ptr = Curl_meta_get(data, CURL_META_IMAP_EASY) orelse return CURLE_FAILED_INIT;
-    const imap: *IMAP = @ptrCast(@alignCast(imap_ptr));
+    const imap = imapEasy(data) orelse return CURLE_FAILED_INIT;
     const conn = Curl_imap_ws_easy_conn(data);
-    const imapc_ptr = Curl_conn_meta_get(conn, CURL_META_IMAP_CONN) orelse return CURLE_FAILED_INIT;
-    const imapc: *imap_conn = @ptrCast(@alignCast(imapc_ptr));
+    const imapc = imapConn(conn) orelse return CURLE_FAILED_INIT;
 
     done.* = false;
 
@@ -1653,9 +1656,7 @@ fn imap_do(data: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
 }
 
 fn imap_disconnect(data: ?*Curl_easy, conn: ?*connectdata, dead_connection: bool) callconv(.c) CURLcode {
-    const imapc_ptr = Curl_conn_meta_get(conn, CURL_META_IMAP_CONN);
-    if (imapc_ptr) |p| {
-        const imapc: *imap_conn = @ptrCast(@alignCast(p));
+    if (imapConn(conn)) |imapc| {
         if (!dead_connection and Curl_imap_ws_conn_protoconnstart(conn) and
             !Curl_pp_needs_flush(data, &imapc.pp) and
             imap_perform_logout(data, imapc) == CURLE_OK)
@@ -1675,8 +1676,7 @@ fn imap_dophase_done(data: ?*Curl_easy, imap: *IMAP, connected: bool) CURLcode {
 }
 
 fn imap_doing(data: ?*Curl_easy, dophase_done: *bool) callconv(.c) CURLcode {
-    const imap_ptr = Curl_meta_get(data, CURL_META_IMAP_EASY) orelse return CURLE_FAILED_INIT;
-    const imap: *IMAP = @ptrCast(@alignCast(imap_ptr));
+    const imap = imapEasy(data) orelse return CURLE_FAILED_INIT;
 
     var result = imap_multi_statemach(data, dophase_done);
     if (result != CURLE_OK) {
@@ -1703,8 +1703,7 @@ fn imap_regular_transfer(data: ?*Curl_easy, imap: *IMAP, imapc: *imap_conn, doph
 }
 
 fn imap_setup_connection(data: ?*Curl_easy, conn: ?*connectdata) callconv(.c) CURLcode {
-    const raw_conn = mem.calloc(1, @sizeOf(imap_conn)) orelse return CURLE_OUT_OF_MEMORY;
-    const imapc: *imap_conn = @ptrCast(@alignCast(raw_conn));
+    const imapc = mem.create(imap_conn) orelse return CURLE_OUT_OF_MEMORY;
 
     imapc.pp.statemachine = imap_pp_statemachine;
     imapc.pp.endofresp = imap_endofresp;
@@ -1712,11 +1711,11 @@ fn imap_setup_connection(data: ?*Curl_easy, conn: ?*connectdata) callconv(.c) CU
     Curl_sasl_init(&imapc.sasl, data, &saslimap);
     Curl_imap_ws_pp_init(data, &imapc.pp);
 
-    const result = Curl_conn_meta_set(conn, CURL_META_IMAP_CONN, raw_conn, imap_conn_dtor);
+    const result = Curl_conn_meta_set(conn, CURL_META_IMAP_CONN, mem.toRawPtr(imapc), imap_conn_dtor);
     if (result != CURLE_OK) return result;
 
-    const raw_easy = mem.calloc(1, @sizeOf(IMAP)) orelse return CURLE_OUT_OF_MEMORY;
-    return Curl_meta_set(data, CURL_META_IMAP_EASY, raw_easy, imap_easy_dtor);
+    const imap = mem.create(IMAP) orelse return CURLE_OUT_OF_MEMORY;
+    return Curl_meta_set(data, CURL_META_IMAP_EASY, mem.toRawPtr(imap), imap_easy_dtor);
 }
 
 pub export const Curl_protocol_imap = Curl_protocol{
@@ -1854,7 +1853,7 @@ extern fn Curl_cwriter_free(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.
 
 extern fn Curl_checkheaders(data: ?*const Curl_easy, thisheader: [*]const u8, thislen: usize) callconv(.c) ?[*:0]u8;
 extern fn Curl_cf_recvbuf_add(data: ?*Curl_easy, conn: ?*connectdata, sockindex: c_int, buf: [*]const u8, len: usize) callconv(.c) CURLcode;
-extern fn Curl_easy_recv(data: ?*Curl_easy, buffer: ?*anyopaque, buflen: usize, n: *usize) callconv(.c) CURLcode;
+extern fn Curl_easy_recv(data: ?*anyopaque, buffer: ?*anyopaque, buflen: usize, n: *usize) callconv(.c) CURLcode;
 extern fn Curl_getconnectinfo(data: ?*Curl_easy, connp: *?*connectdata) callconv(.c) curl_socket_t;
 extern fn Curl_connect_only_attach(data: ?*Curl_easy) callconv(.c) CURLcode;
 extern fn Curl_xfer_send(data: ?*Curl_easy, buf: ?*const anyopaque, blen: usize, eos: bool, pnwritten: *usize) callconv(.c) CURLcode;
@@ -2118,17 +2117,6 @@ fn ws_dec_info(dec: *ws_decoder, data: ?*Curl_easy, msg: []const u8) void {
     }
 }
 
-const ws_write_payload_fn = *const fn (
-    buf: [*]const u8,
-    buflen: usize,
-    frame_age: c_int,
-    frame_flags: c_int,
-    payload_offset: curl_off_t,
-    payload_len: curl_off_t,
-    userp: *anyopaque,
-    pnwritten: *usize,
-) CURLcode;
-
 fn ws_dec_next_frame(dec: *ws_decoder) void {
     dec.frame_age = 0;
     dec.frame_flags = 0;
@@ -2281,8 +2269,8 @@ fn ws_dec_pass_payload(
     dec: *ws_decoder,
     data: ?*Curl_easy,
     inraw: *bufq,
-    write_cb: ws_write_payload_fn,
-    write_ctx: *anyopaque,
+    write_cb: anytype,
+    write_ctx: anytype,
 ) CURLcode {
     var inbuf: ?[*]const u8 = null;
     var inlen: usize = 0;
@@ -2316,8 +2304,8 @@ fn ws_dec_pass(
     dec: *ws_decoder,
     data: ?*Curl_easy,
     inraw: *bufq,
-    write_cb: ws_write_payload_fn,
-    write_ctx: *anyopaque,
+    write_cb: anytype,
+    write_ctx: anytype,
 ) CURLcode {
     if (io_buffers.Curl_bufq_is_empty(inraw)) return CURLE_AGAIN;
 
@@ -2398,14 +2386,14 @@ fn update_meta(
 
 fn ws_cw_init(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) CURLcode {
     _ = data;
-    const ctx: *ws_cw_ctx = @ptrCast(@alignCast(writer.ctx));
+    const ctx: *ws_cw_ctx = @fieldParentPtr("super", writer);
     io_buffers.Curl_bufq_init2(&ctx.buf, WS_CHUNK_SIZE, 1, io_buffers.BUFQ_OPT_SOFT_LIMIT);
     return CURLE_OK;
 }
 
 fn ws_cw_close(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) void {
     _ = data;
-    const ctx: *ws_cw_ctx = @ptrCast(@alignCast(writer.ctx));
+    const ctx: *ws_cw_ctx = @fieldParentPtr("super", writer);
     io_buffers.Curl_bufq_free(&ctx.buf);
 }
 
@@ -2448,10 +2436,9 @@ fn ws_cw_dec_next(
     frame_flags: c_int,
     payload_offset: curl_off_t,
     payload_len: curl_off_t,
-    user_data: *anyopaque,
+    ctx: *ws_cw_dec_ctx,
     pnwritten: *usize,
 ) CURLcode {
-    const ctx: *ws_cw_dec_ctx = @ptrCast(@alignCast(user_data));
     const data = ctx.data;
     const ws = ctx.ws;
     const auto_pong = !Curl_imap_ws_get_raw_mode(data) and !Curl_imap_ws_get_no_auto_pong(data);
@@ -2478,7 +2465,7 @@ fn ws_cw_dec_next(
 }
 
 fn ws_cw_write(data: ?*Curl_easy, writer: *Curl_cwriter, wtype: c_int, buf: [*]const u8, nbytes: usize) callconv(.c) CURLcode {
-    const ctx: *ws_cw_ctx = @ptrCast(@alignCast(writer.ctx));
+    const ctx: *ws_cw_ctx = @fieldParentPtr("super", writer);
     var result: CURLcode = CURLE_OK;
 
     trcWriteFmt(data, "[WS] write(len={d}, type={d})", .{ nbytes, wtype });
@@ -2487,11 +2474,10 @@ fn ws_cw_write(data: ?*Curl_easy, writer: *Curl_cwriter, wtype: c_int, buf: [*]c
     }
 
     const conn = Curl_imap_ws_easy_conn(data);
-    const ws_ptr = Curl_conn_meta_get(conn, CURL_META_PROTO_WS_CONN) orelse {
+    const ws = wsConn(conn) orelse {
         failfFmt(data, "[WS] not a websocket transfer", .{});
         return CURLE_FAILED_INIT;
     };
-    const ws: *websocket = @ptrCast(@alignCast(ws_ptr));
 
     if (nbytes > 0) {
         var nwritten: usize = 0;
@@ -2511,7 +2497,7 @@ fn ws_cw_write(data: ?*Curl_easy, writer: *Curl_cwriter, wtype: c_int, buf: [*]c
                 .next_writer = writer.next,
                 .cw_type = wtype,
             };
-            result = ws_dec_pass(&ws.dec, data, &ctx.buf, ws_cw_dec_next, @ptrCast(&pass_ctx));
+            result = ws_dec_pass(&ws.dec, data, &ctx.buf, ws_cw_dec_next, &pass_ctx);
             if (result == CURLE_AGAIN) {
                 result = CURLE_OK;
                 break;
@@ -2542,15 +2528,14 @@ fn ws_cw_flush(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) CURLcode {
 
     trcWriteFmt(data, "[ws] flush", .{});
     if (!Curl_imap_ws_get_raw_mode(data)) {
-        const ctx: *ws_cw_ctx = @ptrCast(@alignCast(writer.ctx));
+        const ctx: *ws_cw_ctx = @fieldParentPtr("super", writer);
         result = cwriter_flush(data, writer.next);
         if (result == CURLE_OK) {
             const conn = Curl_imap_ws_easy_conn(data);
-            const ws_ptr = Curl_conn_meta_get(conn, CURL_META_PROTO_WS_CONN) orelse {
+            const ws = wsConn(conn) orelse {
                 failfFmt(data, "[WS] not a websocket transfer", .{});
                 return CURLE_FAILED_INIT;
             };
-            const ws: *websocket = @ptrCast(@alignCast(ws_ptr));
 
             while (!io_buffers.Curl_bufq_is_empty(&ctx.buf) and !Curl_imap_ws_cwriter_is_paused(data)) {
                 var pass_ctx = ws_cw_dec_ctx{
@@ -2559,7 +2544,7 @@ fn ws_cw_flush(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) CURLcode {
                     .next_writer = writer.next,
                     .cw_type = CLIENTWRITE_BODY,
                 };
-                result = ws_dec_pass(&ws.dec, data, &ctx.buf, ws_cw_dec_next, @ptrCast(&pass_ctx));
+                result = ws_dec_pass(&ws.dec, data, &ctx.buf, ws_cw_dec_next, &pass_ctx);
                 if (result == CURLE_AGAIN) {
                     result = CURLE_OK;
                     break;
@@ -2872,7 +2857,7 @@ fn cr_ws_close(data: ?*Curl_easy, reader: *Curl_creader) callconv(.c) void {
 }
 
 fn cr_ws_read(data: ?*Curl_easy, reader: *Curl_creader, buf: [*]u8, blen_in: usize, pnread: *usize, peos: *bool) callconv(.c) CURLcode {
-    const ctx: *cr_ws_ctx = @ptrCast(@alignCast(reader.ctx));
+    const ctx: *cr_ws_ctx = @fieldParentPtr("super", reader);
     var result: CURLcode = CURLE_OK;
     var nread: usize = 0;
     var n: usize = 0;
@@ -2886,11 +2871,10 @@ fn cr_ws_read(data: ?*Curl_easy, reader: *Curl_creader, buf: [*]u8, blen_in: usi
     }
 
     const conn = Curl_imap_ws_easy_conn(data);
-    const ws_ptr = Curl_conn_meta_get(conn, CURL_META_PROTO_WS_CONN) orelse {
+    const ws = wsConn(conn) orelse {
         failfFmt(data, "[WS] not a websocket transfer", .{});
         return CURLE_FAILED_INIT;
     };
-    const ws: *websocket = @ptrCast(@alignCast(ws_ptr));
 
     if (io_buffers.Curl_bufq_is_empty(&ws.sendbuf)) {
         if (ctx.read_eos) {
@@ -2981,7 +2965,7 @@ fn ws_conn_dtor(key: [*:0]const u8, klen: usize, entry: ?*anyopaque) callconv(.c
     const ws: *websocket = @ptrCast(@alignCast(p));
     io_buffers.Curl_bufq_free(&ws.recvbuf);
     io_buffers.Curl_bufq_free(&ws.sendbuf);
-    mem.freeSized(p, @sizeOf(websocket));
+    mem.freeTyped(ws);
 }
 
 pub export fn Curl_ws_request(data: ?*Curl_easy, req: *dynbuf) callconv(.c) CURLcode {
@@ -2995,7 +2979,7 @@ pub export fn Curl_ws_request(data: ?*Curl_easy, req: *dynbuf) callconv(.c) CURL
     result = curlx_parse.curlx_base64_encode(&rand, rand.len, &randstr, &randlen);
     if (result != CURLE_OK) return result;
     const key_ptr = randstr orelse return CURLE_OUT_OF_MEMORY;
-    defer mem.free(@ptrCast(key_ptr));
+    defer mem.free(key_ptr);
 
     if (randlen >= 40) return CURLE_FAILED_INIT;
     const key_s = key_ptr[0..randlen];
@@ -3019,21 +3003,96 @@ pub export fn Curl_ws_request(data: ?*Curl_easy, req: *dynbuf) callconv(.c) CURL
     return result;
 }
 
+fn wsAcceptStreams(
+    data: ?*Curl_easy,
+    conn: ?*connectdata,
+    ws: *websocket,
+    mem_ptr: ?[*]const u8,
+    nread: usize,
+    out_code: *CURLcode,
+) !void {
+    var ws_dec_writer: ?*Curl_cwriter = null;
+    var ws_enc_reader: ?*Curl_creader = null;
+    errdefer if (ws_dec_writer) |w| Curl_cwriter_free(data, w);
+    errdefer if (ws_enc_reader) |r| Curl_creader_free(data, r);
+
+    var result = Curl_cwriter_create(&ws_dec_writer, data, &ws_cw_decode, CURL_CW_CONTENT_DECODE);
+    if (result != CURLE_OK) {
+        out_code.* = result;
+        return error.WsAcceptFailed;
+    }
+
+    result = Curl_cwriter_add(data, ws_dec_writer.?);
+    if (result != CURLE_OK) {
+        out_code.* = result;
+        return error.WsAcceptFailed;
+    }
+    ws_dec_writer = null;
+    Curl_imap_ws_set_req_header(data, false);
+
+    if (Curl_imap_ws_get_connect_only(data)) {
+        if (nread > 0) {
+            if (mem_ptr) |mp| {
+                result = Curl_cf_recvbuf_add(data, conn, FIRSTSOCKET, mp, nread);
+                if (result != CURLE_OK) {
+                    out_code.* = result;
+                    return error.WsAcceptFailed;
+                }
+            }
+        }
+        Curl_imap_ws_clear_req_recv(data);
+    } else {
+        if (Curl_imap_ws_is_method_put(data)) {
+            trcWsFmt(data, "UPLOAD set, add ws-encode reader", .{});
+            result = Curl_creader_set_fread(data, -1);
+            if (result != CURLE_OK) {
+                out_code.* = result;
+                return error.WsAcceptFailed;
+            }
+            if (!Curl_imap_ws_get_raw_mode(data)) {
+                result = Curl_creader_create(&ws_enc_reader, data, &ws_cr_encode, CURL_CR_CONTENT_ENCODE);
+                if (result != CURLE_OK) {
+                    out_code.* = result;
+                    return error.WsAcceptFailed;
+                }
+                result = Curl_creader_add(data, ws_enc_reader.?);
+                if (result != CURLE_OK) {
+                    out_code.* = result;
+                    return error.WsAcceptFailed;
+                }
+                ws_enc_reader = null;
+                ws.using_reader = true;
+            }
+            Curl_imap_ws_restart_req_send(data);
+        }
+
+        if (nread > 0) {
+            if (mem_ptr) |mp| {
+                result = Curl_client_write(data, CLIENTWRITE_BODY, mp, nread);
+                if (result != CURLE_OK) {
+                    out_code.* = result;
+                    return error.WsAcceptFailed;
+                }
+            }
+        }
+    }
+
+    Curl_imap_ws_set_upgr101_received(data);
+    Curl_imap_ws_set_req_header(data, false);
+}
+
 pub export fn Curl_ws_accept(data: ?*Curl_easy, mem_ptr: ?[*]const u8, nread: usize) callconv(.c) CURLcode {
     const conn = Curl_imap_ws_easy_conn(data);
     var ws: *websocket = undefined;
-    var ws_dec_writer: ?*Curl_cwriter = null;
-    var ws_enc_reader: ?*Curl_creader = null;
     var result: CURLcode = CURLE_OK;
 
-    if (Curl_conn_meta_get(conn, CURL_META_PROTO_WS_CONN)) |existing| {
-        ws = @ptrCast(@alignCast(existing));
+    if (wsConn(conn)) |existing| {
+        ws = existing;
         io_buffers.Curl_bufq_reset(&ws.recvbuf);
         ws_dec_reset(&ws.dec);
         ws_enc_reset(&ws.enc);
     } else {
-        const raw = mem.calloc(1, @sizeOf(websocket)) orelse return CURLE_OUT_OF_MEMORY;
-        ws = @ptrCast(@alignCast(raw));
+        ws = mem.create(websocket) orelse return CURLE_OUT_OF_MEMORY;
         var chunk_size: usize = WS_CHUNK_SIZE;
         if (getenv("CURL_WS_CHUNK_SIZE")) |env_p| {
             var p: [*:0]const u8 = env_p;
@@ -3047,71 +3106,21 @@ pub export fn Curl_ws_accept(data: ?*Curl_easy, mem_ptr: ?[*]const u8, nread: us
         io_buffers.Curl_bufq_init2(&ws.sendbuf, chunk_size, WS_CHUNK_COUNT, io_buffers.BUFQ_OPT_SOFT_LIMIT);
         ws_dec_init(&ws.dec);
         ws_enc_init(&ws.enc);
-        result = Curl_conn_meta_set(conn, CURL_META_PROTO_WS_CONN, raw, ws_conn_dtor);
+        result = Curl_conn_meta_set(conn, CURL_META_PROTO_WS_CONN, mem.toRawPtr(ws), ws_conn_dtor);
         if (result != CURLE_OK) return result;
     }
 
     infofFmt(data, "[WS] Received 101, switch to WebSocket", .{});
 
-    result = Curl_cwriter_create(&ws_dec_writer, data, &ws_cw_decode, CURL_CW_CONTENT_DECODE);
-    if (result == CURLE_OK) {
-        result = Curl_cwriter_add(data, ws_dec_writer.?);
-        if (result == CURLE_OK) {
-            ws_dec_writer = null;
-            Curl_imap_ws_set_req_header(data, false);
-
-            if (Curl_imap_ws_get_connect_only(data)) {
-                if (nread > 0) {
-                    if (mem_ptr) |mp| {
-                        result = Curl_cf_recvbuf_add(data, conn, FIRSTSOCKET, mp, nread);
-                    }
-                }
-                if (result == CURLE_OK) {
-                    Curl_imap_ws_clear_req_recv(data);
-                }
-            } else {
-                if (Curl_imap_ws_is_method_put(data)) {
-                    trcWsFmt(data, "UPLOAD set, add ws-encode reader", .{});
-                    result = Curl_creader_set_fread(data, -1);
-                    if (result == CURLE_OK and !Curl_imap_ws_get_raw_mode(data)) {
-                        result = Curl_creader_create(&ws_enc_reader, data, &ws_cr_encode, CURL_CR_CONTENT_ENCODE);
-                        if (result == CURLE_OK) {
-                            result = Curl_creader_add(data, ws_enc_reader.?);
-                            if (result == CURLE_OK) {
-                                ws_enc_reader = null;
-                                ws.using_reader = true;
-                            }
-                        }
-                    }
-                    if (result == CURLE_OK) {
-                        Curl_imap_ws_restart_req_send(data);
-                    }
-                }
-
-                if (result == CURLE_OK and nread > 0) {
-                    if (mem_ptr) |mp| {
-                        result = Curl_client_write(data, CLIENTWRITE_BODY, mp, nread);
-                    }
-                }
-            }
-
-            if (result == CURLE_OK) {
-                Curl_imap_ws_set_upgr101_received(data);
-                Curl_imap_ws_set_req_header(data, false);
-            }
-        }
-    }
-
-    if (ws_dec_writer) |w| Curl_cwriter_free(data, w);
-    if (ws_enc_reader) |r| Curl_creader_free(data, r);
-    if (result != CURLE_OK) {
+    wsAcceptStreams(data, conn, ws, mem_ptr, nread, &result) catch {
         trcWsFmt(data, "Curl_ws_accept() failed -> {d}", .{result});
-    } else {
-        trcWsFmt(data, "websocket established, {s} mode", .{
-            if (Curl_imap_ws_get_connect_only(data)) "connect-only" else "callback",
-        });
-    }
-    return result;
+        return result;
+    };
+
+    trcWsFmt(data, "websocket established, {s} mode", .{
+        if (Curl_imap_ws_get_connect_only(data)) "connect-only" else "callback",
+    });
+    return CURLE_OK;
 }
 
 const ws_collect = struct {
@@ -3134,10 +3143,9 @@ fn ws_client_collect(
     frame_flags: c_int,
     payload_offset: curl_off_t,
     payload_len: curl_off_t,
-    userp: *anyopaque,
+    ctx: *ws_collect,
     pnwritten: *usize,
 ) CURLcode {
-    const ctx: *ws_collect = @ptrCast(@alignCast(userp));
     const data = ctx.data;
     const auto_pong = !Curl_imap_ws_get_raw_mode(data) and !Curl_imap_ws_get_no_auto_pong(data);
     var result: CURLcode = CURLE_OK;
@@ -3176,13 +3184,12 @@ fn ws_client_collect(
 }
 
 fn nw_in_recv(reader_ctx: ?*anyopaque, buf: [*]u8, buflen: usize, pnread: *usize) callconv(.c) CURLcode {
-    const data: ?*Curl_easy = @ptrCast(reader_ctx);
-    return Curl_easy_recv(data, buf, buflen, pnread);
+    return Curl_easy_recv(reader_ctx, buf, buflen, pnread);
 }
 
 pub export fn curl_ws_recv(
     curl: ?*Curl_easy,
-    buffer: ?*anyopaque,
+    buffer: ?[*]u8,
     buflen: usize,
     recv: ?*usize,
     metap: ?*?*const curl_ws_frame,
@@ -3216,16 +3223,15 @@ pub export fn curl_ws_recv(
             }
         }
 
-        const ws_ptr = Curl_conn_meta_get(conn, CURL_META_PROTO_WS_CONN) orelse {
+        const ws = wsConn(conn) orelse {
             failfFmt(data, "[WS] connection is not setup for websocket", .{});
             return CURLE_BAD_FUNCTION_ARGUMENT;
         };
-        const ws: *websocket = @ptrCast(@alignCast(ws_ptr));
 
         var ctx = ws_collect{
             .data = data,
             .ws = ws,
-            .buffer = if (buffer) |b| @ptrCast(b) else null,
+            .buffer = buffer,
             .buflen = buflen,
             .bufidx = 0,
             .frame_age = 0,
@@ -3238,7 +3244,7 @@ pub export fn curl_ws_recv(
         while (true) {
             if (io_buffers.Curl_bufq_is_empty(&ws.recvbuf)) {
                 var n: usize = 0;
-                result = io_buffers.Curl_bufq_slurp(&ws.recvbuf, nw_in_recv, @ptrCast(data), &n);
+                result = io_buffers.Curl_bufq_slurp(&ws.recvbuf, nw_in_recv, data, &n);
                 if (result != CURLE_OK) {
                     return result;
                 } else if (n == 0) {
@@ -3248,7 +3254,7 @@ pub export fn curl_ws_recv(
                 trcWsFmt(data, "curl_ws_recv, added {d} bytes from network", .{io_buffers.Curl_bufq_len(&ws.recvbuf)});
             }
 
-            result = ws_dec_pass(&ws.dec, data, &ws.recvbuf, ws_client_collect, @ptrCast(&ctx));
+            result = ws_dec_pass(&ws.dec, data, &ws.recvbuf, ws_client_collect, &ctx);
             if (result == CURLE_AGAIN) {
                 if (!ctx.written) {
                     ws_dec_info(&ws.dec, data, "need more input");
@@ -3360,20 +3366,19 @@ fn ws_send_raw_blocking(data: ?*Curl_easy, ws: *websocket, buffer_in: [*]const u
     return result;
 }
 
-fn ws_send_raw(data: ?*Curl_easy, buffer: *const anyopaque, buflen: usize, pnwritten: *usize) CURLcode {
+fn ws_send_raw(data: ?*Curl_easy, buffer: [*]const u8, buflen: usize, pnwritten: *usize) CURLcode {
     const conn = Curl_imap_ws_easy_conn(data);
-    const ws_ptr = Curl_conn_meta_get(conn, CURL_META_PROTO_WS_CONN) orelse {
+    const ws = wsConn(conn) orelse {
         failfFmt(data, "[WS] Not a websocket transfer", .{});
         return CURLE_SEND_ERROR;
     };
-    const ws: *websocket = @ptrCast(@alignCast(ws_ptr));
     if (buflen == 0) return CURLE_OK;
 
     var result: CURLcode = CURLE_OK;
     if (Curl_api_is_in_callback(data)) {
         result = ws_flush(data, ws, true);
         if (result != CURLE_OK) return result;
-        result = ws_send_raw_blocking(data, ws, @ptrCast(buffer), buflen);
+        result = ws_send_raw_blocking(data, ws, buffer, buflen);
         if (result == CURLE_OK) pnwritten.* = buflen;
     } else {
         result = ws_flush(data, ws, false);
@@ -3387,7 +3392,7 @@ fn ws_send_raw(data: ?*Curl_easy, buffer: *const anyopaque, buflen: usize, pnwri
 
 pub export fn curl_ws_send(
     curl: ?*Curl_easy,
-    buffer_arg: ?*const anyopaque,
+    buffer: ?[*]const u8,
     buflen: usize,
     sent: ?*usize,
     fragsize: curl_off_t,
@@ -3399,7 +3404,6 @@ pub export fn curl_ws_send(
     if (Curl_eapi_enter(&guard, curl, CURL_EAPI_FN_ws_send, &result) and curl != null) {
         defer Curl_eapi_leave(&guard);
         const data = curl;
-        const buffer: ?[*]const u8 = if (buffer_arg) |b| @ptrCast(b) else null;
         var ndummy: usize = 0;
         const pnsent: *usize = sent orelse &ndummy;
 
@@ -3425,17 +3429,16 @@ pub export fn curl_ws_send(
             failfFmt(data, "[WS] No associated connection", .{});
             return CURLE_SEND_ERROR;
         };
-        const ws_ptr = Curl_conn_meta_get(conn, CURL_META_PROTO_WS_CONN) orelse {
+        const ws = wsConn(conn) orelse {
             failfFmt(data, "[WS] Not a websocket transfer", .{});
             return CURLE_SEND_ERROR;
         };
-        const ws: *websocket = @ptrCast(@alignCast(ws_ptr));
 
         if (Curl_imap_ws_get_raw_mode(data)) {
             result = ws_flush(data, ws, false);
             if (result != CURLE_OK) return result;
 
-            const buf_nn = buffer_arg orelse {
+            const buf_nn = buffer orelse {
                 failfFmt(data, "[WS] buffer is NULL in raw mode", .{});
                 return CURLE_BAD_FUNCTION_ARGUMENT;
             };
@@ -3474,8 +3477,7 @@ fn ws_setup_conn(data: ?*Curl_easy, conn: ?*connectdata) callconv(.c) CURLcode {
 pub export fn curl_ws_meta(curl: ?*Curl_easy) callconv(.c) ?*const curl_ws_frame {
     if (Curl_imap_ws_good_easy_handle(curl) and Curl_api_is_in_callback(curl) and !Curl_imap_ws_get_raw_mode(curl)) {
         if (Curl_imap_ws_easy_conn(curl)) |conn| {
-            if (Curl_conn_meta_get(conn, CURL_META_PROTO_WS_CONN)) |ws_ptr| {
-                const ws: *websocket = @ptrCast(@alignCast(ws_ptr));
+            if (wsConn(conn)) |ws| {
                 return &ws.recvframe;
             }
         }
@@ -3506,11 +3508,10 @@ pub export fn curl_ws_start_frame(
             failfFmt(data, "[WS] No associated connection", .{});
             return CURLE_SEND_ERROR;
         };
-        const ws_ptr = Curl_conn_meta_get(conn, CURL_META_PROTO_WS_CONN) orelse {
+        const ws = wsConn(conn) orelse {
             failfFmt(data, "[WS] Not a websocket transfer", .{});
             return CURLE_SEND_ERROR;
         };
-        const ws: *websocket = @ptrCast(@alignCast(ws_ptr));
 
         if (ws.enc.payload_remain != 0) {
             failfFmt(data, "[WS] previous frame not finished", .{});
@@ -3555,22 +3556,22 @@ pub export const Curl_protocol_ws = Curl_protocol{
 test "imap_atom quoting and escaping" {
     const plain = imap_atom("INBOX", false);
     try std.testing.expect(plain != null);
-    defer mem.free(@ptrCast(plain.?));
+    defer mem.free(plain.?);
     try std.testing.expectEqualStrings("INBOX", std.mem.span(plain.?));
 
     const with_space = imap_atom("My Folder", false);
     try std.testing.expect(with_space != null);
-    defer mem.free(@ptrCast(with_space.?));
+    defer mem.free(with_space.?);
     try std.testing.expectEqualStrings("\"My Folder\"", std.mem.span(with_space.?));
 
     const escape_only_space = imap_atom("My Folder", true);
     try std.testing.expect(escape_only_space != null);
-    defer mem.free(@ptrCast(escape_only_space.?));
+    defer mem.free(escape_only_space.?);
     try std.testing.expectEqualStrings("My Folder", std.mem.span(escape_only_space.?));
 
     const with_quote = imap_atom("a\"b\\c", false);
     try std.testing.expect(with_quote != null);
-    defer mem.free(@ptrCast(with_quote.?));
+    defer mem.free(with_quote.?);
     try std.testing.expectEqualStrings("\"a\\\"b\\\\c\"", std.mem.span(with_quote.?));
 }
 

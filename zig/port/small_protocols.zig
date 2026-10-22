@@ -6,6 +6,7 @@ const containers = @import("containers.zig");
 const format_parse = @import("format_parse.zig");
 const curlx_time_net = @import("curlx_time_net.zig");
 const os_leaf = @import("os_leaf.zig");
+const doh_hostip_easy = @import("doh_hostip_easy.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -253,12 +254,49 @@ fn send_buf(
     return result;
 }
 
+fn gopherDecodeSelector(
+    data: ?*anyopaque,
+    gopherpath: [*:0]u8,
+    buf_out: *[*]const u8,
+    buf_len_out: *usize,
+    out_rc: *CURLcode,
+) error{SelectorInvalid}!?[*:0]u8 {
+    if (std.mem.len(gopherpath) <= 2) {
+        buf_out.* = "";
+        buf_len_out.* = 0;
+        return null;
+    }
+
+    var buf_alloc: ?[*:0]u8 = null;
+    var buf_len: usize = 0;
+    const newp: [*:0]const u8 = gopherpath + 2;
+    const result = Curl_urldecode(newp, 0, &buf_alloc, &buf_len, format_parse.REJECT_ZERO);
+    if (result != CURLE_OK) {
+        out_rc.* = result;
+        return error.SelectorInvalid;
+    }
+    const alloc_ptr = buf_alloc.?;
+    errdefer mem.free(alloc_ptr);
+
+    const slice = alloc_ptr[0..buf_len];
+    if (std.mem.indexOfScalar(u8, slice, '\r') != null or
+        std.mem.indexOfScalar(u8, slice, '\n') != null)
+    {
+        Curl_failf(data, "Bad gopher selector, CR or LF not allowed");
+        out_rc.* = CURLE_URL_MALFORMAT;
+        return error.SelectorInvalid;
+    }
+
+    buf_out.* = alloc_ptr;
+    buf_len_out.* = buf_len;
+    return alloc_ptr;
+}
+
 fn gopher_do(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
     var result: CURLcode = CURLE_OK;
     const path = Curl_proto_get_up_path(data) orelse return CURLE_URL_MALFORMAT;
     const query = Curl_proto_get_up_query(data);
     var buf: [*]const u8 = "";
-    var buf_alloc: ?[*:0]u8 = null;
     var buf_len: usize = 0;
 
     done.* = true;
@@ -269,31 +307,13 @@ fn gopher_do(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
         mem.strdup(path);
 
     const gopherpath = gopherpath_opt orelse return CURLE_OUT_OF_MEMORY;
-
-    if (std.mem.len(gopherpath) <= 2) {
-        buf = "";
-        buf_len = 0;
-        mem.free(gopherpath);
-    } else {
-        const newp: [*:0]const u8 = gopherpath + 2;
-        result = Curl_urldecode(newp, 0, &buf_alloc, &buf_len, format_parse.REJECT_ZERO);
-        mem.free(gopherpath);
-        if (result != CURLE_OK) return result;
-        const alloc_ptr = buf_alloc.?;
-        buf = alloc_ptr;
-
-        const slice = buf[0..buf_len];
-        if (std.mem.indexOfScalar(u8, slice, '\r') != null or
-            std.mem.indexOfScalar(u8, slice, '\n') != null)
-        {
-            mem.free(buf_alloc);
-            Curl_failf(data, "Bad gopher selector, CR or LF not allowed");
-            return CURLE_URL_MALFORMAT;
-        }
-    }
+    const buf_alloc = blk: {
+        defer mem.free(gopherpath);
+        break :blk gopherDecodeSelector(data, gopherpath, &buf, &buf_len, &result) catch return result;
+    };
+    defer mem.free(buf_alloc);
 
     result = send_buf(data, buf, buf_len, true);
-    mem.free(buf_alloc);
 
     if (result == CURLE_OK) {
         result = send_buf(data, "\r\n", 2, false);
@@ -361,25 +381,24 @@ const DICT_DEFINE2 = "/D:";
 const DICT_DEFINE3 = "/LOOKUP:";
 const DYN_DICT_WORD: usize = 10000;
 
-pub fn unescape_word(input: [*:0]const u8) ?[*:0]u8 {
+fn unescapeWordInner(input: [*:0]const u8) error{OutOfMemory}!?[*:0]u8 {
     var out: containers.dynbuf = undefined;
-    var result: CURLcode = CURLE_OK;
     containers.curlx_dyn_init(&out, DYN_DICT_WORD);
+    errdefer containers.curlx_dyn_free(&out);
 
     var ptr: [*:0]const u8 = input;
     while (ptr[0] != 0) : (ptr += 1) {
         const ch = ptr[0];
         if (ch <= 32 or ch == 127 or ch == '\'' or ch == '"' or ch == '\\') {
-            result = containers.curlx_dyn_addn(&out, "\\", 1);
+            if (containers.curlx_dyn_addn(&out, "\\", 1) != CURLE_OK) return error.OutOfMemory;
         }
-        if (result == CURLE_OK) {
-            result = containers.curlx_dyn_addn(&out, ptr, 1);
-        }
-        if (result != CURLE_OK) {
-            return null;
-        }
+        if (containers.curlx_dyn_addn(&out, ptr, 1) != CURLE_OK) return error.OutOfMemory;
     }
     return containers.curlx_dyn_ptr(&out);
+}
+
+pub fn unescape_word(input: [*:0]const u8) ?[*:0]u8 {
+    return unescapeWordInner(input) catch null;
 }
 
 fn dict_send_str(data: ?*anyopaque, s_opt: ?[*:0]u8) CURLcode {
@@ -797,6 +816,10 @@ fn fileFstat(fd: c_int, out: *FileStat) bool {
     }
 }
 
+inline fn fileEasy(data: ?*anyopaque) ?*FILEPROTO {
+    return doh_hostip_easy.metaGetTyped(FILEPROTO, data, CURL_META_FILE_EASY);
+}
+
 fn file_cleanup(file: *FILEPROTO) void {
     if (file.freepath) |fp| {
         mem.free(fp);
@@ -815,13 +838,12 @@ fn file_easy_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callc
     _ = klen;
     const file: *FILEPROTO = @ptrCast(@alignCast(entry orelse return));
     file_cleanup(file);
-    mem.freeSized(file, @sizeOf(FILEPROTO));
+    mem.freeTyped(file);
 }
 
 fn file_setup_connection(data: ?*anyopaque, conn: ?*anyopaque) callconv(.c) CURLcode {
     _ = conn;
-    const raw = mem.calloc(1, @sizeOf(FILEPROTO)) orelse return CURLE_OUT_OF_MEMORY;
-    const filep: *FILEPROTO = @ptrCast(@alignCast(raw));
+    const filep = mem.create(FILEPROTO) orelse return CURLE_OUT_OF_MEMORY;
     filep.fd = -1;
     if (Curl_meta_set(data, CURL_META_FILE_EASY, filep, file_easy_dtor) != CURLE_OK) {
         return CURLE_OUT_OF_MEMORY;
@@ -832,28 +854,25 @@ fn file_setup_connection(data: ?*anyopaque, conn: ?*anyopaque) callconv(.c) CURL
 fn file_done(data: ?*anyopaque, status: CURLcode, premature: bool) callconv(.c) CURLcode {
     _ = status;
     _ = premature;
-    if (Curl_meta_get(data, CURL_META_FILE_EASY)) |raw| {
-        const file: *FILEPROTO = @ptrCast(@alignCast(raw));
+    if (fileEasy(data)) |file| {
         file_cleanup(file);
     }
     return CURLE_OK;
 }
 
-fn file_connect(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
-    const raw = Curl_meta_get(data, CURL_META_FILE_EASY) orelse return CURLE_FAILED_INIT;
-    const file: *FILEPROTO = @ptrCast(@alignCast(raw));
-
-    if (file.path != null) {
-        done.* = true;
-        return CURLE_OK;
-    }
-
-    const up_path = Curl_proto_get_up_path(data) orelse return CURLE_URL_MALFORMAT;
+fn fileDecodePath(up_path: [*:0]const u8, file: *FILEPROTO, out_rc: *CURLcode) error{PathDecodeFailed}!c_int {
     var real_path_opt: ?[*:0]u8 = null;
     var real_path_len: usize = 0;
     const result = Curl_urldecode(up_path, 0, &real_path_opt, &real_path_len, format_parse.REJECT_ZERO);
-    if (result != CURLE_OK) return result;
-    const real_path = real_path_opt orelse return CURLE_OUT_OF_MEMORY;
+    if (result != CURLE_OK) {
+        out_rc.* = result;
+        return error.PathDecodeFailed;
+    }
+    const real_path = real_path_opt orelse {
+        out_rc.* = CURLE_OUT_OF_MEMORY;
+        return error.PathDecodeFailed;
+    };
+    errdefer mem.free(real_path);
 
     var fd: c_int = -1;
     if (comptime is_windows) {
@@ -871,8 +890,8 @@ fn file_connect(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
             if (actual_path[i] == '/') {
                 actual_path[i] = '\\';
             } else if (actual_path[i] == 0) {
-                mem.free(real_path);
-                return CURLE_URL_MALFORMAT;
+                out_rc.* = CURLE_URL_MALFORMAT;
+                return error.PathDecodeFailed;
             }
         }
 
@@ -880,8 +899,8 @@ fn file_connect(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
         file.path = actual_path;
     } else {
         if (std.mem.indexOfScalar(u8, real_path[0..real_path_len], 0) != null) {
-            mem.free(real_path);
-            return CURLE_URL_MALFORMAT;
+            out_rc.* = CURLE_URL_MALFORMAT;
+            return error.PathDecodeFailed;
         }
         const o_rdonly: c_int = @bitCast(std.c.O{ .ACCMODE = .RDONLY });
         fd = posix_c.open(real_path, o_rdonly);
@@ -891,6 +910,20 @@ fn file_connect(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
     mem.free(file.freepath);
     file.freepath = real_path;
     file.fd = fd;
+    return fd;
+}
+
+fn file_connect(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
+    const file = fileEasy(data) orelse return CURLE_FAILED_INIT;
+
+    if (file.path != null) {
+        done.* = true;
+        return CURLE_OK;
+    }
+
+    const up_path = Curl_proto_get_up_path(data) orelse return CURLE_URL_MALFORMAT;
+    var decode_rc: CURLcode = CURLE_OK;
+    const fd = fileDecodePath(up_path, file, &decode_rc) catch return decode_rc;
 
     const is_upload = Curl_proto_is_upload(data);
     if (comptime is_windows) {
@@ -1025,12 +1058,12 @@ fn win32_file_list(data: ?*anyopaque, path: [*:0]const u8) CURLcode {
 
     while (true) {
         if (entry.cFileName[0] != '.') {
-            const c_fname: [*:0]const u8 = @ptrCast(&entry.cFileName);
-            const name = mem.strdup(c_fname) orelse {
+            const c_fname = std.mem.sliceTo(&entry.cFileName, 0);
+            const name = mem.memdup0(c_fname.ptr, c_fname.len) orelse {
                 result = CURLE_OUT_OF_MEMORY;
                 break;
             };
-            result = Curl_client_write(data, CLIENTWRITE_BODY, name, std.mem.len(name));
+            result = Curl_client_write(data, CLIENTWRITE_BODY, name, c_fname.len);
             mem.free(name);
             if (result != CURLE_OK) break;
 
@@ -1050,7 +1083,6 @@ fn win32_file_list(data: ?*anyopaque, path: [*:0]const u8) CURLcode {
 }
 
 fn file_do(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
-    const raw = Curl_meta_get(data, CURL_META_FILE_EASY);
     var result: CURLcode = CURLE_OK;
     var statbuf: FileStat = undefined;
     var expected_size: curl_off_t = -1;
@@ -1060,7 +1092,7 @@ fn file_do(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
     var xfer_blen: usize = 0;
 
     done.* = true;
-    const file: *FILEPROTO = @ptrCast(@alignCast(raw orelse return CURLE_FAILED_INIT));
+    const file = fileEasy(data) orelse return CURLE_FAILED_INIT;
 
     if (Curl_proto_is_upload(data)) {
         return file_upload(data, file);
@@ -1223,9 +1255,9 @@ fn file_do(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
             const dir = posix_c.opendir(file.path.?) orelse return CURLE_READ_ERROR;
             defer _ = posix_c.closedir(dir);
             while (posix_c.readdir(dir)) |entry| {
-                const d_name_ptr: [*:0]const u8 = @ptrCast(&entry.d_name);
-                if (d_name_ptr[0] != '.') {
-                    result = Curl_client_write(data, CLIENTWRITE_BODY, d_name_ptr, std.mem.len(d_name_ptr));
+                const d_name = std.mem.sliceTo(&entry.d_name, 0);
+                if (d_name.len > 0 and d_name[0] != '.') {
+                    result = Curl_client_write(data, CLIENTWRITE_BODY, d_name.ptr, d_name.len);
                     if (result != CURLE_OK) break;
                     result = Curl_client_write(data, CLIENTWRITE_BODY, "\n", 1);
                     if (result != CURLE_OK) break;
@@ -1313,30 +1345,30 @@ const MQTT = extern struct {
     pingsent: bool,
 };
 
+inline fn mqttEasy(data: ?*anyopaque) ?*MQTT {
+    return doh_hostip_easy.metaGetTyped(MQTT, data, CURL_META_MQTT_EASY);
+}
+
+inline fn mqttConn(conn: ?*anyopaque) ?*mqtt_conn {
+    return doh_hostip_easy.connMetaGetTyped(mqtt_conn, conn, CURL_META_MQTT_CONN);
+}
+
 fn mqtt_easy_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callconv(.c) void {
     _ = key;
     _ = klen;
     const mq: *MQTT = @ptrCast(@alignCast(entry orelse return));
     containers.curlx_dyn_free(&mq.sendbuf);
     containers.curlx_dyn_free(&mq.recvbuf);
-    mem.freeSized(mq, @sizeOf(MQTT));
-}
-
-fn mqtt_conn_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callconv(.c) void {
-    _ = key;
-    _ = klen;
-    const mqc: *mqtt_conn = @ptrCast(@alignCast(entry orelse return));
-    mem.freeSized(mqc, @sizeOf(mqtt_conn));
+    mem.freeTyped(mq);
 }
 
 fn mqtt_setup_conn(data: ?*anyopaque, conn: ?*anyopaque) callconv(.c) CURLcode {
-    const mqtt_raw = mem.calloc(1, @sizeOf(mqtt_conn)) orelse return CURLE_OUT_OF_MEMORY;
-    if (Curl_conn_meta_set(conn, CURL_META_MQTT_CONN, mqtt_raw, mqtt_conn_dtor) != CURLE_OK) {
+    const mqc = mem.create(mqtt_conn) orelse return CURLE_OUT_OF_MEMORY;
+    if (doh_hostip_easy.connMetaSetTyped(mqtt_conn, conn, CURL_META_MQTT_CONN, mqc) != CURLE_OK) {
         return CURLE_OUT_OF_MEMORY;
     }
 
-    const mq_raw = mem.calloc(1, @sizeOf(MQTT)) orelse return CURLE_OUT_OF_MEMORY;
-    const mq: *MQTT = @ptrCast(@alignCast(mq_raw));
+    const mq = mem.create(MQTT) orelse return CURLE_OUT_OF_MEMORY;
     containers.curlx_dyn_init(&mq.recvbuf, DYN_MQTT_RECV);
     containers.curlx_dyn_init(&mq.sendbuf, DYN_MQTT_SEND);
     if (Curl_meta_set(data, CURL_META_MQTT_EASY, mq, mqtt_easy_dtor) != CURLE_OK) {
@@ -1347,8 +1379,7 @@ fn mqtt_setup_conn(data: ?*anyopaque, conn: ?*anyopaque) callconv(.c) CURLcode {
 
 fn mqtt_send(data: ?*anyopaque, buf: [*]const u8, len: usize) CURLcode {
     var n: usize = 0;
-    const mq_raw = Curl_meta_get(data, CURL_META_MQTT_EASY) orelse return CURLE_FAILED_INIT;
-    const mq: *MQTT = @ptrCast(@alignCast(mq_raw));
+    const mq = mqttEasy(data) orelse return CURLE_FAILED_INIT;
 
     var result = Curl_xfer_send(data, buf, len, false, &n);
     if (result != CURLE_OK) return result;
@@ -1361,8 +1392,7 @@ fn mqtt_send(data: ?*anyopaque, buf: [*]const u8, len: usize) CURLcode {
 }
 
 fn mqtt_flush(data: ?*anyopaque) CURLcode {
-    const mq_raw = Curl_meta_get(data, CURL_META_MQTT_EASY) orelse return CURLE_FAILED_INIT;
-    const mq: *MQTT = @ptrCast(@alignCast(mq_raw));
+    const mq = mqttEasy(data) orelse return CURLE_FAILED_INIT;
     const len = containers.curlx_dyn_len(&mq.sendbuf);
     if (len == 0) return CURLE_OK;
 
@@ -1377,8 +1407,7 @@ fn mqtt_flush(data: ?*anyopaque) CURLcode {
 
 fn mqtt_pollset(data: ?*anyopaque, ps: ?*anyopaque) callconv(.c) CURLcode {
     const sock = Curl_proto_get_firstsocket(data);
-    if (Curl_meta_get(data, CURL_META_MQTT_EASY)) |mq_raw| {
-        const mq: *MQTT = @ptrCast(@alignCast(mq_raw));
+    if (mqttEasy(data)) |mq| {
         if (containers.curlx_dyn_len(&mq.sendbuf) != 0) {
             return Curl_pollset_change(data, ps, sock, CURL_POLL_OUT, 0);
         }
@@ -1464,7 +1493,7 @@ pub fn init_connpack(packet: [*]u8, remain: [*]const u8, remain_pos: usize) usiz
 fn mqtt_connect(data: ?*anyopaque) CURLcode {
     var result: CURLcode = CURLE_OK;
     var remain: [4]u8 = .{ 0, 0, 0, 0 };
-    var client_id: [MQTT_CLIENTID_LEN + 1]u8 = std.mem.zeroes([MQTT_CLIENTID_LEN + 1]u8);
+    var client_id: [MQTT_CLIENTID_LEN:0]u8 = @splat(0);
     @memcpy(client_id[0..4], "curl");
     const clen: usize = 4;
 
@@ -1482,18 +1511,17 @@ fn mqtt_connect(data: ?*anyopaque) CURLcode {
     if (packetlen > 0xFFFFFFF) {
         return CURLE_WEIRD_SERVER_REPLY;
     }
-    const packet_raw = mem.calloc(1, packetlen) orelse return CURLE_OUT_OF_MEMORY;
-    const packet: [*]u8 = @ptrCast(packet_raw);
+    const packet = mem.callocMany(u8, packetlen) orelse return CURLE_OUT_OF_MEMORY;
     defer {
         std.crypto.secureZero(u8, packet[0..packetlen]);
-        mem.free(packet_raw);
+        mem.free(packet);
         Curl_proto_unlink_creds(data);
     }
 
     const pos = init_connpack(packet, &remain, remain_pos);
 
-    result = Curl_rand_alnum(data, @ptrCast(&client_id[clen]), MQTT_CLIENTID_LEN - clen + 1);
-    const cid_cstr: [*:0]const u8 = @ptrCast(&client_id);
+    result = Curl_rand_alnum(data, client_id[clen..].ptr, MQTT_CLIENTID_LEN - clen + 1);
+    const cid_cstr: [*:0]const u8 = &client_id;
     const cid_len = std.mem.len(cid_cstr);
     if (add_client_id(cid_cstr, cid_len, packet, pos + 1) != 0) {
         Curl_failf(data, "Client ID length mismatched: [%zu]", cid_len);
@@ -1529,8 +1557,7 @@ fn mqtt_disconnect(data: ?*anyopaque) CURLcode {
 }
 
 fn mqtt_recv_atleast(data: ?*anyopaque, nbytes: usize) CURLcode {
-    const mq_raw = Curl_meta_get(data, CURL_META_MQTT_EASY) orelse return CURLE_FAILED_INIT;
-    const mq: *MQTT = @ptrCast(@alignCast(mq_raw));
+    const mq = mqttEasy(data) orelse return CURLE_FAILED_INIT;
     var rlen = containers.curlx_dyn_len(&mq.recvbuf);
 
     if (rlen < nbytes) {
@@ -1548,8 +1575,7 @@ fn mqtt_recv_atleast(data: ?*anyopaque, nbytes: usize) CURLcode {
 }
 
 fn mqtt_recv_consume(data: ?*anyopaque, nbytes: usize) void {
-    if (Curl_meta_get(data, CURL_META_MQTT_EASY)) |mq_raw| {
-        const mq: *MQTT = @ptrCast(@alignCast(mq_raw));
+    if (mqttEasy(data)) |mq| {
         const rlen = containers.curlx_dyn_len(&mq.recvbuf);
         if (rlen <= nbytes) {
             containers.curlx_dyn_reset(&mq.recvbuf);
@@ -1560,8 +1586,7 @@ fn mqtt_recv_consume(data: ?*anyopaque, nbytes: usize) void {
 }
 
 fn mqtt_verify_connack(data: ?*anyopaque) CURLcode {
-    const mq_raw = Curl_meta_get(data, CURL_META_MQTT_EASY) orelse return CURLE_FAILED_INIT;
-    const mq: *MQTT = @ptrCast(@alignCast(mq_raw));
+    const mq = mqttEasy(data) orelse return CURLE_FAILED_INIT;
 
     if (mq.remaining_length != 2) {
         Curl_failf(data, "CONNACK expected Remaining Length 2, got %zu", mq.remaining_length);
@@ -1612,16 +1637,11 @@ fn mqtt_subscribe(data: ?*anyopaque) CURLcode {
     var result: CURLcode = CURLE_OK;
     var topic: ?[*:0]u8 = null;
     var topiclen: usize = 0;
-    var packet: ?[*]u8 = null;
     var encodedsize: [4]u8 = undefined;
     const conn = Curl_proto_get_conn(data);
-    const mqtt_raw = Curl_conn_meta_get(conn, CURL_META_MQTT_CONN) orelse return CURLE_FAILED_INIT;
-    const mqtt: *mqtt_conn = @ptrCast(@alignCast(mqtt_raw));
+    const mqtt = mqttConn(conn) orelse return CURLE_FAILED_INIT;
 
-    defer {
-        mem.free(topic);
-        mem.free(packet);
-    }
+    defer mem.free(topic);
 
     result = mqtt_get_topic(data, &topic, &topiclen);
     if (result != CURLE_OK) return result;
@@ -1632,8 +1652,8 @@ fn mqtt_subscribe(data: ?*anyopaque) CURLcode {
     const n = mqtt_encode_len(&encodedsize, packetlen);
     packetlen += n + 1;
 
-    packet = mem.malloc(packetlen) orelse return CURLE_OUT_OF_MEMORY;
-    const pkt = packet.?;
+    const pkt = mem.allocMany(u8, packetlen) orelse return CURLE_OUT_OF_MEMORY;
+    defer mem.free(pkt);
 
     pkt[0] = MQTT_MSG_SUBSCRIBE;
     @memcpy(pkt[1 .. 1 + n], encodedsize[0..n]);
@@ -1649,12 +1669,9 @@ fn mqtt_subscribe(data: ?*anyopaque) CURLcode {
 }
 
 fn mqtt_verify_suback(data: ?*anyopaque) CURLcode {
-    const mq_raw = Curl_meta_get(data, CURL_META_MQTT_EASY);
+    const mq = mqttEasy(data) orelse return CURLE_FAILED_INIT;
     const conn = Curl_proto_get_conn(data);
-    const mqtt_raw = Curl_conn_meta_get(conn, CURL_META_MQTT_CONN);
-    if (mqtt_raw == null or mq_raw == null) return CURLE_FAILED_INIT;
-    const mq: *MQTT = @ptrCast(@alignCast(mq_raw.?));
-    const mqtt: *mqtt_conn = @ptrCast(@alignCast(mqtt_raw.?));
+    const mqtt = mqttConn(conn) orelse return CURLE_FAILED_INIT;
 
     if (mq.remaining_length != 3) {
         Curl_failf(data, "SUBACK expected Remaining Length 3, got %zu", mq.remaining_length);
@@ -1684,7 +1701,6 @@ fn mqtt_publish(data: ?*anyopaque) CURLcode {
     var payloadlen: usize = 0;
     var topic: ?[*:0]u8 = null;
     var topiclen: usize = 0;
-    var pkt: ?[*]u8 = null;
     var encodedbytes: [4]u8 = undefined;
     const postfieldsize = Curl_proto_get_postfieldsize(data);
 
@@ -1693,10 +1709,7 @@ fn mqtt_publish(data: ?*anyopaque) CURLcode {
         payloadlen = std.mem.len(payload);
     }
 
-    defer {
-        mem.free(pkt);
-        mem.free(topic);
-    }
+    defer mem.free(topic);
 
     result = mqtt_get_topic(data, &topic, &topiclen);
     if (result != CURLE_OK) return result;
@@ -1711,8 +1724,8 @@ fn mqtt_publish(data: ?*anyopaque) CURLcode {
         return CURLE_TOO_LARGE;
     }
 
-    pkt = mem.malloc(remaininglength + 1 + encodelen) orelse return CURLE_OUT_OF_MEMORY;
-    const p = pkt.?;
+    const p = mem.allocMany(u8, remaininglength + 1 + encodelen) orelse return CURLE_OUT_OF_MEMORY;
+    defer mem.free(p);
 
     var i: usize = 0;
     p[i] = MQTT_MSG_PUBLISH;
@@ -1757,8 +1770,7 @@ pub fn mqtt_decode_len(lenp: *usize, buf: [*]const u8, buflen: usize) bool {
 
 fn mqstate(data: ?*anyopaque, state: mqttstate, nextstate: mqttstate) void {
     const conn = Curl_proto_get_conn(data);
-    const mqtt_raw = Curl_conn_meta_get(conn, CURL_META_MQTT_CONN) orelse return;
-    const mqtt: *mqtt_conn = @ptrCast(@alignCast(mqtt_raw));
+    const mqtt = mqttConn(conn) orelse return;
     mqtt.state = state;
     if (state == .MQTT_FIRST) {
         mqtt.nextstate = nextstate;
@@ -1768,11 +1780,8 @@ fn mqstate(data: ?*anyopaque, state: mqttstate, nextstate: mqttstate) void {
 fn mqtt_read_publish(data: ?*anyopaque, done: *bool) CURLcode {
     var result: CURLcode = CURLE_OK;
     const conn = Curl_proto_get_conn(data);
-    const mqtt_raw = Curl_conn_meta_get(conn, CURL_META_MQTT_CONN);
-    const mq_raw = Curl_meta_get(data, CURL_META_MQTT_EASY);
-    if (mqtt_raw == null or mq_raw == null) return CURLE_FAILED_INIT;
-    const mqtt: *mqtt_conn = @ptrCast(@alignCast(mqtt_raw.?));
-    const mq: *MQTT = @ptrCast(@alignCast(mq_raw.?));
+    const mqtt = mqttConn(conn) orelse return CURLE_FAILED_INIT;
+    const mq = mqttEasy(data) orelse return CURLE_FAILED_INIT;
 
     sw: switch (mqtt.state) {
         .MQTT_SUBACK_COMING => {
@@ -1850,8 +1859,7 @@ fn mqtt_read_publish(data: ?*anyopaque, done: *bool) CURLcode {
 }
 
 fn mqtt_do(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
-    const mq_raw = Curl_meta_get(data, CURL_META_MQTT_EASY) orelse return CURLE_FAILED_INIT;
-    const mq: *MQTT = @ptrCast(@alignCast(mq_raw));
+    const mq = mqttEasy(data) orelse return CURLE_FAILED_INIT;
     done.* = false;
 
     mq.lastTime = Curl_pgrs_now(data).*;
@@ -1869,8 +1877,7 @@ fn mqtt_do(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
 fn mqtt_done(data: ?*anyopaque, status: CURLcode, premature: bool) callconv(.c) CURLcode {
     _ = status;
     _ = premature;
-    if (Curl_meta_get(data, CURL_META_MQTT_EASY)) |mq_raw| {
-        const mq: *MQTT = @ptrCast(@alignCast(mq_raw));
+    if (mqttEasy(data)) |mq| {
         containers.curlx_dyn_free(&mq.sendbuf);
         containers.curlx_dyn_free(&mq.recvbuf);
     }
@@ -1878,12 +1885,9 @@ fn mqtt_done(data: ?*anyopaque, status: CURLcode, premature: bool) callconv(.c) 
 }
 
 fn mqtt_ping(data: ?*anyopaque) CURLcode {
-    const mq_raw = Curl_meta_get(data, CURL_META_MQTT_EASY);
+    const mq = mqttEasy(data) orelse return CURLE_FAILED_INIT;
     const conn = Curl_proto_get_conn(data);
-    const mqtt_raw = Curl_conn_meta_get(conn, CURL_META_MQTT_CONN);
-    if (mqtt_raw == null or mq_raw == null) return CURLE_FAILED_INIT;
-    const mq: *MQTT = @ptrCast(@alignCast(mq_raw.?));
-    const mqtt: *mqtt_conn = @ptrCast(@alignCast(mqtt_raw.?));
+    const mqtt = mqttConn(conn) orelse return CURLE_FAILED_INIT;
 
     var result: CURLcode = CURLE_OK;
     const upkeep_ms = Curl_proto_get_upkeep_interval_ms(data);
@@ -1903,12 +1907,9 @@ fn mqtt_ping(data: ?*anyopaque) CURLcode {
 }
 
 fn mqtt_doing(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
-    const mq_raw = Curl_meta_get(data, CURL_META_MQTT_EASY);
+    const mq = mqttEasy(data) orelse return CURLE_FAILED_INIT;
     const conn = Curl_proto_get_conn(data);
-    const mqtt_raw = Curl_conn_meta_get(conn, CURL_META_MQTT_CONN);
-    if (mqtt_raw == null or mq_raw == null) return CURLE_FAILED_INIT;
-    const mq: *MQTT = @ptrCast(@alignCast(mq_raw.?));
-    const mqtt: *mqtt_conn = @ptrCast(@alignCast(mqtt_raw.?));
+    const mqtt = mqttConn(conn) orelse return CURLE_FAILED_INIT;
 
     var result: CURLcode = CURLE_OK;
     var nread: usize = 0;
@@ -1931,7 +1932,8 @@ fn mqtt_doing(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
     Curl_infof(data, "mqtt_doing: state [%d]", @as(c_int, @intCast(@backingInt(mqtt.state))));
     sw: switch (mqtt.state) {
         .MQTT_FIRST => {
-            result = Curl_xfer_recv(data, @ptrCast(&mq.firstbyte), 1, &nread);
+            const firstbyte_ptr = (&mq.firstbyte)[0..1].ptr;
+            result = Curl_xfer_recv(data, firstbyte_ptr, 1, &nread);
             if (result != CURLE_OK) {
                 break :sw;
             } else if (nread == 0) {
@@ -1940,17 +1942,18 @@ fn mqtt_doing(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
                 result = CURLE_RECV_ERROR;
                 break :sw;
             }
-            Curl_debug(data, CURLINFO_HEADER_IN, @ptrCast(&mq.firstbyte), 1);
+            Curl_debug(data, CURLINFO_HEADER_IN, firstbyte_ptr, 1);
             mq.lastTime = Curl_pgrs_now(data).*;
             mq.npacket = 0;
             mqstate(data, .MQTT_REMAINING_LENGTH, .MQTT_NOSTATE);
             continue :sw .MQTT_REMAINING_LENGTH;
         },
         .MQTT_REMAINING_LENGTH => {
+            const recvbyte_ptr = (&recvbyte)[0..1].ptr;
             while (true) {
-                result = Curl_xfer_recv(data, @ptrCast(&recvbyte), 1, &nread);
+                result = Curl_xfer_recv(data, recvbyte_ptr, 1, &nread);
                 if (result != CURLE_OK or nread == 0) break;
-                Curl_debug(data, CURLINFO_HEADER_IN, @ptrCast(&recvbyte), 1);
+                Curl_debug(data, CURLINFO_HEADER_IN, recvbyte_ptr, 1);
                 mq.pkt_hd[mq.npacket] = recvbyte;
                 mq.npacket += 1;
                 if (!((recvbyte & 0x80) != 0 and mq.npacket < 4)) break;
