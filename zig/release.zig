@@ -2102,11 +2102,6 @@ pub fn renderReleaseNotes(
         \\ghr install {s}@{s}
         \\```
         \\
-        \\> **Distribution Identity:** `{s}` is a prerelease of the **curl Zig-port distribution**
-        \\> maintained in [`{s}`](https://github.com/{s}), **not** an official upstream curl
-        \\> release from https://curl.se. It targets the six-platform subset below and does
-        \\> not promise upstream platform or feature parity.
-        \\
         \\## Highlights
         \\
         \\- **Six-platform Zig-built `curl` CLI archives.** Publishes `linux-musl-x64`, `linux-musl-arm64`, `macos-x64`, `macos-arm64`, `windows-x64`, and `windows-arm64` archives (`curl-{s}-<platform>.tar.gz`) with GitHub build provenance attestations and zero SBOM or SPDX assets.
@@ -2134,9 +2129,6 @@ pub fn renderReleaseNotes(
         .{
             repository_name,
             tag,
-            tag,
-            repository_name,
-            repository_name,
             version,
             version,
             version,
@@ -3793,7 +3785,7 @@ test "end-to-end packaging, allowlist verification, and SBOM/sidecar rejection" 
     );
     defer allocator.free(notes);
     try std.testing.expect(std.mem.indexOf(u8, notes, "ghr install cataggar/curl@v8.23.0-zig.1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, notes, "Zig-port distribution") != null);
+    try std.testing.expect(std.mem.indexOf(u8, notes, "Distribution Identity") == null);
     try std.testing.expect(std.mem.indexOf(u8, notes, "curl-8.23.0-zig.1-windows-arm64.tar.gz") != null);
     try std.testing.expect(std.mem.indexOf(u8, notes, "| `curl-8.23.0-zig.1-linux-musl-x64.tar.gz` | `x86_64-linux-musl` | `curl` |") != null);
     try std.testing.expect(std.mem.indexOf(u8, notes, "| `curl-8.23.0-zig.1-windows-x64.tar.gz` | `x86_64-windows-gnu` | `curl.exe` |") != null);
