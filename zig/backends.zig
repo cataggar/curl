@@ -57,6 +57,7 @@ pub const Options = struct {
     ldap: LdapBackend = .none,
     gssapi: bool = false,
     sspi: ?bool = null,
+    bundled: bool = false,
     version: []const u8 = "8.23.1-DEV",
 
     pub fn versionNum(self: Options) u32 {
@@ -73,7 +74,7 @@ pub const Options = struct {
     }
 
     pub fn useThreadedResolver(self: Options) bool {
-        return self.threaded_resolver orelse !self.ares;
+        return self.threaded_resolver orelse (self.bundled or !self.ares);
     }
 
     pub fn useResolvAres(self: Options) bool {
@@ -93,7 +94,7 @@ pub const Options = struct {
     }
 
     pub fn hasProxyHttp3(self: Options) bool {
-        return self.quic == .ngtcp2 and self.ssl == .openssl;
+        return self.quic == .ngtcp2 and (self.ssl == .openssl or (self.bundled and self.ssl == .schannel));
     }
 
     pub fn hasLdap(self: Options) bool {
@@ -113,7 +114,7 @@ pub const Options = struct {
         if (self.apple_sectrust == true and (self.ssl != .openssl or !os_tag.isDarwin())) return false;
         if (self.idn == .winidn and os_tag != .windows) return false;
         if (self.idn == .appleidn and !os_tag.isDarwin()) return false;
-        if (self.quic == .ngtcp2 and self.ssl != .openssl and self.ssl != .gnutls and self.ssl != .wolfssl) return false;
+        if (self.quic == .ngtcp2 and self.ssl != .openssl and self.ssl != .gnutls and self.ssl != .wolfssl and !(self.bundled and self.ssl == .schannel)) return false;
         if (self.ldap == .winldap and os_tag != .windows) return false;
         if (self.ldap == .openldap and os_tag == .windows) return false;
         if (self.sspi == true and os_tag != .windows) return false;
@@ -134,7 +135,7 @@ pub const Options = struct {
         if (self.idn == .appleidn and !os_tag.isDarwin()) {
             @panic("AppleIDN backend (-Didn=appleidn) is only supported on Darwin targets");
         }
-        if (self.quic == .ngtcp2 and self.ssl != .openssl and self.ssl != .gnutls and self.ssl != .wolfssl) {
+        if (self.quic == .ngtcp2 and self.ssl != .openssl and self.ssl != .gnutls and self.ssl != .wolfssl and !(self.bundled and self.ssl == .schannel)) {
             @panic("ngtcp2 requires -Dssl=openssl, -Dssl=gnutls, or -Dssl=wolfssl");
         }
         if (self.ldap == .winldap and os_tag != .windows) {
@@ -178,6 +179,7 @@ pub fn fromBuild(b: *std.Build) Options {
         .ldap = b.option(LdapBackend, "ldap", "LDAP/LDAPS backend (none, openldap, ldap, winldap; default: none)") orelse .none,
         .gssapi = b.option(bool, "gssapi", "Enable GSS-API / Kerberos5 / SPNEGO via system libgssapi_krb5 or Apple GSS (default: false)") orelse false,
         .sspi = b.option(bool, "sspi", "Enable Windows SSPI authentication (default: true with -Dssl=schannel on Windows)"),
+        .bundled = b.option(bool, "bundled", "Use bundled pure-Zig providers instead of linking external non-OS C libraries (default: false)") orelse false,
         .version = b.option([]const u8, "version", "Override embedded curl/libcurl version string (default: 8.23.1-DEV)") orelse "8.23.1-DEV",
     };
 }
@@ -185,6 +187,10 @@ pub fn fromBuild(b: *std.Build) Options {
 pub fn applyCMacros(mod: *std.Build.Module, target: std.Build.ResolvedTarget, opts: Options) void {
     const b = mod.owner;
     opts.validateForTarget(target.result.os.tag);
+
+    if (opts.bundled) {
+        mod.addCMacro("CURL_ZIG_BUNDLED", "1");
+    }
 
     switch (opts.ssl) {
         .none => {
@@ -278,7 +284,7 @@ pub fn applyCMacros(mod: *std.Build.Module, target: std.Build.ResolvedTarget, op
     switch (opts.quic) {
         .none => {},
         .ngtcp2 => {
-            if (opts.ssl != .openssl and opts.ssl != .gnutls and opts.ssl != .wolfssl) {
+            if (opts.ssl != .openssl and opts.ssl != .gnutls and opts.ssl != .wolfssl and !(opts.bundled and opts.ssl == .schannel)) {
                 @panic("ngtcp2 requires -Dssl=openssl, -Dssl=gnutls, or -Dssl=wolfssl");
             }
             mod.addCMacro("USE_NGTCP2", "1");
@@ -342,6 +348,27 @@ pub fn applyCMacros(mod: *std.Build.Module, target: std.Build.ResolvedTarget, op
 
 pub fn linkBackends(mod: *std.Build.Module, target: std.Build.ResolvedTarget, opts: Options) void {
     opts.validateForTarget(target.result.os.tag);
+
+    if (opts.bundled) {
+        if (target.result.os.tag == .windows) {
+            mod.linkSystemLibrary("ws2_32", .{});
+            mod.linkSystemLibrary("advapi32", .{});
+            mod.linkSystemLibrary("crypt32", .{});
+            if (opts.ssl == .schannel) {
+                mod.linkSystemLibrary("secur32", .{});
+                mod.linkSystemLibrary("bcrypt", .{});
+            } else if (opts.useSspi(target.result.os.tag)) {
+                mod.linkSystemLibrary("secur32", .{});
+            }
+            if (opts.idn == .winidn) {
+                mod.linkSystemLibrary("normaliz", .{});
+            }
+            if (opts.ldap == .winldap or opts.ldap == .ldap) {
+                mod.linkSystemLibrary("wldap32", .{});
+            }
+        }
+        return;
+    }
 
     switch (opts.ssl) {
         .none => {},
@@ -491,7 +518,22 @@ pub fn createOptionsStep(b: *std.Build, opts: Options) *std.Build.Step.Options {
     step.addOption(bool, "has_ldaps", opts.hasLdaps());
     step.addOption(bool, "gssapi", opts.gssapi);
     step.addOption(?bool, "sspi", opts.sspi);
+    step.addOption(bool, "bundled", opts.bundled);
     step.addOption([]const u8, "version", opts.version);
     step.addOption(u32, "version_num", opts.versionNum());
     return step;
+}
+
+test "bundled Options resolver and Windows schannel+ngtcp2 support" {
+    const opts = Options{
+        .bundled = true,
+        .ares = true,
+        .httpsrr = true,
+        .quic = .ngtcp2,
+        .ssl = .schannel,
+    };
+    try std.testing.expect(opts.useThreadedResolver());
+    try std.testing.expect(!opts.useResolvAres());
+    try std.testing.expect(opts.hasProxyHttp3());
+    try std.testing.expect(opts.isValidForTarget(.windows));
 }

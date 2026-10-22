@@ -32,8 +32,34 @@ extern const struct Curl_protocol Curl_protocol_scp;
 #ifdef USE_SSH
 
 #ifdef USE_LIBSSH2
+#if __has_include(<libssh2.h>) && __has_include(<libssh2_sftp.h>) && !defined(CURL_ZIG_BUNDLED)
 #include <libssh2.h>
 #include <libssh2_sftp.h>
+#else
+#ifndef CURL_ZIG_LIBSSH2_FALLBACK_DEFINED
+#define CURL_ZIG_LIBSSH2_FALLBACK_DEFINED
+typedef struct _LIBSSH2_SESSION LIBSSH2_SESSION;
+typedef struct _LIBSSH2_CHANNEL LIBSSH2_CHANNEL;
+typedef struct _LIBSSH2_SFTP LIBSSH2_SFTP;
+typedef struct _LIBSSH2_SFTP_HANDLE LIBSSH2_SFTP_HANDLE;
+typedef struct _LIBSSH2_KNOWNHOSTS LIBSSH2_KNOWNHOSTS;
+typedef struct _LIBSSH2_AGENT LIBSSH2_AGENT;
+typedef struct _LIBSSH2_SFTP_ATTRIBUTES {
+  unsigned long flags;
+  curl_uint64_t filesize;
+  unsigned long uid, gid;
+  unsigned long permissions;
+  unsigned long atime, mtime;
+} LIBSSH2_SFTP_ATTRIBUTES;
+struct libssh2_agent_publickey {
+  unsigned int magic;
+  void *node;
+  unsigned char *blob;
+  size_t blob_len;
+  char *comment;
+};
+#endif
+#endif
 #elif defined(USE_LIBSSH)
 /* in 0.10.0 or later, ignore deprecated warnings */
 #define SSH_SUPPRESS_DEPRECATED

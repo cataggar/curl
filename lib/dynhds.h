@@ -132,7 +132,18 @@ CURLcode Curl_dynhds_h1_dprint(struct dynhds *dynhds, struct dynbuf *dbuf);
 
 #ifdef USE_NGHTTP2
 
+#include <stdint.h>
+#if __has_include(<nghttp2/nghttp2.h>) && !defined(CURL_ZIG_BUNDLED)
 #include <nghttp2/nghttp2.h>
+#else
+typedef struct {
+  uint8_t *name;
+  uint8_t *value;
+  size_t namelen;
+  size_t valuelen;
+  uint8_t flags;
+} nghttp2_nv;
+#endif
 
 nghttp2_nv *Curl_dynhds_to_nva(struct dynhds *dynhds, size_t *pcount);
 

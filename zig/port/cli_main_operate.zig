@@ -5474,6 +5474,38 @@ fn cacertpaths(config: *OperationConfig) CURLcode {
     if (result == CURLE_OK) {
         result = win32_setup_certs(config);
     }
+    if (result == CURLE_OK and config.cacert == null and config.capath == null) {
+        const default_cacertpaths = switch (builtin.os.tag) {
+            .linux => [_]?[*:0]const u8{
+                "/etc/ssl/certs/ca-certificates.crt",
+                "/etc/pki/tls/certs/ca-bundle.crt",
+                "/etc/ssl/ca-bundle.pem",
+                "/etc/pki/tls/cacert.pem",
+                "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+                "/etc/ssl/cert.pem",
+                null,
+            },
+            .macos => [_]?[*:0]const u8{
+                "/etc/ssl/cert.pem",
+                "/etc/ssl/certs/ca-certificates.crt",
+                null,
+            },
+            else => [_]?[*:0]const u8{
+                null,
+            },
+        };
+        for (default_cacertpaths) |maybe_path| {
+            const path = maybe_path orelse break;
+            var st: ToolStat = undefined;
+            if (toolStat(path, &st) == 0) {
+                config.cacert = Curl_cstrdup(path);
+                if (config.cacert == null) {
+                    result = CURLE_OUT_OF_MEMORY;
+                }
+                break;
+            }
+        }
+    }
     if (result != CURLE_OK) {
         Curl_cfree(config.capath);
         config.capath = null;

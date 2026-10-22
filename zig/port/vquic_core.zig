@@ -307,7 +307,7 @@ const ngtcp2_ext = if (backend_options.quic == .ngtcp2) struct {
     extern fn nghttp3_version(least_version: c_int) callconv(.c) *const nghttp3_info;
 } else struct {};
 
-const ngtcp2_ossl_ext = if (backend_options.quic == .ngtcp2 and backend_options.ssl == .openssl) struct {
+const ngtcp2_ossl_ext = if (backend_options.quic == .ngtcp2 and backend_options.ssl == .openssl and !backend_options.bundled) struct {
     extern fn ngtcp2_crypto_ossl_init() callconv(.c) c_int;
 } else struct {};
 
@@ -366,7 +366,7 @@ pub fn Curl_nghttp3_mem() callconv(.c) *const nghttp3_mem {
 /// Initialize QUIC backend (`Curl_vquic_init` in `lib/vquic/vquic.c`).
 /// Returns 1 on success, 0 on failure.
 pub fn Curl_vquic_init() callconv(.c) c_int {
-    if (comptime (backend_options.quic == .ngtcp2 and backend_options.ssl == .openssl)) {
+    if (comptime (backend_options.quic == .ngtcp2 and backend_options.ssl == .openssl and !backend_options.bundled)) {
         if (ngtcp2_ossl_ext.ngtcp2_crypto_ossl_init() != 0)
             return 0;
     }
@@ -1248,6 +1248,12 @@ pub fn Curl_vquic_tls_init(
 ) CURLcode {
     switch (comptime backend_options.ssl) {
         .openssl => {
+            if (comptime backend_options.bundled) {
+                if (cb_setup) |cb| {
+                    return cb(cf, data, cb_user_data);
+                }
+                return CURLE_OK;
+            }
             return ossl_backend.Curl_ossl_ctx_init(
                 &ctx.ossl,
                 cf,
@@ -1295,7 +1301,9 @@ pub fn Curl_vquic_tls_init(
 pub fn Curl_vquic_tls_cleanup(ctx: *CurlTlsCtx) void {
     switch (comptime backend_options.ssl) {
         .openssl => {
-            ossl_backend.Curl_osslctx_cleanup(&ctx.ossl);
+            if (comptime !backend_options.bundled) {
+                ossl_backend.Curl_osslctx_cleanup(&ctx.ossl);
+            }
         },
         .gnutls => {
             if (ctx.gtls.session) |s| {
@@ -1324,12 +1332,14 @@ pub fn Curl_vquic_tls_before_recv(
 ) CURLcode {
     switch (comptime backend_options.ssl) {
         .openssl => {
-            if (!ctx.ossl.x509_store_setup()) {
-                if (ctx.ossl.ssl_ctx == null) return CURLE_FAILED_INIT;
-                const result = ossl_backend.Curl_ossl_setup_x509_store(cf, data, &ctx.ossl);
-                if (result != CURLE_OK)
-                    return result;
-                ctx.ossl.set_x509_store_setup(true);
+            if (comptime !backend_options.bundled) {
+                if (!ctx.ossl.x509_store_setup()) {
+                    if (ctx.ossl.ssl_ctx == null) return CURLE_FAILED_INIT;
+                    const result = ossl_backend.Curl_ossl_setup_x509_store(cf, data, &ctx.ossl);
+                    if (result != CURLE_OK)
+                        return result;
+                    ctx.ossl.set_x509_store_setup(true);
+                }
             }
         },
         .wolfssl => {
@@ -1365,7 +1375,9 @@ pub fn Curl_vquic_tls_verify_peer(
 
     switch (comptime backend_options.ssl) {
         .openssl => {
-            result = ossl_backend.Curl_ossl_check_peer_cert(cf, data, &ctx.ossl, peer);
+            if (comptime !backend_options.bundled) {
+                result = ossl_backend.Curl_ossl_check_peer_cert(cf, data, &ctx.ossl, peer);
+            }
         },
         .gnutls => {
             const easy_ssl = vtls_backends.vtls_impl.Curl_ssl_cf_get_easy_config(cf, data);
@@ -1457,7 +1469,9 @@ pub fn Curl_vquic_report_handshake(
     _ = cf;
     switch (comptime backend_options.ssl) {
         .openssl => {
-            ossl_backend.Curl_ossl_report_handshake(data, &ctx.ossl);
+            if (comptime !backend_options.bundled) {
+                ossl_backend.Curl_ossl_report_handshake(data, &ctx.ossl);
+            }
         },
         .gnutls => {
             vtls_gtls.Curl_gtls_report_handshake(data, &ctx.gtls);
@@ -1497,7 +1511,7 @@ pub fn Curl_vquic_tls_is_ke_supported(
         return true;
     }
 
-    if (comptime (backend_options.ssl == .openssl)) {
+    if (comptime (backend_options.ssl == .openssl and !backend_options.bundled)) {
         const ssl = ctx.ossl.ssl orelse return false;
         const SSL_CTRL_GET_SHARED_GROUP: c_int = 93;
         var idx: c_long = 0;

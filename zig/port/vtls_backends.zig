@@ -13,6 +13,7 @@ const cfilters_progress = @import("cfilters_progress.zig");
 pub const vtls_gtls = @import("vtls_gtls.zig");
 pub const vtls_rustls = @import("vtls_rustls.zig");
 pub const vtls_wolfssl = @import("vtls_wolfssl.zig");
+pub const bundled_tls = @import("bundled_tls.zig");
 
 pub const is_windows = builtin.os.tag == .windows;
 pub const use_ssl = switch (backend_options.ssl) {
@@ -20,7 +21,7 @@ pub const use_ssl = switch (backend_options.ssl) {
     .none => false,
 };
 pub const has_ssl = use_ssl;
-pub const use_apple_sectrust = backend_options.apple_sectrust orelse (backend_options.ssl == .openssl and builtin.os.tag.isDarwin());
+pub const use_apple_sectrust = backend_options.apple_sectrust orelse (backend_options.ssl == .openssl and !backend_options.bundled and builtin.os.tag.isDarwin());
 
 // ============================================================================
 // Constants & Error Codes
@@ -620,7 +621,7 @@ fn multisslSetup(backend: ?*const CurlSsl) c_int {
         }
         vtls_impl.Curl_ssl = switch (backend_options.ssl) {
             .schannel => &schannel_backend.Curl_ssl_schannel,
-            .openssl => &openssl_backend.Curl_ssl_openssl,
+            .openssl => if (backend_options.bundled) &bundled_tls.Curl_ssl_zig_tls else &openssl_backend.Curl_ssl_openssl,
             .mbedtls => &mbedtls_backend.Curl_ssl_mbedtls,
             .gnutls => &vtls_gtls.Curl_ssl_gnutls,
             .rustls => &vtls_rustls.Curl_ssl_rustls,
@@ -1061,7 +1062,7 @@ const vtls_core_impl = struct {
     }
 
     pub fn Curl_ssl_setup_x509_store(cf: *CurlCfilter, data: ?*CurlEasy, ssl_ctx: ?*anyopaque) callconv(.c) CURLcode {
-        if (comptime backend_options.ssl == .openssl) {
+        if (comptime (backend_options.ssl == .openssl and !backend_options.bundled)) {
             return openssl_backend.Curl_ossl_setup_x509_store(cf, data, ssl_ctx);
         } else if (comptime backend_options.ssl == .wolfssl) {
             return vtls_wolfssl.Curl_wssl_setup_x509_store(cf, data, ssl_ctx);
@@ -1070,7 +1071,7 @@ const vtls_core_impl = struct {
     }
 
     pub fn Curl_ssl_get_x509_store(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) ?*anyopaque {
-        if (comptime backend_options.ssl == .openssl) {
+        if (comptime (backend_options.ssl == .openssl and !backend_options.bundled)) {
             if (@hasDecl(openssl_backend, "Curl_ossl_get_x509_store")) {
                 return openssl_backend.Curl_ossl_get_x509_store(cf, data);
             }
@@ -1992,7 +1993,7 @@ pub const vtls_impl = struct {
 
     pub var Curl_ssl: *const root_self.CurlSsl = switch (backend_options.ssl) {
         .schannel => &schannel_backend.Curl_ssl_schannel,
-        .openssl => &openssl_backend.Curl_ssl_openssl,
+        .openssl => if (backend_options.bundled) &bundled_tls.Curl_ssl_zig_tls else &openssl_backend.Curl_ssl_openssl,
         .mbedtls => &mbedtls_backend.Curl_ssl_mbedtls,
         .gnutls => &vtls_gtls.Curl_ssl_gnutls,
         .rustls => &vtls_rustls.Curl_ssl_rustls,
@@ -9819,18 +9820,22 @@ comptime {
             @export(&schannel_backend.Curl_schannel_get_cached_cert_store, .{ .name = "Curl_schannel_get_cached_cert_store" });
             @export(&schannel_backend.Curl_schannel_set_cached_cert_store, .{ .name = "Curl_schannel_set_cached_cert_store" });
         } else if (backend_options.ssl == .openssl) {
-            @export(&openssl_backend.Curl_ssl_openssl, .{ .name = "Curl_ssl_openssl" });
-            @export(&openssl_backend.Curl_ossl_init, .{ .name = "Curl_ossl_init" });
-            @export(&openssl_backend.Curl_ossl_cleanup, .{ .name = "Curl_ossl_cleanup" });
-            @export(&openssl_backend.Curl_ossl_version, .{ .name = "Curl_ossl_version" });
-            @export(&openssl_backend.Curl_ossl_verifyhost, .{ .name = "Curl_ossl_verifyhost" });
-            @export(&openssl_backend.Curl_ossl_certchain, .{ .name = "Curl_ossl_certchain" });
-            @export(&openssl_backend.Curl_ossl_check_peer_cert, .{ .name = "Curl_ossl_check_peer_cert" });
-            @export(&openssl_backend.Curl_ossl_setup_x509_store, .{ .name = "Curl_ossl_setup_x509_store" });
-            @export(&openssl_backend.Curl_ossl_ctx_init, .{ .name = "Curl_ossl_ctx_init" });
-            @export(&openssl_backend.Curl_osslctx_cleanup, .{ .name = "Curl_osslctx_cleanup" });
-            @export(&openssl_backend.Curl_ossl_report_handshake, .{ .name = "Curl_ossl_report_handshake" });
-            @export(&openssl_backend.Curl_ossl_add_session, .{ .name = "Curl_ossl_add_session" });
+            if (backend_options.bundled) {
+                @export(&bundled_tls.Curl_ssl_zig_tls, .{ .name = "Curl_ssl_openssl" });
+            } else {
+                @export(&openssl_backend.Curl_ssl_openssl, .{ .name = "Curl_ssl_openssl" });
+                @export(&openssl_backend.Curl_ossl_init, .{ .name = "Curl_ossl_init" });
+                @export(&openssl_backend.Curl_ossl_cleanup, .{ .name = "Curl_ossl_cleanup" });
+                @export(&openssl_backend.Curl_ossl_version, .{ .name = "Curl_ossl_version" });
+                @export(&openssl_backend.Curl_ossl_verifyhost, .{ .name = "Curl_ossl_verifyhost" });
+                @export(&openssl_backend.Curl_ossl_certchain, .{ .name = "Curl_ossl_certchain" });
+                @export(&openssl_backend.Curl_ossl_check_peer_cert, .{ .name = "Curl_ossl_check_peer_cert" });
+                @export(&openssl_backend.Curl_ossl_setup_x509_store, .{ .name = "Curl_ossl_setup_x509_store" });
+                @export(&openssl_backend.Curl_ossl_ctx_init, .{ .name = "Curl_ossl_ctx_init" });
+                @export(&openssl_backend.Curl_osslctx_cleanup, .{ .name = "Curl_osslctx_cleanup" });
+                @export(&openssl_backend.Curl_ossl_report_handshake, .{ .name = "Curl_ossl_report_handshake" });
+                @export(&openssl_backend.Curl_ossl_add_session, .{ .name = "Curl_ossl_add_session" });
+            }
         } else if (backend_options.ssl == .mbedtls) {
             @export(&mbedtls_backend.Curl_ssl_mbedtls, .{ .name = "Curl_ssl_mbedtls" });
         }

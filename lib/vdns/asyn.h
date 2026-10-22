@@ -89,7 +89,16 @@ bool Curl_async_knows_https(struct Curl_easy *data,
 
 #ifdef USE_ARES
 /* common functions for c-ares and threaded resolver with HTTPSRR */
+#if __has_include(<ares.h>) && !defined(CURL_ZIG_BUNDLED)
 #include <ares.h>
+#else
+#ifndef CURL_ZIG_ARES_FALLBACK_DEFINED
+#define CURL_ZIG_ARES_FALLBACK_DEFINED
+typedef void *ares_channel;
+typedef void *ares_channel_t;
+typedef struct ares_dns_record ares_dns_record_t;
+#endif
+#endif
 
 CURLcode Curl_ares_pollset(struct Curl_easy *data,
                            ares_channel channel,

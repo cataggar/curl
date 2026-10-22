@@ -698,7 +698,7 @@ const ngtcp2_c = if (use_ngtcp2) struct {
     extern fn nghttp3_err_infer_quic_app_error_code(liberr: c_int) callconv(.c) u64;
 } else struct {};
 
-const ngtcp2_ossl_c = if (use_ngtcp2 and backend_options.ssl == .openssl) struct {
+const ngtcp2_ossl_c = if (use_ngtcp2 and backend_options.ssl == .openssl and !backend_options.bundled) struct {
     extern fn ngtcp2_crypto_ossl_ctx_new(poctx: *?*ngtcp2_crypto_ossl_ctx, ssl: ?*anyopaque) callconv(.c) c_int;
     extern fn ngtcp2_crypto_ossl_ctx_del(octx: ?*ngtcp2_crypto_ossl_ctx) callconv(.c) void;
     extern fn ngtcp2_crypto_ossl_ctx_set_ssl(octx: *ngtcp2_crypto_ossl_ctx, ssl: ?*anyopaque) callconv(.c) void;
@@ -1119,7 +1119,7 @@ pub fn Curl_cf_ngtcp2_ctx_cleanup(ctx: *CfNgtcp2Ctx) callconv(.c) void {
                 ctx.qconn = null;
             }
         }
-        if (comptime (use_ngtcp2 and backend_options.ssl == .openssl)) {
+        if (comptime (use_ngtcp2 and backend_options.ssl == .openssl and !backend_options.bundled)) {
             if (ctx.ossl_ctx) |octx| {
                 ngtcp2_ossl_c.ngtcp2_crypto_ossl_ctx_del(octx);
                 ctx.ossl_ctx = null;
@@ -1905,7 +1905,7 @@ fn cf_ngtcp2_on_session_reuse(
     const qconn = ctx.qconn orelse return CURLE_OK;
 
     if (scs.quic_tp != null and scs.quic_tp_len > 0) {
-        if (comptime (backend_options.ssl == .openssl)) {
+        if (comptime (backend_options.ssl == .openssl and !backend_options.bundled)) {
             if (ctx.ossl_ctx) |octx| {
                 ngtcp2_ossl_c.ngtcp2_crypto_ossl_ctx_set_ssl(octx, ctx.tls.ossl.ssl);
             }
@@ -1928,7 +1928,7 @@ fn cf_ngtcp2_on_session_reuse(
 }
 
 fn cf_ngtcp2_new_session_cb(ssl: *anyopaque, ssl_sessionid: *anyopaque) callconv(.c) c_int {
-    if (comptime !(use_ngtcp2 and backend_options.ssl == .openssl)) return 0;
+    if (comptime !(use_ngtcp2 and backend_options.ssl == .openssl and !backend_options.bundled)) return 0;
     const cref_raw = ngtcp2_ossl_c.SSL_get_ex_data(ssl, 0) orelse return 0;
     const cref: *ngtcp2_crypto_conn_ref = @ptrCast(@alignCast(cref_raw));
     const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(cref.user_data orelse return 0));
@@ -2008,6 +2008,9 @@ fn cf_ngtcp2_ssl_ctx_setup(
     if (comptime !use_ngtcp2) return CURLE_NOT_BUILT_IN;
     switch (comptime backend_options.ssl) {
         .openssl => {
+            if (comptime backend_options.bundled) {
+                return CURLE_OK;
+            }
             const octx: *vtls_backends.openssl_backend.OsslCtx = @ptrCast(@alignCast(user_data orelse return CURLE_FAILED_INIT));
             const ssl_ctx = octx.ssl_ctx orelse return CURLE_FAILED_INIT;
             _ = ngtcp2_ossl_c.SSL_CTX_ctrl(
@@ -2066,6 +2069,10 @@ fn quic_init_ssl(
                 cf_ngtcp2_on_session_reuse,
             );
             if (result != CURLE_OK) return result;
+            if (comptime backend_options.bundled) {
+                ngtcp2_c.ngtcp2_conn_set_tls_native_handle(qconn, &ctx.conn_ref);
+                return CURLE_OK;
+            }
             if (ngtcp2_ossl_c.ngtcp2_crypto_ossl_ctx_new(&ctx.ossl_ctx, ctx.tls.ossl.ssl) != 0) {
                 Curl_failf(data, "ngtcp2_crypto_ossl_ctx_new failed");
                 return CURLE_FAILED_INIT;
