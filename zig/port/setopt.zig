@@ -2337,9 +2337,6 @@ fn setoptCptrFtp(data: *Curl_easy, option: CURLoption, ptr: ?[*:0]const u8) CURL
         },
         CURLOPT_SSH_HOST_PUBLIC_KEY_MD5 => {
             if (!use_ssh) return CURLE_UNKNOWN_OPTION;
-            if (ptr) |p| {
-                if (std.mem.len(p) != 32) return CURLE_BAD_FUNCTION_ARGUMENT;
-            }
             return Curl_setstropt(data, STRING_SSH_HOST_PUBLIC_KEY_MD5, ptr);
         },
         CURLOPT_SSH_KNOWNHOSTS => {

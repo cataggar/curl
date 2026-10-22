@@ -3827,7 +3827,7 @@ test "CURLOPT_SSH_* options and version info with libssh2" {
         try std.testing.expectEqual(CURLE_OK, curl_easy_setopt(easy, @intCast(setopt.CURLOPT_SSH_PRIVATE_KEYFILE), "/tmp/id_rsa"));
         try std.testing.expectEqual(CURLE_OK, curl_easy_setopt(easy, @intCast(setopt.CURLOPT_SSH_KNOWNHOSTS), "/tmp/known_hosts"));
         try std.testing.expectEqual(CURLE_OK, curl_easy_setopt(easy, @intCast(setopt.CURLOPT_SSH_HOST_PUBLIC_KEY_MD5), "0123456789abcdef0123456789abcdef"));
-        try std.testing.expectEqual(CURLE_BAD_FUNCTION_ARGUMENT, curl_easy_setopt(easy, @intCast(setopt.CURLOPT_SSH_HOST_PUBLIC_KEY_MD5), "short"));
+        try std.testing.expectEqual(CURLE_OK, curl_easy_setopt(easy, @intCast(setopt.CURLOPT_SSH_HOST_PUBLIC_KEY_MD5), "short"));
         try std.testing.expectEqual(CURLE_OK, curl_easy_setopt(easy, @intCast(setopt.CURLOPT_SSH_HOST_PUBLIC_KEY_SHA256), "aaaa"));
 
         var vbuf: [64]u8 = undefined;

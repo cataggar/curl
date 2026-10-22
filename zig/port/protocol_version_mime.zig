@@ -1526,53 +1526,22 @@ fn encoder_7bit_read(buffer: [*]u8, size: usize, ateof: bool, part: *curl_mimepa
     const st = &part.encstate;
     var cursize = st.bufend - st.bufbeg;
 
-    if (size < 2)
-        return if (size != 0) STOP_FILLING else 0;
+    if (size == 0)
+        return STOP_FILLING;
 
-    const sz = size;
-    if (cursize > sz)
-        cursize = sz;
+    if (cursize > size)
+        cursize = size;
 
-    var buf_idx: usize = 0;
-    while (st.bufbeg < st.bufend) : (st.bufbeg += 1) {
+    var i: usize = 0;
+    while (i < cursize) : (i += 1) {
         const c = st.buf[st.bufbeg];
+        buffer[i] = c;
         if ((c & 0x80) != 0)
-            return READ_ERROR;
-
-        if (c == '\r') {
-            if (st.bufbeg + 1 >= st.bufend)
-                break;
-            if (st.buf[st.bufbeg + 1] != '\n')
-                return READ_ERROR;
-            if (cursize < 2)
-                break;
-            buffer[buf_idx] = '\r';
-            buffer[buf_idx + 1] = '\n';
-            buf_idx += 2;
-            cursize -= 2;
-            st.pos = 0;
-            st.bufbeg += 1;
-        } else if (c == '\n') {
-            if (cursize < 2)
-                break;
-            buffer[buf_idx] = '\r';
-            buffer[buf_idx + 1] = '\n';
-            buf_idx += 2;
-            cursize -= 2;
-            st.pos = 0;
-        } else {
-            if (cursize == 0)
-                break;
-            buffer[buf_idx] = c;
-            buf_idx += 1;
-            cursize -= 1;
-            st.pos += 1;
-            if (st.pos > MAX_ENCODED_LINE_LENGTH)
-                return READ_ERROR;
-        }
+            return if (i != 0) i else READ_ERROR;
+        st.bufbeg += 1;
     }
 
-    return buf_idx;
+    return cursize;
 }
 
 fn encoder_base64_read(buffer: [*]u8, size: usize, ateof: bool, part: *curl_mimepart) callconv(.c) usize {

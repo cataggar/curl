@@ -63,7 +63,7 @@ const CURLSSH_AUTH_GSSAPI: c_long = 1 << 5;
 const CURL_POLL_IN: c_int = 1;
 const CURL_POLL_OUT: c_int = 2;
 const FIRSTSOCKET: i8 = 0;
-const TIMER_APPCONNECT: c_uint = 5;
+const TIMER_APPCONNECT: c_uint = 6;
 const CLIENTWRITE_BODY: c_int = 1 << 0;
 const CLIENTWRITE_HEADER: c_int = 1 << 2;
 

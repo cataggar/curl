@@ -34,24 +34,49 @@ my %indocs; # variable described in docs
 
 my $srccount = 1;
 sub getsrcvars {
-    open(my $f, "<", "$root/../src/tool_writeout.c");
-    my $mode = 0;
-    while(<$f>) {
-        if(!$mode &&
-           ($_ =~ /^static const struct writeoutvar/)) {
-            $mode = 1;
-        }
-        if($mode) {
-            if($_ =~ /^}/) {
-                last;
+    my $srcfile = "$root/../src/tool_writeout.c";
+    if(-f $srcfile) {
+        open(my $f, "<", $srcfile);
+        my $mode = 0;
+        while(<$f>) {
+            if(!$mode &&
+               ($_ =~ /^static const struct writeoutvar/)) {
+                $mode = 1;
             }
-            if($_ =~ /^  \{ \"([^\"]*)/) {
-                my $var = $1;
-                $insrc{$var} = $srccount++;
+            if($mode) {
+                if($_ =~ /^}/) {
+                    last;
+                }
+                if($_ =~ /^  \{ \"([^\"]*)/) {
+                    my $var = $1;
+                    $insrc{$var} = $srccount++;
+                }
             }
         }
+        close($f);
+        return;
     }
-    close($f);
+    my $zigfile = "$root/../zig/port/cli_callbacks.zig";
+    if(-f $zigfile) {
+        open(my $f, "<", $zigfile);
+        my $mode = 0;
+        while(<$f>) {
+            if(!$mode &&
+               ($_ =~ /^(?:pub )?const variables = \[_\]writeoutvar\{/)) {
+                $mode = 1;
+            }
+            if($mode) {
+                if($_ =~ /^\};/) {
+                    last;
+                }
+                if($_ =~ /^\s*\.\{\s*\.name = \"([^\"]*)\"/) {
+                    my $var = $1;
+                    $insrc{$var} = $srccount++;
+                }
+            }
+        }
+        close($f);
+    }
 }
 
 my %special = (

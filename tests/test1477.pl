@@ -63,11 +63,14 @@ sub scanheader {
 
 sub scanmanpage {
     my ($file) = @_;
+    if(! -f $file && -f "$root/docs/libcurl/libcurl-errors.md") {
+        $file = "$root/docs/libcurl/libcurl-errors.md";
+    }
     open(H, "<", $file);
     my $line = 0;
     while(<H>) {
         $line++;
-        if($_ =~ /^\.IP \"(CURL(E|UE|SHE|HE|M)_[A-Z0-9_]*)/) {
+        if($_ =~ /^(?:\.IP \"|## )(CURL(E|UE|SHE|HE|M)_[A-Z0-9_]*)/) {
             my ($name) = ($1);
             if($name !~ /(CURLM_CALL_MULTI_SOCKET)/) {
                 push @mnames, $name;

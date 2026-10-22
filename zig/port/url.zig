@@ -231,8 +231,8 @@ pub const CURL_HET_DEFAULT: i64 = 200;
 pub const CURL_UPKEEP_INTERVAL_DEFAULT: i64 = 60000;
 pub const DEFAULT_CONNCACHE_SIZE: i64 = 5;
 pub const CURL_HTTP_VERSION_NONE: i64 = 0;
-pub const TIMER_POSTQUEUE: c_uint = 2;
-pub const TIMER_NAMELOOKUP: c_uint = 3;
+pub const TIMER_POSTQUEUE: c_uint = 3;
+pub const TIMER_NAMELOOKUP: c_uint = 4;
 
 pub const CURL_DEFAULT_USER: [*:0]const u8 = "anonymous";
 pub const CURL_DEFAULT_PASSWORD: [*:0]const u8 = "ftp@example.com";
