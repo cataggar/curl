@@ -2545,12 +2545,12 @@ test "rustls loopback TLS handshake and HTTPS GET via curl_easy_perform" {
 
             var resp_buf = ResponseBuf{};
             var blob = CurlBlob{
-                .data = mem.toRawPtr(opts.ca_pem.ptr),
+                .data = opts.ca_pem.ptr,
                 .len = opts.ca_pem.len,
                 .flags = curl_c.CURL_BLOB_COPY,
             };
 
-            try std.testing.expectEqual(CURLE_OK, curl_c.curl_easy_setopt(easy, curl_c.CURLOPT_URL, url.ptr));
+            try std.testing.expectEqual(CURLE_OK, curl_c.curl_easy_setopt(easy, curl_c.CURLOPT_URL, url));
             try std.testing.expectEqual(CURLE_OK, curl_c.curl_easy_setopt(easy, curl_c.CURLOPT_RESOLVE, resolve_list));
             try std.testing.expectEqual(CURLE_OK, curl_c.curl_easy_setopt(easy, curl_c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
             try std.testing.expectEqual(CURLE_OK, curl_c.curl_easy_setopt(easy, curl_c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));
