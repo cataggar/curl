@@ -209,11 +209,19 @@ pub const CurlCertinfo = extern struct {
 pub const AlpnSpec = extern struct {
     entries: [ALPN_ENTRIES_MAX][ALPN_NAME_MAX]u8,
     count: usize,
+
+    pub inline fn entryStr(self: *const AlpnSpec, idx: usize) [*:0]const u8 {
+        return @ptrCast(&self.entries[idx]);
+    }
 };
 
 pub const AlpnProtoBuf = extern struct {
     data: [ALPN_PROTO_BUF_MAX]u8,
     len: c_int,
+
+    pub inline fn cStr(self: *const AlpnProtoBuf) [*:0]const u8 {
+        return @ptrCast(&self.data);
+    }
 };
 
 pub const CurlSslBackendInfo = extern struct {
@@ -288,6 +296,9 @@ pub const SslConnectData = extern struct {
     pub fn set_stats_reported(self: *SslConnectData, v: bool) void {
         if (v) self.flags |= 8 else self.flags &= ~@as(FlagsType, 8);
     }
+    pub inline fn backendAs(self: *const SslConnectData, comptime T: type) ?*T {
+        return @ptrCast(@alignCast(self.backend));
+    }
 };
 
 pub const CurlCftype = extern struct {
@@ -307,46 +318,31 @@ pub const CurlCftype = extern struct {
     query: *const fn (cf: *CurlCfilter, data: ?*CurlEasy, query: c_int, pres1: ?*c_int, pres2: ?*anyopaque) callconv(.c) CURLcode,
 };
 
-pub const CurlCfilter = if (is_windows) extern struct {
+pub const CurlCfilter = extern struct {
+    const FlagsType = if (is_windows) u32 else u8;
+
     cft: *const CurlCftype,
     next: ?*CurlCfilter,
     ctx: ?*anyopaque,
     conn: ?*ConnectData,
     sockindex: i8,
-    _pad: [3]u8 = .{ 0, 0, 0 },
-    flags: u32,
+    _pad: if (is_windows) [3]u8 else [0]u8 = if (is_windows) .{ 0, 0, 0 } else .{},
+    flags: FlagsType,
 
     pub fn isConnected(self: *const CurlCfilter) bool {
         return (self.flags & 1) != 0;
     }
     pub fn setConnected(self: *CurlCfilter, v: bool) void {
-        if (v) self.flags |= 1 else self.flags &= ~@as(u32, 1);
+        if (v) self.flags |= 1 else self.flags &= ~@as(FlagsType, 1);
     }
     pub fn isShutdown(self: *const CurlCfilter) bool {
         return (self.flags & 2) != 0;
     }
     pub fn setShutdown(self: *CurlCfilter, v: bool) void {
-        if (v) self.flags |= 2 else self.flags &= ~@as(u32, 2);
+        if (v) self.flags |= 2 else self.flags &= ~@as(FlagsType, 2);
     }
-} else extern struct {
-    cft: *const CurlCftype,
-    next: ?*CurlCfilter,
-    ctx: ?*anyopaque,
-    conn: ?*ConnectData,
-    sockindex: i8,
-    flags: u8,
-
-    pub fn isConnected(self: *const CurlCfilter) bool {
-        return (self.flags & 1) != 0;
-    }
-    pub fn setConnected(self: *CurlCfilter, v: bool) void {
-        if (v) self.flags |= 1 else self.flags &= ~@as(u8, 1);
-    }
-    pub fn isShutdown(self: *const CurlCfilter) bool {
-        return (self.flags & 2) != 0;
-    }
-    pub fn setShutdown(self: *CurlCfilter, v: bool) void {
-        if (v) self.flags |= 2 else self.flags &= ~@as(u8, 2);
+    pub inline fn sslCtx(self: *const CurlCfilter) ?*SslConnectData {
+        return @ptrCast(@alignCast(self.ctx));
     }
 };
 
@@ -453,7 +449,7 @@ pub const c_ext = struct {
     }
 
     // Accessor helpers in lib/url.c (#ifdef USE_SSL)
-    pub extern fn Curl_vtls_acc_data_certs(data: ?*CurlEasy) callconv(.c) ?*CurlCertinfo;
+    pub extern fn Curl_vtls_acc_data_certs(data: ?*anyopaque) callconv(.c) ?*CurlCertinfo;
     pub extern fn Curl_vtls_acc_data_conn(data: ?*CurlEasy) callconv(.c) ?*ConnectData;
     pub extern fn Curl_vtls_acc_conn_cfilter(conn: ?*ConnectData, sockindex: i8) callconv(.c) ?*CurlCfilter;
     pub extern fn Curl_vtls_acc_multi_proto_hash(data: ?*CurlEasy) callconv(.c) ?*anyopaque;
@@ -678,7 +674,7 @@ pub fn alpnToProtoBuf(buf: *AlpnProtoBuf, spec_opt: ?*const AlpnSpec) CURLcode {
     var off: usize = 0;
     var i: usize = 0;
     while (i < spec.count) : (i += 1) {
-        const entry_ptr: [*:0]const u8 = @ptrCast(&spec.entries[i]);
+        const entry_ptr = spec.entryStr(i);
         const len = std.mem.len(entry_ptr);
         if (len >= ALPN_NAME_MAX)
             return CURLE_FAILED_INIT;
@@ -700,7 +696,7 @@ pub fn alpnToProtoStr(buf: *AlpnProtoBuf, spec_opt: ?*const AlpnSpec) CURLcode {
     var off: usize = 0;
     var i: usize = 0;
     while (i < spec.count) : (i += 1) {
-        const entry_ptr: [*:0]const u8 = @ptrCast(&spec.entries[i]);
+        const entry_ptr = spec.entryStr(i);
         const len = std.mem.len(entry_ptr);
         if (len >= ALPN_NAME_MAX)
             return CURLE_FAILED_INIT;
@@ -725,7 +721,7 @@ pub fn alpnContainsProto(spec_opt: ?*const AlpnSpec, proto_opt: ?[*:0]const u8) 
     if (plen == 0) return false;
     var i: usize = 0;
     while (i < spec.count) : (i += 1) {
-        const entry_ptr: [*:0]const u8 = @ptrCast(&spec.entries[i]);
+        const entry_ptr = spec.entryStr(i);
         const slen = std.mem.len(entry_ptr);
         if (slen == plen and std.mem.eql(u8, proto[0..plen], entry_ptr[0..plen]))
             return true;
@@ -863,7 +859,7 @@ const vtls_core_impl = struct {
                     c_ext.curl_slist_free_all(table[i]);
                     table[i] = null;
                 }
-                mem.free(@ptrCast(table));
+                mem.freeTyped(table);
             }
             ci.certinfo = null;
             ci.num_of_certs = 0;
@@ -873,17 +869,17 @@ const vtls_core_impl = struct {
     pub fn Curl_ssl_init_certinfo(data: ?*CurlEasy, num: c_int) callconv(.c) CURLcode {
         const ci = c_ext.Curl_vtls_acc_data_certs(data) orelse return CURLE_BAD_FUNCTION_ARGUMENT;
         Curl_ssl_free_certinfo(data);
-        const raw = mem.calloc(@intCast(num), @sizeOf(?*curl_slist)) orelse return CURLE_OUT_OF_MEMORY;
+        const table = mem.callocMany(?*curl_slist, @intCast(num)) orelse return CURLE_OUT_OF_MEMORY;
         ci.num_of_certs = num;
-        ci.certinfo = @ptrCast(@alignCast(raw));
+        ci.certinfo = table;
         return CURLE_OK;
     }
 
     pub fn Curl_ssl_push_certinfo_len(
-        data: ?*CurlEasy,
+        data: ?*anyopaque,
         certnum: c_int,
         label: [*:0]const u8,
-        value: [*]const u8,
+        value_opt: ?[*]const u8,
         valuelen: usize,
     ) callconv(.c) CURLcode {
         const ci = c_ext.Curl_vtls_acc_data_certs(data) orelse return CURLE_BAD_FUNCTION_ARGUMENT;
@@ -895,7 +891,7 @@ const vtls_core_impl = struct {
 
         if (containers.curlx_dyn_add(&build, label) != CURLE_OK or
             containers.curlx_dyn_addn(&build, ":", 1) != CURLE_OK or
-            containers.curlx_dyn_addn(&build, value, valuelen) != CURLE_OK)
+            (valuelen > 0 and containers.curlx_dyn_addn(&build, value_opt orelse "", valuelen) != CURLE_OK))
         {
             return CURLE_OUT_OF_MEMORY;
         }
@@ -965,8 +961,7 @@ const vtls_core_impl = struct {
 
         if (std.mem.startsWith(u8, pinned_slice, "sha256//")) {
             const sha_fn = vtls_impl.Curl_ssl.sha256sum orelse return result;
-            const raw_digest = mem.malloc(CURL_SHA256_DIGEST_LENGTH) orelse return CURLE_OUT_OF_MEMORY;
-            const sha256sumdigest: [*]u8 = @ptrCast(raw_digest);
+            const sha256sumdigest = mem.allocMany(u8, CURL_SHA256_DIGEST_LENGTH) orelse return CURLE_OUT_OF_MEMORY;
 
             var encode = sha_fn(pubkey, pubkeylen, sha256sumdigest, CURL_SHA256_DIGEST_LENGTH);
             var cert_hash: ?[*:0]u8 = null;
@@ -975,7 +970,7 @@ const vtls_core_impl = struct {
             if (encode == CURLE_OK) {
                 encode = c_ext.curlx_base64_encode(sha256sumdigest, CURL_SHA256_DIGEST_LENGTH, &cert_hash, &cert_hash_len);
             }
-            mem.free(raw_digest);
+            mem.free(sha256sumdigest);
             if (encode != CURLE_OK) return encode;
 
             if (cert_hash) |ch| {
@@ -1078,8 +1073,8 @@ const vtls_core_impl = struct {
             if (@hasDecl(openssl_backend, "Curl_ssl_get_x509_store")) {
                 return openssl_backend.Curl_ssl_get_x509_store(cf, data);
             }
-            const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return null));
-            const octx: *openssl_backend.OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return null));
+            const connssl = cf.sslCtx() orelse return null;
+            const octx = connssl.backendAs(openssl_backend.OsslCtx) orelse return null;
             if (octx.ssl_ctx) |ctx| {
                 return openssl_backend.ossl_ext.SSL_CTX_get_cert_store(ctx);
             }
@@ -1101,7 +1096,7 @@ const vtls_core_impl = struct {
     }
 
     pub fn Curl_ssl_adjust_pollset(cf: *CurlCfilter, data: ?*CurlEasy, ps: ?*EasyPollset) callconv(.c) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_OK));
+        const connssl = cf.sslCtx() orelse return CURLE_OK;
         if (connssl.io_need != 0) {
             const sock = c_ext.Curl_conn_cf_get_socket(cf.next, data);
             if (sock != CURL_SOCKET_BAD) {
@@ -1193,19 +1188,19 @@ const vtls_core_impl = struct {
         return true;
     }
 
-    fn cfCtxNew(data: ?*CurlEasy, alpn: ?*const AlpnSpec) ?*SslConnectData {
-        _ = data;
-        const raw = mem.calloc(1, @sizeOf(SslConnectData)) orelse return null;
-        const ctx: *SslConnectData = @ptrCast(@alignCast(raw));
+    fn cfCtxNewInner(alpn: ?*const AlpnSpec) error{OutOfMemory}!*SslConnectData {
+        const ctx = mem.create(SslConnectData) orelse return error.OutOfMemory;
+        errdefer mem.destroy(ctx);
         ctx.ssl_impl = vtls_impl.Curl_ssl;
         ctx.alpn = alpn;
         io_buffers.Curl_bufq_init2(&ctx.earlydata, CURL_SSL_EARLY_MAX, 1, BUFQ_OPT_NO_SPARES);
-        ctx.backend = mem.calloc(1, ctx.ssl_impl.sizeof_ssl_backend_data);
-        if (ctx.backend == null) {
-            mem.freeSized(ctx, @sizeOf(SslConnectData));
-            return null;
-        }
+        ctx.backend = mem.calloc(1, ctx.ssl_impl.sizeof_ssl_backend_data) orelse return error.OutOfMemory;
         return ctx;
+    }
+
+    fn cfCtxNew(data: ?*CurlEasy, alpn: ?*const AlpnSpec) ?*SslConnectData {
+        _ = data;
+        return cfCtxNewInner(alpn) catch null;
     }
 
     fn cfCtxFree(ctx_opt: ?*SslConnectData) void {
@@ -1217,7 +1212,7 @@ const vtls_core_impl = struct {
         io_buffers.Curl_bufq_free(&ctx.earlydata);
         mem.freeSized(ctx.backend, ctx.ssl_impl.sizeof_ssl_backend_data);
         ctx.backend = null;
-        mem.freeSized(ctx, @sizeOf(SslConnectData));
+        mem.destroy(ctx);
     }
 
     pub fn Curl_ssl_peer_cleanup(peer: *SslPeer) callconv(.c) void {
@@ -1234,21 +1229,20 @@ const vtls_core_impl = struct {
         peer.type = SSL_PEER_DNS;
     }
 
-    pub fn Curl_ssl_peer_init(
+    fn initSslPeerInner(
         ssl_peer: *SslPeer,
         origin_opt: ?*CurlPeer,
         peer_opt: ?*CurlPeer,
         sslc: *SslFilterConfig,
         tls_id: [*:0]const u8,
         transport: u8,
-    ) callconv(.c) CURLcode {
+    ) error{ OutOfMemory, FailedInit }!void {
         Curl_ssl_peer_cleanup(ssl_peer);
+        errdefer Curl_ssl_peer_cleanup(ssl_peer);
         c_ext.Curl_peer_link(&ssl_peer.origin, origin_opt);
         c_ext.Curl_peer_link(&ssl_peer.peer, peer_opt);
         ssl_peer.transport = transport;
-        const origin = ssl_peer.origin orelse {
-            return CURLE_FAILED_INIT;
-        };
+        const origin = ssl_peer.origin orelse return error.FailedInit;
 
         var ipv4_addr: [4]u8 = undefined;
         var ipv6_addr: [16]u8 = undefined;
@@ -1268,23 +1262,32 @@ const vtls_core_impl = struct {
                     sni_len -= 1;
                 }
                 if (sni_len > 0) {
-                    const sni = mem.calloc(1, sni_len + 1) orelse {
-                        Curl_ssl_peer_cleanup(ssl_peer);
-                        return CURLE_OUT_OF_MEMORY;
-                    };
-                    const sni_bytes: [*:0]u8 = @ptrCast(sni);
-                    primitives.Curl_strntolower(sni_bytes, origin.hostname, sni_len);
-                    sni_bytes[sni_len] = 0;
-                    ssl_peer.sni = sni_bytes;
+                    const sni_buf = mem.callocMany(u8, sni_len + 1) orelse return error.OutOfMemory;
+                    primitives.Curl_strntolower(sni_buf, origin.hostname, sni_len);
+                    sni_buf[sni_len] = 0;
+                    ssl_peer.sni = sni_buf[0..sni_len :0].ptr;
                 }
             }
         }
 
         const result = vtls_scache_asn1.Curl_ssl_peer_key_make(ssl_peer, sslc, tls_id, &ssl_peer.scache_key);
-        if (result != CURLE_OK) {
-            Curl_ssl_peer_cleanup(ssl_peer);
-        }
-        return result;
+        if (result == CURLE_OUT_OF_MEMORY) return error.OutOfMemory;
+        if (result != CURLE_OK) return error.FailedInit;
+    }
+
+    pub fn Curl_ssl_peer_init(
+        ssl_peer: *SslPeer,
+        origin_opt: ?*CurlPeer,
+        peer_opt: ?*CurlPeer,
+        sslc: *SslFilterConfig,
+        tls_id: [*:0]const u8,
+        transport: u8,
+    ) callconv(.c) CURLcode {
+        initSslPeerInner(ssl_peer, origin_opt, peer_opt, sslc, tls_id, transport) catch |err| switch (err) {
+            error.OutOfMemory => return CURLE_OUT_OF_MEMORY,
+            error.FailedInit => return CURLE_FAILED_INIT,
+        };
+        return CURLE_OK;
     }
 
     fn cfSslPeerInit(
@@ -1293,17 +1296,30 @@ const vtls_core_impl = struct {
         peer_opt: ?*CurlPeer,
         conn_config: *SslFilterConfig,
     ) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_FAILED_INIT));
-        var tls_id: [80]u8 = @splat(0);
-        _ = connssl.ssl_impl.version(&tls_id, tls_id.len - 1);
+        const connssl = cf.sslCtx() orelse return CURLE_FAILED_INIT;
+        var tls_id: [79:0]u8 = @splat(0);
+        _ = connssl.ssl_impl.version(&tls_id, tls_id.len);
         return Curl_ssl_peer_init(
             &connssl.peer,
             origin_opt,
             peer_opt,
             conn_config,
-            @ptrCast(&tls_id),
+            &tls_id,
             TRNSPRT_TCP,
         );
+    }
+
+    fn createSslCfilterInner(
+        cft: *const CurlCftype,
+        alpn: ?*const AlpnSpec,
+    ) error{ OutOfMemory, CfCreateFailed }!*CurlCfilter {
+        const ctx = try cfCtxNewInner(alpn);
+        errdefer cfCtxFree(ctx);
+        var cf: ?*CurlCfilter = null;
+        if (c_ext.Curl_cf_create(&cf, cft, ctx) != CURLE_OK or cf == null) {
+            return error.CfCreateFailed;
+        }
+        return cf.?;
     }
 
     pub fn Curl_cf_ssl_create(pcf: *?*CurlCfilter, data: ?*CurlEasy, conn: ?*ConnectData) callconv(.c) CURLcode {
@@ -1313,20 +1329,36 @@ const vtls_core_impl = struct {
         var use_alpn = false;
         c_ext.Curl_vtls_acc_cf_ssl_create_params(data, conn, &wanted, &preferred, &only_http_10, &use_alpn);
 
-        const ctx = cfCtxNew(data, alpnGetSpec(wanted, preferred, only_http_10, use_alpn)) orelse {
+        pcf.* = createSslCfilterInner(
+            &vtls_impl.Curl_cft_ssl,
+            alpnGetSpec(wanted, preferred, only_http_10, use_alpn),
+        ) catch {
             pcf.* = null;
             return CURLE_OUT_OF_MEMORY;
         };
+        return CURLE_OK;
+    }
 
+    fn cfSslInsertAfterInner(
+        cf_at: *CurlCfilter,
+        data: ?*CurlEasy,
+        origin: ?*CurlPeer,
+        peer: ?*CurlPeer,
+        is_proxy: bool,
+    ) error{ OutOfMemory, FailedInit }!*CurlCfilter {
         var cf: ?*CurlCfilter = null;
-        const result = c_ext.Curl_cf_create(&cf, &vtls_impl.Curl_cft_ssl, ctx);
-        if (result != CURLE_OK) {
-            cfCtxFree(ctx);
-            pcf.* = null;
-        } else {
-            pcf.* = cf;
-        }
-        return result;
+        const create_rc = if (is_proxy)
+            Curl_cf_ssl_proxy_create(&cf, data, cf_at.conn)
+        else
+            Curl_cf_ssl_create(&cf, data, cf_at.conn);
+        if (create_rc != CURLE_OK or cf == null) return error.OutOfMemory;
+        errdefer c_ext.Curl_conn_cf_discard_chain(&cf, data);
+
+        const cfg = c_ext.Curl_vtls_acc_conn_ssl_filter_config(cf_at.conn, is_proxy) orelse return error.FailedInit;
+        const init_rc = cfSslPeerInit(cf.?, origin, peer, cfg);
+        if (init_rc == CURLE_OUT_OF_MEMORY) return error.OutOfMemory;
+        if (init_rc != CURLE_OK) return error.FailedInit;
+        return cf.?;
     }
 
     pub fn cfSslInsertAfter(
@@ -1335,21 +1367,12 @@ const vtls_core_impl = struct {
         origin: ?*CurlPeer,
         peer: ?*CurlPeer,
     ) CURLcode {
-        var cf: ?*CurlCfilter = null;
-        var result = Curl_cf_ssl_create(&cf, data, cf_at.conn);
-        if (result == CURLE_OK) {
-            if (c_ext.Curl_vtls_acc_conn_ssl_filter_config(cf_at.conn, false)) |cfg| {
-                result = cfSslPeerInit(cf.?, origin, peer, cfg);
-            } else {
-                result = CURLE_FAILED_INIT;
-            }
-        }
-        if (result == CURLE_OK) {
-            c_ext.Curl_conn_cf_insert_after(cf_at, cf.?);
-        } else if (cf != null) {
-            c_ext.Curl_conn_cf_discard_chain(&cf, data);
-        }
-        return result;
+        const cf = cfSslInsertAfterInner(cf_at, data, origin, peer, false) catch |err| switch (err) {
+            error.OutOfMemory => return CURLE_OUT_OF_MEMORY,
+            error.FailedInit => return CURLE_FAILED_INIT,
+        };
+        c_ext.Curl_conn_cf_insert_after(cf_at, cf);
+        return CURLE_OK;
     }
 
     pub fn Curl_cf_ssl_proxy_create(pcf: *?*CurlCfilter, data: ?*CurlEasy, conn: ?*ConnectData) callconv(.c) CURLcode {
@@ -1357,20 +1380,14 @@ const vtls_core_impl = struct {
         var use_alpn = false;
         c_ext.Curl_vtls_acc_cf_proxy_create_params(data, conn, &wanted, &use_alpn);
 
-        const ctx = cfCtxNew(data, alpnGetSpec(wanted, 0, false, use_alpn)) orelse {
+        pcf.* = createSslCfilterInner(
+            &vtls_impl.Curl_cft_ssl_proxy,
+            alpnGetSpec(wanted, 0, false, use_alpn),
+        ) catch {
             pcf.* = null;
             return CURLE_OUT_OF_MEMORY;
         };
-
-        var cf: ?*CurlCfilter = null;
-        const result = c_ext.Curl_cf_create(&cf, &vtls_impl.Curl_cft_ssl_proxy, ctx);
-        if (result != CURLE_OK) {
-            cfCtxFree(ctx);
-            pcf.* = null;
-        } else {
-            pcf.* = cf;
-        }
-        return result;
+        return CURLE_OK;
     }
 
     pub fn cfSslProxyInsertAfter(
@@ -1378,21 +1395,12 @@ const vtls_core_impl = struct {
         data: ?*CurlEasy,
         peer: ?*CurlPeer,
     ) CURLcode {
-        var cf: ?*CurlCfilter = null;
-        var result = Curl_cf_ssl_proxy_create(&cf, data, cf_at.conn);
-        if (result == CURLE_OK) {
-            if (c_ext.Curl_vtls_acc_conn_ssl_filter_config(cf_at.conn, true)) |cfg| {
-                result = cfSslPeerInit(cf.?, peer, null, cfg);
-            } else {
-                result = CURLE_FAILED_INIT;
-            }
-        }
-        if (result == CURLE_OK) {
-            c_ext.Curl_conn_cf_insert_after(cf_at, cf.?);
-        } else if (cf != null) {
-            c_ext.Curl_conn_cf_discard_chain(&cf, data);
-        }
-        return result;
+        const cf = cfSslInsertAfterInner(cf_at, data, peer, null, true) catch |err| switch (err) {
+            error.OutOfMemory => return CURLE_OUT_OF_MEMORY,
+            error.FailedInit => return CURLE_FAILED_INIT,
+        };
+        c_ext.Curl_conn_cf_insert_after(cf_at, cf);
+        return CURLE_OK;
     }
 
     pub fn Curl_ssl_cfilter_add(
@@ -1420,7 +1428,7 @@ const vtls_core_impl = struct {
     }
 
     fn vtlsShutdownBlocking(cf: *CurlCfilter, data: ?*CurlEasy, send_shutdown: bool, done: *bool) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_OK));
+        const connssl = cf.sslCtx() orelse return CURLE_OK;
         var result: CURLcode = CURLE_OK;
         var loop: c_int = 10;
 
@@ -1501,7 +1509,7 @@ const vtls_core_impl = struct {
 
     pub fn Curl_ssl_cf_get_ssl(cf_opt: ?*CurlCfilter) callconv(.c) ?*const CurlSsl {
         const cf = cf_opt orelse return null;
-        const ctx: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return null));
+        const ctx = cf.sslCtx() orelse return null;
         return ctx.ssl_impl;
     }
 
@@ -1568,10 +1576,7 @@ const vtls_core_impl = struct {
                 c_ext.Curl_failf(data, "ALPN: server selected protocol contains NUL. Refusing to continue.");
                 return CURLE_SSL_CONNECT_ERROR;
             }
-            const dup_raw = mem.malloc(proto_len + 1) orelse return CURLE_OUT_OF_MEMORY;
-            @memcpy(dup_raw[0..proto_len], proto[0..proto_len]);
-            dup_raw[proto_len] = 0;
-            connssl.negotiated_alpn = @ptrCast(dup_raw);
+            connssl.negotiated_alpn = mem.memdup0(proto, proto_len) orelse return CURLE_OUT_OF_MEMORY;
             if (connssl.state == ssl_connection_deferred) {
                 c_ext.Curl_infof(data, "ALPN: condensed to %.*s for early data", @as(c_int, @intCast(proto_len)), proto);
             } else {
@@ -1595,7 +1600,7 @@ const vtls_core_impl = struct {
         do_early_data: *bool,
         early_data_allowed: bool,
     ) callconv(.c) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_FAILED_INIT));
+        const connssl = cf.sslCtx() orelse return CURLE_FAILED_INIT;
         do_early_data.* = false;
 
         if (!early_data_allowed) {
@@ -1625,8 +1630,7 @@ const vtls_core_impl = struct {
             var cf1 = c_ext.Curl_vtls_acc_conn_cfilter(conn, sockindex);
             while (cf1) |cur| : (cf1 = cur.next) {
                 if (cur.cft == cft) {
-                    if (cur.ctx) |raw_ctx| {
-                        const connssl: *SslConnectData = @ptrCast(@alignCast(raw_ctx));
+                    if (cur.sslCtx()) |connssl| {
                         return connssl.session;
                     }
                     break;
@@ -1638,7 +1642,7 @@ const vtls_core_impl = struct {
 
     // Connection filter callbacks
     fn sslCfConnectFinish(cf: *CurlCfilter, data: ?*CurlEasy) void {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return));
+        const connssl = cf.sslCtx() orelse return;
         cf.setConnected(true);
         connssl.state = ssl_connection_complete;
         connssl.connecting_state = ssl_connect_done;
@@ -1652,7 +1656,7 @@ const vtls_core_impl = struct {
     }
 
     fn sslCfConnectDeferred(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_FAILED_INIT));
+        const connssl = cf.sslCtx() orelse return CURLE_FAILED_INIT;
         done.* = true;
         c_ext.Curl_infof(data, "SSL connection is deferred,vroom!");
         if (cf.sockindex == FIRSTSOCKET) {
@@ -1663,7 +1667,7 @@ const vtls_core_impl = struct {
     }
 
     fn sslCfConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_FAILED_INIT));
+        const connssl = cf.sslCtx() orelse return CURLE_FAILED_INIT;
 
         if (cf.isConnected() or connssl.state == ssl_connection_complete) {
             done.* = true;
@@ -1698,7 +1702,7 @@ const vtls_core_impl = struct {
     }
 
     pub fn cfSslConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_FAILED_INIT));
+        const connssl = cf.sslCtx() orelse return CURLE_FAILED_INIT;
         if (cf.isConnected() and connssl.state == ssl_connection_complete) {
             done.* = true;
             return CURLE_OK;
@@ -1719,7 +1723,7 @@ const vtls_core_impl = struct {
     }
 
     pub fn cfSslShutdown(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_OK));
+        const connssl = cf.sslCtx() orelse return CURLE_OK;
         if (cf.isShutdown() or !cf.isConnected() or connssl.state != ssl_connection_complete) {
             done.* = true;
             return CURLE_OK;
@@ -1741,7 +1745,7 @@ const vtls_core_impl = struct {
     }
 
     pub fn cfSslDataPending(cf: *CurlCfilter, data: ?*const CurlEasy) callconv(.c) bool {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return false));
+        const connssl = cf.sslCtx() orelse return false;
         const saved_call_data = connssl.call_data;
         connssl.call_data = @constCast(data);
         defer connssl.call_data = saved_call_data;
@@ -1756,7 +1760,7 @@ const vtls_core_impl = struct {
     }
 
     pub fn cfSslAdjustPollset(cf: *CurlCfilter, data: ?*CurlEasy, ps: ?*EasyPollset) callconv(.c) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_OK));
+        const connssl = cf.sslCtx() orelse return CURLE_OK;
         const saved_call_data = connssl.call_data;
         connssl.call_data = data;
         defer connssl.call_data = saved_call_data;
@@ -1779,7 +1783,7 @@ const vtls_core_impl = struct {
         eos: bool,
         pnwritten: *usize,
     ) callconv(.c) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_FAILED_INIT));
+        const connssl = cf.sslCtx() orelse return CURLE_FAILED_INIT;
         _ = eos;
         pnwritten.* = 0;
         const saved_call_data = connssl.call_data;
@@ -1839,7 +1843,7 @@ const vtls_core_impl = struct {
         len: usize,
         pnread: *usize,
     ) callconv(.c) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_FAILED_INIT));
+        const connssl = cf.sslCtx() orelse return CURLE_FAILED_INIT;
         pnread.* = 0;
         const saved_call_data = connssl.call_data;
         connssl.call_data = data;
@@ -1859,7 +1863,7 @@ const vtls_core_impl = struct {
     }
 
     fn cfSslClose(cf: *CurlCfilter, data: ?*CurlEasy) void {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return));
+        const connssl = cf.sslCtx() orelse return;
         connssl.ssl_impl.close(cf, data);
         connssl.state = ssl_connection_none;
         connssl.connecting_state = ssl_connect_1;
@@ -1890,8 +1894,7 @@ const vtls_core_impl = struct {
     }
 
     pub fn cfSslDestroy(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) void {
-        if (cf.ctx) |raw_ctx| {
-            const ctx: *SslConnectData = @ptrCast(@alignCast(raw_ctx));
+        if (cf.sslCtx()) |ctx| {
             cfSslClose(cf, data);
             Curl_ssl_peer_cleanup(&ctx.peer);
             cfCtxFree(ctx);
@@ -1908,7 +1911,7 @@ const vtls_core_impl = struct {
     ) callconv(.c) CURLcode {
         _ = arg1;
         _ = arg2;
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_OK));
+        const connssl = cf.sslCtx() orelse return CURLE_OK;
         switch (event) {
             CF_CTRL_CONN_INFO_UPDATE => {
                 if (cf.sockindex == FIRSTSOCKET and !Curl_ssl_cf_is_proxy(cf)) {
@@ -1952,7 +1955,7 @@ const vtls_core_impl = struct {
         pres1: ?*c_int,
         pres2: ?*anyopaque,
     ) callconv(.c) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_FAILED_INIT));
+        const connssl = cf.sslCtx() orelse return CURLE_FAILED_INIT;
         switch (query) {
             CF_QUERY_TIMER_APPCONNECT => {
                 if (!Curl_ssl_cf_is_proxy(cf)) {
@@ -2866,6 +2869,15 @@ const schannel_backend = struct {
         ) callconv(.c) ?*anyopaque;
     };
 
+    inline fn cfConnssl(cf: *CurlCfilter) ?*SslConnectData {
+        return cf.sslCtx();
+    }
+
+    inline fn cfBackend(cf: *CurlCfilter) ?*SchannelSslBackendData {
+        const connssl = cf.sslCtx() orelse return null;
+        return connssl.backendAs(SchannelSslBackendData);
+    }
+
     inline fn initSecBuffer(buf: *SecBuffer, buf_type: ULONG, pv: ?*anyopaque, cb: ULONG) void {
         buf.cbBuffer = cb;
         buf.BufferType = buf_type;
@@ -2878,11 +2890,8 @@ const schannel_backend = struct {
         desc.pBuffers = buffers;
     }
 
-    fn schannelMemdup0(src: [*]const u8, len: usize) ?[*:0]u8 {
-        const buf = mem.malloc(len + 1) orelse return null;
-        if (len > 0) @memcpy(buf[0..len], src[0..len]);
-        buf[len] = 0;
-        return @ptrCast(buf);
+    inline fn initSecBufferDesc1(desc: *SecBufferDesc, buffer: *SecBuffer) void {
+        initSecBufferDesc(desc, @ptrCast(buffer), 1);
     }
 
     fn setSslVersionMinMax(enabled_protocols: *DWORD, cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
@@ -3065,13 +3074,7 @@ const schannel_backend = struct {
         thumbprint.* = tp_ptr;
 
         const sp_slice = remainder[0..second_sep];
-        const raw_sp = mem.malloc(sp_slice.len + 1) orelse return CURLE_OUT_OF_MEMORY;
-        const sp_buf: [*]u8 = @ptrCast(raw_sp);
-        if (sp_slice.len > 0) {
-            @memcpy(sp_buf[0..sp_slice.len], sp_slice);
-        }
-        sp_buf[sp_slice.len] = 0;
-        store_path.* = @ptrCast(sp_buf);
+        store_path.* = mem.memdup0(sp_slice.ptr, sp_slice.len) orelse return CURLE_OUT_OF_MEMORY;
 
         return CURLE_OK;
     }
@@ -3091,7 +3094,7 @@ const schannel_backend = struct {
             var cert_store_name: DWORD = 0;
             var cert_store_path: ?[*:0]u8 = null;
             var cert_thumbprint_str: ?[*:0]const u8 = null;
-            var cert_thumbprint_buf: [CERT_THUMBPRINT_STR_LEN + 1]u8 = @splat(0);
+            var cert_thumbprint_buf: [CERT_THUMBPRINT_STR_LEN:0]u8 = @splat(0);
             var cert_store: HCERTSTORE = null;
             var fInCert: ?*anyopaque = null;
             var certdata: ?[*]u8 = null;
@@ -3107,8 +3110,8 @@ const schannel_backend = struct {
                 const cert_path = mem.strdup(clientcert) orelse return CURLE_OUT_OF_MEMORY;
                 result = getCertLocation(cert_path, &cert_store_name, &cert_store_path, &cert_thumbprint_str);
                 if (result == CURLE_OK and cert_thumbprint_str != null) {
-                    @memcpy(cert_thumbprint_buf[0 .. CERT_THUMBPRINT_STR_LEN + 1], cert_thumbprint_str.?[0 .. CERT_THUMBPRINT_STR_LEN + 1]);
-                    cert_thumbprint_str = @ptrCast(&cert_thumbprint_buf);
+                    @memcpy(&cert_thumbprint_buf, cert_thumbprint_str.?[0..CERT_THUMBPRINT_STR_LEN]);
+                    cert_thumbprint_str = &cert_thumbprint_buf;
                 }
                 mem.free(cert_path);
                 if (result != CURLE_OK and clientcert[0] != 0) {
@@ -3157,9 +3160,7 @@ const schannel_backend = struct {
                         continue_reading = (win_ext.fseek(f, 0, SEEK_SET) == 0);
                     }
                     if (continue_reading and certsize < CURL_MAX_INPUT_LENGTH) {
-                        if (mem.malloc(certsize + 1)) |raw_cd| {
-                            certdata = @ptrCast(raw_cd);
-                        }
+                        certdata = mem.allocMany(u8, certsize + 1);
                     }
                     if (certdata == null or win_ext.fread(certdata.?, certsize, 1, f) != 1) {
                         continue_reading = false;
@@ -3181,8 +3182,7 @@ const schannel_backend = struct {
                 };
 
                 const pwd_len: usize = if (sslc.key_passwd) |kp| std.mem.len(kp) else 0;
-                if (mem.malloc(@sizeOf(u16) * (pwd_len + 1))) |raw_pw| {
-                    const pszPassword: [*]u16 = @ptrCast(@alignCast(raw_pw));
+                if (mem.allocMany(u16, pwd_len + 1)) |pszPassword| {
                     var str_w_len: c_int = 0;
                     if (pwd_len > 0) {
                         str_w_len = win_ext.MultiByteToWideChar(
@@ -3194,19 +3194,19 @@ const schannel_backend = struct {
                             @intCast(pwd_len + 1),
                         );
                     }
-                    if (str_w_len >= 0 and @as(usize, @intCast(str_w_len)) <= pwd_len) {
-                        pszPassword[@intCast(str_w_len)] = 0;
-                    } else {
-                        pszPassword[0] = 0;
-                    }
+                    const term_idx: usize = if (str_w_len >= 0 and @as(usize, @intCast(str_w_len)) <= pwd_len)
+                        @intCast(str_w_len)
+                    else
+                        0;
+                    pszPassword[term_idx] = 0;
 
                     cert_store = win_ext.PFXImportCertStore(
                         &datablob,
-                        @ptrCast(pszPassword),
+                        pszPassword[0..term_idx :0].ptr,
                         PKCS12_NO_PERSIST_KEY,
                     );
-                    mem.secureZero(@ptrCast(pszPassword), @sizeOf(u16) * (pwd_len + 1));
-                    mem.freeSized(raw_pw, @sizeOf(u16) * (pwd_len + 1));
+                    mem.secureZero(pszPassword, @sizeOf(u16) * (pwd_len + 1));
+                    mem.freeSized(pszPassword, @sizeOf(u16) * (pwd_len + 1));
                 }
 
                 if (!blob) {
@@ -3439,9 +3439,7 @@ const schannel_backend = struct {
         return CURLE_OK;
     }
 
-    fn schannelAcquireCredentialHandle(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-        const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+    fn schannelAcquireCredentialHandle(cf: *CurlCfilter, data: ?*CurlEasy, backend: *SchannelSslBackendData) CURLcode {
         const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
 
         var client_cert: ?*const CERT_CONTEXT = null;
@@ -3505,50 +3503,78 @@ const schannel_backend = struct {
 
         var result = getClientCert(cf, data, &client_cert_store, &client_cert);
         if (result != CURLE_OK) return result;
+        defer if (client_cert) |cc| {
+            _ = win_ext.CertFreeCertificateContext(cc);
+        };
 
-        const raw_cred = mem.calloc(1, @sizeOf(CurlSchannelCred)) orelse {
+        const cred = mem.create(CurlSchannelCred) orelse {
             c_ext.Curl_failf(data, "schannel: unable to allocate memory");
-            if (client_cert) |cc| _ = win_ext.CertFreeCertificateContext(cc);
             if (client_cert_store) |cs| _ = win_ext.CertCloseStore(cs, 0);
             return CURLE_OUT_OF_MEMORY;
         };
-        const cred: *CurlSchannelCred = @ptrCast(@alignCast(raw_cred));
         cred.refcount = 1;
         cred.client_cert_store = client_cert_store;
         backend.cred = cred;
 
         result = acquireSspiHandle(cf, data, backend, client_cert, flags, enabled_protocols);
-
-        if (client_cert) |cc| {
-            _ = win_ext.CertFreeCertificateContext(cc);
-        }
-
         return result;
     }
 
     fn schannelSessionFree(ptr: ?*anyopaque) callconv(.c) void {
-        const cred_opt: ?*CurlSchannelCred = if (ptr) |p| @ptrCast(@alignCast(p)) else null;
-        if (cred_opt) |cred| {
-            cred.refcount -= 1;
-            if (cred.refcount == 0) {
-                if (win_ext.Curl_pSecFn) |sec_fn| {
-                    _ = sec_fn.FreeCredentialsHandle(&cred.cred_handle);
-                }
-                if (cred.sni_hostname) |sni| {
-                    mem.free(sni);
-                }
-                if (cred.client_cert_store) |cs| {
-                    _ = win_ext.CertCloseStore(cs, 0);
-                    cred.client_cert_store = null;
-                }
-                mem.freeSized(cred, @sizeOf(CurlSchannelCred));
+        const cred: *CurlSchannelCred = @ptrCast(@alignCast(ptr orelse return));
+        cred.refcount -= 1;
+        if (cred.refcount == 0) {
+            if (win_ext.Curl_pSecFn) |sec_fn| {
+                _ = sec_fn.FreeCredentialsHandle(&cred.cred_handle);
             }
+            if (cred.sni_hostname) |sni| {
+                mem.free(sni);
+            }
+            if (cred.client_cert_store) |cs| {
+                _ = win_ext.CertCloseStore(cs, 0);
+                cred.client_cert_store = null;
+            }
+            mem.destroy(cred);
         }
     }
 
-    fn schannelConnectStep1(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-        const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+    fn createSchannelCtxtInner(
+        backend: *SchannelSslBackendData,
+        sec_fn: *SecurityFunctionTableA,
+        inbuf_desc: ?*SecBufferDesc,
+        outbuf_desc: *SecBufferDesc,
+        sspi_status_out: *SECURITY_STATUS,
+    ) error{ OutOfMemory, HandshakeFailed }!*CurlSchannelCtxt {
+        const ctxt = mem.create(CurlSchannelCtxt) orelse return error.OutOfMemory;
+        errdefer mem.destroy(ctxt);
+
+        const sspi_status = sec_fn.InitializeSecurityContextA(
+            &backend.cred.?.cred_handle,
+            null,
+            backend.cred.?.sni_hostname,
+            backend.req_flags,
+            0,
+            0,
+            inbuf_desc,
+            0,
+            &ctxt.ctxt_handle,
+            outbuf_desc,
+            &backend.ret_flags,
+            null,
+        );
+        sspi_status_out.* = sspi_status;
+        if (sspi_status != SEC_I_CONTINUE_NEEDED) {
+            return error.HandshakeFailed;
+        }
+        return ctxt;
+    }
+
+    fn schannelConnectStep1(
+        cf: *CurlCfilter,
+        data: ?*CurlEasy,
+        connssl: *SslConnectData,
+        backend: *SchannelSslBackendData,
+    ) CURLcode {
         const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
         const sec_fn = win_ext.Curl_pSecFn orelse return CURLE_SSL_CONNECT_ERROR;
 
@@ -3588,7 +3614,7 @@ const schannel_backend = struct {
         }
 
         if (backend.cred == null) {
-            result = schannelAcquireCredentialHandle(cf, data);
+            result = schannelAcquireCredentialHandle(cf, data, backend);
             if (result != CURLE_OK or backend.cred == null) return result;
 
             const snihost: ?[*:0]const u8 = connssl.peer.sni orelse connssl.peer.origin.?.hostname;
@@ -3627,17 +3653,17 @@ const schannel_backend = struct {
                 @memcpy(alpn_buffer[10 .. 10 + proto_len], proto.data[0..proto_len]);
             }
             initSecBuffer(&inbuf, SECBUFFER_APPLICATION_PROTOCOLS, &alpn_buffer, @intCast(10 + proto_len));
-            initSecBufferDesc(&inbuf_desc, @ptrCast(&inbuf), 1);
+            initSecBufferDesc1(&inbuf_desc, &inbuf);
 
             _ = alpnToProtoStr(&proto, connssl.alpn);
-            c_ext.Curl_infof(data, "ALPN: curl offers %s", @as([*:0]const u8, @ptrCast(&proto.data)));
+            c_ext.Curl_infof(data, "ALPN: curl offers %s", proto.cStr());
         } else {
             initSecBuffer(&inbuf, SECBUFFER_EMPTY, null, 0);
-            initSecBufferDesc(&inbuf_desc, @ptrCast(&inbuf), 1);
+            initSecBufferDesc1(&inbuf_desc, &inbuf);
         }
 
         initSecBuffer(&outbuf, SECBUFFER_EMPTY, null, 0);
-        initSecBufferDesc(&outbuf_desc, @ptrCast(&outbuf), 1);
+        initSecBufferDesc1(&outbuf_desc, &outbuf);
 
         backend.req_flags = ISC_REQ_SEQUENCE_DETECT |
             ISC_REQ_REPLAY_DETECT |
@@ -3646,58 +3672,49 @@ const schannel_backend = struct {
             ISC_REQ_STREAM |
             (if (!conn_config.auto_client_cert()) ISC_REQ_USE_SUPPLIED_CREDS else 0);
 
-        const raw_ctxt = mem.calloc(1, @sizeOf(CurlSchannelCtxt)) orelse {
-            c_ext.Curl_failf(data, "schannel: unable to allocate memory");
-            return CURLE_OUT_OF_MEMORY;
-        };
-        backend.ctxt = @ptrCast(@alignCast(raw_ctxt));
-
-        const sspi_status = sec_fn.InitializeSecurityContextA(
-            &backend.cred.?.cred_handle,
-            null,
-            backend.cred.?.sni_hostname,
-            backend.req_flags,
-            0,
-            0,
+        var sspi_status: SECURITY_STATUS = SEC_E_OK;
+        backend.ctxt = createSchannelCtxtInner(
+            backend,
+            sec_fn,
             if (backend.use_alpn()) &inbuf_desc else null,
-            0,
-            &backend.ctxt.?.ctxt_handle,
             &outbuf_desc,
-            &backend.ret_flags,
-            null,
-        );
-
-        if (sspi_status != SEC_I_CONTINUE_NEEDED) {
-            var buffer: [STRERROR_LEN]u8 = undefined;
-            mem.free(backend.ctxt);
-            backend.ctxt = null;
-            switch (sspi_status) {
-                SEC_E_INSUFFICIENT_MEMORY => {
-                    c_ext.Curl_failf(
-                        data,
-                        "schannel: initial InitializeSecurityContext failed: %s",
-                        win_ext.Curl_sspi_strerror(sspi_status, &buffer, buffer.len),
-                    );
-                    return CURLE_OUT_OF_MEMORY;
-                },
-                SEC_E_WRONG_PRINCIPAL => {
-                    c_ext.Curl_failf(
-                        data,
-                        "schannel: SNI or certificate check failed: %s",
-                        win_ext.Curl_sspi_strerror(sspi_status, &buffer, buffer.len),
-                    );
-                    return CURLE_PEER_FAILED_VERIFICATION;
-                },
-                else => {
-                    c_ext.Curl_failf(
-                        data,
-                        "schannel: initial InitializeSecurityContext failed: %s",
-                        win_ext.Curl_sspi_strerror(sspi_status, &buffer, buffer.len),
-                    );
-                    return CURLE_SSL_CONNECT_ERROR;
-                },
-            }
-        }
+            &sspi_status,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => {
+                c_ext.Curl_failf(data, "schannel: unable to allocate memory");
+                return CURLE_OUT_OF_MEMORY;
+            },
+            error.HandshakeFailed => {
+                var buffer: [STRERROR_LEN]u8 = undefined;
+                backend.ctxt = null;
+                switch (sspi_status) {
+                    SEC_E_INSUFFICIENT_MEMORY => {
+                        c_ext.Curl_failf(
+                            data,
+                            "schannel: initial InitializeSecurityContext failed: %s",
+                            win_ext.Curl_sspi_strerror(sspi_status, &buffer, buffer.len),
+                        );
+                        return CURLE_OUT_OF_MEMORY;
+                    },
+                    SEC_E_WRONG_PRINCIPAL => {
+                        c_ext.Curl_failf(
+                            data,
+                            "schannel: SNI or certificate check failed: %s",
+                            win_ext.Curl_sspi_strerror(sspi_status, &buffer, buffer.len),
+                        );
+                        return CURLE_PEER_FAILED_VERIFICATION;
+                    },
+                    else => {
+                        c_ext.Curl_failf(
+                            data,
+                            "schannel: initial InitializeSecurityContext failed: %s",
+                            win_ext.Curl_sspi_strerror(sspi_status, &buffer, buffer.len),
+                        );
+                        return CURLE_SSL_CONNECT_ERROR;
+                    },
+                }
+            },
+        };
 
         var written: usize = 0;
         result = c_ext.Curl_conn_cf_send(
@@ -3771,10 +3788,12 @@ const schannel_backend = struct {
         }
     }
 
-    fn schannelPkpPinPeerPubkey(cf: *CurlCfilter, data: ?*CurlEasy, pinnedpubkey: ?[*:0]const u8) CURLcode {
+    fn schannelPkpPinPeerPubkey(
+        backend: *SchannelSslBackendData,
+        data: ?*CurlEasy,
+        pinnedpubkey: ?[*:0]const u8,
+    ) CURLcode {
         const pinned = pinnedpubkey orelse return CURLE_OK;
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_PINNEDPUBKEYNOTMATCH));
-        const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_PINNEDPUBKEYNOTMATCH));
         const sec_fn = win_ext.Curl_pSecFn orelse return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
 
         var pCertContextServer: ?*CERT_CONTEXT = null;
@@ -3784,7 +3803,7 @@ const schannel_backend = struct {
             const sspi_status = sec_fn.QueryContextAttributesA(
                 &backend.ctxt.?.ctxt_handle,
                 SECPKG_ATTR_REMOTE_CERT_CONTEXT,
-                @ptrCast(&pCertContextServer),
+                mem.toRawPtr(&pCertContextServer).?,
             );
             if (sspi_status != SEC_E_OK or pCertContextServer == null) {
                 var buffer: [STRERROR_LEN]u8 = undefined;
@@ -3842,11 +3861,10 @@ const schannel_backend = struct {
         if (size < CURL_SCHANNEL_BUFFER_FREE_SIZE or encdata.length < min_length) {
             var length = encdata.offset + CURL_SCHANNEL_BUFFER_FREE_SIZE;
             if (length < min_length) length = min_length;
-            const raw = mem.realloc(encdata.buffer, length) orelse {
+            encdata.buffer = mem.reallocMany(u8, encdata.buffer, length) orelse {
                 c_ext.Curl_failf(data, "schannel: unable to re-allocate memory");
                 return CURLE_OUT_OF_MEMORY;
             };
-            encdata.buffer = @ptrCast(raw);
             encdata.length = length;
         }
         return CURLE_OK;
@@ -3858,19 +3876,21 @@ const schannel_backend = struct {
         if (decdata.length - decdata.offset < size or decdata.length < len) {
             var length = decdata.offset + size;
             if (length < len) length = len;
-            const raw = mem.realloc(decdata.buffer, length) orelse {
+            decdata.buffer = mem.reallocMany(u8, decdata.buffer, length) orelse {
                 c_ext.Curl_failf(data, "schannel: unable to re-allocate memory");
                 return CURLE_OUT_OF_MEMORY;
             };
-            decdata.buffer = @ptrCast(raw);
             decdata.length = length;
         }
         return CURLE_OK;
     }
 
-    fn schannelConnectStep2(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-        const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+    fn schannelConnectStep2(
+        cf: *CurlCfilter,
+        data: ?*CurlEasy,
+        connssl: *SslConnectData,
+        backend: *SchannelSslBackendData,
+    ) CURLcode {
         const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
         const sec_fn = win_ext.Curl_pSecFn orelse return CURLE_SSL_CONNECT_ERROR;
 
@@ -3884,22 +3904,20 @@ const schannel_backend = struct {
         if (backend.decdata.buffer == null) {
             backend.decdata.offset = 0;
             backend.decdata.length = CURL_SCHANNEL_BUFFER_INIT_SIZE;
-            const raw = mem.malloc(backend.decdata.length) orelse {
+            backend.decdata.buffer = mem.allocMany(u8, backend.decdata.length) orelse {
                 c_ext.Curl_failf(data, "schannel: unable to allocate memory");
                 return CURLE_OUT_OF_MEMORY;
             };
-            backend.decdata.buffer = @ptrCast(raw);
         }
 
         if (backend.encdata.buffer == null) {
             backend.set_encdata_is_incomplete(false);
             backend.encdata.offset = 0;
             backend.encdata.length = CURL_SCHANNEL_BUFFER_INIT_SIZE;
-            const raw = mem.malloc(backend.encdata.length) orelse {
+            backend.encdata.buffer = mem.allocMany(u8, backend.encdata.length) orelse {
                 c_ext.Curl_failf(data, "schannel: unable to allocate memory");
                 return CURLE_OUT_OF_MEMORY;
             };
-            backend.encdata.buffer = @ptrCast(raw);
         }
 
         var result = ensureEncodingSize(data, &backend.encdata, 0);
@@ -3933,8 +3951,8 @@ const schannel_backend = struct {
 
             var inbuf: [2]SecBuffer = undefined;
             var inbuf_desc: SecBufferDesc = undefined;
-            const dup_buf = schannelMemdup0(backend.encdata.buffer.?, backend.encdata.offset);
-            initSecBuffer(&inbuf[0], SECBUFFER_TOKEN, if (dup_buf) |db| @ptrCast(db) else null, @intCast(backend.encdata.offset));
+            const dup_buf = mem.memdup0(backend.encdata.buffer.?, backend.encdata.offset);
+            initSecBuffer(&inbuf[0], SECBUFFER_TOKEN, dup_buf, @intCast(backend.encdata.offset));
             initSecBuffer(&inbuf[1], SECBUFFER_EMPTY, null, 0);
             initSecBufferDesc(&inbuf_desc, &inbuf, 2);
 
@@ -4054,7 +4072,7 @@ const schannel_backend = struct {
         }
 
         if (c_ext.Curl_vtls_acc_pinned_pubkey(data, vtls_impl.Curl_ssl_cf_is_proxy(cf))) |pubkey_ptr| {
-            result = schannelPkpPinPeerPubkey(cf, data, pubkey_ptr);
+            result = schannelPkpPinPeerPubkey(backend, data, pubkey_ptr);
             if (result != CURLE_OK) {
                 c_ext.Curl_failf(data, "SSL: public key does not match pinned public key");
                 return result;
@@ -4079,9 +4097,12 @@ const schannel_backend = struct {
             ctx.cbCertEncoded > 0;
     }
 
-    const ReadCrtFunc = *const fn (ccert_context: *const CERT_CONTEXT, reverse_order: bool, arg: *anyopaque) bool;
-
-    fn traverseCertStore(context: *const CERT_CONTEXT, func: ReadCrtFunc, arg: *anyopaque) void {
+    fn traverseCertStore(
+        comptime ArgPtr: type,
+        context: *const CERT_CONTEXT,
+        func: *const fn (ccert_context: *const CERT_CONTEXT, reverse_order: bool, arg: ArgPtr) bool,
+        arg: ArgPtr,
+    ) void {
         var current_context: ?*const CERT_CONTEXT = null;
         var should_continue = true;
         var first = true;
@@ -4100,9 +4121,8 @@ const schannel_backend = struct {
         }
     }
 
-    fn certCounterCallback(ccert_context: *const CERT_CONTEXT, reverse_order: bool, certs_count_raw: *anyopaque) bool {
+    fn certCounterCallback(ccert_context: *const CERT_CONTEXT, reverse_order: bool, certs_count: *c_int) bool {
         _ = reverse_order;
-        const certs_count: *c_int = @ptrCast(@alignCast(certs_count_raw));
         if (validCertEncoding(ccert_context)) {
             certs_count.* += 1;
         }
@@ -4119,8 +4139,7 @@ const schannel_backend = struct {
         certs_count: c_int,
     };
 
-    fn addCertToCertinfo(ccert_context: *const CERT_CONTEXT, reverse_order: bool, raw_arg: *anyopaque) bool {
-        const args: *AdderArgs = @ptrCast(@alignCast(raw_arg));
+    fn addCertToCertinfo(ccert_context: *const CERT_CONTEXT, reverse_order: bool, args: *AdderArgs) bool {
         args.result = CURLE_OK;
         if (validCertEncoding(ccert_context)) {
             const insert_index: c_int = if (reverse_order) (args.certs_count - 1) - args.idx else args.idx;
@@ -4131,7 +4150,7 @@ const schannel_backend = struct {
                 pb,
                 pb + ccert_context.cbCertEncoded,
                 true,
-                @ptrCast(&vtls_impl.Curl_ssl_push_certinfo_len),
+                &vtls_impl.Curl_ssl_push_certinfo_len,
             );
             args.idx += 1;
         }
@@ -4147,9 +4166,12 @@ const schannel_backend = struct {
         return false;
     }
 
-    fn schannelConnectStep3(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-        const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+    fn schannelConnectStep3(
+        cf: *CurlCfilter,
+        data: ?*CurlEasy,
+        connssl: *SslConnectData,
+        backend: *SchannelSslBackendData,
+    ) CURLcode {
         const sec_fn = win_ext.Curl_pSecFn orelse return CURLE_SSL_CONNECT_ERROR;
 
         if (backend.cred == null) {
@@ -4180,7 +4202,7 @@ const schannel_backend = struct {
             const sspi_status = sec_fn.QueryContextAttributesA(
                 &backend.ctxt.?.ctxt_handle,
                 SECPKG_ATTR_APPLICATION_PROTOCOL,
-                @ptrCast(&alpn_result),
+                &alpn_result,
             );
             if (sspi_status != SEC_E_OK) {
                 c_ext.Curl_failf(data, "schannel: failed to retrieve ALPN result");
@@ -4238,14 +4260,14 @@ const schannel_backend = struct {
             const sspi_status = sec_fn.QueryContextAttributesA(
                 &backend.ctxt.?.ctxt_handle,
                 SECPKG_ATTR_REMOTE_CERT_CONTEXT,
-                @ptrCast(&ccert_context),
+                mem.toRawPtr(&ccert_context).?,
             );
             if (sspi_status != SEC_E_OK or ccert_context == null) {
                 c_ext.Curl_failf(data, "schannel: failed to retrieve remote cert context");
                 return CURLE_PEER_FAILED_VERIFICATION;
             }
 
-            traverseCertStore(ccert_context.?, certCounterCallback, @ptrCast(&certs_count));
+            traverseCertStore(*c_int, ccert_context.?, certCounterCallback, &certs_count);
             if (certs_count > MAX_ALLOWED_CERT_AMOUNT) {
                 c_ext.Curl_failf(
                     data,
@@ -4265,7 +4287,7 @@ const schannel_backend = struct {
                     .certs_count = certs_count,
                     .result = CURLE_OK,
                 };
-                traverseCertStore(ccert_context.?, addCertToCertinfo, @ptrCast(&args));
+                traverseCertStore(*AdderArgs, ccert_context.?, addCertToCertinfo, &args);
                 result = args.result;
             }
             _ = win_ext.CertFreeCertificateContext(ccert_context);
@@ -4277,32 +4299,32 @@ const schannel_backend = struct {
     }
 
     fn schannelConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
+        const connssl = cfConnssl(cf) orelse return CURLE_SSL_CONNECT_ERROR;
         if (connssl.state == ssl_connection_complete) {
             done.* = true;
             return CURLE_OK;
         }
         done.* = false;
 
+        const backend = connssl.backendAs(SchannelSslBackendData) orelse return CURLE_SSL_CONNECT_ERROR;
         if (connssl.connecting_state == ssl_connect_1) {
-            const rc = schannelConnectStep1(cf, data);
+            const rc = schannelConnectStep1(cf, data, connssl, backend);
             if (rc != CURLE_OK) return rc;
         }
         if (connssl.connecting_state == ssl_connect_2) {
-            const rc = schannelConnectStep2(cf, data);
+            const rc = schannelConnectStep2(cf, data, connssl, backend);
             if (rc != CURLE_OK) return rc;
         }
         if (connssl.connecting_state == ssl_connect_3) {
-            const rc = schannelConnectStep3(cf, data);
+            const rc = schannelConnectStep3(cf, data, connssl, backend);
             if (rc != CURLE_OK) return rc;
         }
         if (connssl.connecting_state == ssl_connect_done) {
-            const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
             const sec_fn = win_ext.Curl_pSecFn orelse return CURLE_SSL_CONNECT_ERROR;
             if (sec_fn.QueryContextAttributesA(
                 &backend.ctxt.?.ctxt_handle,
                 SECPKG_ATTR_STREAM_SIZES,
-                @ptrCast(&backend.stream_sizes),
+                &backend.stream_sizes,
             ) != SEC_E_OK) {
                 c_ext.Curl_failf(data, "schannel: failed getting stream sizes");
                 return CURLE_SSL_CONNECT_ERROR;
@@ -4326,8 +4348,8 @@ const schannel_backend = struct {
         data: ?*CurlEasy,
         caller: SchannelRenegotiateCaller,
     ) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-        const backend_opt: ?*SchannelSslBackendData = if (connssl.backend) |b| @ptrCast(@alignCast(b)) else null;
+        const connssl = cfConnssl(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+        const backend_opt = connssl.backendAs(SchannelSslBackendData);
         if (backend_opt == null or !backend_opt.?.recv_renegotiating()) {
             c_ext.Curl_failf(data, "schannel: unexpected call to schannel_recv_renegotiate");
             return CURLE_SSL_CONNECT_ERROR;
@@ -4452,8 +4474,7 @@ const schannel_backend = struct {
         len_in: usize,
         pnwritten: *usize,
     ) callconv(.c) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SEND_ERROR));
-        const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SEND_ERROR));
+        const backend = cfBackend(cf) orelse return CURLE_SEND_ERROR;
         const sec_fn = win_ext.Curl_pSecFn orelse return CURLE_SEND_ERROR;
 
         pnwritten.* = 0;
@@ -4471,8 +4492,7 @@ const schannel_backend = struct {
         const data_len: usize = @as(usize, backend.stream_sizes.cbHeader) + len + @as(usize, backend.stream_sizes.cbTrailer);
         var ptr: [*]u8 = undefined;
         if (data_len > backend.send_buffer_len) {
-            const raw = mem.realloc(backend.send_buffer, data_len) orelse return CURLE_OUT_OF_MEMORY;
-            ptr = @ptrCast(raw);
+            ptr = mem.reallocMany(u8, backend.send_buffer, data_len) orelse return CURLE_OUT_OF_MEMORY;
             backend.send_buffer = ptr;
             backend.send_buffer_len = data_len;
         } else {
@@ -4481,16 +4501,16 @@ const schannel_backend = struct {
 
         var outbuf: [4]SecBuffer = undefined;
         var outbuf_desc: SecBufferDesc = undefined;
+        const payload_dst = ptr + backend.stream_sizes.cbHeader;
         initSecBuffer(&outbuf[0], SECBUFFER_STREAM_HEADER, ptr, backend.stream_sizes.cbHeader);
-        initSecBuffer(&outbuf[1], SECBUFFER_DATA, ptr + backend.stream_sizes.cbHeader, @intCast(len));
-        initSecBuffer(&outbuf[2], SECBUFFER_STREAM_TRAILER, ptr + backend.stream_sizes.cbHeader + len, backend.stream_sizes.cbTrailer);
+        initSecBuffer(&outbuf[1], SECBUFFER_DATA, payload_dst, @intCast(len));
+        initSecBuffer(&outbuf[2], SECBUFFER_STREAM_TRAILER, payload_dst + len, backend.stream_sizes.cbTrailer);
         initSecBuffer(&outbuf[3], SECBUFFER_EMPTY, null, 0);
         initSecBufferDesc(&outbuf_desc, &outbuf, 4);
 
         if (buf_opt != null and len > 0) {
             const src: [*]const u8 = @ptrCast(buf_opt.?);
-            const dst: [*]u8 = @ptrCast(outbuf[1].pvBuffer.?);
-            @memcpy(dst[0..len], src[0..len]);
+            @memcpy(payload_dst[0..len], src[0..len]);
         }
 
         const sspi_status = sec_fn.EncryptMessage(&backend.ctxt.?.ctxt_handle, 0, &outbuf_desc, 0);
@@ -4555,8 +4575,7 @@ const schannel_backend = struct {
         len: usize,
         pnread: *usize,
     ) callconv(.c) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_RECV_ERROR));
-        const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_RECV_ERROR));
+        const backend = cfBackend(cf) orelse return CURLE_RECV_ERROR;
         const sec_fn = win_ext.Curl_pSecFn orelse return CURLE_RECV_ERROR;
 
         pnread.* = 0;
@@ -4722,8 +4741,7 @@ const schannel_backend = struct {
 
     fn schannelDataPending(cf: *CurlCfilter, data: ?*const CurlEasy) callconv(.c) bool {
         _ = data;
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return false));
-        const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return false));
+        const backend = cfBackend(cf) orelse return false;
         if (backend.ctxt != null) {
             return backend.decdata.offset > 0 or
                 (backend.encdata.offset > 0 and !backend.encdata_is_incomplete()) or
@@ -4741,8 +4759,8 @@ const schannel_backend = struct {
             return CURLE_OK;
         }
 
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_OK));
-        const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_OK));
+        const connssl = cfConnssl(cf) orelse return CURLE_OK;
+        const backend = connssl.backendAs(SchannelSslBackendData) orelse return CURLE_OK;
         const sec_fn = win_ext.Curl_pSecFn orelse return CURLE_SEND_ERROR;
         var result: CURLcode = CURLE_OK;
 
@@ -4772,7 +4790,7 @@ const schannel_backend = struct {
                 var dwshut: DWORD = SCHANNEL_SHUTDOWN;
 
                 initSecBuffer(&Buffer, SECBUFFER_TOKEN, &dwshut, @sizeOf(DWORD));
-                initSecBufferDesc(&BuffDesc, @ptrCast(&Buffer), 1);
+                initSecBufferDesc1(&BuffDesc, &Buffer);
 
                 var sspi_status = sec_fn.ApplyControlToken(&backend.ctxt.?.ctxt_handle, &BuffDesc);
                 if (sspi_status != SEC_E_OK) {
@@ -4787,7 +4805,7 @@ const schannel_backend = struct {
                 }
 
                 initSecBuffer(&outbuf, SECBUFFER_EMPTY, null, 0);
-                initSecBufferDesc(&outbuf_desc, @ptrCast(&outbuf), 1);
+                initSecBufferDesc1(&outbuf_desc, &outbuf);
 
                 sspi_status = sec_fn.InitializeSecurityContextA(
                     &backend.cred.?.cred_handle,
@@ -4887,8 +4905,7 @@ const schannel_backend = struct {
     }
 
     fn schannelClose(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) void {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return));
-        const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return));
+        const backend = cfBackend(cf) orelse return;
 
         if (backend.shutdown_token.pvBuffer) |pv| {
             if (win_ext.Curl_pSecFn) |sec_fn| {
@@ -4899,13 +4916,13 @@ const schannel_backend = struct {
         backend.shutdown_offset = 0;
 
         if (backend.ctxt) |ctxt| {
-            if (win_ext.Curl_vtls_acc_conn_get_ssl_context(cf.conn) == @as(?*anyopaque, @ptrCast(&ctxt.ctxt_handle))) {
+            if (win_ext.Curl_vtls_acc_conn_get_ssl_context(cf.conn) == @as(?*anyopaque, &ctxt.ctxt_handle)) {
                 win_ext.Curl_vtls_acc_conn_set_ssl_context(cf.conn, null);
             }
             if (win_ext.Curl_pSecFn) |sec_fn| {
                 _ = sec_fn.DeleteSecurityContext(&ctxt.ctxt_handle);
             }
-            mem.freeSized(ctxt, @sizeOf(CurlSchannelCtxt));
+            mem.destroy(ctxt);
             backend.ctxt = null;
         }
 
@@ -4969,7 +4986,7 @@ const schannel_backend = struct {
 
     fn schannelGetInternals(connssl: *SslConnectData, info: c_uint) callconv(.c) ?*anyopaque {
         _ = info;
-        const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return null));
+        const backend = connssl.backendAs(SchannelSslBackendData) orelse return null;
         if (backend.ctxt) |ctxt| {
             return &ctxt.ctxt_handle;
         }
@@ -5057,23 +5074,25 @@ const schannel_backend = struct {
         if (share.CAfile) |caf| {
             mem.free(caf);
         }
-        mem.free(share);
+        mem.destroy(share);
     }
 
-    pub fn Curl_schannel_set_cached_cert_store(cf: *CurlCfilter, data: ?*CurlEasy, cert_store: HCERTSTORE) callconv(.c) bool {
-        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return false;
-        const proto_hash = win_ext.Curl_vtls_acc_multi_proto_hash(data) orelse return false;
-
+    fn setCachedCertStoreInner(
+        conn_config: *const SslFilterConfig,
+        proto_hash: *anyopaque,
+        cert_store: HCERTSTORE,
+    ) error{ Failed, OutOfMemory }!void {
         var digest: [CURL_SHA256_DIGEST_LENGTH]u8 = undefined;
         var CAfile: ?[*:0]u8 = null;
+        errdefer if (CAfile) |caf| mem.free(caf);
 
         if (conn_config.ca_info_blob) |ca_info_blob| {
             const blob_ptr: [*]const u8 = if (ca_info_blob.data) |d| @ptrCast(d) else (&digest);
             if (schannelSha256sum(blob_ptr, ca_info_blob.len, &digest, CURL_SHA256_DIGEST_LENGTH) != CURLE_OK) {
-                return false;
+                return error.Failed;
             }
         } else if (conn_config.CAfile) |caf| {
-            CAfile = mem.strdup(caf) orelse return false;
+            CAfile = mem.strdup(caf) orelse return error.OutOfMemory;
         }
 
         var share: *SchCertShare = undefined;
@@ -5084,22 +5103,18 @@ const schannel_backend = struct {
         )) |raw_share| {
             share = @ptrCast(@alignCast(raw_share));
         } else {
-            const raw_new = mem.calloc(1, @sizeOf(SchCertShare)) orelse {
-                if (CAfile) |caf| mem.free(caf);
-                return false;
-            };
-            share = @ptrCast(@alignCast(raw_new));
+            const new_share = mem.create(SchCertShare) orelse return error.OutOfMemory;
+            errdefer mem.destroy(new_share);
             if (win_ext.Curl_hash_add2(
                 proto_hash,
                 MPROTO_SCHANNEL_CERT_SHARE_KEY.ptr,
                 MPROTO_SCHANNEL_CERT_SHARE_KEY.len,
-                share,
+                new_share,
                 schannelCertShareFree,
             ) == null) {
-                mem.free(share);
-                if (CAfile) |caf| mem.free(caf);
-                return false;
+                return error.OutOfMemory;
             }
+            share = new_share;
         }
 
         if (share.cert_store) |cs| {
@@ -5119,6 +5134,12 @@ const schannel_backend = struct {
         share.time = curlx_time_net.curlx_now();
         share.cert_store = cert_store;
         share.CAfile = CAfile;
+    }
+
+    pub fn Curl_schannel_set_cached_cert_store(cf: *CurlCfilter, data: ?*CurlEasy, cert_store: HCERTSTORE) callconv(.c) bool {
+        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return false;
+        const proto_hash = win_ext.Curl_vtls_acc_multi_proto_hash(data) orelse return false;
+        setCachedCertStoreInner(conn_config, proto_hash, cert_store) catch return false;
         return true;
     }
 
@@ -5127,12 +5148,11 @@ const schannel_backend = struct {
         var cf = c_ext.Curl_vtls_acc_conn_cfilter(conn, sockindex);
         while (cf) |cur| : (cf = cur.next) {
             if (cur.cft == &vtls_impl.Curl_cft_ssl or cur.cft == &vtls_impl.Curl_cft_ssl_proxy) {
-                const connssl: *SslConnectData = @ptrCast(@alignCast(cur.ctx orelse return CURLE_OK));
-                const backend: *SchannelSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_OK));
+                const backend = cfBackend(cur) orelse return CURLE_OK;
                 if (backend.ctxt) |ctxt| {
                     const sec_fn = win_ext.Curl_pSecFn orelse return CURLE_SSL_CONNECT_ERROR;
                     var bindings: SecPkgContext_Bindings = std.mem.zeroes(SecPkgContext_Bindings);
-                    const st = sec_fn.QueryContextAttributesA(&ctxt.ctxt_handle, SECPKG_ATTR_ENDPOINT_BINDINGS, @ptrCast(&bindings));
+                    const st = sec_fn.QueryContextAttributesA(&ctxt.ctxt_handle, SECPKG_ATTR_ENDPOINT_BINDINGS, &bindings);
                     if (st != SEC_E_OK) return CURLE_SSL_CONNECT_ERROR;
                     defer if (bindings.Bindings) |b| {
                         _ = sec_fn.FreeContextBuffer(b);
@@ -5398,6 +5418,31 @@ pub const openssl_backend = struct {
             if (v) self.flags |= 16 else self.flags &= ~@as(c_uint, 16);
         }
     };
+
+    inline fn cfConnssl(cf: *CurlCfilter) ?*SslConnectData {
+        return cf.sslCtx();
+    }
+
+    inline fn cfBackend(cf: *CurlCfilter) ?*OsslCtx {
+        const connssl = cf.sslCtx() orelse return null;
+        return connssl.backendAs(OsslCtx);
+    }
+
+    inline fn bioGetCf(bio: *BIO) ?*CurlCfilter {
+        return @ptrCast(@alignCast(ossl_ext.BIO_get_data(bio)));
+    }
+
+    inline fn skValueAs(comptime T: type, st: ?*const OPENSSL_STACK, i: c_int) ?*T {
+        return @ptrCast(@alignCast(ossl_ext.OPENSSL_sk_value(st, i)));
+    }
+
+    inline fn bioGetInfo(bio: *BIO, ptr: *?[*]const u8) c_long {
+        return ossl_ext.BIO_ctrl(bio, BIO_CTRL_INFO, 0, mem.toRawPtr(ptr));
+    }
+
+    inline fn sslGetOcspResp(ssl: *SSL, ptr: *?[*]const u8) c_long {
+        return ossl_ext.SSL_ctrl(ssl, SSL_CTRL_GET_TLSEXT_STATUS_REQ_OCSP_RESP, 0, mem.toRawPtr(ptr));
+    }
 
     const PemPasswordCb = *const fn ([*]u8, c_int, c_int, ?*anyopaque) callconv(.c) c_int;
     const KeylogCb = *const fn (*const SSL, [*:0]const u8) callconv(.c) void;
@@ -5668,15 +5713,15 @@ pub const openssl_backend = struct {
         const san_slice = cn[0..cert_len];
         if (std.mem.indexOfScalar(u8, san_slice, 0) != null) return false;
         if (std.mem.indexOfScalar(u8, host, 0) != null) return false;
-        var host_buf: [256]u8 = undefined;
-        if (host.len >= host_buf.len) return false;
+        var host_buf: [255:0]u8 = undefined;
+        if (host.len > host_buf.len) return false;
         @memcpy(host_buf[0..host.len], host);
         host_buf[host.len] = 0;
-        var pat_buf: [256]u8 = undefined;
-        if (cert_len >= pat_buf.len) return false;
+        var pat_buf: [255:0]u8 = undefined;
+        if (cert_len > pat_buf.len) return false;
         @memcpy(pat_buf[0..cert_len], san_slice);
         pat_buf[cert_len] = 0;
-        return vtls_core.Curl_cert_hostcheck(@ptrCast(&pat_buf), cert_len, @ptrCast(&host_buf), host.len);
+        return vtls_core.Curl_cert_hostcheck(&pat_buf, cert_len, &host_buf, host.len);
     }
 
     // Pure helper for IP SAN matching using curlx_inet_pton
@@ -5823,8 +5868,8 @@ pub const openssl_backend = struct {
             },
             BIO_CTRL_FLUSH, BIO_CTRL_DUP => 1,
             BIO_CTRL_EOF => blk: {
-                const cf: *CurlCfilter = @ptrCast(@alignCast(ossl_ext.BIO_get_data(bio) orelse break :blk 0));
-                const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse break :blk 0));
+                const cf = bioGetCf(bio) orelse break :blk 0;
+                const connssl = cfConnssl(cf) orelse break :blk 0;
                 break :blk @intFromBool(connssl.peer_closed());
             },
             else => 0,
@@ -5832,9 +5877,9 @@ pub const openssl_backend = struct {
     }
 
     fn osslBioCfOutWrite(bio: *BIO, buf_opt: ?[*]const u8, blen: c_int) callconv(.c) c_int {
-        const cf: *CurlCfilter = @ptrCast(@alignCast(ossl_ext.BIO_get_data(bio) orelse return -1));
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return -1));
-        const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return -1));
+        const cf = bioGetCf(bio) orelse return -1;
+        const connssl = cfConnssl(cf) orelse return -1;
+        const octx = connssl.backendAs(OsslCtx) orelse return -1;
         const data = connssl.call_data;
         if (blen < 0) return 0;
 
@@ -5852,9 +5897,9 @@ pub const openssl_backend = struct {
     }
 
     fn osslBioCfInRead(bio: *BIO, buf_opt: ?[*]u8, blen: c_int) callconv(.c) c_int {
-        const cf: *CurlCfilter = @ptrCast(@alignCast(ossl_ext.BIO_get_data(bio) orelse return -1));
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return -1));
-        const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return -1));
+        const cf = bioGetCf(bio) orelse return -1;
+        const connssl = cfConnssl(cf) orelse return -1;
+        const octx = connssl.backendAs(OsslCtx) orelse return -1;
         const data = connssl.call_data;
         const buf = buf_opt orelse return 0;
         if (blen <= 0) return 0;
@@ -5929,71 +5974,70 @@ pub const openssl_backend = struct {
         octx.p.set_provider_loaded(false);
     }
 
+    fn osslSetProviderInner(data: ?*CurlEasy, octx: *OsslCtx, iname: [*:0]const u8) !void {
+        const full = std.mem.span(iname);
+        const colon_idx = std.mem.indexOfScalar(u8, full, ':');
+        const prov_len = colon_idx orelse full.len;
+        if (prov_len == 0 or prov_len > 128) return error.BadArgument;
+
+        var name_buf: [128:0]u8 = @splat(0);
+        @memcpy(name_buf[0..prov_len], full[0..prov_len]);
+        name_buf[prov_len] = 0;
+
+        const propq_cstr: ?[*:0]const u8 = if (colon_idx) |ci| full[ci + 1 .. :0].ptr else null;
+
+        if (octx.p.libctx == null) {
+            const libctx = ossl_ext.OSSL_LIB_CTX_new() orelse return error.OutOfMemory;
+            errdefer ossl_ext.OSSL_LIB_CTX_free(libctx);
+            if (propq_cstr) |pq| {
+                octx.p.propq = mem.strdup(pq) orelse return error.OutOfMemory;
+            }
+            octx.p.libctx = libctx;
+        }
+        errdefer osslProviderCleanup(octx);
+
+        _ = ossl_ext.OSSL_LIB_CTX_load_config(octx.p.libctx.?, null);
+
+        if (ossl_ext.OSSL_PROVIDER_available(octx.p.libctx, &name_buf) != 0) {
+            octx.p.set_provider_loaded(true);
+            return;
+        }
+
+        octx.p.provider = ossl_ext.OSSL_PROVIDER_try_load(octx.p.libctx, &name_buf, 1);
+        if (octx.p.provider == null) {
+            var err_buf: [256]u8 = @splat(0);
+            c_ext.Curl_failf(data, "Failed to initialize provider: %s", osslStrerror(ossl_ext.ERR_get_error(), &err_buf, err_buf.len));
+            return error.EngineNotFound;
+        }
+
+        octx.p.baseprov = ossl_ext.OSSL_PROVIDER_try_load(octx.p.libctx, "base", 1);
+        if (octx.p.baseprov == null) {
+            c_ext.Curl_failf(data, "Failed to load base");
+            return error.EngineNotFound;
+        }
+        octx.p.set_provider_loaded(true);
+    }
+
     fn osslSetProvider(data: ?*CurlEasy, octx: *OsslCtx, iname_opt: ?[*:0]const u8) CURLcode {
         const iname = iname_opt orelse {
             osslProviderCleanup(octx);
             return CURLE_OK;
         };
-        const full = iname[0..std.mem.len(iname)];
-        const colon_idx = std.mem.indexOfScalar(u8, full, ':');
-        const prov_len = colon_idx orelse full.len;
-        if (prov_len == 0 or prov_len > 128) return CURLE_BAD_FUNCTION_ARGUMENT;
-
-        var name_buf: [129]u8 = @splat(0);
-        @memcpy(name_buf[0..prov_len], full[0..prov_len]);
-        name_buf[prov_len] = 0;
-
-        const propq_cstr: ?[*:0]const u8 = if (colon_idx) |ci| @ptrCast(iname + ci + 1) else null;
-
-        if (octx.p.libctx == null) {
-            const libctx = ossl_ext.OSSL_LIB_CTX_new() orelse return CURLE_OUT_OF_MEMORY;
-            if (propq_cstr) |pq| {
-                const dup_pq = mem.strdup(pq) orelse {
-                    ossl_ext.OSSL_LIB_CTX_free(libctx);
-                    return CURLE_OUT_OF_MEMORY;
-                };
-                octx.p.propq = dup_pq;
-            }
-            octx.p.libctx = libctx;
-        }
-
-        _ = ossl_ext.OSSL_LIB_CTX_load_config(octx.p.libctx.?, null);
-
-        if (ossl_ext.OSSL_PROVIDER_available(octx.p.libctx, @ptrCast(&name_buf)) != 0) {
-            octx.p.set_provider_loaded(true);
-            return CURLE_OK;
-        }
-
-        octx.p.provider = ossl_ext.OSSL_PROVIDER_try_load(octx.p.libctx, @ptrCast(&name_buf), 1);
-        if (octx.p.provider == null) {
-            var err_buf: [256]u8 = @splat(0);
-            c_ext.Curl_failf(data, "Failed to initialize provider: %s", osslStrerror(ossl_ext.ERR_get_error(), &err_buf, err_buf.len));
-            osslProviderCleanup(octx);
-            return CURLE_SSL_ENGINE_NOTFOUND;
-        }
-
-        octx.p.baseprov = ossl_ext.OSSL_PROVIDER_try_load(octx.p.libctx, "base", 1);
-        if (octx.p.baseprov == null) {
-            osslProviderCleanup(octx);
-            c_ext.Curl_failf(data, "Failed to load base");
-            return CURLE_SSL_ENGINE_NOTFOUND;
-        }
-        octx.p.set_provider_loaded(true);
+        osslSetProviderInner(data, octx, iname) catch |err| return switch (err) {
+            error.BadArgument => CURLE_BAD_FUNCTION_ARGUMENT,
+            error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+            error.EngineNotFound => CURLE_SSL_ENGINE_NOTFOUND,
+        };
         return CURLE_OK;
     }
 
     fn resolveOsslCtxAndSslCtx(cf: *CurlCfilter, arg: ?*anyopaque) struct { octx: ?*OsslCtx, ssl_ctx: ?*SSL_CTX } {
         var octx: ?*OsslCtx = null;
         if (cf.cft == &vtls_impl.Curl_cft_ssl or cf.cft == &vtls_impl.Curl_cft_ssl_proxy) {
-            if (cf.ctx) |ctx_raw| {
-                const connssl: *SslConnectData = @ptrCast(@alignCast(ctx_raw));
-                if (connssl.backend) |b_raw| {
-                    octx = @ptrCast(@alignCast(b_raw));
-                }
-            }
+            octx = cfBackend(cf);
         }
         if (octx) |oc| {
-            if (arg == null or arg == @as(?*anyopaque, @ptrCast(oc))) {
+            if (arg == null or arg == mem.toRawPtr(oc)) {
                 return .{ .octx = oc, .ssl_ctx = oc.ssl_ctx };
             }
             return .{ .octx = oc, .ssl_ctx = @ptrCast(@alignCast(arg.?)) };
@@ -6064,7 +6108,7 @@ pub const openssl_backend = struct {
                 const count = ossl_ext.OPENSSL_sk_num(inf);
                 var i: c_int = 0;
                 while (i < count) : (i += 1) {
-                    const it: *const X509_INFO = @ptrCast(@alignCast(ossl_ext.OPENSSL_sk_value(inf, i) orelse continue));
+                    const it = skValueAs(X509_INFO, inf, i) orelse continue;
                     if (it.x509) |x| {
                         if (ossl_ext.X509_STORE_add_cert(store, x) == 0) {
                             if (verifypeer) {
@@ -6163,7 +6207,7 @@ pub const openssl_backend = struct {
 
             var i: c_int = 0;
             while (i < numalts and !dnsmatched and !ipmatched) : (i += 1) {
-                const check: *const GENERAL_NAME = @ptrCast(@alignCast(ossl_ext.OPENSSL_sk_value(altnames, i) orelse continue));
+                const check = skValueAs(GENERAL_NAME, altnames, i) orelse continue;
                 if (check.type == GEN_DNS and peer.type == SSL_PEER_DNS) {
                     const dns_str = check.d.ia5 orelse continue;
                     const altptr = ossl_ext.ASN1_STRING_get0_data(dns_str);
@@ -6244,7 +6288,7 @@ pub const openssl_backend = struct {
 
     fn pushCertinfo(data: ?*CurlEasy, mem_bio: *BIO, label: [*:0]const u8, num: c_int) CURLcode {
         var ptr: ?[*]const u8 = null;
-        const len = ossl_ext.BIO_ctrl(mem_bio, BIO_CTRL_INFO, 0, @ptrCast(&ptr));
+        const len = bioGetInfo(mem_bio, &ptr);
         const res = if (ptr != null and len >= 0)
             vtls_impl.Curl_ssl_push_certinfo_len(data, num, label, ptr.?, @intCast(len))
         else
@@ -6254,12 +6298,12 @@ pub const openssl_backend = struct {
     }
 
     fn pubkeyShow(data: ?*CurlEasy, mem_bio: *BIO, num: c_int, key_type: [*:0]const u8, name: [*:0]const u8, bn: ?*const BIGNUM) CURLcode {
-        var namebuf: [32]u8 = @splat(0);
-        _ = c_ext.curl_msnprintf(&namebuf, namebuf.len, "%s(%s)", key_type, name);
+        var namebuf: [31:0]u8 = @splat(0);
+        _ = c_ext.curl_msnprintf(&namebuf, namebuf.len + 1, "%s(%s)", key_type, name);
         if (bn) |b| {
             _ = ossl_ext.BN_print(mem_bio, b);
         }
-        return pushCertinfo(data, mem_bio, @ptrCast(&namebuf), num);
+        return pushCertinfo(data, mem_bio, &namebuf, num);
     }
 
     fn dumpX509V3Ext(data: ?*CurlEasy, certnum: c_int, exts_opt: ?*const OPENSSL_STACK) CURLcode {
@@ -6269,15 +6313,15 @@ pub const openssl_backend = struct {
 
         var i: c_int = 0;
         while (i < count) : (i += 1) {
-            const ext: *X509_EXTENSION = @ptrCast(@alignCast(ossl_ext.OPENSSL_sk_value(exts, i) orelse continue));
+            const ext = skValueAs(X509_EXTENSION, exts, i) orelse continue;
             const bio_out = ossl_ext.BIO_new(ossl_ext.BIO_s_mem()) orelse return CURLE_OUT_OF_MEMORY;
             defer _ = ossl_ext.BIO_free(bio_out);
 
-            var namebuf: [128]u8 = @splat(0);
+            var namebuf: [127:0]u8 = @splat(0);
             if (ossl_ext.X509_EXTENSION_get_object(ext)) |obj| {
-                const n = ossl_ext.i2t_ASN1_OBJECT(&namebuf, @intCast(namebuf.len), obj);
-                if (n >= @as(c_int, @intCast(namebuf.len))) {
-                    namebuf[namebuf.len - 1] = 0;
+                const n = ossl_ext.i2t_ASN1_OBJECT(&namebuf, @intCast(namebuf.len + 1), obj);
+                if (n >= @as(c_int, @intCast(namebuf.len + 1))) {
+                    namebuf[namebuf.len] = 0;
                 }
             }
 
@@ -6288,9 +6332,9 @@ pub const openssl_backend = struct {
             }
 
             var ptr: ?[*]const u8 = null;
-            const len = ossl_ext.BIO_ctrl(bio_out, BIO_CTRL_INFO, 0, @ptrCast(&ptr));
+            const len = bioGetInfo(bio_out, &ptr);
             if (ptr != null and len >= 0) {
-                const rc = vtls_impl.Curl_ssl_push_certinfo_len(data, certnum, @ptrCast(&namebuf), ptr.?, @intCast(len));
+                const rc = vtls_impl.Curl_ssl_push_certinfo_len(data, certnum, &namebuf, ptr.?, @intCast(len));
                 if (rc != CURLE_OK) return rc;
             }
         }
@@ -6360,7 +6404,7 @@ pub const openssl_backend = struct {
 
         var i: c_int = 0;
         while (result == CURLE_OK and i < numcerts) : (i += 1) {
-            const x: *X509 = @ptrCast(@alignCast(ossl_ext.OPENSSL_sk_value(sk, i) orelse continue));
+            const x = skValueAs(X509, sk, i) orelse continue;
 
             if (ossl_ext.X509_get_subject_name(x)) |subj| {
                 _ = ossl_ext.X509_NAME_print_ex(mem_bio, subj, 0, XN_FLAG_ONELINE);
@@ -6490,7 +6534,7 @@ pub const openssl_backend = struct {
         pder.* = null;
         pder_len.* = 0;
 
-        const x: *X509 = @ptrCast(@alignCast(ossl_ext.OPENSSL_sk_value(cder.sk, @intCast(cert_idx)) orelse return CURLE_BAD_FUNCTION_ARGUMENT));
+        const x = skValueAs(X509, cder.sk, @intCast(cert_idx)) orelse return CURLE_BAD_FUNCTION_ARGUMENT;
         const der_len_int = ossl_ext.i2d_X509(x, null);
         if (der_len_int <= 0) return CURLE_SSL_CERTPROBLEM;
         const der_len: usize = @intCast(der_len_int);
@@ -6501,7 +6545,7 @@ pub const openssl_backend = struct {
                 cder.buf = null;
                 cder.buf_max = 0;
             }
-            const new_buf: [*]u8 = @ptrCast(mem.calloc(1, der_len) orelse return CURLE_OUT_OF_MEMORY);
+            const new_buf = mem.callocMany(u8, der_len) orelse return CURLE_OUT_OF_MEMORY;
             cder.buf = new_buf;
             cder.buf_max = der_len;
         }
@@ -6528,7 +6572,7 @@ pub const openssl_backend = struct {
         var ocsp_buf: ?[*]const u8 = null;
         var ocsp_len: usize = 0;
         if (conn_config.verifystatus()) {
-            const len = ossl_ext.SSL_ctrl(ssl, SSL_CTRL_GET_TLSEXT_STATUS_REQ_OCSP_RESP, 0, @ptrCast(&ocsp_buf));
+            const len = sslGetOcspResp(ssl, &ocsp_buf);
             if (ocsp_buf != null and len > 0) {
                 ocsp_len = @intCast(len);
             }
@@ -6553,7 +6597,7 @@ pub const openssl_backend = struct {
         const ssl_ctx = octx.ssl_ctx orelse return CURLE_SSL_INVALIDCERTSTATUS;
 
         var p: ?[*]const u8 = null;
-        const len = ossl_ext.SSL_ctrl(ssl, SSL_CTRL_GET_TLSEXT_STATUS_REQ_OCSP_RESP, 0, @ptrCast(&p));
+        const len = sslGetOcspResp(ssl, &p);
         if (p == null or len <= 0) {
             c_ext.Curl_failf(data, "No OCSP response received");
             return CURLE_SSL_INVALIDCERTSTATUS;
@@ -6676,16 +6720,16 @@ pub const openssl_backend = struct {
             return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
         }
         const len: usize = @intCast(len_int);
-        const buff1_raw = mem.malloc(len) orelse return CURLE_OUT_OF_MEMORY;
-        defer mem.free(buff1_raw);
+        const buff1 = mem.allocMany(u8, len) orelse return CURLE_OUT_OF_MEMORY;
+        defer mem.free(buff1);
 
-        var temp: ?[*]u8 = @ptrCast(buff1_raw);
+        var temp: ?[*]u8 = buff1;
         const enc_len = ossl_ext.i2d_X509_PUBKEY(xpubkey, &temp);
         if (enc_len != len_int) {
             c_ext.Curl_failf(data, "SSL: failed retrieving public key from server certificate");
             return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
         }
-        return vtls_impl.Curl_pin_peer_pubkey(data, pinned, @ptrCast(buff1_raw), len);
+        return vtls_impl.Curl_pin_peer_pubkey(data, pinned, buff1, len);
     }
 
     pub fn Curl_ossl_check_peer_cert(cf: *CurlCfilter, data: ?*CurlEasy, octx: *OsslCtx, peer: *SslPeer) callconv(.c) CURLcode {
@@ -6924,6 +6968,31 @@ pub const openssl_backend = struct {
         return CURLE_OK;
     }
 
+    fn encodeAndCloneSessionData(
+        session: *SSL_SESSION,
+        quic_tp: ?[*]u8,
+        quic_tp_len: usize,
+    ) !struct { sess_buf: [*]u8, enc_len: usize, qtp_clone: ?[*]u8 } {
+        const sess_len_int = ossl_ext.i2d_SSL_SESSION(session, null);
+        if (sess_len_int <= 0) return error.OutOfMemory;
+        const sess_len: usize = @intCast(sess_len_int);
+        const sess_buf = mem.allocMany(u8, sess_len) orelse return error.OutOfMemory;
+        errdefer {
+            mem.secureZero(sess_buf, sess_len);
+            mem.freeSized(sess_buf, sess_len);
+        }
+        var sess_ptr: ?[*]u8 = sess_buf;
+        const enc_len_int = ossl_ext.i2d_SSL_SESSION(session, &sess_ptr);
+        if (enc_len_int <= 0 or enc_len_int > sess_len_int) {
+            return error.OutOfMemory;
+        }
+        var qtp_clone: ?[*]u8 = null;
+        if (quic_tp != null and quic_tp_len > 0) {
+            qtp_clone = mem.memdup0(quic_tp.?, quic_tp_len) orelse return error.OutOfMemory;
+        }
+        return .{ .sess_buf = sess_buf, .enc_len = @intCast(enc_len_int), .qtp_clone = qtp_clone };
+    }
+
     pub fn Curl_ossl_add_session(
         cf: *CurlCfilter,
         data: ?*CurlEasy,
@@ -6940,29 +7009,7 @@ pub const openssl_backend = struct {
         if (!conn_config.primary_cache_session()) return CURLE_OK;
         const peer_key = ssl_peer_key orelse return CURLE_OK;
 
-        const sess_len = ossl_ext.i2d_SSL_SESSION(session, null);
-        if (sess_len <= 0) return CURLE_OUT_OF_MEMORY;
-        const sess_buf_raw = mem.malloc(@intCast(sess_len)) orelse return CURLE_OUT_OF_MEMORY;
-        var sess_ptr: ?[*]u8 = @ptrCast(sess_buf_raw);
-        const enc_len = ossl_ext.i2d_SSL_SESSION(session, &sess_ptr);
-        if (enc_len <= 0 or enc_len > sess_len) {
-            mem.secureZero(sess_buf_raw, @intCast(sess_len));
-            mem.freeSized(sess_buf_raw, @intCast(sess_len));
-            return CURLE_OUT_OF_MEMORY;
-        }
-
-        var qtp_clone: ?[*]u8 = null;
-        if (quic_tp != null and quic_tp_len > 0) {
-            const qtp_raw = mem.malloc(quic_tp_len + 1) orelse {
-                mem.secureZero(sess_buf_raw, @intCast(sess_len));
-                mem.freeSized(sess_buf_raw, @intCast(sess_len));
-                return CURLE_OUT_OF_MEMORY;
-            };
-            const qtp_bytes: [*]u8 = @ptrCast(qtp_raw);
-            @memcpy(qtp_bytes[0..quic_tp_len], quic_tp.?[0..quic_tp_len]);
-            qtp_bytes[quic_tp_len] = 0;
-            qtp_clone = qtp_bytes;
-        }
+        const encoded = encodeAndCloneSessionData(session, quic_tp, quic_tp_len) catch return CURLE_OUT_OF_MEMORY;
 
         const timeout = ossl_ext.SSL_SESSION_get_timeout(session);
         const valid_until = if (timeout > 0) vtls_scache_asn1.nowEpochSecs() + @as(i64, @intCast(timeout)) else 0;
@@ -6971,13 +7018,13 @@ pub const openssl_backend = struct {
 
         var sc_session: ?*CurlSslSession = null;
         const res = vtls_scache_asn1.Curl_ssl_session_create2(
-            @ptrCast(sess_buf_raw),
-            @intCast(enc_len),
+            encoded.sess_buf,
+            encoded.enc_len,
             @intCast(ietf_tls_id),
             alpn,
             valid_until,
             earlydata_max,
-            qtp_clone,
+            encoded.qtp_clone,
             quic_tp_len,
             &sc_session,
         );
@@ -6995,7 +7042,7 @@ pub const openssl_backend = struct {
             data,
             scache,
             has_share_scache,
-            @ptrCast(conn_config),
+            conn_config,
             trc_feat,
             peer_key,
             sc_session.?,
@@ -7228,7 +7275,7 @@ pub const openssl_backend = struct {
                     data,
                     scache,
                     has_share_scache,
-                    @ptrCast(conn_config),
+                    conn_config,
                     trc_feat,
                     peer_key,
                     &sc_session,
@@ -7239,7 +7286,7 @@ pub const openssl_backend = struct {
                         data,
                         scache,
                         has_share_scache,
-                        @ptrCast(conn_config),
+                        conn_config,
                         trc_feat,
                         peer_key,
                         scs,
@@ -7288,26 +7335,28 @@ pub const openssl_backend = struct {
     }
 
     fn osslNewSessionCb(ssl: *SSL, ssl_sessionid: *SSL_SESSION) callconv(.c) c_int {
-        const cf_raw = ossl_ext.SSL_get_ex_data(ssl, 0) orelse blk: {
+        const cf: *CurlCfilter = if (ossl_ext.SSL_get_ex_data(ssl, 0)) |cf_raw|
+            @ptrCast(@alignCast(cf_raw))
+        else blk: {
             const rbio = ossl_ext.SSL_get_rbio(ssl) orelse return 0;
-            break :blk ossl_ext.BIO_get_data(rbio) orelse return 0;
+            break :blk bioGetCf(rbio) orelse return 0;
         };
-        const cf: *CurlCfilter = @ptrCast(@alignCast(cf_raw));
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return 0));
-        const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return 0));
+        const connssl = cfConnssl(cf) orelse return 0;
+        const octx = connssl.backendAs(OsslCtx) orelse return 0;
         const data = connssl.call_data orelse return 0;
         const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return 0;
         if (!conn_config.primary_cache_session()) return 0;
         const peer_key = connssl.peer.scache_key orelse return 0;
 
-        const sess_len = ossl_ext.i2d_SSL_SESSION(ssl_sessionid, null);
-        if (sess_len <= 0) return 0;
-        const sess_buf_raw = mem.calloc(1, @intCast(sess_len)) orelse return 0;
-        var sess_ptr: ?[*]u8 = @ptrCast(sess_buf_raw);
+        const sess_len_int = ossl_ext.i2d_SSL_SESSION(ssl_sessionid, null);
+        if (sess_len_int <= 0) return 0;
+        const sess_len: usize = @intCast(sess_len_int);
+        const sess_buf = mem.callocMany(u8, sess_len) orelse return 0;
+        var sess_ptr: ?[*]u8 = sess_buf;
         const enc_len = ossl_ext.i2d_SSL_SESSION(ssl_sessionid, &sess_ptr);
-        if (enc_len <= 0 or enc_len > sess_len) {
-            mem.secureZero(sess_buf_raw, @intCast(sess_len));
-            mem.freeSized(sess_buf_raw, @intCast(sess_len));
+        if (enc_len <= 0 or enc_len > sess_len_int) {
+            mem.secureZero(sess_buf, sess_len);
+            mem.freeSized(sess_buf, sess_len);
             return 0;
         }
 
@@ -7316,7 +7365,7 @@ pub const openssl_backend = struct {
         const ietf_tls_id = ossl_ext.SSL_version(ssl);
         var sc_session: ?*CurlSslSession = null;
         const res = vtls_scache_asn1.Curl_ssl_session_create2(
-            @ptrCast(sess_buf_raw),
+            sess_buf,
             @intCast(enc_len),
             ietf_tls_id,
             connssl.negotiated_alpn,
@@ -7340,7 +7389,7 @@ pub const openssl_backend = struct {
             data,
             scache,
             has_share_scache,
-            @ptrCast(conn_config),
+            conn_config,
             trc_feat,
             peer_key,
             sc_session.?,
@@ -7348,9 +7397,7 @@ pub const openssl_backend = struct {
         return 0;
     }
 
-    fn osslConnectStep1(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-        const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+    fn osslConnectStep1(cf: *CurlCfilter, data: ?*CurlEasy, connssl: *SslConnectData, octx: *OsslCtx) CURLcode {
         const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
         const is_proxy = vtls_impl.Curl_ssl_cf_is_proxy(cf);
 
@@ -7494,7 +7541,7 @@ pub const openssl_backend = struct {
                     data,
                     scache,
                     has_share_scache,
-                    @ptrCast(conn_config),
+                    conn_config,
                     trc_feat,
                     peer_key,
                     &sc_session,
@@ -7505,7 +7552,7 @@ pub const openssl_backend = struct {
                         data,
                         scache,
                         has_share_scache,
-                        @ptrCast(conn_config),
+                        conn_config,
                         trc_feat,
                         peer_key,
                         scs,
@@ -7546,9 +7593,7 @@ pub const openssl_backend = struct {
         return CURLE_OK;
     }
 
-    fn osslConnectStep2(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-        const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+    fn osslConnectStep2(cf: *CurlCfilter, data: ?*CurlEasy, connssl: *SslConnectData, octx: *OsslCtx) CURLcode {
         const ssl = octx.ssl orelse return CURLE_SSL_CONNECT_ERROR;
 
         if (!octx.x509_store_setup()) {
@@ -7597,8 +7642,8 @@ pub const openssl_backend = struct {
     }
 
     fn osslConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-        const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+        const connssl = cfConnssl(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+        const octx = connssl.backendAs(OsslCtx) orelse return CURLE_SSL_CONNECT_ERROR;
 
         if (connssl.state == ssl_connection_complete) {
             done.* = true;
@@ -7610,11 +7655,11 @@ pub const openssl_backend = struct {
         defer connssl.call_data = null;
 
         if (connssl.connecting_state == ssl_connect_1) {
-            const rc = osslConnectStep1(cf, data);
+            const rc = osslConnectStep1(cf, data, connssl, octx);
             if (rc != CURLE_OK) return rc;
         }
         if (connssl.connecting_state == ssl_connect_2) {
-            const rc = osslConnectStep2(cf, data);
+            const rc = osslConnectStep2(cf, data, connssl, octx);
             if (rc != CURLE_OK) return rc;
         }
         if (connssl.connecting_state == ssl_connect_3) {
@@ -7631,8 +7676,8 @@ pub const openssl_backend = struct {
 
     fn osslDataPending(cf: *CurlCfilter, data: ?*const CurlEasy) callconv(.c) bool {
         _ = data;
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return false));
-        const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return false));
+        const connssl = cfConnssl(cf) orelse return false;
+        const octx = connssl.backendAs(OsslCtx) orelse return false;
         if (octx.ssl) |ssl| {
             if (ossl_ext.SSL_pending(ssl) > 0) return true;
         }
@@ -7646,8 +7691,8 @@ pub const openssl_backend = struct {
         len: usize,
         pnwritten: *usize,
     ) callconv(.c) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SEND_ERROR));
-        const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SEND_ERROR));
+        const connssl = cfConnssl(cf) orelse return CURLE_SEND_ERROR;
+        const octx = connssl.backendAs(OsslCtx) orelse return CURLE_SEND_ERROR;
         const ssl = octx.ssl orelse return CURLE_SEND_ERROR;
 
         pnwritten.* = 0;
@@ -7694,8 +7739,8 @@ pub const openssl_backend = struct {
         buffersize: usize,
         pnread: *usize,
     ) callconv(.c) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_RECV_ERROR));
-        const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return CURLE_RECV_ERROR));
+        const connssl = cfConnssl(cf) orelse return CURLE_RECV_ERROR;
+        const octx = connssl.backendAs(OsslCtx) orelse return CURLE_RECV_ERROR;
         const ssl = octx.ssl orelse return CURLE_RECV_ERROR;
 
         pnread.* = 0;
@@ -7730,14 +7775,14 @@ pub const openssl_backend = struct {
     }
 
     fn osslShutdown(cf: *CurlCfilter, data: ?*CurlEasy, send_shutdown: bool, done: *bool) callconv(.c) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse {
+        const connssl = cfConnssl(cf) orelse {
             done.* = true;
             return CURLE_OK;
-        }));
-        const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse {
+        };
+        const octx = connssl.backendAs(OsslCtx) orelse {
             done.* = true;
             return CURLE_OK;
-        }));
+        };
         const ssl = octx.ssl orelse {
             done.* = true;
             cf.setShutdown(true);
@@ -7848,8 +7893,7 @@ pub const openssl_backend = struct {
 
     fn osslClose(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) void {
         _ = data;
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return));
-        const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return));
+        const octx = cfBackend(cf) orelse return;
         Curl_osslctx_cleanup(octx);
     }
 
@@ -7858,8 +7902,8 @@ pub const openssl_backend = struct {
     }
 
     fn osslGetInternals(connssl: *SslConnectData, info: c_uint) callconv(.c) ?*anyopaque {
-        const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return null));
-        return if (info == CURLINFO_TLS_SESSION) @ptrCast(octx.ssl_ctx) else @ptrCast(octx.ssl);
+        const octx = connssl.backendAs(OsslCtx) orelse return null;
+        return if (info == CURLINFO_TLS_SESSION) octx.ssl_ctx else octx.ssl;
     }
 
     fn osslRandom(data: ?*CurlEasy, entropy: [*]u8, length: usize) callconv(.c) CURLcode {
@@ -7886,8 +7930,7 @@ pub const openssl_backend = struct {
         var cf = c_ext.Curl_vtls_acc_conn_cfilter(conn, sockindex);
         while (cf) |cur| : (cf = cur.next) {
             if (cur.cft == &vtls_impl.Curl_cft_ssl) {
-                const connssl: *SslConnectData = @ptrCast(@alignCast(cur.ctx orelse return CURLE_OK));
-                const octx: *OsslCtx = @ptrCast(@alignCast(connssl.backend orelse return CURLE_OK));
+                const octx = cfBackend(cur) orelse return CURLE_OK;
                 const ssl = octx.ssl orelse return CURLE_OK;
                 const server_cert = ossl_ext.SSL_get1_peer_certificate(ssl) orelse return CURLE_OK;
                 defer ossl_ext.X509_free(server_cert);
@@ -8210,6 +8253,23 @@ const mbedtls_backend = struct {
         },
     };
 
+    inline fn cfConnssl(cf: *CurlCfilter) ?*SslConnectData {
+        return cf.sslCtx();
+    }
+
+    inline fn cfBackend(cf: *CurlCfilter) ?*MbedSslBackendData {
+        const connssl = cf.sslCtx() orelse return null;
+        return connssl.backendAs(MbedSslBackendData);
+    }
+
+    inline fn bioGetCf(bio: ?*anyopaque) ?*CurlCfilter {
+        return @ptrCast(@alignCast(bio));
+    }
+
+    inline fn blobBytes(blob: *const CurlBlob) ?[*]const u8 {
+        return @ptrCast(blob.data);
+    }
+
     const mbed_ext = struct {
         extern fn psa_crypto_init() callconv(.c) c_int;
         extern fn mbedtls_version_get_number() callconv(.c) c_uint;
@@ -8350,8 +8410,8 @@ const mbedtls_backend = struct {
     }
 
     pub fn mbedtls_bio_cf_write(bio: ?*anyopaque, buf: [*]const u8, blen: usize) callconv(.c) c_int {
-        const cf: *CurlCfilter = @ptrCast(@alignCast(bio orelse return 0));
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return 0));
+        const cf = bioGetCf(bio) orelse return 0;
+        const connssl = cfConnssl(cf) orelse return 0;
         const data = connssl.call_data orelse return 0;
         var nwritten: usize = 0;
         const result = c_ext.Curl_conn_cf_send(cf.next, data, buf, blen, false, &nwritten);
@@ -8360,8 +8420,8 @@ const mbedtls_backend = struct {
     }
 
     pub fn mbedtls_bio_cf_read(bio: ?*anyopaque, buf: ?[*]u8, blen: usize) callconv(.c) c_int {
-        const cf: *CurlCfilter = @ptrCast(@alignCast(bio orelse return 0));
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return 0));
+        const cf = bioGetCf(bio) orelse return 0;
+        const connssl = cfConnssl(cf) orelse return 0;
         const data = connssl.call_data orelse return 0;
         const out_buf = buf orelse return 0;
         var nread: usize = 0;
@@ -8473,19 +8533,16 @@ const mbedtls_backend = struct {
         return count;
     }
 
-    pub fn mbed_set_selected_ciphers(
+    fn selectCiphersInner(
         data: ?*CurlEasy,
-        backend: *MbedSslBackendData,
         ciphers12: ?[*:0]const u8,
         ciphers13: ?[*:0]const u8,
-    ) CURLcode {
-        if (ciphers12 == null and ciphers13 == null) return CURLE_OK;
-
+    ) ![*]c_int {
         const max_entries = (if (ciphers13) |c13| countCipherTokens(c13) else 0) +
             (if (ciphers12) |c12| countCipherTokens(c12) else 0);
 
-        const raw = mem.calloc(max_entries + 1, @sizeOf(c_int)) orelse return CURLE_OUT_OF_MEMORY;
-        const selected: [*]c_int = @ptrCast(@alignCast(raw));
+        const selected = mem.callocMany(c_int, max_entries + 1) orelse return error.OutOfMemory;
+        errdefer mem.free(selected);
         var count: usize = 0;
 
         const lists = [2]?[*:0]const u8{ ciphers13, ciphers12 };
@@ -8523,10 +8580,24 @@ const mbedtls_backend = struct {
 
         selected[count] = 0;
         if (count == 0) {
-            mem.free(raw);
             if (data) |d| c_ext.Curl_failf(d, "mbedTLS: no supported cipher in list");
-            return CURLE_SSL_CIPHER;
+            return error.NoSupportedCipher;
         }
+        return selected;
+    }
+
+    pub fn mbed_set_selected_ciphers(
+        data: ?*CurlEasy,
+        backend: *MbedSslBackendData,
+        ciphers12: ?[*:0]const u8,
+        ciphers13: ?[*:0]const u8,
+    ) CURLcode {
+        if (ciphers12 == null and ciphers13 == null) return CURLE_OK;
+
+        const selected = selectCiphersInner(data, ciphers12, ciphers13) catch |err| return switch (err) {
+            error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+            error.NoSupportedCipher => CURLE_SSL_CIPHER,
+        };
 
         if (backend.ciphersuites) |old| {
             mem.free(old);
@@ -8587,16 +8658,16 @@ const mbedtls_backend = struct {
                     raw_p,
                     raw_p + cur.?.raw.len,
                     true,
-                    @ptrCast(&vtls_impl.Curl_ssl_push_certinfo_len),
+                    &vtls_impl.Curl_ssl_push_certinfo_len,
                 );
             }
         }
     }
 
     fn mbed_verify_cb(ptr: ?*anyopaque, crt: *mbedtls_x509_crt, depth: c_int, flags: *u32) callconv(.c) c_int {
-        const cf: *CurlCfilter = @ptrCast(@alignCast(ptr orelse return 0));
+        const cf = bioGetCf(ptr) orelse return 0;
         const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return 0;
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return 0));
+        const connssl = cfConnssl(cf) orelse return 0;
         const data = connssl.call_data;
 
         if (depth == 0) {
@@ -8616,27 +8687,23 @@ const mbedtls_backend = struct {
         }
 
         if (flags.* != 0) {
-            var buf: [128]u8 = @splat(0);
-            _ = mbed_ext.mbedtls_x509_crt_verify_info(&buf, buf.len, "", flags.*);
-            c_ext.Curl_failf(data, "mbedTLS: %s", @as([*:0]const u8, @ptrCast(&buf)));
+            var buf: [127:0]u8 = @splat(0);
+            _ = mbed_ext.mbedtls_x509_crt_verify_info(&buf, buf.len + 1, "", flags.*);
+            c_ext.Curl_failf(data, "mbedTLS: %s", &buf);
         }
 
         return 0;
     }
 
     fn dupNullTerminatedBlob(blob_data: [*]const u8, len: usize) ?[*]u8 {
-        const buf = mem.malloc(len + 1) orelse return null;
-        if (len > 0) {
-            @memcpy(buf[0..len], blob_data[0..len]);
-        }
-        buf[len] = 0;
-        return buf;
+        return mem.memdup0(blob_data, len);
     }
 
-    fn mbed_load_cacert(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
-        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+    fn mbed_load_cacert(
+        data: ?*CurlEasy,
+        backend: *MbedSslBackendData,
+        conn_config: *const SslFilterConfig,
+    ) CURLcode {
         const ca_info_blob = conn_config.ca_info_blob;
         const ssl_cafile: ?[*:0]const u8 = if (ca_info_blob != null) null else conn_config.CAfile;
         const verifypeer = conn_config.verifypeer();
@@ -8648,7 +8715,7 @@ const mbedtls_backend = struct {
 
         if (ca_info_blob != null and verifypeer) {
             const blob = ca_info_blob.?;
-            const blob_ptr: [*]const u8 = @ptrCast(blob.data orelse return CURLE_SSL_CERTPROBLEM);
+            const blob_ptr = blobBytes(blob) orelse return CURLE_SSL_CERTPROBLEM;
             var ret: c_int = -1;
             const is_der = ssl_cert_type != null and primitives.curl_strequal(ssl_cert_type, "DER") != 0;
             if (is_der or (blob.len > 0 and blob_ptr[blob.len - 1] == 0)) {
@@ -8701,10 +8768,11 @@ const mbedtls_backend = struct {
         return CURLE_OK;
     }
 
-    fn mbed_load_clicert(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
-        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+    fn mbed_load_clicert(
+        data: ?*CurlEasy,
+        backend: *MbedSslBackendData,
+        conn_config: *const SslFilterConfig,
+    ) CURLcode {
         const ssl_cert: ?[*:0]const u8 = conn_config.clientcert;
         const ssl_cert_blob = conn_config.cert_blob;
         const ssl_cert_type: ?[*:0]const u8 = conn_config.cert_type;
@@ -8727,7 +8795,7 @@ const mbedtls_backend = struct {
         }
 
         if (ssl_cert_blob) |blob| {
-            const blob_ptr: [*]const u8 = @ptrCast(blob.data orelse return CURLE_SSL_CERTPROBLEM);
+            const blob_ptr = blobBytes(blob) orelse return CURLE_SSL_CERTPROBLEM;
             var ret: c_int = -1;
             const is_der = ssl_cert_type != null and primitives.curl_strequal(ssl_cert_type, "DER") != 0;
             if (is_der or (blob.len > 0 and blob_ptr[blob.len - 1] == 0)) {
@@ -8752,10 +8820,11 @@ const mbedtls_backend = struct {
         return CURLE_OK;
     }
 
-    fn mbed_load_privkey(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
-        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+    fn mbed_load_privkey(
+        data: ?*CurlEasy,
+        backend: *MbedSslBackendData,
+        conn_config: *const SslFilterConfig,
+    ) CURLcode {
         var errorbuf: [128]u8 = @splat(0);
 
         mbed_ext.mbedtls_pk_init(&backend.pk);
@@ -8786,7 +8855,7 @@ const mbedtls_backend = struct {
                     return CURLE_SSL_CERTPROBLEM;
                 }
             } else if (conn_config.key_blob) |blob| {
-                const blob_ptr: [*]const u8 = @ptrCast(blob.data orelse return CURLE_SSL_CERTPROBLEM);
+                const blob_ptr = blobBytes(blob) orelse return CURLE_SSL_CERTPROBLEM;
                 const passwd: ?[*:0]const u8 = conn_config.key_passwd;
                 const pwd_ptr: ?[*]const u8 = if (passwd) |p| p else null;
                 const pwd_len: usize = if (passwd) |p| std.mem.len(p) else 0;
@@ -8828,10 +8897,11 @@ const mbedtls_backend = struct {
         return CURLE_OK;
     }
 
-    fn mbed_load_crl(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
-        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+    fn mbed_load_crl(
+        data: ?*CurlEasy,
+        backend: *MbedSslBackendData,
+        conn_config: *const SslFilterConfig,
+    ) CURLcode {
         var errorbuf: [128]u8 = @splat(0);
 
         mbed_ext.mbedtls_x509_crl_init(&backend.crl);
@@ -8853,11 +8923,9 @@ const mbedtls_backend = struct {
         return CURLE_OK;
     }
 
-    fn mbed_apply_session(cf: *CurlCfilter, data: ?*CurlEasy, sc_session: ?*CurlSslSession) bool {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return false));
-        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return false));
+    fn mbed_apply_session(data: ?*CurlEasy, backend: *MbedSslBackendData, sc_session: ?*CurlSslSession) bool {
         const sess = sc_session orelse return false;
-        const sdata: [*]const u8 = @ptrCast(sess.sdata orelse return false);
+        const sdata = sess.sdata orelse return false;
         if (sess.sdata_len == 0) return false;
 
         var session: mbedtls_ssl_session = .{};
@@ -8878,9 +8946,24 @@ const mbedtls_backend = struct {
         return true;
     }
 
+    fn saveMbedSessionBytes(session: *const mbedtls_ssl_session, data: ?*CurlEasy, slen_inout: *usize) ![*]u8 {
+        const slen = slen_inout.*;
+        const sdata = mem.allocMany(u8, slen) orelse return error.OutOfMemory;
+        errdefer {
+            mem.secureZero(sdata, slen);
+            mem.freeSized(sdata, slen);
+        }
+        const ret = mbed_ext.mbedtls_ssl_session_save(session, sdata, slen, slen_inout);
+        if (ret != 0) {
+            c_ext.Curl_failf(data, "failed to serialize session: -0x%x", @as(c_uint, @intCast(-ret)));
+            return error.SerializeFailed;
+        }
+        return sdata;
+    }
+
     fn mbed_new_session(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+        const connssl = cfConnssl(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+        const backend = connssl.backendAs(MbedSslBackendData) orelse return CURLE_SSL_CONNECT_ERROR;
         const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf);
         const scache_key = connssl.peer.scache_key orelse return CURLE_OK;
 
@@ -8894,7 +8977,7 @@ const mbedtls_backend = struct {
 
         var session: mbedtls_ssl_session = .{};
         mbed_ext.mbedtls_ssl_session_init(&session);
-        var ret = mbed_ext.mbedtls_ssl_get_session(&backend.ssl, &session);
+        const ret = mbed_ext.mbedtls_ssl_get_session(&backend.ssl, &session);
         const msession_alloced = (ret != MBEDTLS_ERR_SSL_ALLOC_FAILED);
         defer if (msession_alloced) mbed_ext.mbedtls_ssl_session_free(&session);
 
@@ -8910,14 +8993,10 @@ const mbedtls_backend = struct {
             return CURLE_OK;
         }
 
-        const sdata = mem.malloc(slen) orelse return CURLE_OUT_OF_MEMORY;
-        ret = mbed_ext.mbedtls_ssl_session_save(&session, sdata, slen, &slen);
-        if (ret != 0) {
-            mem.secureZero(sdata, slen);
-            mem.freeSized(sdata, slen);
-            c_ext.Curl_failf(data, "failed to serialize session: -0x%x", @as(c_uint, @intCast(-ret)));
-            return CURLE_OK;
-        }
+        const sdata = saveMbedSessionBytes(&session, data, &slen) catch |err| return switch (err) {
+            error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+            error.SerializeFailed => CURLE_OK,
+        };
 
         const ietf_tls_id = sslTlsVersion(&backend.ssl);
         var sc_session: ?*CurlSslSession = null;
@@ -8947,10 +9026,13 @@ const mbedtls_backend = struct {
         return result;
     }
 
-    fn mbed_configure_ssl(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
-        const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+    fn mbed_configure_ssl(
+        cf: *CurlCfilter,
+        data: ?*CurlEasy,
+        connssl: *SslConnectData,
+        backend: *MbedSslBackendData,
+        conn_config: *const SslFilterConfig,
+    ) CURLcode {
         var errorbuf: [128]u8 = @splat(0);
 
         if (connssl.peer.origin) |orig| {
@@ -9024,7 +9106,7 @@ const mbedtls_backend = struct {
                     &sc_session,
                 );
                 if (sresult == CURLE_OK and sc_session != null) {
-                    _ = mbed_apply_session(cf, data, sc_session);
+                    _ = mbed_apply_session(data, backend, sc_session);
                 }
                 vtls_scache_asn1.Curl_ssl_scache_return_zig(
                     cf,
@@ -9062,7 +9144,7 @@ const mbedtls_backend = struct {
         if (connssl.alpn) |alpn| {
             var i: usize = 0;
             while (i < alpn.count and i < ALPN_ENTRIES_MAX) : (i += 1) {
-                backend.protocols[i] = @ptrCast(&alpn.entries[i]);
+                backend.protocols[i] = alpn.entryStr(i);
             }
             backend.protocols[i] = null;
             if (mbed_ext.mbedtls_ssl_conf_alpn_protocols(&backend.config, &backend.protocols) != 0) {
@@ -9071,7 +9153,7 @@ const mbedtls_backend = struct {
             }
             var proto: AlpnProtoBuf = undefined;
             _ = vtls_impl.Curl_alpn_to_proto_str(&proto, alpn);
-            c_ext.Curl_infof(data, "ALPN: curl offers %s", @as([*:0]const u8, @ptrCast(&proto.data)));
+            c_ext.Curl_infof(data, "ALPN: curl offers %s", proto.cStr());
         }
 
         var fsslctx: ?*const anyopaque = null;
@@ -9088,9 +9170,12 @@ const mbedtls_backend = struct {
         return CURLE_OK;
     }
 
-    fn mbed_connect_step1(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+    fn mbed_connect_step1(
+        cf: *CurlCfilter,
+        data: ?*CurlEasy,
+        connssl: *SslConnectData,
+        backend: *MbedSslBackendData,
+    ) CURLcode {
         const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
 
         if (conn_config.version == CURL_SSLVERSION_SSLv2 or conn_config.version == CURL_SSLVERSION_SSLv3) {
@@ -9119,20 +9204,57 @@ const mbedtls_backend = struct {
             return CURLE_SSL_CONNECT_ERROR;
         }
 
-        var result = mbed_load_cacert(cf, data);
-        if (result == CURLE_OK) result = mbed_load_clicert(cf, data);
-        if (result == CURLE_OK) result = mbed_load_privkey(cf, data);
-        if (result == CURLE_OK) result = mbed_load_crl(cf, data);
-        if (result == CURLE_OK) result = mbed_configure_ssl(cf, data);
+        var result = mbed_load_cacert(data, backend, conn_config);
+        if (result == CURLE_OK) result = mbed_load_clicert(data, backend, conn_config);
+        if (result == CURLE_OK) result = mbed_load_privkey(data, backend, conn_config);
+        if (result == CURLE_OK) result = mbed_load_crl(data, backend, conn_config);
+        if (result == CURLE_OK) result = mbed_configure_ssl(cf, data, connssl, backend, conn_config);
         if (result != CURLE_OK) return result;
 
         connssl.connecting_state = ssl_connect_2;
         return CURLE_OK;
     }
 
-    fn mbed_connect_step2(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+    fn checkMbedPinnedPubkey(
+        data: ?*CurlEasy,
+        pinnedpubkey: [*:0]const u8,
+        raw_p: [*]const u8,
+        raw_len: usize,
+    ) CURLcode {
+        const p = mem.create(mbedtls_x509_crt) orelse return CURLE_OUT_OF_MEMORY;
+        defer mem.destroy(p);
+        const pubkey = mem.allocMany(u8, PUB_DER_MAX_BYTES) orelse return CURLE_OUT_OF_MEMORY;
+        defer mem.free(pubkey);
+
+        mbed_ext.mbedtls_x509_crt_init(p);
+        defer mbed_ext.mbedtls_x509_crt_free(p);
+
+        if (mbed_ext.mbedtls_x509_crt_parse(p, raw_p, raw_len) != 0) {
+            c_ext.Curl_failf(data, "Failed copying peer certificate");
+            return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
+        }
+
+        const size = mbed_ext.mbedtls_pk_write_pubkey_der(&p.pk, pubkey, PUB_DER_MAX_BYTES);
+        if (size <= 0) {
+            c_ext.Curl_failf(data, "Failed copying public key from peer certificate");
+            return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
+        }
+
+        const usize_len: usize = @intCast(size);
+        return vtls_impl.Curl_pin_peer_pubkey(
+            data,
+            pinnedpubkey,
+            pubkey + (PUB_DER_MAX_BYTES - usize_len),
+            usize_len,
+        );
+    }
+
+    fn mbed_connect_step2(
+        cf: *CurlCfilter,
+        data: ?*CurlEasy,
+        connssl: *SslConnectData,
+        backend: *MbedSslBackendData,
+    ) CURLcode {
         const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
 
         var ret: c_int = 0;
@@ -9219,36 +9341,7 @@ const mbedtls_backend = struct {
                 return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
             }
 
-            const p_raw = mem.calloc(1, @sizeOf(mbedtls_x509_crt)) orelse return CURLE_OUT_OF_MEMORY;
-            const p: *mbedtls_x509_crt = @ptrCast(@alignCast(p_raw));
-            const pubkey = mem.malloc(PUB_DER_MAX_BYTES) orelse {
-                mem.free(p_raw);
-                return CURLE_OUT_OF_MEMORY;
-            };
-            mbed_ext.mbedtls_x509_crt_init(p);
-            defer {
-                mbed_ext.mbedtls_x509_crt_free(p);
-                mem.free(p_raw);
-                mem.free(pubkey);
-            }
-
-            if (mbed_ext.mbedtls_x509_crt_parse(p, raw_p, peercert.raw.len) != 0) {
-                c_ext.Curl_failf(data, "Failed copying peer certificate");
-                return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
-            }
-
-            const size = mbed_ext.mbedtls_pk_write_pubkey_der(&p.pk, pubkey, PUB_DER_MAX_BYTES);
-            if (size <= 0) {
-                c_ext.Curl_failf(data, "Failed copying public key from peer certificate");
-                return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
-            }
-            const usize_len: usize = @intCast(size);
-            const result = vtls_impl.Curl_pin_peer_pubkey(
-                data,
-                pinnedpubkey,
-                pubkey + (PUB_DER_MAX_BYTES - usize_len),
-                usize_len,
-            );
+            const result = checkMbedPinnedPubkey(data, pinnedpubkey, raw_p, peercert.raw.len);
             if (result != CURLE_OK) return result;
         }
 
@@ -9293,7 +9386,8 @@ const mbedtls_backend = struct {
     }
 
     fn mbedConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
+        const connssl = cfConnssl(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+        const backend = connssl.backendAs(MbedSslBackendData) orelse return CURLE_SSL_CONNECT_ERROR;
 
         if (connssl.state == ssl_connection_complete) {
             done.* = true;
@@ -9307,17 +9401,16 @@ const mbedtls_backend = struct {
         defer connssl.call_data = saved_call_data;
 
         if (connssl.connecting_state == ssl_connect_1) {
-            const result = mbed_connect_step1(cf, data);
+            const result = mbed_connect_step1(cf, data, connssl, backend);
             if (result != CURLE_OK) return result;
         }
 
         if (connssl.connecting_state == ssl_connect_2) {
-            const result = mbed_connect_step2(cf, data);
+            const result = mbed_connect_step2(cf, data, connssl, backend);
             if (result != CURLE_OK) return result;
         }
 
         if (connssl.connecting_state == ssl_connect_3) {
-            const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
             if (sslTlsVersion(&backend.ssl) <= MBEDTLS_SSL_VERSION_TLS1_2) {
                 const result = mbed_new_session(cf, data);
                 if (result != CURLE_OK) return result;
@@ -9335,14 +9428,13 @@ const mbedtls_backend = struct {
 
     fn mbedDataPending(cf: *CurlCfilter, data: ?*const CurlEasy) callconv(.c) bool {
         _ = data;
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return false));
-        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return false));
+        const backend = cfBackend(cf) orelse return false;
         return mbed_ext.mbedtls_ssl_get_bytes_avail(&backend.ssl) != 0;
     }
 
     fn mbedSend(cf: *CurlCfilter, data: ?*CurlEasy, mem_ptr: ?*const anyopaque, len_in: usize, pnwritten: *usize) callconv(.c) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SEND_ERROR));
-        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SEND_ERROR));
+        const connssl = cfConnssl(cf) orelse return CURLE_SEND_ERROR;
+        const backend = connssl.backendAs(MbedSslBackendData) orelse return CURLE_SEND_ERROR;
         const buf: [*]const u8 = @ptrCast(mem_ptr orelse return CURLE_BAD_FUNCTION_ARGUMENT);
         var len = len_in;
         var result: CURLcode = CURLE_OK;
@@ -9414,8 +9506,8 @@ const mbedtls_backend = struct {
     }
 
     fn mbedRecv(cf: *CurlCfilter, data: ?*CurlEasy, buf: [*]u8, len: usize, pnread: *usize) callconv(.c) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_RECV_ERROR));
-        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_RECV_ERROR));
+        const connssl = cfConnssl(cf) orelse return CURLE_RECV_ERROR;
+        const backend = connssl.backendAs(MbedSslBackendData) orelse return CURLE_RECV_ERROR;
         var result: CURLcode = CURLE_OK;
         const saved_call_data = connssl.call_data;
         connssl.call_data = data;
@@ -9472,14 +9564,14 @@ const mbedtls_backend = struct {
     }
 
     fn mbedShutdown(cf: *CurlCfilter, data: ?*CurlEasy, send_shutdown: bool, done: *bool) callconv(.c) CURLcode {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse {
+        const connssl = cfConnssl(cf) orelse {
             done.* = true;
             return CURLE_OK;
-        }));
-        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse {
+        };
+        const backend = connssl.backendAs(MbedSslBackendData) orelse {
             done.* = true;
             return CURLE_OK;
-        }));
+        };
         var buf: [1024]u8 = undefined;
         var result: CURLcode = CURLE_OK;
         var ret: c_int = 0;
@@ -9559,8 +9651,7 @@ const mbedtls_backend = struct {
 
     fn mbedClose(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) void {
         _ = data;
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return));
-        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return));
+        const backend = cfBackend(cf) orelse return;
         if (backend.flags.initialized) {
             mbed_ext.mbedtls_pk_free(&backend.pk);
             mbed_ext.mbedtls_x509_crt_free(&backend.clicert);
@@ -9582,8 +9673,8 @@ const mbedtls_backend = struct {
     }
 
     fn mbedGetInternals(connssl: *SslConnectData, info: c_uint) callconv(.c) ?*anyopaque {
-        const backend: *MbedSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return null));
-        return if (info == CURLINFO_TLS_SESSION) @ptrCast(&backend.config) else @ptrCast(&backend.ssl);
+        const backend = connssl.backendAs(MbedSslBackendData) orelse return null;
+        return if (info == CURLINFO_TLS_SESSION) &backend.config else &backend.ssl;
     }
 
     fn mbedRandom(data: ?*CurlEasy, entropy: [*]u8, length: usize) callconv(.c) CURLcode {
@@ -9862,15 +9953,15 @@ pub const RustlsSslBackendData = vtls_rustls.RustlsSslBackendData;
 pub const WolfsslBackendData = vtls_wolfssl.WolfsslBackendData;
 
 pub fn freeOsslCtx(ptr: ?*openssl_backend.OsslCtx) void {
-    mem.freeSized(ptr, @sizeOf(openssl_backend.OsslCtx));
+    mem.destroy(ptr);
 }
 
 pub fn freeMbedsslBackendData(ptr: ?*MbedsslBackendData) void {
-    mem.freeSized(ptr, @sizeOf(MbedsslBackendData));
+    mem.destroy(ptr);
 }
 
 pub fn freeSchannelBackendData(ptr: ?*SchannelBackendData) void {
-    mem.freeSized(ptr, @sizeOf(SchannelBackendData));
+    mem.destroy(ptr);
 }
 
 // ============================================================================
@@ -9914,17 +10005,17 @@ test "X.509 SAN and CN embedded-NUL rejection and backend context poisoning" {
     try std.testing.expectEqual(expected_poison, std.mem.asBytes(&rustls_ctx)[0]);
     try std.testing.expectEqual(expected_poison, std.mem.asBytes(&wssl_ctx)[0]);
 
-    const heap_ossl: *openssl_backend.OsslCtx = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(openssl_backend.OsslCtx)).?));
+    const heap_ossl = mem.create(openssl_backend.OsslCtx).?;
     freeOsslCtx(heap_ossl);
-    const heap_mbed: *MbedsslBackendData = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(MbedsslBackendData)).?));
+    const heap_mbed = mem.create(MbedsslBackendData).?;
     freeMbedsslBackendData(heap_mbed);
-    const heap_schan: *SchannelBackendData = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(SchannelBackendData)).?));
+    const heap_schan = mem.create(SchannelBackendData).?;
     freeSchannelBackendData(heap_schan);
-    const heap_gtls: *GtlsSslBackendData = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(GtlsSslBackendData)).?));
+    const heap_gtls = mem.create(GtlsSslBackendData).?;
     vtls_gtls.freeGtlsBackendData(heap_gtls);
-    const heap_rustls: *RustlsSslBackendData = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(RustlsSslBackendData)).?));
+    const heap_rustls = mem.create(RustlsSslBackendData).?;
     vtls_rustls.freeRustlsBackendData(heap_rustls);
-    const heap_wssl: *WolfsslBackendData = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(WolfsslBackendData)).?));
+    const heap_wssl = mem.create(WolfsslBackendData).?;
     vtls_wolfssl.freeWolfsslBackendData(heap_wssl);
 }
 
