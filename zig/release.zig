@@ -2096,7 +2096,7 @@ pub fn renderReleaseNotes(
 
     return std.fmt.allocPrint(
         allocator,
-        \\**Install:**
+        \\**Install with [ghr](https://cataggar.github.io/ghr/):**
         \\
         \\```console
         \\ghr install {s}@{s}
@@ -3755,6 +3755,7 @@ test "end-to-end packaging, allowlist verification, and SBOM/sidecar rejection" 
         &diagnostic,
     );
     defer allocator.free(notes);
+    try std.testing.expect(std.mem.indexOf(u8, notes, "**Install with [ghr](https://cataggar.github.io/ghr/):**") != null);
     try std.testing.expect(std.mem.indexOf(u8, notes, "ghr install cataggar/curl@v8.23.0-zig.1") != null);
     try std.testing.expect(std.mem.indexOf(u8, notes, "Distribution Identity") == null);
     try std.testing.expect(std.mem.indexOf(u8, notes, "## Highlights") == null);
