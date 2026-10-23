@@ -16,7 +16,7 @@ pub const z_stream = extern struct {
     avail_out: c_uint = 0,
     total_out: c_ulong = 0,
     msg: ?[*:0]const u8 = null,
-    state: ?*anyopaque = null,
+    state: ?*ZlibState = null,
     zalloc: z_alloc_func = null,
     zfree: z_free_func = null,
     opaque_ptr: ?*anyopaque = null,
@@ -79,7 +79,7 @@ fn inflateInit2Impl(strm_opt: ?*z_stream, window_bits: c_int, version: [*:0]cons
     const strm = strm_opt orelse return Z_STREAM_ERROR;
     const state = std.heap.c_allocator.create(ZlibState) catch return Z_MEM_ERROR;
     state.* = .{ .window_bits = window_bits };
-    strm.state = @ptrCast(state);
+    strm.state = state;
     strm.total_in = 0;
     strm.total_out = 0;
     strm.msg = null;
@@ -88,7 +88,7 @@ fn inflateInit2Impl(strm_opt: ?*z_stream, window_bits: c_int, version: [*:0]cons
 
 fn inflateReset2Impl(strm_opt: ?*z_stream, window_bits: c_int) callconv(.c) c_int {
     const strm = strm_opt orelse return Z_STREAM_ERROR;
-    const state: *ZlibState = @ptrCast(@alignCast(strm.state orelse return Z_STREAM_ERROR));
+    const state = strm.state orelse return Z_STREAM_ERROR;
     state.reset(window_bits);
     strm.total_in = 0;
     strm.total_out = 0;
@@ -96,10 +96,73 @@ fn inflateReset2Impl(strm_opt: ?*z_stream, window_bits: c_int) callconv(.c) c_in
     return Z_OK;
 }
 
+fn inflateDecodeStep(state: *ZlibState, strm: *z_stream, in_slice: []const u8) !void {
+    const prev_in_len = state.in_buf.items.len;
+    try state.in_buf.appendSlice(std.heap.c_allocator, in_slice);
+    errdefer state.in_buf.shrinkRetainingCapacity(prev_in_len);
+
+    const container = detectContainer(state.window_bits, state.in_buf.items);
+    var fixed = std.Io.Reader.fixed(state.in_buf.items);
+    var window_buf: [std.compress.flate.max_window_len]u8 = undefined;
+    var decomp = std.compress.flate.Decompress.init(&fixed, container, &window_buf);
+
+    var decoded = std.ArrayListUnmanaged(u8).empty;
+    defer decoded.deinit(std.heap.c_allocator);
+
+    var tmp: [16384]u8 = undefined;
+    var hit_eof = false;
+    while (true) {
+        const n = decomp.reader.readSliceShort(&tmp) catch |err| switch (err) {
+            error.ReadFailed => {
+                if (decomp.err) |derr| switch (derr) {
+                    error.EndOfStream => break,
+                    else => {
+                        strm.next_in = in_slice.ptr + in_slice.len;
+                        strm.total_in += strm.avail_in;
+                        strm.avail_in = 0;
+                        return error.CorruptStream;
+                    },
+                };
+                break;
+            },
+        };
+        if (n > 0) {
+            try decoded.appendSlice(std.heap.c_allocator, tmp[0..n]);
+        }
+        if (n < tmp.len) {
+            if (decomp.err == null) {
+                hit_eof = true;
+            }
+            break;
+        }
+    }
+
+    // How many bytes of state.in_buf were actually consumed by the flate stream?
+    const total_used_in = if (hit_eof) fixed.seek else state.in_buf.items.len;
+    const newly_used_in = if (total_used_in > prev_in_len) total_used_in - prev_in_len else 0;
+    const consume_now = @min(newly_used_in, in_slice.len);
+
+    // Emit only the newly decoded bytes beyond what we already emitted in earlier chunks
+    const already_emitted = state.out_buf.items.len;
+    if (decoded.items.len > already_emitted) {
+        const new_out = decoded.items[already_emitted..];
+        try state.out_buf.appendSlice(std.heap.c_allocator, new_out);
+    }
+
+    strm.next_in = in_slice.ptr + consume_now;
+    strm.avail_in -= @intCast(consume_now);
+    strm.total_in += @intCast(consume_now);
+    state.in_buf.shrinkRetainingCapacity(prev_in_len + consume_now);
+
+    if (hit_eof) {
+        state.finished = true;
+    }
+}
+
 fn inflateImpl(strm_opt: ?*z_stream, flush: c_int) callconv(.c) c_int {
     _ = flush;
     const strm = strm_opt orelse return Z_STREAM_ERROR;
-    const state: *ZlibState = @ptrCast(@alignCast(strm.state orelse return Z_STREAM_ERROR));
+    const state = strm.state orelse return Z_STREAM_ERROR;
 
     // First drain any already-decoded output waiting in state.out_buf
     if (state.out_pos < state.out_buf.items.len) {
@@ -128,66 +191,11 @@ fn inflateImpl(strm_opt: ?*z_stream, flush: c_int) callconv(.c) c_int {
         return Z_BUF_ERROR;
     }
 
-    const prev_in_len = state.in_buf.items.len;
     const in_slice = (strm.next_in orelse return Z_STREAM_ERROR)[0..strm.avail_in];
-    state.in_buf.appendSlice(std.heap.c_allocator, in_slice) catch return Z_MEM_ERROR;
-
-    const container = detectContainer(state.window_bits, state.in_buf.items);
-    var fixed = std.Io.Reader.fixed(state.in_buf.items);
-    var window_buf: [std.compress.flate.max_window_len]u8 = undefined;
-    var decomp = std.compress.flate.Decompress.init(&fixed, container, &window_buf);
-
-    var decoded = std.ArrayListUnmanaged(u8).empty;
-    defer decoded.deinit(std.heap.c_allocator);
-
-    var tmp: [16384]u8 = undefined;
-    var hit_eof = false;
-    while (true) {
-        const n = decomp.reader.readSliceShort(&tmp) catch |err| switch (err) {
-            error.ReadFailed => {
-                if (decomp.err) |derr| switch (derr) {
-                    error.EndOfStream => break,
-                    else => {
-                        strm.next_in = in_slice.ptr + in_slice.len;
-                        strm.total_in += strm.avail_in;
-                        strm.avail_in = 0;
-                        return Z_DATA_ERROR;
-                    },
-                };
-                break;
-            },
-        };
-        if (n > 0) {
-            decoded.appendSlice(std.heap.c_allocator, tmp[0..n]) catch return Z_MEM_ERROR;
-        }
-        if (n < tmp.len) {
-            if (decomp.err == null) {
-                hit_eof = true;
-            }
-            break;
-        }
-    }
-
-    // How many bytes of state.in_buf were actually consumed by the flate stream?
-    const total_used_in = if (hit_eof) fixed.seek else state.in_buf.items.len;
-    const newly_used_in = if (total_used_in > prev_in_len) total_used_in - prev_in_len else 0;
-    const consume_now = @min(newly_used_in, in_slice.len);
-
-    strm.next_in = in_slice.ptr + consume_now;
-    strm.avail_in -= @intCast(consume_now);
-    strm.total_in += @intCast(consume_now);
-    state.in_buf.shrinkRetainingCapacity(prev_in_len + consume_now);
-
-    if (hit_eof) {
-        state.finished = true;
-    }
-
-    // Emit only the newly decoded bytes beyond what we already emitted in earlier chunks
-    const already_emitted = state.out_buf.items.len;
-    if (decoded.items.len > already_emitted) {
-        const new_out = decoded.items[already_emitted..];
-        state.out_buf.appendSlice(std.heap.c_allocator, new_out) catch return Z_MEM_ERROR;
-    }
+    inflateDecodeStep(state, strm, in_slice) catch |err| switch (err) {
+        error.OutOfMemory => return Z_MEM_ERROR,
+        error.CorruptStream => return Z_DATA_ERROR,
+    };
 
     const avail_decoded = state.out_buf.items.len - state.out_pos;
     const copy_len = @min(avail_decoded, @as(usize, strm.avail_out));
@@ -209,8 +217,7 @@ fn inflateImpl(strm_opt: ?*z_stream, flush: c_int) callconv(.c) c_int {
 
 fn inflateEndImpl(strm_opt: ?*z_stream) callconv(.c) c_int {
     const strm = strm_opt orelse return Z_STREAM_ERROR;
-    if (strm.state) |raw| {
-        const state: *ZlibState = @ptrCast(@alignCast(raw));
+    if (strm.state) |state| {
         state.deinit();
         std.heap.c_allocator.destroy(state);
         strm.state = null;
@@ -223,13 +230,13 @@ fn inflateEndImpl(strm_opt: ?*z_stream) callconv(.c) c_int {
 // ============================================================================
 
 pub const ZSTD_inBuffer = extern struct {
-    src: ?*const anyopaque = null,
+    src: ?[*]const u8 = null,
     size: usize = 0,
     pos: usize = 0,
 };
 
 pub const ZSTD_outBuffer = extern struct {
-    dst: ?*anyopaque = null,
+    dst: ?[*]u8 = null,
     size: usize = 0,
     pos: usize = 0,
 };
@@ -254,15 +261,14 @@ fn zstdVersionNumberImpl() callconv(.c) c_uint {
     return 10506;
 }
 
-fn zstdCreateDStreamImpl() callconv(.c) ?*anyopaque {
+fn zstdCreateDStreamImpl() callconv(.c) ?*ZstdState {
     const state = std.heap.c_allocator.create(ZstdState) catch return null;
     state.* = .{};
-    return @ptrCast(state);
+    return state;
 }
 
-fn zstdFreeDStreamImpl(zds_raw: ?*anyopaque) callconv(.c) usize {
-    if (zds_raw) |raw| {
-        const state: *ZstdState = @ptrCast(@alignCast(raw));
+fn zstdFreeDStreamImpl(zds_opt: ?*ZstdState) callconv(.c) usize {
+    if (zds_opt) |state| {
         state.deinit();
         std.heap.c_allocator.destroy(state);
     }
@@ -282,8 +288,8 @@ fn zstdGetErrorNameImpl(code: usize) callconv(.c) [*:0]const u8 {
     };
 }
 
-fn zstdDecompressStreamImpl(zds_raw: ?*anyopaque, output_opt: ?*ZSTD_outBuffer, input_opt: ?*ZSTD_inBuffer) callconv(.c) usize {
-    const state: *ZstdState = @ptrCast(@alignCast(zds_raw orelse return ZSTD_ERR_GENERIC));
+fn zstdDecompressStreamImpl(zds_opt: ?*ZstdState, output_opt: ?*ZSTD_outBuffer, input_opt: ?*ZSTD_inBuffer) callconv(.c) usize {
+    const state = zds_opt orelse return ZSTD_ERR_GENERIC;
     const output = output_opt orelse return ZSTD_ERR_GENERIC;
     const input = input_opt orelse return ZSTD_ERR_GENERIC;
 
@@ -293,7 +299,7 @@ fn zstdDecompressStreamImpl(zds_raw: ?*anyopaque, output_opt: ?*ZSTD_outBuffer, 
         const rem = state.out_buf.items.len - state.out_pos;
         const copy_len = @min(rem, out_avail);
         if (copy_len > 0) {
-            const dst: [*]u8 = @ptrCast(output.dst orelse return ZSTD_ERR_GENERIC);
+            const dst = output.dst orelse return ZSTD_ERR_GENERIC;
             @memcpy(dst[output.pos .. output.pos + copy_len], state.out_buf.items[state.out_pos .. state.out_pos + copy_len]);
             output.pos += copy_len;
             state.out_pos += copy_len;
@@ -309,7 +315,7 @@ fn zstdDecompressStreamImpl(zds_raw: ?*anyopaque, output_opt: ?*ZSTD_outBuffer, 
             state.out_pos = 0;
             state.finished = false;
         }
-        const src: [*]const u8 = @ptrCast(input.src orelse return ZSTD_ERR_GENERIC);
+        const src = input.src orelse return ZSTD_ERR_GENERIC;
         const new_slice = src[input.pos..input.size];
         state.in_buf.appendSlice(std.heap.c_allocator, new_slice) catch return ZSTD_ERR_MEMORY;
         input.pos = input.size;
@@ -369,7 +375,7 @@ fn zstdDecompressStreamImpl(zds_raw: ?*anyopaque, output_opt: ?*ZSTD_outBuffer, 
         const rem = state.out_buf.items.len - state.out_pos;
         const copy_len = @min(rem, out_avail);
         if (copy_len > 0) {
-            const dst: [*]u8 = @ptrCast(output.dst orelse return ZSTD_ERR_GENERIC);
+            const dst = output.dst orelse return ZSTD_ERR_GENERIC;
             @memcpy(dst[output.pos .. output.pos + copy_len], state.out_buf.items[state.out_pos .. state.out_pos + copy_len]);
             output.pos += copy_len;
             state.out_pos += copy_len;
@@ -706,6 +712,8 @@ fn decodeInsertAndCopyCode(ic_code: u16) struct { insert_code: u8, copy_code: u8
 }
 
 fn decodeBrotliStream(input: []const u8, out: *std.ArrayListUnmanaged(u8)) !usize {
+    const prev_out_len = out.items.len;
+    errdefer out.shrinkRetainingCapacity(prev_out_len);
     var br = BrotliBitReader{ .data = input };
 
     // 1. Read WBITS (RFC 7932 Section 9.1)
@@ -901,26 +909,24 @@ fn brotliDecoderVersionImpl() callconv(.c) u32 {
     return (1 << 24) | (1 << 12) | 0;
 }
 
-fn brotliDecoderCreateInstanceImpl(alloc_func: ?*const anyopaque, free_func: ?*const anyopaque, opaque_ptr: ?*anyopaque) callconv(.c) ?*anyopaque {
+fn brotliDecoderCreateInstanceImpl(alloc_func: ?*const anyopaque, free_func: ?*const anyopaque, opaque_ptr: ?*anyopaque) callconv(.c) ?*BrotliState {
     _ = alloc_func;
     _ = free_func;
     _ = opaque_ptr;
     const state = std.heap.c_allocator.create(BrotliState) catch return null;
     state.* = .{};
-    return @ptrCast(state);
+    return state;
 }
 
-fn brotliDecoderDestroyInstanceImpl(state_raw: ?*anyopaque) callconv(.c) void {
-    if (state_raw) |raw| {
-        const state: *BrotliState = @ptrCast(@alignCast(raw));
+fn brotliDecoderDestroyInstanceImpl(state_opt: ?*BrotliState) callconv(.c) void {
+    if (state_opt) |state| {
         state.deinit();
         std.heap.c_allocator.destroy(state);
     }
 }
 
-fn brotliDecoderGetErrorCodeImpl(state_raw: ?*const anyopaque) callconv(.c) c_int {
-    if (state_raw) |raw| {
-        const state: *const BrotliState = @ptrCast(@alignCast(raw));
+fn brotliDecoderGetErrorCodeImpl(state_opt: ?*const BrotliState) callconv(.c) c_int {
+    if (state_opt) |state| {
         return state.err_code;
     }
     return -1;
@@ -932,14 +938,14 @@ fn brotliDecoderErrorStringImpl(code: c_int) callconv(.c) [*:0]const u8 {
 }
 
 fn brotliDecoderDecompressStreamImpl(
-    state_raw: ?*anyopaque,
+    state_opt: ?*BrotliState,
     available_in: *usize,
     next_in: *[*]const u8,
     available_out: *usize,
     next_out: *[*]u8,
     total_out: ?*usize,
 ) callconv(.c) c_int {
-    const state: *BrotliState = @ptrCast(@alignCast(state_raw orelse return BROTLI_DECODER_RESULT_ERROR));
+    const state = state_opt orelse return BROTLI_DECODER_RESULT_ERROR;
 
     // Drain any buffered output first
     if (state.out_pos < state.out_buf.items.len) {

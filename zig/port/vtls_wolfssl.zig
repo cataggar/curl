@@ -157,7 +157,7 @@ const WcRngStorage = extern struct {
 
 const CallbackIORecv = *const fn (ssl: ?*WOLFSSL, buf: ?[*]u8, sz: c_int, ctx: ?*anyopaque) callconv(.c) c_int;
 const CallbackIOSend = *const fn (ssl: ?*WOLFSSL, buf: ?[*]const u8, sz: c_int, ctx: ?*anyopaque) callconv(.c) c_int;
-const WcPasswdCb = *const fn (buf: [*]u8, sz: c_int, rwflag: c_int, userdata: ?*anyopaque) callconv(.c) c_int;
+const WcPasswdCb = *const fn (buf: [*]u8, sz: c_int, rwflag: c_int, userdata: ?[*:0]const u8) callconv(.c) c_int;
 const NewSessionCb = *const fn (ssl: ?*WOLFSSL, session: ?*WOLFSSL_SESSION) callconv(.c) c_int;
 const KeylogCb = *const fn (ssl: ?*const WOLFSSL, line: ?[*:0]const u8) callconv(.c) void;
 
@@ -196,7 +196,7 @@ pub const wssl_ext = struct {
     pub extern "c" fn wolfSSL_CTX_use_PrivateKey_buffer(ctx: *WOLFSSL_CTX, in: [*]const u8, sz: c_long, format: c_int) callconv(.c) c_int;
 
     pub extern "c" fn wolfSSL_CTX_set_default_passwd_cb(ctx: *WOLFSSL_CTX, cb: ?WcPasswdCb) callconv(.c) void;
-    pub extern "c" fn wolfSSL_CTX_set_default_passwd_cb_userdata(ctx: *WOLFSSL_CTX, userdata: ?*anyopaque) callconv(.c) void;
+    pub extern "c" fn wolfSSL_CTX_set_default_passwd_cb_userdata(ctx: *WOLFSSL_CTX, userdata: ?[*:0]const u8) callconv(.c) void;
 
     pub extern "c" fn wolfSSL_CTX_set_verify(ctx: *WOLFSSL_CTX, mode: c_int, verify_callback: ?*const anyopaque) callconv(.c) void;
     pub extern "c" fn wolfSSL_CTX_SetIORecv(ctx: *WOLFSSL_CTX, cb: CallbackIORecv) callconv(.c) void;
@@ -345,7 +345,49 @@ pub const WsslCtx = WsslSslBackendData;
 pub const WolfsslBackendData = WsslSslBackendData;
 
 pub fn freeWolfsslBackendData(ptr: ?*WolfsslBackendData) void {
-    mem.freeSized(ptr, @sizeOf(WolfsslBackendData));
+    mem.freeTyped(ptr);
+}
+
+inline fn cfCtx(cf: *const CurlCfilter) ?*SslConnectData {
+    return @ptrCast(@alignCast(cf.ctx orelse return null));
+}
+
+inline fn connsslBackend(connssl: *const SslConnectData) ?*WsslSslBackendData {
+    return @ptrCast(@alignCast(connssl.backend orelse return null));
+}
+
+inline fn cfBackend(cf: *const CurlCfilter) ?*WsslSslBackendData {
+    const connssl = cfCtx(cf) orelse return null;
+    return connsslBackend(connssl);
+}
+
+inline fn cfFromOpaque(ptr: ?*anyopaque) ?*CurlCfilter {
+    return @ptrCast(@alignCast(ptr orelse return null));
+}
+
+inline fn shareFromOpaque(ptr: ?*anyopaque) ?*WsslX509Share {
+    return @ptrCast(@alignCast(ptr orelse return null));
+}
+
+inline fn backendFromOpaque(ptr: ?*anyopaque) ?*WsslSslBackendData {
+    return @ptrCast(@alignCast(ptr orelse return null));
+}
+
+inline fn blobBytes(blob: *const CurlBlob) ?[]const u8 {
+    if (blob.len == 0) return null;
+    const data_ptr: [*]const u8 = @ptrCast(blob.data orelse return null);
+    return data_ptr[0..blob.len];
+}
+
+inline fn sessionBytesPtr(s: *const CurlSslSession) ?[*]const u8 {
+    if (s.sdata_len == 0) return null;
+    return @ptrCast(s.sdata orelse return null);
+}
+
+const SslCtxCallback = *const fn (?*CurlEasy, ?*anyopaque, ?*anyopaque) callconv(.c) CURLcode;
+
+inline fn sslCtxCbFromOpaque(ptr: ?*const anyopaque) ?SslCtxCallback {
+    return @ptrCast(@alignCast(ptr orelse return null));
 }
 
 pub fn wsslVerifyHostSlice(san_bytes_opt: ?[*]const u8, len: usize, hostname: []const u8) bool {
@@ -393,9 +435,9 @@ fn wssl_bio_cf_ctrl(bio: ?*WOLFSSL_BIO, cmd: c_int, num: c_long, ptr: ?*anyopaqu
 fn wssl_bio_cf_out_write(bio: ?*WOLFSSL_BIO, buf: ?[*]const u8, blen: c_int) callconv(.c) c_int {
     if (comptime !use_wolfssl) return -1;
     const b = bio orelse return -1;
-    const cf: *CurlCfilter = @ptrCast(@alignCast(wssl_ext.wolfSSL_BIO_get_data(b) orelse return -1));
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return -1));
-    const backend: *WsslSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return -1));
+    const cf = cfFromOpaque(wssl_ext.wolfSSL_BIO_get_data(b)) orelse return -1;
+    const connssl = cfCtx(cf) orelse return -1;
+    const backend = connsslBackend(connssl) orelse return -1;
     const data = connssl.call_data;
 
     wssl_ext.wolfSSL_BIO_clear_flags(b, WOLFSSL_BIO_FLAG_RWS | WOLFSSL_BIO_FLAG_RETRY);
@@ -419,9 +461,9 @@ fn wssl_bio_cf_out_write(bio: ?*WOLFSSL_BIO, buf: ?[*]const u8, blen: c_int) cal
 fn wssl_bio_cf_in_read(bio: ?*WOLFSSL_BIO, buf_opt: ?[*]u8, blen: c_int) callconv(.c) c_int {
     if (comptime !use_wolfssl) return -1;
     const b = bio orelse return -1;
-    const cf: *CurlCfilter = @ptrCast(@alignCast(wssl_ext.wolfSSL_BIO_get_data(b) orelse return -1));
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return -1));
-    const backend: *WsslSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return -1));
+    const cf = cfFromOpaque(wssl_ext.wolfSSL_BIO_get_data(b)) orelse return -1;
+    const connssl = cfCtx(cf) orelse return -1;
+    const backend = connsslBackend(connssl) orelse return -1;
     const data = connssl.call_data;
 
     wssl_ext.wolfSSL_BIO_clear_flags(b, WOLFSSL_BIO_FLAG_RWS | WOLFSSL_BIO_FLAG_RETRY);
@@ -481,9 +523,9 @@ fn wssl_bio_cf_free_methods() void {
 fn wssl_io_send(ssl: ?*WOLFSSL, buf_opt: ?[*]const u8, sz: c_int, ctx: ?*anyopaque) callconv(.c) c_int {
     if (comptime !use_wolfssl) return WOLFSSL_CBIO_ERR_GENERAL;
     _ = ssl;
-    const cf: *CurlCfilter = @ptrCast(@alignCast(ctx orelse return WOLFSSL_CBIO_ERR_GENERAL));
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return WOLFSSL_CBIO_ERR_GENERAL));
-    const backend: *WsslSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return WOLFSSL_CBIO_ERR_GENERAL));
+    const cf = cfFromOpaque(ctx) orelse return WOLFSSL_CBIO_ERR_GENERAL;
+    const connssl = cfCtx(cf) orelse return WOLFSSL_CBIO_ERR_GENERAL;
+    const backend = connsslBackend(connssl) orelse return WOLFSSL_CBIO_ERR_GENERAL;
     const data = connssl.call_data;
 
     if (sz <= 0) return 0;
@@ -503,9 +545,9 @@ fn wssl_io_send(ssl: ?*WOLFSSL, buf_opt: ?[*]const u8, sz: c_int, ctx: ?*anyopaq
 fn wssl_io_recv(ssl: ?*WOLFSSL, buf_opt: ?[*]u8, sz: c_int, ctx: ?*anyopaque) callconv(.c) c_int {
     if (comptime !use_wolfssl) return WOLFSSL_CBIO_ERR_GENERAL;
     _ = ssl;
-    const cf: *CurlCfilter = @ptrCast(@alignCast(ctx orelse return WOLFSSL_CBIO_ERR_GENERAL));
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return WOLFSSL_CBIO_ERR_GENERAL));
-    const backend: *WsslSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return WOLFSSL_CBIO_ERR_GENERAL));
+    const cf = cfFromOpaque(ctx) orelse return WOLFSSL_CBIO_ERR_GENERAL;
+    const connssl = cfCtx(cf) orelse return WOLFSSL_CBIO_ERR_GENERAL;
+    const backend = connsslBackend(connssl) orelse return WOLFSSL_CBIO_ERR_GENERAL;
     const data = connssl.call_data;
     const buf = buf_opt orelse return 0;
 
@@ -543,7 +585,7 @@ fn do_file_type(type_opt: ?[*:0]const u8) c_int {
 fn peerDispname(peer: *const SslPeer) [*:0]const u8 {
     if (peer.origin) |orig| {
         if (orig.user_hostname[0] != 0) {
-            return @ptrCast(&orig.user_hostname[0]);
+            return @ptrCast(&orig.user_hostname);
         }
         return orig.hostname;
     }
@@ -560,7 +602,7 @@ fn peerHostname(peer: *const SslPeer) [*:0]const u8 {
 fn wsslStrerror(err: c_ulong, buf: *[WOLFSSL_MAX_ERROR_SZ]u8) [*:0]const u8 {
     if (comptime !use_wolfssl) {
         buf[0] = 0;
-        return @ptrCast(buf);
+        return "";
     }
     buf.* = @splat(0);
     if (err != 0) {
@@ -569,9 +611,9 @@ fn wsslStrerror(err: c_ulong, buf: *[WOLFSSL_MAX_ERROR_SZ]u8) [*:0]const u8 {
     return "Unknown error";
 }
 
-fn wsslPasswdCallback(buf: [*]u8, sz: c_int, rwflag: c_int, userdata: ?*anyopaque) callconv(.c) c_int {
+fn wsslPasswdCallback(buf: [*]u8, sz: c_int, rwflag: c_int, userdata: ?[*:0]const u8) callconv(.c) c_int {
     _ = rwflag;
-    const kpasswd: [*:0]const u8 = @ptrCast(userdata orelse return 0);
+    const kpasswd = userdata orelse return 0;
     if (sz <= 0) return 0;
     const max_len: usize = @intCast(sz);
     const pw_len = std.mem.len(kpasswd);
@@ -613,14 +655,14 @@ fn wssl_log_tls12_secret(ssl: *WOLFSSL) void {
 
 fn wssl_x509_share_free(obj: ?*anyopaque) callconv(.c) void {
     if (comptime !use_wolfssl) return;
-    const share: *WsslX509Share = @ptrCast(@alignCast(obj orelse return));
+    const share = shareFromOpaque(obj) orelse return;
     if (share.store) |store| {
         wssl_ext.wolfSSL_X509_STORE_free(store);
     }
     if (share.CAfile) |ca| {
         mem.free(ca);
     }
-    mem.freeSized(share, @sizeOf(WsslX509Share));
+    mem.freeTyped(share);
 }
 
 fn wssl_cached_x509_store_expired(data: ?*CurlEasy, mb: *const WsslX509Share) bool {
@@ -650,7 +692,7 @@ fn wssl_cached_x509_store_different(cf: *CurlCfilter, data: ?*CurlEasy, mb: *con
 fn get_cached_x509_store(cf: *CurlCfilter, data: ?*CurlEasy) ?*WOLFSSL_X509_STORE {
     if (comptime !use_wolfssl) return null;
     const d = data orelse return null;
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return null));
+    const connssl = cfCtx(cf) orelse return null;
     const scache_key = connssl.peer.scache_key orelse return null;
     const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf);
     var scache: ?*vtls_impl.CurlSslScache = null;
@@ -659,8 +701,7 @@ fn get_cached_x509_store(cf: *CurlCfilter, data: ?*CurlEasy) ?*WOLFSSL_X509_STOR
     c_ext.Curl_vtls_acc_scache_params(d, &scache, &has_share_scache, &trc_feat);
     vtls_scache_asn1.Curl_ssl_scache_lock_zig(d, scache, has_share_scache);
     defer vtls_scache_asn1.Curl_ssl_scache_unlock_zig(d, scache, has_share_scache);
-    const share_raw = vtls_scache_asn1.Curl_ssl_scache_get_obj_zig(cf, d, scache, conn_config, trc_feat, scache_key) orelse return null;
-    const share: *WsslX509Share = @ptrCast(@alignCast(share_raw));
+    const share = shareFromOpaque(vtls_scache_asn1.Curl_ssl_scache_get_obj_zig(cf, d, scache, conn_config, trc_feat, scache_key)) orelse return null;
     const store = share.store orelse return null;
 
     if (!wssl_cached_x509_store_expired(d, share) and
@@ -673,21 +714,29 @@ fn get_cached_x509_store(cf: *CurlCfilter, data: ?*CurlEasy) ?*WOLFSSL_X509_STOR
     return null;
 }
 
+fn createX509Share(d: *CurlEasy, store: *WOLFSSL_X509_STORE, cafile: ?[*:0]const u8) error{ OutOfMemory, UpRefFailed }!*WsslX509Share {
+    const share = mem.create(WsslX509Share) orelse return error.OutOfMemory;
+    errdefer mem.freeTyped(share);
+
+    if (wssl_ext.wolfSSL_X509_STORE_up_ref(store) == 0) {
+        return error.UpRefFailed;
+    }
+    errdefer wssl_ext.wolfSSL_X509_STORE_free(store);
+
+    share.time = c_ext.Curl_pgrs_now(d).*;
+    share.store = store;
+
+    if (cafile) |ca| {
+        share.CAfile = mem.strdup(ca) orelse return error.OutOfMemory;
+    }
+    return share;
+}
+
 fn set_cached_x509_store(cf: *CurlCfilter, data: ?*CurlEasy, store: *WOLFSSL_X509_STORE) void {
     if (comptime !use_wolfssl) return;
     const d = data orelse return;
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return));
+    const connssl = cfCtx(cf) orelse return;
     const scache_key = connssl.peer.scache_key orelse return;
-
-    const share_raw = mem.calloc(1, @sizeOf(WsslX509Share)) orelse return;
-    const share: *WsslX509Share = @ptrCast(@alignCast(share_raw));
-
-    if (wssl_ext.wolfSSL_X509_STORE_up_ref(store) == 0) {
-        mem.freeSized(share_raw, @sizeOf(WsslX509Share));
-        return;
-    }
-    share.time = c_ext.Curl_pgrs_now(d).*;
-    share.store = store;
 
     const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf);
     const is_proxy = vtls_impl.Curl_ssl_cf_is_proxy(cf);
@@ -696,14 +745,7 @@ fn set_cached_x509_store(cf: *CurlCfilter, data: ?*CurlEasy, store: *WOLFSSL_X50
     else
         c_ext.Curl_vtls_acc_ssl_cainfo(d, is_proxy);
 
-    if (cafile) |ca| {
-        const dup = mem.strdup(ca) orelse {
-            wssl_ext.wolfSSL_X509_STORE_free(store);
-            mem.freeSized(share_raw, @sizeOf(WsslX509Share));
-            return;
-        };
-        share.CAfile = dup;
-    }
+    const share = createX509Share(d, store, cafile) catch return;
 
     var scache: ?*vtls_impl.CurlSslScache = null;
     var has_share_scache = false;
@@ -765,12 +807,11 @@ fn wssl_populate_x509_store(
     }
 
     if (ca_info_blob) |blob| {
-        if (blob.data != null and blob.len > 0) {
-            const ptr: [*]const u8 = @ptrCast(blob.data.?);
+        if (blobBytes(blob)) |bytes| {
             if (wssl_ext.wolfSSL_CTX_load_verify_buffer(
                 ssl_ctx,
-                ptr,
-                @intCast(blob.len),
+                bytes.ptr,
+                @intCast(bytes.len),
                 SSL_FILETYPE_PEM,
             ) != SSL_SUCCESS) {
                 if (imported_native_ca) {
@@ -852,12 +893,7 @@ pub fn Curl_wssl_setup_x509_store(
     wssl_raw: ?*anyopaque,
 ) callconv(.c) CURLcode {
     if (comptime !use_wolfssl) return CURLE_OK;
-    const backend: *WsslSslBackendData = if (wssl_raw) |p|
-        @ptrCast(@alignCast(p))
-    else blk: {
-        const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-        break :blk @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
-    };
+    const backend = backendFromOpaque(wssl_raw) orelse cfBackend(cf) orelse return CURLE_SSL_CONNECT_ERROR;
     const ssl_ctx = backend.ssl_ctx orelse return CURLE_SSL_CONNECT_ERROR;
 
     if (backend.x509_store_setup()) {
@@ -1010,38 +1046,42 @@ fn wssl_set_ssl_version_min_max(ctx: *WOLFSSL_CTX, cf: *CurlCfilter, data: ?*Cur
     return CURLE_OK;
 }
 
+fn encodeSessionAsn1(sess: *WOLFSSL_SESSION) error{EncodeFailed}!struct { ptr: [*]u8, alloc_len: usize, enc_len: usize } {
+    const sdata_len_int = wssl_ext.wolfSSL_i2d_SSL_SESSION(sess, null);
+    if (sdata_len_int <= 0) return error.EncodeFailed;
+    const sdata_len: usize = @intCast(sdata_len_int);
+    const sdata = mem.callocMany(u8, sdata_len) orelse return error.EncodeFailed;
+    errdefer {
+        mem.secureZero(sdata, sdata_len);
+        mem.freeSized(sdata, sdata_len);
+    }
+    var sdata_ptr: ?[*]u8 = sdata;
+    const enc_len = wssl_ext.wolfSSL_i2d_SSL_SESSION(sess, &sdata_ptr);
+    if (enc_len <= 0) return error.EncodeFailed;
+    return .{ .ptr = sdata, .alloc_len = sdata_len, .enc_len = @intCast(enc_len) };
+}
+
 fn wssl_new_session_cb(ssl: ?*WOLFSSL, session: ?*WOLFSSL_SESSION) callconv(.c) c_int {
     if (comptime !use_wolfssl) return 0;
     const s = ssl orelse return 0;
     const sess = session orelse return 0;
-    const cf_raw = wssl_ext.wolfSSL_get_app_data(s) orelse return 0;
-    const cf: *CurlCfilter = @ptrCast(@alignCast(cf_raw));
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return 0));
-    const backend: *WsslSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return 0));
+    const cf = cfFromOpaque(wssl_ext.wolfSSL_get_app_data(s)) orelse return 0;
+    const connssl = cfCtx(cf) orelse return 0;
+    const backend = connsslBackend(connssl) orelse return 0;
     const data = connssl.call_data orelse backend.handle orelse return 0;
     const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return 0;
     if (!conn_config.primary_cache_session()) return 0;
     const scache_key = connssl.peer.scache_key orelse return 0;
 
-    const sdata_len_int = wssl_ext.wolfSSL_i2d_SSL_SESSION(sess, null);
-    if (sdata_len_int <= 0) return 0;
-    const sdata_len: usize = @intCast(sdata_len_int);
-    const sdata_raw = mem.calloc(1, sdata_len) orelse return 0;
-    var sdata_ptr: ?[*]u8 = @ptrCast(sdata_raw);
-    const enc_len = wssl_ext.wolfSSL_i2d_SSL_SESSION(sess, &sdata_ptr);
-    if (enc_len <= 0) {
-        mem.secureZero(sdata_raw, sdata_len);
-        mem.freeSized(sdata_raw, sdata_len);
-        return 0;
-    }
+    const encoded = encodeSessionAsn1(sess) catch return 0;
 
     const timeout = wssl_ext.wolfSSL_SESSION_get_timeout(sess);
     const valid_until = if (timeout > 0) vtls_scache_asn1.nowEpochSecs() + @as(i64, @intCast(timeout)) else 0;
     const ietf_tls_id = wssl_ext.wolfSSL_version(s);
     var sc_session: ?*CurlSslSession = null;
     const rc = vtls_scache_asn1.Curl_ssl_session_create2(
-        @ptrCast(sdata_raw),
-        @intCast(enc_len),
+        encoded.ptr,
+        encoded.enc_len,
         ietf_tls_id,
         connssl.negotiated_alpn,
         valid_until,
@@ -1058,12 +1098,12 @@ fn wssl_new_session_cb(ssl: ?*WOLFSSL, session: ?*WOLFSSL_SESSION) callconv(.c) 
             c_ext.Curl_vtls_acc_scache_params(data, &scache, &has_share_scache, &trc_feat);
             _ = vtls_scache_asn1.Curl_ssl_scache_put_zig(cf, data, scache, has_share_scache, conn_config, trc_feat, scache_key, scs);
         } else {
-            mem.secureZero(sdata_raw, sdata_len);
-            mem.freeSized(sdata_raw, sdata_len);
+            mem.secureZero(encoded.ptr, encoded.alloc_len);
+            mem.freeSized(encoded.ptr, encoded.alloc_len);
         }
     } else {
-        mem.secureZero(sdata_raw, sdata_len);
-        mem.freeSized(sdata_raw, sdata_len);
+        mem.secureZero(encoded.ptr, encoded.alloc_len);
+        mem.freeSized(encoded.ptr, encoded.alloc_len);
     }
     return 0;
 }
@@ -1074,7 +1114,7 @@ fn wssl_setup_session(cf: *CurlCfilter, data: ?*CurlEasy, backend: *WsslSslBacke
     if (!conn_config.primary_cache_session()) return CURLE_OK;
     const ssl_ctx = backend.ssl_ctx orelse return CURLE_SSL_CONNECT_ERROR;
     const ssl = backend.ssl orelse return CURLE_SSL_CONNECT_ERROR;
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
+    const connssl = cfCtx(cf) orelse return CURLE_SSL_CONNECT_ERROR;
 
     _ = wssl_ext.wolfSSL_set_app_data(ssl, cf);
     _ = wssl_ext.wolfSSL_CTX_set_session_cache_mode(ssl_ctx, WOLFSSL_SESS_CACHE_OFF);
@@ -1089,8 +1129,8 @@ fn wssl_setup_session(cf: *CurlCfilter, data: ?*CurlEasy, backend: *WsslSslBacke
         var scs: ?*CurlSslSession = null;
         if (vtls_scache_asn1.Curl_ssl_scache_take_zig(cf, d, scache, has_share_scache, conn_config, trc_feat, scache_key, &scs) == CURLE_OK) {
             if (scs) |s| {
-                if (s.sdata != null and s.sdata_len > 0) {
-                    var sdata_ptr: [*]const u8 = @ptrCast(s.sdata.?);
+                if (sessionBytesPtr(s)) |init_ptr| {
+                    var sdata_ptr = init_ptr;
                     if (wssl_ext.wolfSSL_d2i_SSL_SESSION(null, &sdata_ptr, @intCast(s.sdata_len))) |w_sess| {
                         defer wssl_ext.wolfSSL_SESSION_free(w_sess);
                         if (wssl_ext.wolfSSL_set_session(ssl, w_sess) == WOLFSSL_SUCCESS) {
@@ -1107,10 +1147,26 @@ fn wssl_setup_session(cf: *CurlCfilter, data: ?*CurlEasy, backend: *WsslSslBacke
     return CURLE_OK;
 }
 
+fn setCombinedCipherList(ssl_ctx: *WOLFSSL_CTX, c13: [*:0]const u8, c12: [*:0]const u8) error{ OutOfMemory, CipherError }!void {
+    const len13 = std.mem.len(c13);
+    const len12 = std.mem.len(c12);
+    const total = len13 + 1 + len12;
+    const combined = mem.allocMany(u8, total + 1) orelse return error.OutOfMemory;
+    defer mem.freeSized(combined, total + 1);
+    @memcpy(combined[0..len13], c13[0..len13]);
+    combined[len13] = ':';
+    @memcpy(combined[len13 + 1 .. total], c12[0..len12]);
+    combined[total] = 0;
+    const combined_z = combined[0..total :0];
+    if (wssl_ext.wolfSSL_CTX_set_cipher_list(ssl_ctx, combined_z.ptr) == 0) {
+        return error.CipherError;
+    }
+}
+
 fn wssl_init_step1(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
     if (comptime !use_wolfssl) return CURLE_NOT_BUILT_IN;
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-    const backend: *WsslSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+    const connssl = cfCtx(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+    const backend = connsslBackend(connssl) orelse return CURLE_SSL_CONNECT_ERROR;
     const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
     const is_proxy = vtls_impl.Curl_ssl_cf_is_proxy(cf);
 
@@ -1142,20 +1198,13 @@ fn wssl_init_step1(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
 
     if (ciphers13) |c13| {
         if (ciphers12) |c12| {
-            const len13 = std.mem.len(c13);
-            const len12 = std.mem.len(c12);
-            const total = len13 + 1 + len12 + 1;
-            const combined_raw = mem.malloc(total) orelse return CURLE_OUT_OF_MEMORY;
-            defer mem.free(combined_raw);
-            const combined: [*]u8 = @ptrCast(combined_raw);
-            @memcpy(combined[0..len13], c13[0..len13]);
-            combined[len13] = ':';
-            @memcpy(combined[len13 + 1 .. len13 + 1 + len12], c12[0..len12]);
-            combined[len13 + 1 + len12] = 0;
-            if (wssl_ext.wolfSSL_CTX_set_cipher_list(ssl_ctx, @ptrCast(combined)) == 0) {
-                c_ext.Curl_failf(data, "failed setting cipher list: %s:%s", c13, c12);
-                return CURLE_SSL_CIPHER;
-            }
+            setCombinedCipherList(ssl_ctx, c13, c12) catch |err| switch (err) {
+                error.OutOfMemory => return CURLE_OUT_OF_MEMORY,
+                error.CipherError => {
+                    c_ext.Curl_failf(data, "failed setting cipher list: %s:%s", c13, c12);
+                    return CURLE_SSL_CIPHER;
+                },
+            };
             c_ext.Curl_infof(data, "Cipher selection: %s:%s", c13, c12);
         } else {
             if (wssl_ext.wolfSSL_CTX_set_cipher_list(ssl_ctx, c13) == 0) {
@@ -1199,8 +1248,8 @@ fn wssl_init_step1(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
         const file_type = do_file_type(cert_type_str);
         if (file_type == SSL_FILETYPE_PEM) {
             const ret = if (cert_blob) |cb|
-                if (cb.data != null and cb.len > 0)
-                    wssl_ext.wolfSSL_CTX_use_certificate_chain_buffer(ssl_ctx, @ptrCast(cb.data.?), @intCast(cb.len))
+                if (blobBytes(cb)) |bytes|
+                    wssl_ext.wolfSSL_CTX_use_certificate_chain_buffer(ssl_ctx, bytes.ptr, @intCast(bytes.len))
                 else
                     0
             else
@@ -1211,8 +1260,8 @@ fn wssl_init_step1(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
             }
         } else if (file_type == SSL_FILETYPE_ASN1) {
             const ret = if (cert_blob) |cb|
-                if (cb.data != null and cb.len > 0)
-                    wssl_ext.wolfSSL_CTX_use_certificate_buffer(ssl_ctx, @ptrCast(cb.data.?), @intCast(cb.len), file_type)
+                if (blobBytes(cb)) |bytes|
+                    wssl_ext.wolfSSL_CTX_use_certificate_buffer(ssl_ctx, bytes.ptr, @intCast(bytes.len), file_type)
                 else
                     0
             else
@@ -1240,11 +1289,11 @@ fn wssl_init_step1(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
         }
         if (key_passwd) |pw| {
             wssl_ext.wolfSSL_CTX_set_default_passwd_cb(ssl_ctx, &wsslPasswdCallback);
-            wssl_ext.wolfSSL_CTX_set_default_passwd_cb_userdata(ssl_ctx, @ptrCast(@constCast(pw)));
+            wssl_ext.wolfSSL_CTX_set_default_passwd_cb_userdata(ssl_ctx, pw);
         }
         const ret = if (key_blob) |kb|
-            if (kb.data != null and kb.len > 0)
-                wssl_ext.wolfSSL_CTX_use_PrivateKey_buffer(ssl_ctx, @ptrCast(kb.data.?), @intCast(kb.len), file_type)
+            if (blobBytes(kb)) |bytes|
+                wssl_ext.wolfSSL_CTX_use_PrivateKey_buffer(ssl_ctx, bytes.ptr, @intCast(bytes.len), file_type)
             else
                 0
         else
@@ -1295,7 +1344,7 @@ fn wssl_init_step1(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
                     c_ext.Curl_failf(data, "SSL: failed setting ALPN protocols");
                     return CURLE_SSL_CONNECT_ERROR;
                 }
-                c_ext.Curl_infof(data, "ALPN: curl offers %s", @as([*:0]const u8, @ptrCast(&proto.data)));
+                c_ext.Curl_infof(data, "ALPN: curl offers %s", (&proto.data)[0..@intCast(proto.len) :0].ptr);
             }
         }
     }
@@ -1323,9 +1372,8 @@ fn wssl_init_step1(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
     var fsslctx_fn: ?*const anyopaque = null;
     var fsslctx_p: ?*anyopaque = null;
     if (c_ext.Curl_vtls_acc_ssl_fsslctx(data, &fsslctx_fn, &fsslctx_p)) {
-        if (fsslctx_fn) |fn_ptr| {
+        if (sslCtxCbFromOpaque(fsslctx_fn)) |cb| {
             c_ext.Curl_pgrsTime(data, vtls_backends.TIMER_APPCONNECT);
-            const cb: *const fn (?*CurlEasy, ?*anyopaque, ?*anyopaque) callconv(.c) CURLcode = @ptrCast(@alignCast(fn_ptr));
             const cb_rc = cb(data, ssl_ctx, fsslctx_p);
             if (cb_rc != CURLE_OK) {
                 c_ext.Curl_failf(data, "error signaled by ssl ctx callback");
@@ -1388,17 +1436,17 @@ fn wssl_pin_peer_pubkey(cf: *CurlCfilter, data: ?*CurlEasy, backend: *WsslSslBac
     }
 
     const len: usize = @intCast(len_int);
-    const buff1_raw = mem.malloc(len) orelse return CURLE_OUT_OF_MEMORY;
-    defer mem.free(buff1_raw);
+    const buff1 = mem.allocMany(u8, len) orelse return CURLE_OUT_OF_MEMORY;
+    defer mem.freeSized(buff1, len);
 
-    var temp: ?[*]u8 = @ptrCast(buff1_raw);
+    var temp: ?[*]u8 = buff1;
     const enc_len = wssl_ext.wolfSSL_i2d_PUBKEY(pkey, &temp);
     if (enc_len != len_int) {
         c_ext.Curl_failf(data, "SSL: failed retrieving public key from server certificate");
         return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
     }
 
-    return vtls_impl.Curl_pin_peer_pubkey(data, pinnedpubkey, @ptrCast(buff1_raw), len);
+    return vtls_impl.Curl_pin_peer_pubkey(data, pinnedpubkey, buff1, len);
 }
 
 pub fn Curl_wssl_verify_pinned(
@@ -1437,7 +1485,7 @@ pub const CurlWsslInitSessionReuseCb = *const fn (
     do_early_data: *bool,
 ) callconv(.c) CURLcode;
 
-pub fn Curl_wssl_ctx_init(
+fn wssl_ctx_initImpl(
     wctx: *WsslSslBackendData,
     cf: *CurlCfilter,
     data: ?*CurlEasy,
@@ -1447,33 +1495,37 @@ pub fn Curl_wssl_ctx_init(
     cb_user_data: ?*anyopaque,
     ssl_user_data: ?*anyopaque,
     sess_reuse_cb: ?CurlWsslInitSessionReuseCb,
-) callconv(.c) CURLcode {
-    if (comptime !use_wolfssl) return CURLE_NOT_BUILT_IN;
-    const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_FAILED_INIT;
+    out_rc: *CURLcode,
+) error{StepFailed}!void {
+    const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse {
+        out_rc.* = CURLE_FAILED_INIT;
+        return error.StepFailed;
+    };
     const is_proxy = vtls_impl.Curl_ssl_cf_is_proxy(cf);
 
     wctx.handle = data;
-    const req_method = wssl_ext.wolfSSLv23_client_method() orelse return CURLE_OUT_OF_MEMORY;
+    const req_method = wssl_ext.wolfSSLv23_client_method() orelse {
+        out_rc.* = CURLE_OUT_OF_MEMORY;
+        return error.StepFailed;
+    };
     if (wctx.ssl_ctx) |old_ctx| {
         wssl_ext.wolfSSL_CTX_free(old_ctx);
     }
-    const ssl_ctx = wssl_ext.wolfSSL_CTX_new(req_method) orelse return CURLE_OUT_OF_MEMORY;
-    wctx.ssl_ctx = ssl_ctx;
-
-    var result: CURLcode = CURLE_OK;
-    defer if (result != CURLE_OK) {
-        if (wctx.ssl) |s| {
-            wssl_ext.wolfSSL_free(s);
-            wctx.ssl = null;
-        }
-        if (wctx.ssl_ctx) |c| {
-            wssl_ext.wolfSSL_CTX_free(c);
-            wctx.ssl_ctx = null;
-        }
+    const ssl_ctx = wssl_ext.wolfSSL_CTX_new(req_method) orelse {
+        out_rc.* = CURLE_OUT_OF_MEMORY;
+        return error.StepFailed;
     };
+    wctx.ssl_ctx = ssl_ctx;
+    errdefer {
+        wssl_ext.wolfSSL_CTX_free(ssl_ctx);
+        wctx.ssl_ctx = null;
+    }
 
-    result = wssl_set_ssl_version_min_max(ssl_ctx, cf, data);
-    if (result != CURLE_OK) return result;
+    const ver_rc = wssl_set_ssl_version_min_max(ssl_ctx, cf, data);
+    if (ver_rc != CURLE_OK) {
+        out_rc.* = ver_rc;
+        return error.StepFailed;
+    }
 
     const ciphers12: ?[*:0]const u8 = if (conn_config.cipher_list) |cl|
         cl
@@ -1487,36 +1539,29 @@ pub fn Curl_wssl_ctx_init(
 
     if (ciphers13) |c13| {
         if (ciphers12) |c12| {
-            const len13 = std.mem.len(c13);
-            const len12 = std.mem.len(c12);
-            const total = len13 + 1 + len12 + 1;
-            const combined_raw = mem.malloc(total) orelse {
-                result = CURLE_OUT_OF_MEMORY;
-                return result;
+            setCombinedCipherList(ssl_ctx, c13, c12) catch |err| switch (err) {
+                error.OutOfMemory => {
+                    out_rc.* = CURLE_OUT_OF_MEMORY;
+                    return error.StepFailed;
+                },
+                error.CipherError => {
+                    c_ext.Curl_failf(data, "failed setting cipher list: %s:%s", c13, c12);
+                    out_rc.* = CURLE_SSL_CIPHER;
+                    return error.StepFailed;
+                },
             };
-            defer mem.free(combined_raw);
-            const combined: [*]u8 = @ptrCast(combined_raw);
-            @memcpy(combined[0..len13], c13[0..len13]);
-            combined[len13] = ':';
-            @memcpy(combined[len13 + 1 .. len13 + 1 + len12], c12[0..len12]);
-            combined[len13 + 1 + len12] = 0;
-            if (wssl_ext.wolfSSL_CTX_set_cipher_list(ssl_ctx, @ptrCast(combined)) == 0) {
-                c_ext.Curl_failf(data, "failed setting cipher list: %s:%s", c13, c12);
-                result = CURLE_SSL_CIPHER;
-                return result;
-            }
         } else {
             if (wssl_ext.wolfSSL_CTX_set_cipher_list(ssl_ctx, c13) == 0) {
                 c_ext.Curl_failf(data, "failed setting TLS 1.3 cipher suite: %s", c13);
-                result = CURLE_SSL_CIPHER;
-                return result;
+                out_rc.* = CURLE_SSL_CIPHER;
+                return error.StepFailed;
             }
         }
     } else if (ciphers12) |c12| {
         if (wssl_ext.wolfSSL_CTX_set_cipher_list(ssl_ctx, c12) == 0) {
             c_ext.Curl_failf(data, "failed setting cipher list: %s", c12);
-            result = CURLE_SSL_CIPHER;
-            return result;
+            out_rc.* = CURLE_SSL_CIPHER;
+            return error.StepFailed;
         }
     } else {
         _ = wssl_ext.wolfSSL_CTX_set_cipher_list(ssl_ctx, SSL_DEFAULT_CIPHER_LIST);
@@ -1530,8 +1575,8 @@ pub fn Curl_wssl_ctx_init(
     if (curves) |cv| {
         if (wssl_ext.wolfSSL_CTX_set1_curves_list(ssl_ctx, cv) != WOLFSSL_SUCCESS) {
             c_ext.Curl_failf(data, "failed setting curves list: '%s'", cv);
-            result = CURLE_SSL_CIPHER;
-            return result;
+            out_rc.* = CURLE_SSL_CIPHER;
+            return error.StepFailed;
         }
     }
 
@@ -1547,34 +1592,34 @@ pub fn Curl_wssl_ctx_init(
         const file_type = do_file_type(cert_type_str);
         if (file_type == SSL_FILETYPE_PEM) {
             const ret = if (cert_blob) |cb|
-                if (cb.data != null and cb.len > 0)
-                    wssl_ext.wolfSSL_CTX_use_certificate_chain_buffer(ssl_ctx, @ptrCast(cb.data.?), @intCast(cb.len))
+                if (blobBytes(cb)) |bytes|
+                    wssl_ext.wolfSSL_CTX_use_certificate_chain_buffer(ssl_ctx, bytes.ptr, @intCast(bytes.len))
                 else
                     0
             else
                 wssl_ext.wolfSSL_CTX_use_certificate_chain_file(ssl_ctx, cert_file.?);
             if (ret != 1) {
                 c_ext.Curl_failf(data, "unable to use client certificate");
-                result = CURLE_SSL_CERTPROBLEM;
-                return result;
+                out_rc.* = CURLE_SSL_CERTPROBLEM;
+                return error.StepFailed;
             }
         } else if (file_type == SSL_FILETYPE_ASN1) {
             const ret = if (cert_blob) |cb|
-                if (cb.data != null and cb.len > 0)
-                    wssl_ext.wolfSSL_CTX_use_certificate_buffer(ssl_ctx, @ptrCast(cb.data.?), @intCast(cb.len), file_type)
+                if (blobBytes(cb)) |bytes|
+                    wssl_ext.wolfSSL_CTX_use_certificate_buffer(ssl_ctx, bytes.ptr, @intCast(bytes.len), file_type)
                 else
                     0
             else
                 wssl_ext.wolfSSL_CTX_use_certificate_file(ssl_ctx, cert_file.?, file_type);
             if (ret != 1) {
                 c_ext.Curl_failf(data, "unable to use client certificate");
-                result = CURLE_SSL_CERTPROBLEM;
-                return result;
+                out_rc.* = CURLE_SSL_CERTPROBLEM;
+                return error.StepFailed;
             }
         } else {
             c_ext.Curl_failf(data, "unknown cert type");
-            result = CURLE_SSL_CERTPROBLEM;
-            return result;
+            out_rc.* = CURLE_SSL_CERTPROBLEM;
+            return error.StepFailed;
         }
 
         if (key_file == null and key_blob == null) {
@@ -1587,24 +1632,24 @@ pub fn Curl_wssl_ctx_init(
         const file_type = do_file_type(key_type_str);
         if (file_type != SSL_FILETYPE_PEM and file_type != SSL_FILETYPE_ASN1) {
             c_ext.Curl_failf(data, "unknown key type");
-            result = CURLE_SSL_CERTPROBLEM;
-            return result;
+            out_rc.* = CURLE_SSL_CERTPROBLEM;
+            return error.StepFailed;
         }
         if (key_passwd) |pw| {
             wssl_ext.wolfSSL_CTX_set_default_passwd_cb(ssl_ctx, &wsslPasswdCallback);
-            wssl_ext.wolfSSL_CTX_set_default_passwd_cb_userdata(ssl_ctx, @ptrCast(@constCast(pw)));
+            wssl_ext.wolfSSL_CTX_set_default_passwd_cb_userdata(ssl_ctx, pw);
         }
         const ret = if (key_blob) |kb|
-            if (kb.data != null and kb.len > 0)
-                wssl_ext.wolfSSL_CTX_use_PrivateKey_buffer(ssl_ctx, @ptrCast(kb.data.?), @intCast(kb.len), file_type)
+            if (blobBytes(kb)) |bytes|
+                wssl_ext.wolfSSL_CTX_use_PrivateKey_buffer(ssl_ctx, bytes.ptr, @intCast(bytes.len), file_type)
             else
                 0
         else
             wssl_ext.wolfSSL_CTX_use_PrivateKey_file(ssl_ctx, key_file.?, file_type);
         if (ret != 1) {
             c_ext.Curl_failf(data, "unable to set private key");
-            result = CURLE_SSL_CERTPROBLEM;
-            return result;
+            out_rc.* = CURLE_SSL_CERTPROBLEM;
+            return error.StepFailed;
         }
     }
 
@@ -1615,33 +1660,43 @@ pub fn Curl_wssl_ctx_init(
     );
 
     if (cb_setup) |setup_fn| {
-        result = setup_fn(cf, data, cb_user_data);
-        if (result != CURLE_OK) return result;
+        const rc = setup_fn(cf, data, cb_user_data);
+        if (rc != CURLE_OK) {
+            out_rc.* = rc;
+            return error.StepFailed;
+        }
     }
 
     var fsslctx_fn: ?*const anyopaque = null;
     var fsslctx_p: ?*anyopaque = null;
     if (c_ext.Curl_vtls_acc_ssl_fsslctx(data, &fsslctx_fn, &fsslctx_p)) {
         if (!wctx.x509_store_setup()) {
-            result = Curl_wssl_setup_x509_store(cf, data, wctx);
-            if (result != CURLE_OK) return result;
+            const rc = Curl_wssl_setup_x509_store(cf, data, wctx);
+            if (rc != CURLE_OK) {
+                out_rc.* = rc;
+                return error.StepFailed;
+            }
         }
-        if (fsslctx_fn) |fn_ptr| {
+        if (sslCtxCbFromOpaque(fsslctx_fn)) |cb| {
             c_ext.Curl_pgrsTime(data, vtls_backends.TIMER_APPCONNECT);
-            const cb: *const fn (?*CurlEasy, ?*anyopaque, ?*anyopaque) callconv(.c) CURLcode = @ptrCast(@alignCast(fn_ptr));
-            result = cb(data, ssl_ctx, fsslctx_p);
-            if (result != CURLE_OK) {
+            const rc = cb(data, ssl_ctx, fsslctx_p);
+            if (rc != CURLE_OK) {
                 c_ext.Curl_failf(data, "error signaled by SSL ctx callback");
-                return result;
+                out_rc.* = rc;
+                return error.StepFailed;
             }
         }
     }
 
     const ssl = wssl_ext.wolfSSL_new(ssl_ctx) orelse {
-        result = CURLE_OUT_OF_MEMORY;
-        return result;
+        out_rc.* = CURLE_OUT_OF_MEMORY;
+        return error.StepFailed;
     };
     wctx.ssl = ssl;
+    errdefer {
+        wssl_ext.wolfSSL_free(ssl);
+        wctx.ssl = null;
+    }
     _ = wssl_ext.wolfSSL_set_app_data(ssl, ssl_user_data);
 
     if (peer.sni) |sni| {
@@ -1649,8 +1704,8 @@ pub fn Curl_wssl_ctx_init(
         if (sni_len > 0 and sni_len <= std.math.maxInt(c_ushort)) {
             if (wssl_ext.wolfSSL_UseSNI(ssl, WOLFSSL_SNI_HOST_NAME, sni, @intCast(sni_len)) != WOLFSSL_SUCCESS) {
                 c_ext.Curl_failf(data, "Failed to set SNI");
-                result = CURLE_SSL_CONNECT_ERROR;
-                return result;
+                out_rc.* = CURLE_SSL_CONNECT_ERROR;
+                return error.StepFailed;
             }
         }
     }
@@ -1666,8 +1721,8 @@ pub fn Curl_wssl_ctx_init(
                 if (vtls_scache_asn1.Curl_ssl_scache_take_zig(cf, d, scache, has_share_scache, conn_config, trc_feat, scache_key, &scs) == CURLE_OK) {
                     if (scs) |s| {
                         var applied = false;
-                        if (s.sdata != null and s.sdata_len > 0) {
-                            var sdata_ptr: [*]const u8 = @ptrCast(s.sdata.?);
+                        if (sessionBytesPtr(s)) |init_ptr| {
+                            var sdata_ptr = init_ptr;
                             if (wssl_ext.wolfSSL_d2i_SSL_SESSION(null, &sdata_ptr, @intCast(s.sdata_len))) |w_sess| {
                                 defer wssl_ext.wolfSSL_SESSION_free(w_sess);
                                 if (wssl_ext.wolfSSL_set_session(ssl, w_sess) == WOLFSSL_SUCCESS) {
@@ -1699,8 +1754,11 @@ pub fn Curl_wssl_ctx_init(
                 .data = @splat(0),
                 .len = 0,
             };
-            result = vtls_impl.Curl_alpn_to_proto_str(&proto, alpn_spec);
-            if (result != CURLE_OK) return result;
+            const rc = vtls_impl.Curl_alpn_to_proto_str(&proto, alpn_spec);
+            if (rc != CURLE_OK) {
+                out_rc.* = rc;
+                return error.StepFailed;
+            }
             if (proto.len > 0) {
                 if (wssl_ext.wolfSSL_UseALPN(
                     ssl,
@@ -1709,8 +1767,8 @@ pub fn Curl_wssl_ctx_init(
                     WOLFSSL_ALPN_CONTINUE_ON_MISMATCH,
                 ) != SSL_SUCCESS) {
                     c_ext.Curl_failf(data, "SSL: failed setting ALPN protocols");
-                    result = CURLE_SSL_CONNECT_ERROR;
-                    return result;
+                    out_rc.* = CURLE_SSL_CONNECT_ERROR;
+                    return error.StepFailed;
                 }
             }
         }
@@ -1721,6 +1779,33 @@ pub fn Curl_wssl_ctx_init(
     }
 
     _ = wssl_ext.wolfSSL_UseSecureRenegotiation(ssl);
+}
+
+pub fn Curl_wssl_ctx_init(
+    wctx: *WsslSslBackendData,
+    cf: *CurlCfilter,
+    data: ?*CurlEasy,
+    peer: *const vtls_backends.SslPeer,
+    alpns_requested: ?*const vtls_backends.AlpnSpec,
+    cb_setup: ?CurlWsslCtxSetupCb,
+    cb_user_data: ?*anyopaque,
+    ssl_user_data: ?*anyopaque,
+    sess_reuse_cb: ?CurlWsslInitSessionReuseCb,
+) callconv(.c) CURLcode {
+    if (comptime !use_wolfssl) return CURLE_NOT_BUILT_IN;
+    var out_rc: CURLcode = CURLE_OK;
+    wssl_ctx_initImpl(
+        wctx,
+        cf,
+        data,
+        peer,
+        alpns_requested,
+        cb_setup,
+        cb_user_data,
+        ssl_user_data,
+        sess_reuse_cb,
+        &out_rc,
+    ) catch return out_rc;
     return CURLE_OK;
 }
 
@@ -1754,8 +1839,8 @@ fn wssl_collect_certinfo(data: ?*CurlEasy, ssl: *WOLFSSL) CURLcode {
 
 fn wssl_handshake(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
     if (comptime !use_wolfssl) return CURLE_NOT_BUILT_IN;
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-    const backend: *WsslSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+    const connssl = cfCtx(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+    const backend = connsslBackend(connssl) orelse return CURLE_SSL_CONNECT_ERROR;
     const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
     const ssl_config = vtls_impl.Curl_ssl_cf_get_easy_config(cf, data);
     const ssl = backend.ssl orelse return CURLE_SSL_CONNECT_ERROR;
@@ -1858,8 +1943,8 @@ fn wssl_handshake(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
 
 fn wssl_connect_step3(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
     if (comptime !use_wolfssl) return CURLE_NOT_BUILT_IN;
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-    const backend: *WsslSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+    const connssl = cfCtx(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+    const backend = connsslBackend(connssl) orelse return CURLE_SSL_CONNECT_ERROR;
     const ssl = backend.ssl orelse return CURLE_SSL_CONNECT_ERROR;
 
     const pin_rc = wssl_pin_peer_pubkey(cf, data, backend);
@@ -1931,14 +2016,14 @@ fn wsslShutdown(
         done.* = true;
         return CURLE_OK;
     }
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse {
+    const connssl = cfCtx(cf) orelse {
         done.* = true;
         return CURLE_OK;
-    }));
-    const backend: *WsslSslBackendData = @ptrCast(@alignCast(connssl.backend orelse {
+    };
+    const backend = connsslBackend(connssl) orelse {
         done.* = true;
         return CURLE_OK;
-    }));
+    };
 
     if (backend.ssl == null or cf.isShutdown()) {
         done.* = true;
@@ -2006,8 +2091,7 @@ fn wsslShutdown(
 fn wsslDataPending(cf: *CurlCfilter, data: ?*const CurlEasy) callconv(.c) bool {
     if (comptime !use_wolfssl) return false;
     _ = data;
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return false));
-    const backend: *WsslSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return false));
+    const backend = cfBackend(cf) orelse return false;
     if (backend.ssl) |ssl| {
         return wssl_ext.wolfSSL_pending(ssl) != 0;
     }
@@ -2046,8 +2130,8 @@ fn wsslConnect(
         done.* = false;
         return CURLE_SSL_CONNECT_ERROR;
     }
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-    const backend: *WsslSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+    const connssl = cfCtx(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+    const backend = connsslBackend(connssl) orelse return CURLE_SSL_CONNECT_ERROR;
 
     if (connssl.state == vtls_impl.ssl_connection_complete) {
         done.* = true;
@@ -2084,17 +2168,17 @@ fn wsslConnect(
 }
 
 fn wsslGetInternals(connssl: *SslConnectData, info: c_uint) callconv(.c) ?*anyopaque {
-    const backend: *WsslSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return null));
+    const backend = connsslBackend(connssl) orelse return null;
     return if (info == vtls_impl.CURLINFO_TLS_SESSION)
-        @ptrCast(backend.ssl_ctx)
+        mem.toRawPtr(backend.ssl_ctx)
     else
-        @ptrCast(backend.ssl);
+        mem.toRawPtr(backend.ssl);
 }
 
 fn wsslClose(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) void {
     if (comptime !use_wolfssl) return;
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return));
-    const backend: *WsslSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return));
+    const connssl = cfCtx(cf) orelse return;
+    const backend = connsslBackend(connssl) orelse return;
 
     connssl.call_data = data;
     backend.handle = data;
@@ -2146,8 +2230,8 @@ fn wsslRecv(
         pnread.* = 0;
         return CURLE_RECV_ERROR;
     }
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_RECV_ERROR));
-    const backend: *WsslSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_RECV_ERROR));
+    const connssl = cfCtx(cf) orelse return CURLE_RECV_ERROR;
+    const backend = connsslBackend(connssl) orelse return CURLE_RECV_ERROR;
     const ssl = backend.ssl orelse return CURLE_RECV_ERROR;
 
     pnread.* = 0;
@@ -2223,8 +2307,8 @@ fn wsslSend(
         pnwritten.* = 0;
         return CURLE_SEND_ERROR;
     }
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SEND_ERROR));
-    const backend: *WsslSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SEND_ERROR));
+    const connssl = cfCtx(cf) orelse return CURLE_SEND_ERROR;
+    const backend = connsslBackend(connssl) orelse return CURLE_SEND_ERROR;
     const ssl = backend.ssl orelse return CURLE_SEND_ERROR;
 
     pnwritten.* = 0;
@@ -2335,9 +2419,9 @@ test "wolfSSL helpers, flags, and crypto callbacks" {
 
     var pw_buf: [16]u8 = @splat(0);
     const pw: [*:0]const u8 = "secret";
-    try std.testing.expectEqual(@as(c_int, 6), wsslPasswdCallback(&pw_buf, pw_buf.len, 0, @ptrCast(@constCast(pw))));
+    try std.testing.expectEqual(@as(c_int, 6), wsslPasswdCallback(&pw_buf, pw_buf.len, 0, pw));
     try std.testing.expectEqualStrings("secret", pw_buf[0..6]);
-    try std.testing.expectEqual(@as(c_int, 0), wsslPasswdCallback(&pw_buf, 4, 0, @ptrCast(@constCast(pw))));
+    try std.testing.expectEqual(@as(c_int, 0), wsslPasswdCallback(&pw_buf, 4, 0, pw));
 
     if (comptime use_wolfssl) {
         var ver_buf: [64]u8 = @splat(0);

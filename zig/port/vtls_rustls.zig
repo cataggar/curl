@@ -481,7 +481,20 @@ pub const RustlsSslBackendData = extern struct {
 };
 
 pub fn freeRustlsBackendData(ptr: ?*RustlsSslBackendData) void {
-    mem.freeSized(ptr, @sizeOf(RustlsSslBackendData));
+    mem.freeTyped(ptr);
+}
+
+inline fn cfCtx(cf: *CurlCfilter) ?*SslConnectData {
+    return @ptrCast(@alignCast(cf.ctx orelse return null));
+}
+
+inline fn connsslBackend(connssl: *const SslConnectData) ?*RustlsSslBackendData {
+    return @ptrCast(@alignCast(connssl.backend orelse return null));
+}
+
+inline fn cfBackend(cf: *CurlCfilter) ?*RustlsSslBackendData {
+    const connssl = cfCtx(cf) orelse return null;
+    return connsslBackend(connssl);
 }
 
 pub fn rustlsVerifyHostSlice(san_bytes_opt: ?[*]const u8, len: usize, hostname: []const u8) bool {
@@ -550,8 +563,7 @@ fn rustls_failf(data: ?*CurlEasy, rr: rustls_result, msg: [*:0]const u8) void {
 
 fn crDataPending(cf: *CurlCfilter, data: ?*const CurlEasy) callconv(.c) bool {
     _ = data;
-    const connssl: *const SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return false));
-    const backend: *const RustlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return false));
+    const backend = cfBackend(cf) orelse return false;
     return backend.data_in_pending;
 }
 
@@ -564,20 +576,24 @@ const IoCtx = extern struct {
     data: ?*CurlEasy,
 };
 
+inline fn ioCtxFromOpaque(userdata: ?*anyopaque) ?*const IoCtx {
+    return @ptrCast(@alignCast(userdata orelse return null));
+}
+
 fn read_cb(
     userdata: ?*anyopaque,
     buf: [*]u8,
     len: usize,
     out_n: *usize,
 ) callconv(.c) rustls_io_result {
-    const io_ctx: *const IoCtx = @ptrCast(@alignCast(userdata orelse {
+    const io_ctx = ioCtxFromOpaque(userdata) orelse {
         out_n.* = 0;
         return EINVAL_VAL;
-    }));
-    const connssl: *SslConnectData = @ptrCast(@alignCast(io_ctx.cf.ctx orelse {
+    };
+    const connssl = cfCtx(io_ctx.cf) orelse {
         out_n.* = 0;
         return EINVAL_VAL;
-    }));
+    };
     var nread: usize = 0;
     var ret: rustls_io_result = 0;
 
@@ -610,10 +626,10 @@ fn write_cb(
     len: usize,
     out_n: *usize,
 ) callconv(.c) rustls_io_result {
-    const io_ctx: *const IoCtx = @ptrCast(@alignCast(userdata orelse {
+    const io_ctx = ioCtxFromOpaque(userdata) orelse {
         out_n.* = 0;
         return EINVAL_VAL;
-    }));
+    };
     var nwritten: usize = 0;
     var ret: rustls_io_result = 0;
 
@@ -678,14 +694,10 @@ fn tls_recv_more(
         err.* = CURLE_NOT_BUILT_IN;
         return -1;
     }
-    const connssl: *const SslConnectData = @ptrCast(@alignCast(cf.ctx orelse {
+    const backend = cfBackend(cf) orelse {
         err.* = CURLE_RECV_ERROR;
         return -1;
-    }));
-    const backend: *RustlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse {
-        err.* = CURLE_RECV_ERROR;
-        return -1;
-    }));
+    };
     const rconn = backend.conn orelse {
         err.* = CURLE_RECV_ERROR;
         return -1;
@@ -739,14 +751,10 @@ fn crRecv(
         pnread.* = 0;
         return CURLE_NOT_BUILT_IN;
     }
-    const connssl: *const SslConnectData = @ptrCast(@alignCast(cf.ctx orelse {
+    const backend = cfBackend(cf) orelse {
         pnread.* = 0;
         return CURLE_RECV_ERROR;
-    }));
-    const backend: *RustlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse {
-        pnread.* = 0;
-        return CURLE_RECV_ERROR;
-    }));
+    };
     const rconn = backend.conn orelse {
         pnread.* = 0;
         return CURLE_RECV_ERROR;
@@ -869,14 +877,10 @@ fn crSend(
         pnwritten.* = 0;
         return CURLE_NOT_BUILT_IN;
     }
-    const connssl: *const SslConnectData = @ptrCast(@alignCast(cf.ctx orelse {
+    const backend = cfBackend(cf) orelse {
         pnwritten.* = 0;
         return CURLE_SEND_ERROR;
-    }));
-    const backend: *RustlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse {
-        pnwritten.* = 0;
-        return CURLE_SEND_ERROR;
-    }));
+    };
     const rconn = backend.conn orelse {
         pnwritten.* = 0;
         return CURLE_SEND_ERROR;
@@ -964,7 +968,7 @@ fn crSend(
 
 pub const CipherIdMapEntry = struct {
     id: u16,
-    name: []const u8,
+    name: [:0]const u8,
 };
 
 pub const ciphers_id_map = [_]CipherIdMapEntry{
@@ -988,7 +992,7 @@ pub fn cr_cipher_suite_walk_str(str: *?[*:0]const u8, end: *?[*:0]const u8) u16 
                 if (len > 0) {
                     for (ciphers_id_map) |entry| {
                         if (entry.name.len == len and
-                            primitives.curl_strnequal(@ptrCast(entry.name.ptr), s, len) != 0)
+                            primitives.curl_strnequal(entry.name.ptr, s, len) != 0)
                         {
                             id = entry.id;
                             break;
@@ -1163,7 +1167,7 @@ fn cr_keylog_log_cb(
     secret_len: usize,
 ) callconv(.c) void {
     if (client_random_len != CLIENT_RANDOM_SIZE) return;
-    var clabel: [KEYLOG_LABEL_MAXLEN]u8 = undefined;
+    var clabel: [KEYLOG_LABEL_MAXLEN:0]u8 = @splat(0);
     defer mem.secureZero(&clabel, clabel.len);
     const label_ptr = label.data orelse "";
     _ = c_ext.curl_msnprintf(
@@ -1174,8 +1178,8 @@ fn cr_keylog_log_cb(
         label_ptr,
     );
     _ = vtls_core.Curl_tls_keylog_write(
-        @ptrCast(&clabel),
-        @ptrCast(client_random),
+        &clabel,
+        client_random[0..CLIENT_RANDOM_SIZE],
         client_random_len,
         secret,
         secret_len,
@@ -1239,25 +1243,22 @@ pub fn cr_set_ssl_version_min_max(
     return CURLE_OK;
 }
 
-fn init_config_builder(
+fn init_config_builderImpl(
     cf: *CurlCfilter,
     data: ?*CurlEasy,
     conn_config: *const SslFilterConfig,
     config_builder: *?*rustls_client_config_builder,
-) CURLcode {
-    if (comptime !use_rustls) return CURLE_NOT_BUILT_IN;
-
+) !void {
     var tls_versions: [2]u16 = undefined;
     var tls_versions_len: usize = 0;
-    var result = cr_set_ssl_version_min_max(data, conn_config, &tls_versions, &tls_versions_len);
-    if (result != CURLE_OK) return result;
+    const result = cr_set_ssl_version_min_max(data, conn_config, &tls_versions, &tls_versions_len);
+    if (result != CURLE_OK) return error.BadVersion;
 
     var cipher_suites_len = rustls_ext.rustls_default_crypto_provider_ciphersuites_len();
-    const raw_cs = mem.malloc(@sizeOf(*const rustls_supported_ciphersuite) * @max(cipher_suites_len, 1)) orelse {
-        return CURLE_OUT_OF_MEMORY;
+    const cipher_suites = mem.allocMany(*const rustls_supported_ciphersuite, @max(cipher_suites_len, 1)) orelse {
+        return error.OutOfMemory;
     };
-    const cipher_suites: [*]*const rustls_supported_ciphersuite = @ptrCast(@alignCast(raw_cs));
-    defer mem.free(raw_cs);
+    defer mem.freeTyped(cipher_suites);
 
     const is_proxy = vtls_impl.Curl_ssl_cf_is_proxy(cf);
     const cipher_list: ?[*:0]const u8 = if (conn_config.cipher_list) |c|
@@ -1282,19 +1283,16 @@ fn init_config_builder(
     );
     if (cipher_suites_len == 0) {
         c_ext.Curl_failf(data, "rustls: no supported cipher in list");
-        return CURLE_SSL_CIPHER;
+        return error.SslCipher;
     }
 
     var custom_provider_builder: ?*rustls_crypto_provider_builder = null;
-    defer if (custom_provider_builder) |cpb| rustls_ext.rustls_crypto_provider_builder_free(cpb);
-
-    var custom_provider: ?*const rustls_crypto_provider = null;
-    defer if (custom_provider) |cp| rustls_ext.rustls_crypto_provider_free(cp);
+    errdefer if (custom_provider_builder) |cpb| rustls_ext.rustls_crypto_provider_builder_free(cpb);
 
     var rr = rustls_ext.rustls_crypto_provider_builder_new_from_default(&custom_provider_builder);
     if (rr != RUSTLS_RESULT_OK or custom_provider_builder == null) {
         rustls_failf(data, rr, "failed to create crypto provider builder from default");
-        return CURLE_SSL_CIPHER;
+        return error.SslCipher;
     }
 
     rr = rustls_ext.rustls_crypto_provider_builder_set_cipher_suites(
@@ -1304,15 +1302,18 @@ fn init_config_builder(
     );
     if (rr != RUSTLS_RESULT_OK) {
         rustls_failf(data, rr, "failed to set ciphersuites for crypto provider builder");
-        return CURLE_SSL_CIPHER;
+        return error.SslCipher;
     }
 
     const cpb = custom_provider_builder.?;
     custom_provider_builder = null;
+    var custom_provider: ?*const rustls_crypto_provider = null;
+    defer if (custom_provider) |cp| rustls_ext.rustls_crypto_provider_free(cp);
+
     rr = rustls_ext.rustls_crypto_provider_builder_build(cpb, &custom_provider);
     if (rr != RUSTLS_RESULT_OK or custom_provider == null) {
         rustls_failf(data, rr, "failed to build custom crypto provider");
-        return CURLE_SSL_CIPHER;
+        return error.SslCipher;
     }
 
     rr = rustls_ext.rustls_client_config_builder_new_custom(
@@ -1323,11 +1324,23 @@ fn init_config_builder(
     );
     if (rr != RUSTLS_RESULT_OK) {
         rustls_failf(data, rr, "failed to create client config builder");
-        return CURLE_SSL_CIPHER;
+        return error.SslCipher;
     }
+}
 
-    result = CURLE_OK;
-    return result;
+fn init_config_builder(
+    cf: *CurlCfilter,
+    data: ?*CurlEasy,
+    conn_config: *const SslFilterConfig,
+    config_builder: *?*rustls_client_config_builder,
+) CURLcode {
+    if (comptime !use_rustls) return CURLE_NOT_BUILT_IN;
+    init_config_builderImpl(cf, data, conn_config, config_builder) catch |err| return switch (err) {
+        error.BadVersion => CURLE_BAD_FUNCTION_ARGUMENT,
+        error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+        error.SslCipher => CURLE_SSL_CIPHER,
+    };
+    return CURLE_OK;
 }
 
 fn init_config_builder_alpn(
@@ -1632,19 +1645,17 @@ fn init_config_builder_client_auth(
     return CURLE_OK;
 }
 
-fn cr_init_backend(
+fn cr_init_backendImpl(
     cf: *CurlCfilter,
     data: ?*CurlEasy,
     backend: *RustlsSslBackendData,
-) CURLcode {
-    if (comptime !use_rustls) return CURLE_NOT_BUILT_IN;
-
-    const connssl: *const SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return CURLE_SSL_CONNECT_ERROR));
-    const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
+) !void {
+    const connssl = cfCtx(cf) orelse return error.SslConnectError;
+    const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return error.SslConnectError;
     const is_proxy = vtls_impl.Curl_ssl_cf_is_proxy(cf);
 
     var config_builder: ?*rustls_client_config_builder = null;
-    defer if (config_builder) |cb| rustls_ext.rustls_client_config_builder_free(cb);
+    errdefer if (config_builder) |cb| rustls_ext.rustls_client_config_builder_free(cb);
 
     const ca_info_blob: ?*const CurlBlob = if (conn_config.ca_info_blob) |b|
         b
@@ -1669,7 +1680,7 @@ fn cr_init_backend(
 
     var result = init_config_builder(cf, data, conn_config, &config_builder);
     if (result != CURLE_OK or config_builder == null) {
-        return if (result != CURLE_OK) result else CURLE_SSL_CONNECT_ERROR;
+        return error.InitConfigFailed;
     }
 
     if (connssl.alpn != null) {
@@ -1687,10 +1698,10 @@ fn cr_init_backend(
                 data,
                 "rustls: CRL file not supported with native CA store; the platform verifier has no CRL attachment API",
             );
-            return CURLE_NOT_BUILT_IN;
+            return error.NotBuiltIn;
         }
         result = init_config_builder_platform_verifier(data, config_builder.?);
-        if (result != CURLE_OK) return result;
+        if (result != CURLE_OK) return error.CaCertBadFile;
     } else if (ca_info_blob != null or ssl_cafile != null) {
         result = init_config_builder_verifier(
             data,
@@ -1699,7 +1710,7 @@ fn cr_init_backend(
             ca_info_blob,
             ssl_cafile,
         );
-        if (result != CURLE_OK) return result;
+        if (result != CURLE_OK) return if (result == CURLE_SSL_CRL_BADFILE) error.CrlBadFile else if (result == CURLE_OUT_OF_MEMORY) error.OutOfMemory else error.CaCertBadFile;
     }
 
     const clientcert: ?[*:0]const u8 = if (conn_config.clientcert) |c|
@@ -1745,22 +1756,22 @@ fn cr_init_backend(
             key_type,
             config_builder.?,
         );
-        if (result != CURLE_OK) return result;
+        if (result != CURLE_OK) return if (result == CURLE_OUT_OF_MEMORY) error.OutOfMemory else if (result == CURLE_TOO_LARGE) error.TooLarge else error.CertProblem;
     }
 
     result = init_config_builder_keylog(data, config_builder.?);
-    if (result != CURLE_OK) return result;
+    if (result != CURLE_OK) return error.SslConnectError;
 
     const cb = config_builder.?;
     config_builder = null;
     var rr = rustls_ext.rustls_client_config_builder_build(cb, &backend.config);
+    errdefer if (backend.config) |cfg| {
+        rustls_ext.rustls_client_config_free(cfg);
+        backend.config = null;
+    };
     if (rr != RUSTLS_RESULT_OK or backend.config == null) {
         rustls_failf(data, rr, "failed to build client config");
-        if (backend.config) |cfg| {
-            rustls_ext.rustls_client_config_free(cfg);
-            backend.config = null;
-        }
-        return CURLE_SSL_CONNECT_ERROR;
+        return error.SslConnectError;
     }
 
     const hostname: [*:0]const u8 = if (connssl.peer.origin) |orig|
@@ -1778,15 +1789,29 @@ fn cr_init_backend(
     );
     if (rr != RUSTLS_RESULT_OK or rconn == null) {
         rustls_failf(data, rr, "rustls_client_connection_new");
-        if (backend.config) |cfg| {
-            rustls_ext.rustls_client_config_free(cfg);
-            backend.config = null;
-        }
-        return CURLE_COULDNT_CONNECT;
+        return error.CouldntConnect;
     }
 
     rustls_ext.rustls_connection_set_userdata(rconn.?, backend);
     backend.conn = rconn;
+}
+
+fn cr_init_backend(
+    cf: *CurlCfilter,
+    data: ?*CurlEasy,
+    backend: *RustlsSslBackendData,
+) CURLcode {
+    if (comptime !use_rustls) return CURLE_NOT_BUILT_IN;
+    cr_init_backendImpl(cf, data, backend) catch |err| return switch (err) {
+        error.SslConnectError, error.InitConfigFailed => CURLE_SSL_CONNECT_ERROR,
+        error.NotBuiltIn => CURLE_NOT_BUILT_IN,
+        error.CaCertBadFile => CURLE_SSL_CACERT_BADFILE,
+        error.CrlBadFile => CURLE_SSL_CRL_BADFILE,
+        error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+        error.TooLarge => CURLE_TOO_LARGE,
+        error.CertProblem => CURLE_SSL_CERTPROBLEM,
+        error.CouldntConnect => CURLE_COULDNT_CONNECT,
+    };
     return CURLE_OK;
 }
 
@@ -1800,7 +1825,7 @@ fn cr_set_negotiated_alpn(
     rconn: *const rustls_connection,
 ) void {
     if (comptime !use_rustls) return;
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return));
+    const connssl = cfCtx(cf) orelse return;
     var protocol: ?[*]const u8 = null;
     var len: usize = 0;
 
@@ -1818,14 +1843,14 @@ fn crConnect(
         return CURLE_NOT_BUILT_IN;
     }
 
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse {
+    const connssl = cfCtx(cf) orelse {
         done.* = false;
         return CURLE_SSL_CONNECT_ERROR;
-    }));
-    const backend: *RustlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse {
+    };
+    const backend = connsslBackend(connssl) orelse {
         done.* = false;
         return CURLE_SSL_CONNECT_ERROR;
-    }));
+    };
 
     c_ext.Curl_trc_cf_infof(data, cf, "cr_connect, state=%d", @as(c_int, @intCast(connssl.state)));
     done.* = false;
@@ -1969,8 +1994,8 @@ fn crConnect(
 
 fn crGetInternals(connssl: *SslConnectData, info: c_uint) callconv(.c) ?*anyopaque {
     _ = info;
-    const backend: *RustlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return null));
-    return @ptrCast(backend.conn);
+    const backend = connsslBackend(connssl) orelse return null;
+    return mem.toRawPtr(backend.conn);
 }
 
 fn crShutdown(
@@ -1984,14 +2009,14 @@ fn crShutdown(
         return CURLE_OK;
     }
 
-    const connssl: *SslConnectData = @ptrCast(@alignCast(cf.ctx orelse {
+    const connssl = cfCtx(cf) orelse {
         done.* = true;
         return CURLE_OK;
-    }));
-    const backend: *RustlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse {
+    };
+    const backend = connsslBackend(connssl) orelse {
         done.* = true;
         return CURLE_OK;
-    }));
+    };
 
     var result: CURLcode = CURLE_OK;
     var nread: usize = 0;
@@ -2050,8 +2075,7 @@ fn crClose(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) void {
     _ = data;
     if (comptime !use_rustls) return;
 
-    const connssl: *const SslConnectData = @ptrCast(@alignCast(cf.ctx orelse return));
-    const backend: *RustlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return));
+    const backend = cfBackend(cf) orelse return;
 
     if (backend.conn) |rconn| {
         rustls_ext.rustls_connection_free(rconn);
@@ -2452,9 +2476,9 @@ test "rustls loopback TLS handshake and HTTPS GET via curl_easy_perform" {
             len: usize = 0,
         };
 
-        fn writeCallback(ptr: [*]const u8, size: usize, nmemb: usize, userdata: ?*anyopaque) callconv(.c) usize {
+        fn writeCallback(ptr: [*]const u8, size: usize, nmemb: usize, userdata: ?*ResponseBuf) callconv(.c) usize {
             const total = size * nmemb;
-            const rbuf: *ResponseBuf = @ptrCast(@alignCast(userdata orelse return total));
+            const rbuf = userdata orelse return total;
             const avail = rbuf.data.len - rbuf.len;
             const copy_len = @min(total, avail);
             if (copy_len > 0) {
@@ -2508,22 +2532,25 @@ test "rustls loopback TLS handshake and HTTPS GET via curl_easy_perform" {
             const easy = curl_c.curl_easy_init() orelse return error.EasyInitFailed;
             defer curl_c.curl_easy_cleanup(easy);
 
-            var url_buf: [128]u8 = undefined;
-            const url = try std.fmt.bufPrint(&url_buf, "https://{s}:{d}/test\x00", .{ opts.hostname, port });
+            var url_buf: [128:0]u8 = undefined;
+            const url_s = try std.fmt.bufPrint(&url_buf, "https://{s}:{d}/test", .{ opts.hostname, port });
+            url_buf[url_s.len] = 0;
+            const url: [*:0]const u8 = &url_buf;
 
-            var resolve_buf: [128]u8 = undefined;
-            const resolve_entry = try std.fmt.bufPrint(&resolve_buf, "{s}:{d}:127.0.0.1\x00", .{ opts.hostname, port });
-            const resolve_list = curl_c.curl_slist_append(null, @ptrCast(resolve_entry.ptr)) orelse return error.SlistFailed;
+            var resolve_buf: [128:0]u8 = undefined;
+            const resolve_s = try std.fmt.bufPrint(&resolve_buf, "{s}:{d}:127.0.0.1", .{ opts.hostname, port });
+            resolve_buf[resolve_s.len] = 0;
+            const resolve_list = curl_c.curl_slist_append(null, &resolve_buf) orelse return error.SlistFailed;
             defer curl_c.curl_slist_free_all(resolve_list);
 
             var resp_buf = ResponseBuf{};
             var blob = CurlBlob{
-                .data = @ptrCast(@constCast(opts.ca_pem.ptr)),
+                .data = opts.ca_pem.ptr,
                 .len = opts.ca_pem.len,
                 .flags = curl_c.CURL_BLOB_COPY,
             };
 
-            try std.testing.expectEqual(CURLE_OK, curl_c.curl_easy_setopt(easy, curl_c.CURLOPT_URL, @as([*:0]const u8, @ptrCast(url.ptr))));
+            try std.testing.expectEqual(CURLE_OK, curl_c.curl_easy_setopt(easy, curl_c.CURLOPT_URL, url));
             try std.testing.expectEqual(CURLE_OK, curl_c.curl_easy_setopt(easy, curl_c.CURLOPT_RESOLVE, resolve_list));
             try std.testing.expectEqual(CURLE_OK, curl_c.curl_easy_setopt(easy, curl_c.CURLOPT_NOSIGNAL, @as(c_long, 1)));
             try std.testing.expectEqual(CURLE_OK, curl_c.curl_easy_setopt(easy, curl_c.CURLOPT_TIMEOUT_MS, @as(c_long, 5000)));

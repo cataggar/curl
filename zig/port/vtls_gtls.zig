@@ -405,6 +405,27 @@ pub const GtlsCtx = GtlsSslBackendData;
 pub const gtls_ssl_backend_data = GtlsSslBackendData;
 pub const gtls_ctx = GtlsSslBackendData;
 
+inline fn connsslBackend(connssl: *const vtls_backends.SslConnectData) ?*GtlsSslBackendData {
+    return @ptrCast(@alignCast(connssl.backend orelse return null));
+}
+
+inline fn cfBackend(cf: *vtls_impl.CurlCfilter) ?*GtlsSslBackendData {
+    const connssl = cfCtx(cf) orelse return null;
+    return connsslBackend(connssl);
+}
+
+inline fn cfFromOpaque(ptr: ?*anyopaque) ?*vtls_impl.CurlCfilter {
+    return @ptrCast(@alignCast(ptr orelse return null));
+}
+
+inline fn datumFromBlob(blob: *const vtls_backends.CurlBlob) gnutls_datum_t {
+    const ptr: ?[*]u8 = if (blob.data) |d| @ptrCast(@constCast(d)) else null;
+    return .{
+        .data = ptr,
+        .size = @intCast(blob.len),
+    };
+}
+
 fn gnutlsFreePtr(ptr: ?*anyopaque) void {
     if (comptime use_gnutls) {
         if (ptr) |p| {
@@ -419,9 +440,8 @@ fn gtls_push(
     blen: usize,
 ) callconv(.c) isize {
     if (comptime !use_gnutls) return -1;
-    const cf: *vtls_impl.CurlCfilter = @ptrCast(@alignCast(s orelse return -1));
-    const connssl = cfCtx(cf) orelse return -1;
-    const backend: *GtlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return -1));
+    const cf = cfFromOpaque(s) orelse return -1;
+    const backend = cfBackend(cf) orelse return -1;
     const data = cfCtxCallData(cf);
     var nwritten: usize = 0;
 
@@ -449,9 +469,8 @@ fn gtls_pull(
     blen: usize,
 ) callconv(.c) isize {
     if (comptime !use_gnutls) return -1;
-    const cf: *vtls_impl.CurlCfilter = @ptrCast(@alignCast(s orelse return -1));
-    const connssl = cfCtx(cf) orelse return -1;
-    const backend: *GtlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return -1));
+    const cf = cfFromOpaque(s) orelse return -1;
+    const backend = cfBackend(cf) orelse return -1;
     const data = cfCtxCallData(cf);
     var nread: usize = 0;
 
@@ -517,27 +536,31 @@ fn showtime(data: ?*vtls_impl.CurlEasy, text: [*:0]const u8, stamp: isize) void 
     );
 }
 
-fn load_file(file: [*:0]const u8) gnutls_datum_t {
-    var loaded_file = gnutls_datum_t{ .data = null, .size = 0 };
-    const f = c_ext.fopen(file, "rb") orelse return loaded_file;
+fn load_fileImpl(file: [*:0]const u8) !gnutls_datum_t {
+    const f = c_ext.fopen(file, "rb") orelse return error.OpenFailed;
     defer _ = c_ext.fclose(f);
 
     const max_buf: usize = 1024 * 1024;
-    const buf = mem.malloc(max_buf) orelse return loaded_file;
+    const buf = mem.allocMany(u8, max_buf) orelse return error.OutOfMemory;
+    errdefer mem.freeTyped(buf);
     const n = c_ext.fread(buf, 1, max_buf, f);
     if (n == 0 and max_buf > 0) {
-        mem.free(buf);
-        return loaded_file;
+        return error.EmptyFile;
     }
-    loaded_file.data = buf;
-    loaded_file.size = @intCast(n);
-    return loaded_file;
+    return .{
+        .data = buf,
+        .size = @intCast(n),
+    };
+}
+
+fn load_file(file: [*:0]const u8) gnutls_datum_t {
+    return load_fileImpl(file) catch .{ .data = null, .size = 0 };
 }
 
 fn unload_file(file: gnutls_datum_t) void {
     if (file.data) |d| {
         if (file.size > 0) mem.secureZero(d, file.size);
-        mem.freeSized(d, file.size);
+        mem.freeTyped(d);
     }
 }
 
@@ -715,7 +738,7 @@ fn gtls_handshake_cb(
 ) callconv(.c) c_int {
     _ = msg;
     if (comptime !use_gnutls) return 0;
-    const cf_opt: ?*vtls_impl.CurlCfilter = @ptrCast(@alignCast(gtls_ext.gnutls_session_get_ptr(session)));
+    const cf_opt = cfFromOpaque(gtls_ext.gnutls_session_get_ptr(session));
     if (when == @as(c_uint, @intCast(GNUTLS_HOOK_POST)) and incoming != 0) {
         const cf = cf_opt orelse return 0;
         const data = cfCtxCallData(cf);
@@ -726,6 +749,19 @@ fn gtls_handshake_cb(
     return 0;
 }
 
+fn createSharedCreds(data: ?*vtls_impl.CurlEasy) !*gtls_shared_creds {
+    const shared = mem.create(gtls_shared_creds) orelse return error.OutOfMemory;
+    errdefer mem.freeTyped(shared);
+    const rc = gtls_ext.gnutls_certificate_allocate_credentials(&shared.creds);
+    if (rc != GNUTLS_E_SUCCESS) {
+        c_ext.Curl_failf(data, "gnutls_cert_all_cred() failed: %s", gtls_ext.gnutls_strerror(rc));
+        return error.SslConnectError;
+    }
+    shared.refcount = 1;
+    shared.time = curlx_time_net.curlx_now();
+    return shared;
+}
+
 pub fn Curl_gtls_shared_creds_create(
     data: ?*vtls_impl.CurlEasy,
     pcreds: *?*gtls_shared_creds,
@@ -733,17 +769,10 @@ pub fn Curl_gtls_shared_creds_create(
     pcreds.* = null;
     if (comptime !use_gnutls) return CURLE_NOT_BUILT_IN;
 
-    const raw = mem.calloc(1, @sizeOf(gtls_shared_creds)) orelse return CURLE_OUT_OF_MEMORY;
-    const shared: *gtls_shared_creds = @ptrCast(@alignCast(raw));
-    const rc = gtls_ext.gnutls_certificate_allocate_credentials(&shared.creds);
-    if (rc != GNUTLS_E_SUCCESS) {
-        c_ext.Curl_failf(data, "gnutls_cert_all_cred() failed: %s", gtls_ext.gnutls_strerror(rc));
-        mem.freeSized(shared, @sizeOf(gtls_shared_creds));
-        return CURLE_SSL_CONNECT_ERROR;
-    }
-    shared.refcount = 1;
-    shared.time = curlx_time_net.curlx_now();
-    pcreds.* = shared;
+    pcreds.* = createSharedCreds(data) catch |err| return switch (err) {
+        error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+        error.SslConnectError => CURLE_SSL_CONNECT_ERROR,
+    };
     return CURLE_OK;
 }
 
@@ -768,7 +797,7 @@ pub fn Curl_gtls_shared_creds_free(pcreds: *?*gtls_shared_creds) void {
             }
         }
         mem.free(creds.CAfile);
-        mem.freeSized(creds, @sizeOf(gtls_shared_creds));
+        mem.freeTyped(creds);
     }
 }
 
@@ -814,10 +843,7 @@ pub fn gtls_populate_creds(
             c_ext.Curl_failf(data, "CA info blob too large");
             return CURLE_SSL_CACERT_BADFILE;
         }
-        const ca_instruction_datum = gnutls_datum_t{
-            .data = @ptrCast(@constCast(blob.data)),
-            .size = @intCast(blob.len),
-        };
+        const ca_instruction_datum = datumFromBlob(blob);
         rc = gtls_ext.gnutls_certificate_set_x509_trust_mem(creds, &ca_instruction_datum, GNUTLS_X509_FMT_PEM);
         if (rc < 0) {
             c_ext.Curl_infof(
@@ -924,7 +950,7 @@ fn gtls_get_cached_creds(
     const multi_proto_hash = c_ext.Curl_vtls_acc_multi_proto_hash(data) orelse return null;
     const raw = c_ext.Curl_hash_pick(
         multi_proto_hash,
-        @ptrCast(@constCast(MPROTO_GTLS_X509_KEY.ptr)),
+        mem.toRawPtr(MPROTO_GTLS_X509_KEY.ptr).?,
         MPROTO_GTLS_X509_KEY.len,
     ) orelse return null;
     const shared: *gtls_shared_creds = @ptrCast(@alignCast(raw));
@@ -962,7 +988,7 @@ fn gtls_set_cached_creds(
 
     if (c_ext.Curl_hash_add2(
         multi_proto_hash,
-        @ptrCast(@constCast(MPROTO_GTLS_X509_KEY.ptr)),
+        mem.toRawPtr(MPROTO_GTLS_X509_KEY.ptr).?,
         MPROTO_GTLS_X509_KEY.len,
         shared,
         gtls_shared_creds_hash_free,
@@ -1282,16 +1308,13 @@ pub fn gtls_client_init(
             if (file_type != GNUTLS_X509_FMT_PKCS12) {
                 const ft_u: c_uint = @intCast(file_type);
                 if (conn_config.cert_blob) |cert_blob| {
-                    const cert_d = gnutls_datum_t{
-                        .data = @ptrCast(@constCast(cert_blob.data)),
-                        .size = @intCast(cert_blob.len),
-                    };
+                    const cert_d = datumFromBlob(cert_blob);
                     var key_d = gnutls_datum_t{ .data = null, .size = 0 };
                     var loaded_key = gnutls_datum_t{ .data = null, .size = 0 };
                     defer unload_file(loaded_key);
 
                     if (conn_config.key_blob) |kb| {
-                        key_d = .{ .data = @ptrCast(@constCast(kb.data)), .size = @intCast(kb.len) };
+                        key_d = datumFromBlob(kb);
                     } else if (conn_config.key) |keyfile| {
                         loaded_key = load_file(keyfile);
                         key_d = loaded_key;
@@ -1307,10 +1330,7 @@ pub fn gtls_client_init(
                         ft_flags,
                     );
                 } else if (conn_config.key_blob) |kb| {
-                    const key_d = gnutls_datum_t{
-                        .data = @ptrCast(@constCast(kb.data)),
-                        .size = @intCast(kb.len),
-                    };
+                    const key_d = datumFromBlob(kb);
                     const loaded_cert = load_file(conn_config.clientcert.?);
                     defer unload_file(loaded_cert);
                     rc = gtls_ext.gnutls_certificate_set_x509_key_mem2(
@@ -1342,10 +1362,7 @@ pub fn gtls_client_init(
                 }
             } else {
                 if (conn_config.cert_blob) |cert_blob| {
-                    const p12_d = gnutls_datum_t{
-                        .data = @ptrCast(@constCast(cert_blob.data)),
-                        .size = @intCast(cert_blob.len),
-                    };
+                    const p12_d = datumFromBlob(cert_blob);
                     rc = gtls_ext.gnutls_certificate_set_x509_simple_pkcs12_mem(
                         gtls.shared_creds.?.creds,
                         &p12_d,
@@ -1372,10 +1389,7 @@ pub fn gtls_client_init(
         } else {
             if (file_type == GNUTLS_X509_FMT_PKCS12) {
                 if (conn_config.cert_blob) |cert_blob| {
-                    const p12_d = gnutls_datum_t{
-                        .data = @ptrCast(@constCast(cert_blob.data)),
-                        .size = @intCast(cert_blob.len),
-                    };
+                    const p12_d = datumFromBlob(cert_blob);
                     rc = gtls_ext.gnutls_certificate_set_x509_simple_pkcs12_mem(
                         gtls.shared_creds.?.creds,
                         &p12_d,
@@ -1393,16 +1407,13 @@ pub fn gtls_client_init(
             } else {
                 const ft_u: c_uint = @intCast(file_type);
                 if (conn_config.cert_blob) |cert_blob| {
-                    const cert_d = gnutls_datum_t{
-                        .data = @ptrCast(@constCast(cert_blob.data)),
-                        .size = @intCast(cert_blob.len),
-                    };
+                    const cert_d = datumFromBlob(cert_blob);
                     var key_d = gnutls_datum_t{ .data = null, .size = 0 };
                     var loaded_key = gnutls_datum_t{ .data = null, .size = 0 };
                     defer unload_file(loaded_key);
 
                     if (conn_config.key_blob) |kb| {
-                        key_d = .{ .data = @ptrCast(@constCast(kb.data)), .size = @intCast(kb.len) };
+                        key_d = datumFromBlob(kb);
                     } else if (conn_config.key) |keyfile| {
                         loaded_key = load_file(keyfile);
                         key_d = loaded_key;
@@ -1418,10 +1429,7 @@ pub fn gtls_client_init(
                         0,
                     );
                 } else if (conn_config.key_blob) |kb| {
-                    const key_d = gnutls_datum_t{
-                        .data = @ptrCast(@constCast(kb.data)),
-                        .size = @intCast(kb.len),
-                    };
+                    const key_d = datumFromBlob(kb);
                     const loaded_cert = load_file(conn_config.clientcert.?);
                     defer unload_file(loaded_cert);
                     rc = gtls_ext.gnutls_certificate_set_x509_key_mem2(
@@ -1747,7 +1755,7 @@ fn gtls_connect_step1(
 ) CURLcode {
     if (comptime !use_gnutls) return CURLE_NOT_BUILT_IN;
     const connssl = cfCtx(cf) orelse return CURLE_SSL_CONNECT_ERROR;
-    const backend: *GtlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+    const backend = connsslBackend(connssl) orelse return CURLE_SSL_CONNECT_ERROR;
     const conn_config = vtls_impl.Curl_ssl_cf_get_filter_config(cf) orelse return CURLE_SSL_CONNECT_ERROR;
     var sc_session: ?*vtls_core.CurlSslSession = null;
     var result: CURLcode = CURLE_OK;
@@ -1819,10 +1827,8 @@ fn gtls_connect_step1(
 
     if (conn_config.primary_cache_session() and cf.conn != null and vtls_impl.Curl_ssl_cf_is_proxy(cf)) {
         const proxy_cf = c_ext.Curl_vtls_acc_conn_cfilter(cf.conn, cf.sockindex);
-        if (proxy_cf != null and proxy_cf.?.ctx != null) {
-            const proxy_ssl = cfCtx(proxy_cf.?);
-            if (proxy_ssl != null and proxy_ssl.?.backend != null) {
-                const proxy_backend: *GtlsSslBackendData = @ptrCast(@alignCast(proxy_ssl.?.backend.?));
+        if (proxy_cf) |pcf| {
+            if (cfBackend(pcf)) |proxy_backend| {
                 if (proxy_backend.session != null and proxy_backend.session != backend.session) {
                     var sess_datum = gnutls_datum_t{};
                     if (gtls_ext.gnutls_session_get_data2(proxy_backend.session, &sess_datum) == GNUTLS_E_SUCCESS) {
@@ -1873,8 +1879,8 @@ pub fn pkp_pin_peer_pubkey(
         return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
     }
 
-    const buff: [*]u8 = mem.malloc(len) orelse return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
-    defer mem.free(buff);
+    const buff = mem.allocMany(u8, len) orelse return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
+    defer mem.freeTyped(buff);
 
     if (gtls_ext.gnutls_pubkey_export(pubkey, GNUTLS_X509_FMT_DER, buff, &len) != 0) {
         return CURLE_SSL_PINNEDPUBKEYNOTMATCH;
@@ -2142,7 +2148,7 @@ pub fn gtlsVerifyHostSlice(san_bytes_opt: ?[*]const u8, len: usize, hostname: []
 }
 
 pub fn freeGtlsBackendData(ptr: ?*GtlsSslBackendData) void {
-    mem.freeSized(ptr, @sizeOf(GtlsSslBackendData));
+    mem.freeTyped(ptr);
 }
 
 fn gtls_infof_cert(
@@ -2407,7 +2413,7 @@ fn cf_gtls_send_earlydata(
 ) CURLcode {
     if (comptime !use_gnutls) return CURLE_NOT_BUILT_IN;
     const connssl = cfCtx(cf) orelse return CURLE_SSL_CONNECT_ERROR;
-    const backend: *GtlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+    const backend = connsslBackend(connssl) orelse return CURLE_SSL_CONNECT_ERROR;
     var result: CURLcode = CURLE_OK;
     var pbuf: ?[*]const u8 = null;
     var nsend: usize = 0;
@@ -2447,7 +2453,7 @@ pub fn cf_gtls_handshake(
 ) CURLcode {
     if (comptime !use_gnutls) return CURLE_NOT_BUILT_IN;
     const connssl = cfCtx(cf) orelse return CURLE_SSL_CONNECT_ERROR;
-    const backend: *GtlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+    const backend = connsslBackend(connssl) orelse return CURLE_SSL_CONNECT_ERROR;
     const session = backend.session;
 
     connssl.io_need = CURL_SSL_IO_NEED_NONE;
@@ -2516,7 +2522,7 @@ fn gtls_connect_common(
 ) CURLcode {
     if (comptime !use_gnutls) return CURLE_NOT_BUILT_IN;
     const connssl = cfCtx(cf) orelse return CURLE_SSL_CONNECT_ERROR;
-    const backend: *GtlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SSL_CONNECT_ERROR));
+    const backend = connsslBackend(connssl) orelse return CURLE_SSL_CONNECT_ERROR;
     var result: CURLcode = CURLE_OK;
 
     if (connssl.state == ssl_connection_complete) {
@@ -2613,7 +2619,7 @@ fn gtlsSend(
         return CURLE_NOT_BUILT_IN;
     }
     const connssl = cfCtx(cf) orelse return CURLE_SEND_ERROR;
-    const backend: *GtlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_SEND_ERROR));
+    const backend = connsslBackend(connssl) orelse return CURLE_SEND_ERROR;
     var remain = len;
     var buf: [*]const u8 = if (mem_ptr) |p| @ptrCast(p) else return CURLE_BAD_FUNCTION_ARGUMENT;
     var result: CURLcode = CURLE_OK;
@@ -2659,8 +2665,7 @@ fn gtlsSend(
 fn gtlsClose(cf: *vtls_impl.CurlCfilter, data: ?*vtls_impl.CurlEasy) callconv(.c) void {
     _ = data;
     if (comptime !use_gnutls) return;
-    const connssl = cfCtx(cf) orelse return;
-    const backend: *GtlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return));
+    const backend = cfBackend(cf) orelse return;
 
     if (backend.session != null) {
         gtls_ext.gnutls_deinit(backend.session);
@@ -2687,10 +2692,10 @@ fn gtlsShutdown(
         done.* = true;
         return CURLE_OK;
     };
-    const backend: *GtlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse {
+    const backend = connsslBackend(connssl) orelse {
         done.* = true;
         return CURLE_OK;
-    }));
+    };
     var buf: [1024]u8 = undefined;
     var result: CURLcode = CURLE_OK;
 
@@ -2772,7 +2777,7 @@ fn gtlsRecv(
         return CURLE_NOT_BUILT_IN;
     }
     const connssl = cfCtx(cf) orelse return CURLE_RECV_ERROR;
-    const backend: *GtlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_RECV_ERROR));
+    const backend = connsslBackend(connssl) orelse return CURLE_RECV_ERROR;
 
     const saved_call_data = connssl.call_data;
     connssl.call_data = data;
@@ -2844,15 +2849,14 @@ fn gtlsCertStatusRequest() callconv(.c) bool {
 
 fn gtlsGetInternals(connssl: *vtls_backends.SslConnectData, info: c_uint) callconv(.c) ?*anyopaque {
     _ = info;
-    const backend: *GtlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return null));
+    const backend = connsslBackend(connssl) orelse return null;
     return backend.session;
 }
 
 fn gtlsDataPending(cf: *vtls_impl.CurlCfilter, data: ?*const vtls_impl.CurlEasy) callconv(.c) bool {
     _ = data;
     if (comptime !use_gnutls) return false;
-    const connssl = cfCtx(cf) orelse return false;
-    const backend: *GtlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return false));
+    const backend = cfBackend(cf) orelse return false;
     return backend.session != null and gtls_ext.gnutls_record_check_pending(backend.session) != 0;
 }
 
@@ -2883,8 +2887,7 @@ fn gtlsGetChannelBinding(
     var cf = c_ext.Curl_vtls_acc_conn_cfilter(conn, sockindex);
     while (cf) |cur| : (cf = cur.next) {
         if (cur.cft == &vtls_impl.Curl_cft_ssl or cur.cft == &vtls_impl.Curl_cft_ssl_proxy) {
-            const connssl = cfCtx(cur) orelse return CURLE_OK;
-            const backend: *GtlsSslBackendData = @ptrCast(@alignCast(connssl.backend orelse return CURLE_OK));
+            const backend = cfBackend(cur) orelse return CURLE_OK;
             if (backend.session != null) {
                 var cb = gnutls_datum_t{};
                 var rc = gtls_ext.gnutls_session_channel_binding(
@@ -3159,9 +3162,9 @@ test "gnutls loopback TLS handshake, ALPN, HTTPS GET, CA verification, and pinne
             len: usize = 0,
         };
 
-        fn writeCb(ptr: [*]const u8, size: usize, nmemb: usize, userdata: ?*anyopaque) callconv(.c) usize {
+        fn writeCb(ptr: [*]const u8, size: usize, nmemb: usize, userdata: ?*ResponseBuf) callconv(.c) usize {
             const total = size * nmemb;
-            const rbuf: *ResponseBuf = @ptrCast(@alignCast(userdata orelse return total));
+            const rbuf = userdata orelse return total;
             const avail = rbuf.data.len - rbuf.len;
             const copy_len = @min(total, avail);
             if (copy_len > 0) {
@@ -3218,15 +3221,17 @@ test "gnutls loopback TLS handshake, ALPN, HTTPS GET, CA verification, and pinne
             const easy = curl_easy_init() orelse return error.EasyInitFailed;
             defer curl_easy_cleanup(easy);
 
-            var url_buf: [128]u8 = undefined;
-            const url_s = try std.fmt.bufPrint(&url_buf, "https://{s}:{d}/test\x00", .{ opts.hostname, port });
-            const url_z: [*:0]const u8 = @ptrCast(url_s.ptr);
+            var url_buf: [128:0]u8 = undefined;
+            const url_s = try std.fmt.bufPrint(&url_buf, "https://{s}:{d}/test", .{ opts.hostname, port });
+            url_buf[url_s.len] = 0;
+            const url_z: [*:0]const u8 = &url_buf;
 
             var resolve_list: ?*curl_slist = null;
             defer if (resolve_list) |l| curl_slist_free_all(l);
-            var resolve_buf: [128]u8 = undefined;
-            const resolve_s = try std.fmt.bufPrint(&resolve_buf, "{s}:{d}:127.0.0.1\x00", .{ opts.hostname, port });
-            const resolve_entry: [*:0]const u8 = @ptrCast(resolve_s.ptr);
+            var resolve_buf: [128:0]u8 = undefined;
+            const resolve_s = try std.fmt.bufPrint(&resolve_buf, "{s}:{d}:127.0.0.1", .{ opts.hostname, port });
+            resolve_buf[resolve_s.len] = 0;
+            const resolve_entry: [*:0]const u8 = &resolve_buf;
             resolve_list = curl_slist_append(null, resolve_entry);
 
             var rbuf = ResponseBuf{};
@@ -3241,7 +3246,7 @@ test "gnutls loopback TLS handshake, ALPN, HTTPS GET, CA verification, and pinne
 
             if (opts.ca_pem_blob) |ca_pem| {
                 var blob = curl_blob{
-                    .data = @ptrCast(@constCast(ca_pem.ptr)),
+                    .data = mem.toRawPtr(ca_pem.ptr),
                     .len = ca_pem.len,
                     .flags = 1,
                 };
