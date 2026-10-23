@@ -419,26 +419,26 @@ pub const ngtcp2_transport_params = extern struct {
 };
 
 pub const ngtcp2_callbacks = extern struct {
-    client_initial: ?*const anyopaque = null,
+    client_initial: ?*const fn (conn: *ngtcp2_conn, user_data: ?*anyopaque) callconv(.c) c_int = null,
     recv_client_initial: ?*const anyopaque = null,
-    recv_crypto_data: ?*const anyopaque = null,
+    recv_crypto_data: ?*const fn (conn: *ngtcp2_conn, encryption_level: c_uint, offset: u64, data: [*]const u8, datalen: usize, user_data: ?*anyopaque) callconv(.c) c_int = null,
     handshake_completed: ?*const fn (conn: *ngtcp2_conn, user_data: ?*anyopaque) callconv(.c) c_int = null,
     recv_version_negotiation: ?*const anyopaque = null,
-    encrypt: ?*const anyopaque = null,
-    decrypt: ?*const anyopaque = null,
-    hp_mask: ?*const anyopaque = null,
+    encrypt: ?*const fn (dest: [*]u8, aead: *const anyopaque, aead_ctx: *const anyopaque, plaintext: [*]const u8, plaintextlen: usize, nonce: [*]const u8, noncelen: usize, aad: [*]const u8, aadlen: usize) callconv(.c) c_int = null,
+    decrypt: ?*const fn (dest: [*]u8, aead: *const anyopaque, aead_ctx: *const anyopaque, ciphertext: [*]const u8, ciphertextlen: usize, nonce: [*]const u8, noncelen: usize, aad: [*]const u8, aadlen: usize) callconv(.c) c_int = null,
+    hp_mask: ?*const fn (dest: [*]u8, hp: *const anyopaque, hp_ctx: *const anyopaque, sample: [*]const u8) callconv(.c) c_int = null,
     recv_stream_data: ?*const fn (conn: *ngtcp2_conn, flags: u32, stream_id: i64, offset: u64, data: ?[*]const u8, datalen: usize, user_data: ?*anyopaque, stream_user_data: ?*anyopaque) callconv(.c) c_int = null,
     acked_stream_data_offset: ?*const fn (conn: *ngtcp2_conn, stream_id: i64, offset: u64, datalen: u64, user_data: ?*anyopaque, stream_user_data: ?*anyopaque) callconv(.c) c_int = null,
     stream_open: ?*const fn (conn: *ngtcp2_conn, stream_id: i64, user_data: ?*anyopaque) callconv(.c) c_int = null,
     stream_close: ?*const fn (conn: *ngtcp2_conn, flags: u32, stream_id: i64, app_error_code: u64, user_data: ?*anyopaque, stream_user_data: ?*anyopaque) callconv(.c) c_int = null,
     recv_stateless_reset: ?*const anyopaque = null,
-    recv_retry: ?*const anyopaque = null,
+    recv_retry: ?*const fn (conn: *ngtcp2_conn, hd: *const anyopaque, user_data: ?*anyopaque) callconv(.c) c_int = null,
     extend_max_local_streams_bidi: ?*const fn (conn: *ngtcp2_conn, max_streams: u64, user_data: ?*anyopaque) callconv(.c) c_int = null,
     extend_max_local_streams_uni: ?*const anyopaque = null,
     rand: ?*const fn (dest: [*]u8, destlen: usize, rand_ctx: *const ngtcp2_rand_ctx) callconv(.c) void = null,
     get_new_connection_id: ?*const fn (conn: *ngtcp2_conn, cid: *ngtcp2_cid, token: [*]u8, cidlen: usize, user_data: ?*anyopaque) callconv(.c) c_int = null,
     remove_connection_id: ?*const fn (conn: *ngtcp2_conn, cid: *const ngtcp2_cid, user_data: ?*anyopaque) callconv(.c) c_int = null,
-    update_key: ?*const anyopaque = null,
+    update_key: ?*const fn (conn: *ngtcp2_conn, rx_secret: [*]u8, tx_secret: [*]u8, rx_aead_ctx: *anyopaque, rx_iv: [*]u8, tx_aead_ctx: *anyopaque, tx_iv: [*]u8, current_rx_secret: [*]const u8, current_tx_secret: [*]const u8, secretlen: usize, user_data: ?*anyopaque) callconv(.c) c_int = null,
     path_validation: ?*const anyopaque = null,
     select_preferred_addr: ?*const anyopaque = null,
     stream_reset: ?*const fn (conn: *ngtcp2_conn, stream_id: i64, final_size: u64, app_error_code: u64, user_data: ?*anyopaque, stream_user_data: ?*anyopaque) callconv(.c) c_int = null,
@@ -448,14 +448,14 @@ pub const ngtcp2_callbacks = extern struct {
     dcid_status: ?*const anyopaque = null,
     handshake_confirmed: ?*const anyopaque = null,
     recv_new_token: ?*const anyopaque = null,
-    delete_crypto_aead_ctx: ?*const anyopaque = null,
-    delete_crypto_cipher_ctx: ?*const anyopaque = null,
+    delete_crypto_aead_ctx: ?*const fn (conn: *ngtcp2_conn, aead_ctx: *anyopaque, user_data: ?*anyopaque) callconv(.c) void = null,
+    delete_crypto_cipher_ctx: ?*const fn (conn: *ngtcp2_conn, cipher_ctx: *anyopaque, user_data: ?*anyopaque) callconv(.c) void = null,
     recv_datagram: ?*const fn (conn: *ngtcp2_conn, flags: u32, data: [*]const u8, datalen: usize, user_data: ?*anyopaque) callconv(.c) c_int = null,
     ack_datagram: ?*const anyopaque = null,
     lost_datagram: ?*const anyopaque = null,
-    get_path_challenge_data: ?*const anyopaque = null,
+    get_path_challenge_data: ?*const fn (conn: *ngtcp2_conn, data: [*]u8, user_data: ?*anyopaque) callconv(.c) c_int = null,
     stream_stop_sending: ?*const fn (conn: *ngtcp2_conn, stream_id: i64, app_error_code: u64, user_data: ?*anyopaque, stream_user_data: ?*anyopaque) callconv(.c) c_int = null,
-    version_negotiation: ?*const anyopaque = null,
+    version_negotiation: ?*const fn (conn: *ngtcp2_conn, version: u32, client_dcid: *const ngtcp2_cid, user_data: ?*anyopaque) callconv(.c) c_int = null,
     recv_rx_key: ?*const fn (conn: *ngtcp2_conn, level: c_uint, user_data: ?*anyopaque) callconv(.c) c_int = null,
     recv_tx_key: ?*const fn (conn: *ngtcp2_conn, level: c_uint, user_data: ?*anyopaque) callconv(.c) c_int = null,
     tls_early_data_rejected: ?*const anyopaque = null,
@@ -864,9 +864,13 @@ extern fn Curl_uint32_bset_next(bset: *uint32_bset, last: u32, pnext: *u32) call
 
 pub const CURLEASY_MAGIC_NUMBER: c_uint = 0xc0dedbad;
 
+inline fn fromOpaque(comptime T: type, raw: anytype) if (@typeInfo(T) == .pointer) ?T else ?*T {
+    const p = mem.toRawPtr(raw) orelse return null;
+    return @ptrCast(@alignCast(p));
+}
+
 inline fn goodEasyHandle(data: ?*const CurlEasy) bool {
-    const ptr = data orelse return false;
-    const magic_ptr: *const c_uint = @ptrCast(@alignCast(ptr));
+    const magic_ptr = fromOpaque(*const c_uint, data) orelse return false;
     return magic_ptr.* == CURLEASY_MAGIC_NUMBER;
 }
 
@@ -1025,8 +1029,7 @@ pub fn h3StreamCtx(ctx: *CfNgtcp2Ctx, data: ?*CurlEasy) ?*H3StreamCtx {
     if (!goodEasyHandle(d)) return null;
     const mid = easyMid(d);
     if (mid == std.math.maxInt(u32)) return null;
-    const raw = Curl_u32_ptrset_get(&ctx.streams, mid) orelse return null;
-    const stream: *H3StreamCtx = @ptrCast(@alignCast(raw));
+    const stream = fromOpaque(H3StreamCtx, Curl_u32_ptrset_get(&ctx.streams, mid)) orelse return null;
     if (stream.mid != mid or stream.xfer_id != easyId(d)) return null;
     return stream;
 }
@@ -1071,9 +1074,34 @@ pub fn Curl_cf_ngtcp2_h3_stream_ctx_free(stream_opt: ?*H3StreamCtx) callconv(.c)
 
 fn h3_stream_hash_free(id: u32, stream_ptr: ?*anyopaque) callconv(.c) void {
     _ = id;
-    if (stream_ptr) |p| {
-        const stream: *H3StreamCtx = @ptrCast(@alignCast(p));
+    if (fromOpaque(H3StreamCtx, stream_ptr)) |stream| {
         Curl_cf_ngtcp2_h3_stream_ctx_free(stream);
+    }
+}
+
+fn initNgtcp2CtxInner(
+    ctx: *CfNgtcp2Ctx,
+    origin: ?*CurlPeer,
+    peer: ?*CurlPeer,
+    cbs: *const CfNgtcp2Cbs,
+) error{ OutOfMemory, InitFailed }!void {
+    std.debug.assert(!ctx.initialized);
+    ctx.qlogfd = -1;
+    io_buffers.Curl_bufcp_init(&ctx.stream_bufcp, H3_STREAM_CHUNK_SIZE, H3_STREAM_POOL_SPARES);
+    errdefer io_buffers.Curl_bufcp_free(&ctx.stream_bufcp);
+    Curl_u32_ptrset_init(&ctx.streams, h3_stream_hash_free);
+    errdefer Curl_u32_ptrset_clear(&ctx.streams);
+    Curl_uint32_bset_init(&ctx.active_streams);
+    if (Curl_uint32_bset_resize(&ctx.active_streams, QUIC_MAX_STREAMS) != CURLE_OK) {
+        return error.OutOfMemory;
+    }
+    errdefer Curl_uint32_bset_destroy(&ctx.active_streams);
+    ctx.cbs = cbs;
+    ctx.initialized = true;
+    errdefer ctx.initialized = false;
+    const result = vquic_core.Curl_vquic_tls_peer_init(origin, peer, null, &ctx.ssl_peer);
+    if (result != CURLE_OK) {
+        return if (result == CURLE_OUT_OF_MEMORY) error.OutOfMemory else error.InitFailed;
     }
 }
 
@@ -1083,21 +1111,10 @@ pub fn Curl_cf_ngtcp2_ctx_init(
     peer: ?*CurlPeer,
     cbs: *const CfNgtcp2Cbs,
 ) callconv(.c) CURLcode {
-    std.debug.assert(!ctx.initialized);
-    ctx.qlogfd = -1;
-    io_buffers.Curl_bufcp_init(&ctx.stream_bufcp, H3_STREAM_CHUNK_SIZE, H3_STREAM_POOL_SPARES);
-    Curl_u32_ptrset_init(&ctx.streams, h3_stream_hash_free);
-    Curl_uint32_bset_init(&ctx.active_streams);
-    if (Curl_uint32_bset_resize(&ctx.active_streams, QUIC_MAX_STREAMS) != CURLE_OK) {
-        return CURLE_OUT_OF_MEMORY;
-    }
-    ctx.cbs = cbs;
-    ctx.initialized = true;
-    const result = vquic_core.Curl_vquic_tls_peer_init(origin, peer, null, &ctx.ssl_peer);
-    if (result != CURLE_OK) {
-        Curl_cf_ngtcp2_ctx_cleanup(ctx);
-        return result;
-    }
+    initNgtcp2CtxInner(ctx, origin, peer, cbs) catch |err| return switch (err) {
+        error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+        error.InitFailed => CURLE_FAILED_INIT,
+    };
     return CURLE_OK;
 }
 
@@ -1139,8 +1156,8 @@ const StreamVisitSidCtx = struct {
 };
 
 fn visit_by_sid(mid: u32, value: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) bool {
-    const stream: *H3StreamCtx = @ptrCast(@alignCast(value orelse return true));
-    const vctx: *StreamVisitSidCtx = @ptrCast(@alignCast(user_data orelse return false));
+    const stream = fromOpaque(H3StreamCtx, value) orelse return true;
+    const vctx = fromOpaque(StreamVisitSidCtx, user_data) orelse return false;
     if (stream.id == vctx.stream_id) {
         if (mid != std.math.maxInt(u32) and mid == stream.mid and stream.xfer_id >= 0) {
             const call_data = vctx.ctx.call_data.data;
@@ -1174,6 +1191,47 @@ pub fn Curl_cf_ngtcp2_get_xfer(ctx: *CfNgtcp2Ctx, stream_id: i64) callconv(.c) ?
     return null;
 }
 
+fn setupH3StreamInner(
+    ctx: *CfNgtcp2Ctx,
+    mid: u32,
+    xfer_id: i64,
+) error{OutOfMemory}!*H3StreamCtx {
+    const stream = mem.create(H3StreamCtx) orelse return error.OutOfMemory;
+    errdefer mem.freeTyped(stream);
+    stream.id = -1;
+    stream.mid = mid;
+    stream.xfer_id = xfer_id;
+    io_buffers.Curl_bufq_initp(
+        &stream.sendbuf,
+        &ctx.stream_bufcp,
+        H3_STREAM_SEND_CHUNKS,
+        BUFQ_OPT_NONE,
+    );
+    errdefer io_buffers.Curl_bufq_free(&stream.sendbuf);
+    http1_options.Curl_h1_req_parse_init(&stream.h1, 16 * 1024);
+    errdefer http1_options.Curl_h1_req_parse_free(&stream.h1);
+    stream.sendbuf_len_in_flight = 0;
+    stream.upload_left = 0;
+    stream.status_code = -1;
+    stream.quic_flow_blocked = false;
+    stream.closed = false;
+    stream.reset = false;
+    stream.send_closed = false;
+    stream.resp_hds_complete = false;
+    stream.rx_eos = false;
+    stream.xfer_result = CURLE_OK;
+
+    if (Curl_u32_ptrset_set(&ctx.streams, mid, stream) != CURLE_OK) {
+        return error.OutOfMemory;
+    }
+
+    if (Curl_u32_ptrset_count(&ctx.streams) > collections.uint32_bset_capacity(&ctx.active_streams)) {
+        _ = Curl_uint32_bset_resize(&ctx.active_streams, Curl_u32_ptrset_count(&ctx.streams) * 2);
+    }
+
+    return stream;
+}
+
 pub fn Curl_cf_ngtcp2_h3_stream_setup(
     cf: *CurlCfilter,
     data: ?*CurlEasy,
@@ -1197,40 +1255,10 @@ pub fn Curl_cf_ngtcp2_h3_stream_setup(
         return CURLE_OK;
     }
 
-    const raw = mem.calloc(1, @sizeOf(H3StreamCtx)) orelse return CURLE_OUT_OF_MEMORY;
-    const stream: *H3StreamCtx = @ptrCast(@alignCast(raw));
-    stream.id = -1;
-    stream.mid = mid;
-    stream.xfer_id = xfer_id;
-    io_buffers.Curl_bufq_initp(
-        &stream.sendbuf,
-        &ctx.stream_bufcp,
-        H3_STREAM_SEND_CHUNKS,
-        BUFQ_OPT_NONE,
-    );
-    http1_options.Curl_h1_req_parse_init(&stream.h1, 16 * 1024);
-    stream.sendbuf_len_in_flight = 0;
-    stream.upload_left = 0;
-    stream.status_code = -1;
-    stream.quic_flow_blocked = false;
-    stream.closed = false;
-    stream.reset = false;
-    stream.send_closed = false;
-    stream.resp_hds_complete = false;
-    stream.rx_eos = false;
-    stream.xfer_result = CURLE_OK;
-
-    const result = Curl_u32_ptrset_set(&ctx.streams, mid, stream);
-    if (result != CURLE_OK) {
-        Curl_cf_ngtcp2_h3_stream_ctx_free(stream);
+    const stream = setupH3StreamInner(ctx, mid, xfer_id) catch {
         pstream.* = null;
-        return result;
-    }
-
-    if (Curl_u32_ptrset_count(&ctx.streams) > collections.uint32_bset_capacity(&ctx.active_streams)) {
-        _ = Curl_uint32_bset_resize(&ctx.active_streams, Curl_u32_ptrset_count(&ctx.streams) * 2);
-    }
-
+        return CURLE_OUT_OF_MEMORY;
+    };
     pstream.* = stream;
     return CURLE_OK;
 }
@@ -1298,7 +1326,7 @@ pub fn Curl_cf_ngtcp2_cb_handshake_completed(
     user_data: ?*anyopaque,
 ) callconv(.c) c_int {
     _ = tconn;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return NGTCP2_ERR_CALLBACK_FAILURE));
+    const ctx = fromOpaque(CfNgtcp2Ctx, user_data) orelse return NGTCP2_ERR_CALLBACK_FAILURE;
     const cf = ctx.cf orelse return NGTCP2_ERR_CALLBACK_FAILURE;
     const data = ctx.call_data.data;
 
@@ -1327,7 +1355,7 @@ pub fn Curl_cf_ngtcp2_cb_recv_stream_data(
     _ = offset;
     _ = stream_user_data;
     if (comptime !use_ngtcp2) return NGTCP2_ERR_CALLBACK_FAILURE;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return NGTCP2_ERR_CALLBACK_FAILURE));
+    const ctx = fromOpaque(CfNgtcp2Ctx, user_data) orelse return NGTCP2_ERR_CALLBACK_FAILURE;
     const h3conn = ctx.h3conn orelse return NGTCP2_ERR_CALLBACK_FAILURE;
     const fin: c_int = if ((flags & NGTCP2_STREAM_DATA_FLAG_FIN) != 0) 1 else 0;
 
@@ -1364,7 +1392,7 @@ pub fn Curl_cf_ngtcp2_cb_acked_stream_data_offset(
     _ = offset;
     _ = stream_user_data;
     if (comptime !use_ngtcp2) return NGTCP2_ERR_CALLBACK_FAILURE;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return NGTCP2_ERR_CALLBACK_FAILURE));
+    const ctx = fromOpaque(CfNgtcp2Ctx, user_data) orelse return NGTCP2_ERR_CALLBACK_FAILURE;
     const h3conn = ctx.h3conn orelse return 0;
     const rv = ngtcp2_c.nghttp3_conn_add_ack_offset(h3conn, stream_id, datalen);
     if (rv != 0 and rv != NGHTTP3_ERR_STREAM_NOT_FOUND) {
@@ -1395,7 +1423,7 @@ pub fn Curl_cf_ngtcp2_cb_stream_close(
     _ = tconn;
     _ = stream_user_data;
     if (comptime !use_ngtcp2) return NGTCP2_ERR_CALLBACK_FAILURE;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return NGTCP2_ERR_CALLBACK_FAILURE));
+    const ctx = fromOpaque(CfNgtcp2Ctx, user_data) orelse return NGTCP2_ERR_CALLBACK_FAILURE;
     const h3conn = ctx.h3conn orelse return 0;
     var err_code = app_error_code;
     if ((flags & 0x01) == 0) { // NGTCP2_STREAM_CLOSE_FLAG_APP_ERROR_CODE_SET
@@ -1427,7 +1455,7 @@ pub fn Curl_cf_ngtcp2_cb_stream_reset(
     _ = app_error_code;
     _ = stream_user_data;
     if (comptime !use_ngtcp2) return NGTCP2_ERR_CALLBACK_FAILURE;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return NGTCP2_ERR_CALLBACK_FAILURE));
+    const ctx = fromOpaque(CfNgtcp2Ctx, user_data) orelse return NGTCP2_ERR_CALLBACK_FAILURE;
     const h3conn = ctx.h3conn orelse return 0;
     const rv = ngtcp2_c.nghttp3_conn_shutdown_stream_read(h3conn, stream_id);
     if (rv != 0 and rv != NGHTTP3_ERR_STREAM_NOT_FOUND) {
@@ -1447,7 +1475,7 @@ pub fn Curl_cf_ngtcp2_cb_stream_stop_sending(
     _ = app_error_code;
     _ = stream_user_data;
     if (comptime !use_ngtcp2) return NGTCP2_ERR_CALLBACK_FAILURE;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return NGTCP2_ERR_CALLBACK_FAILURE));
+    const ctx = fromOpaque(CfNgtcp2Ctx, user_data) orelse return NGTCP2_ERR_CALLBACK_FAILURE;
     const h3conn = ctx.h3conn orelse return 0;
     const rv = ngtcp2_c.nghttp3_conn_shutdown_stream_read(h3conn, stream_id);
     if (rv != 0 and rv != NGHTTP3_ERR_STREAM_NOT_FOUND) {
@@ -1559,7 +1587,7 @@ pub fn Curl_cf_ngtcp2_cb_recv_rx_key(
     _ = tconn;
     if (level != NGTCP2_CRYPTO_LEVEL_APPLICATION)
         return 0;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return NGTCP2_ERR_CALLBACK_FAILURE));
+    const ctx = fromOpaque(CfNgtcp2Ctx, user_data) orelse return NGTCP2_ERR_CALLBACK_FAILURE;
     const cf = ctx.cf orelse return NGTCP2_ERR_CALLBACK_FAILURE;
     if (ctx.h3conn == null) {
         const rc = Curl_cf_ngtcp2_h3_init_ctrls(cf, ctx.call_data.data, ctx);
@@ -1578,7 +1606,7 @@ pub fn Curl_cf_ngtcp2_cb_recv_tx_key(
     _ = tconn;
     if (level != NGTCP2_CRYPTO_LEVEL_EARLY)
         return 0;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return NGTCP2_ERR_CALLBACK_FAILURE));
+    const ctx = fromOpaque(CfNgtcp2Ctx, user_data) orelse return NGTCP2_ERR_CALLBACK_FAILURE;
     const cf = ctx.cf orelse return NGTCP2_ERR_CALLBACK_FAILURE;
     if (ctx.h3conn == null) {
         if (Curl_cf_ngtcp2_h3_init_ctrls(cf, ctx.call_data.data, ctx) != CURLE_OK)
@@ -1596,7 +1624,7 @@ pub fn Curl_cf_ngtcp2_cb_h3_acked_stream_data(
 ) callconv(.c) c_int {
     _ = conn;
     _ = stream_user_data;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return 0));
+    const ctx = fromOpaque(CfNgtcp2Ctx, user_data) orelse return 0;
     const sdata = Curl_cf_ngtcp2_get_xfer(ctx, stream_id) orelse return 0;
     const stream = h3StreamCtx(ctx, sdata) orelse return 0;
 
@@ -1619,7 +1647,7 @@ pub fn Curl_cf_ngtcp2_cb_h3_stream_close(
 ) callconv(.c) c_int {
     _ = conn;
     _ = stream_user_data;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return 0));
+    const ctx = fromOpaque(CfNgtcp2Ctx, user_data) orelse return 0;
     const sdata = Curl_cf_ngtcp2_get_xfer(ctx, stream_id) orelse return 0;
     const stream = h3StreamCtx(ctx, sdata) orelse return 0;
 
@@ -1675,7 +1703,7 @@ pub fn Curl_cf_ngtcp2_cb_h3_recv_data(
 ) callconv(.c) c_int {
     _ = conn;
     _ = stream_user_data;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return NGHTTP3_ERR_CALLBACK_FAILURE));
+    const ctx = fromOpaque(CfNgtcp2Ctx, user_data) orelse return NGHTTP3_ERR_CALLBACK_FAILURE;
     const cf = ctx.cf orelse return NGHTTP3_ERR_CALLBACK_FAILURE;
     const sdata = Curl_cf_ngtcp2_get_xfer(ctx, stream_id) orelse return NGHTTP3_ERR_CALLBACK_FAILURE;
     const stream = h3StreamCtx(ctx, sdata) orelse return NGHTTP3_ERR_CALLBACK_FAILURE;
@@ -1702,7 +1730,7 @@ pub fn Curl_cf_ngtcp2_cb_h3_deferred_consume(
     _ = conn;
     _ = stream_user_data;
     if (comptime !use_ngtcp2) return 0;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return 0));
+    const ctx = fromOpaque(CfNgtcp2Ctx, user_data) orelse return 0;
     if (ctx.qconn) |qconn| {
         _ = ngtcp2_c.ngtcp2_conn_extend_max_stream_offset(qconn, stream_id, consumed);
         ngtcp2_c.ngtcp2_conn_extend_max_offset(qconn, consumed);
@@ -1738,7 +1766,7 @@ pub fn Curl_cf_ngtcp2_cb_h3_recv_header(
     _ = flags;
     _ = stream_user_data;
     if (comptime !use_ngtcp2) return NGHTTP3_ERR_CALLBACK_FAILURE;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return NGHTTP3_ERR_CALLBACK_FAILURE));
+    const ctx = fromOpaque(CfNgtcp2Ctx, user_data) orelse return NGHTTP3_ERR_CALLBACK_FAILURE;
     const sdata = Curl_cf_ngtcp2_get_xfer(ctx, stream_id) orelse return 0;
     const stream = h3StreamCtx(ctx, sdata) orelse return 0;
 
@@ -1793,7 +1821,7 @@ pub fn Curl_cf_ngtcp2_cb_h3_end_headers(
 ) callconv(.c) c_int {
     _ = conn;
     _ = stream_user_data;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return NGHTTP3_ERR_CALLBACK_FAILURE));
+    const ctx = fromOpaque(CfNgtcp2Ctx, user_data) orelse return NGHTTP3_ERR_CALLBACK_FAILURE;
     const cf = ctx.cf orelse return NGHTTP3_ERR_CALLBACK_FAILURE;
     const sdata = Curl_cf_ngtcp2_get_xfer(ctx, stream_id) orelse return 0;
     const stream = h3StreamCtx(ctx, sdata) orelse return 0;
@@ -1835,7 +1863,7 @@ pub fn Curl_cf_ngtcp2_cb_h3_stop_sending(
     _ = conn;
     _ = stream_user_data;
     if (comptime !use_ngtcp2) return 0;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return 0));
+    const ctx = fromOpaque(CfNgtcp2Ctx, user_data) orelse return 0;
     const qconn = ctx.qconn orelse return 0;
     const rv = ngtcp2_c.ngtcp2_conn_shutdown_stream_read(qconn, 0, stream_id, app_error_code);
     if (rv != 0 and rv != NGTCP2_ERR_STREAM_NOT_FOUND) {
@@ -1852,7 +1880,7 @@ pub fn Curl_cf_ngtcp2_cb_h3_end_stream(
 ) callconv(.c) c_int {
     _ = conn;
     _ = stream_user_data;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return NGHTTP3_ERR_CALLBACK_FAILURE));
+    const ctx = fromOpaque(CfNgtcp2Ctx, user_data) orelse return NGHTTP3_ERR_CALLBACK_FAILURE;
     const cf = ctx.cf orelse return NGHTTP3_ERR_CALLBACK_FAILURE;
     const sdata = Curl_cf_ngtcp2_get_xfer(ctx, stream_id) orelse return 0;
     const stream = h3StreamCtx(ctx, sdata) orelse return 0;
@@ -1877,7 +1905,7 @@ pub fn Curl_cf_ngtcp2_cb_h3_reset_stream(
     _ = conn;
     _ = stream_user_data;
     if (comptime !use_ngtcp2) return 0;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return 0));
+    const ctx = fromOpaque(CfNgtcp2Ctx, user_data) orelse return 0;
     const qconn = ctx.qconn orelse return 0;
     const rv = ngtcp2_c.ngtcp2_conn_shutdown_stream_write(qconn, 0, stream_id, app_error_code);
     if (rv != 0 and rv != NGTCP2_ERR_STREAM_NOT_FOUND) {
@@ -1887,7 +1915,7 @@ pub fn Curl_cf_ngtcp2_cb_h3_reset_stream(
 }
 
 fn cb_get_conn(conn_ref: *ngtcp2_crypto_conn_ref) callconv(.c) ?*ngtcp2_conn {
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(conn_ref.user_data orelse return null));
+    const ctx = fromOpaque(CfNgtcp2Ctx, conn_ref.user_data) orelse return null;
     return ctx.qconn;
 }
 
@@ -1929,9 +1957,8 @@ fn cf_ngtcp2_on_session_reuse(
 
 fn cf_ngtcp2_new_session_cb(ssl: *anyopaque, ssl_sessionid: *anyopaque) callconv(.c) c_int {
     if (comptime !(use_ngtcp2 and backend_options.ssl == .openssl and !backend_options.bundled)) return 0;
-    const cref_raw = ngtcp2_ossl_c.SSL_get_ex_data(ssl, 0) orelse return 0;
-    const cref: *ngtcp2_crypto_conn_ref = @ptrCast(@alignCast(cref_raw));
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(cref.user_data orelse return 0));
+    const cref = fromOpaque(ngtcp2_crypto_conn_ref, ngtcp2_ossl_c.SSL_get_ex_data(ssl, 0)) orelse return 0;
+    const ctx = fromOpaque(CfNgtcp2Ctx, cref.user_data) orelse return 0;
     const cf = ctx.cf orelse return 0;
     const data = ctx.call_data.data orelse return 0;
     const peer_key = ctx.ssl_peer.scache_key orelse return 0;
@@ -1946,11 +1973,11 @@ fn cf_ngtcp2_new_session_cb(ssl: *anyopaque, ssl_sessionid: *anyopaque) callconv
 
     const sess_len = ngtcp2_ossl_c.i2d_SSL_SESSION(ssl_sessionid, null);
     if (sess_len <= 0) return 0;
-    const sess_buf_raw = mem.calloc(1, @intCast(sess_len)) orelse return 0;
-    var sess_ptr: ?[*]u8 = @ptrCast(sess_buf_raw);
+    const sess_buf = mem.callocMany(u8, @intCast(sess_len)) orelse return 0;
+    var sess_ptr: ?[*]u8 = sess_buf;
     const enc_len = ngtcp2_ossl_c.i2d_SSL_SESSION(ssl_sessionid, &sess_ptr);
     if (enc_len <= 0 or enc_len > sess_len) {
-        mem.free(sess_buf_raw);
+        mem.destroy(sess_buf);
         return 0;
     }
 
@@ -1976,7 +2003,7 @@ fn cf_ngtcp2_new_session_cb(ssl: *anyopaque, ssl_sessionid: *anyopaque) callconv
 
     var sc_session: ?*CurlSslSession = null;
     const res = vtls_scache_asn1.Curl_ssl_session_create2(
-        @ptrCast(sess_buf_raw),
+        sess_buf,
         @intCast(enc_len),
         ietf_tls_id,
         "h3",
@@ -1992,7 +2019,7 @@ fn cf_ngtcp2_new_session_cb(ssl: *anyopaque, ssl_sessionid: *anyopaque) callconv
         data,
         scache,
         has_share_scache,
-        @ptrCast(conn_config),
+        fromOpaque(vtls_scache_asn1.SslPrimaryConfig, conn_config).?,
         trc_feat,
         peer_key,
         sc_session.?,
@@ -2011,7 +2038,7 @@ fn cf_ngtcp2_ssl_ctx_setup(
             if (comptime backend_options.bundled) {
                 return CURLE_OK;
             }
-            const octx: *vtls_backends.openssl_backend.OsslCtx = @ptrCast(@alignCast(user_data orelse return CURLE_FAILED_INIT));
+            const octx = fromOpaque(vtls_backends.openssl_backend.OsslCtx, user_data) orelse return CURLE_FAILED_INIT;
             const ssl_ctx = octx.ssl_ctx orelse return CURLE_FAILED_INIT;
             _ = ngtcp2_ossl_c.SSL_CTX_ctrl(
                 ssl_ctx,
@@ -2024,7 +2051,7 @@ fn cf_ngtcp2_ssl_ctx_setup(
             return CURLE_OK;
         },
         .gnutls => {
-            const gctx: *vtls_gtls.GtlsCtx = @ptrCast(@alignCast(user_data orelse return CURLE_FAILED_INIT));
+            const gctx = fromOpaque(vtls_gtls.GtlsCtx, user_data) orelse return CURLE_FAILED_INIT;
             if (ngtcp2_gtls_c.ngtcp2_crypto_gnutls_configure_client_session(gctx.session) != 0) {
                 Curl_failf(data, "ngtcp2_crypto_gnutls_configure_client_session failed");
                 return CURLE_QUIC_CONNECT_ERROR;
@@ -2033,7 +2060,7 @@ fn cf_ngtcp2_ssl_ctx_setup(
             return CURLE_OK;
         },
         .wolfssl => {
-            const wctx: *vtls_wolfssl.WsslCtx = @ptrCast(@alignCast(user_data orelse return CURLE_FAILED_INIT));
+            const wctx = fromOpaque(vtls_wolfssl.WsslCtx, user_data) orelse return CURLE_FAILED_INIT;
             if (ngtcp2_wssl_c.ngtcp2_crypto_wolfssl_configure_client_context(wctx.ssl_ctx) != 0) {
                 Curl_failf(data, "ngtcp2_crypto_wolfssl_configure_client_context failed");
                 return CURLE_QUIC_CONNECT_ERROR;
@@ -2135,7 +2162,7 @@ fn qlog_callback(
     datalen: usize,
 ) callconv(.c) void {
     _ = flags;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return));
+    const ctx = fromOpaque(CfNgtcp2Ctx, user_data) orelse return;
     if (ctx.qlogfd != -1) {
         const rc = writeFd(ctx.qlogfd, data, datalen);
         if (rc == -1) {
@@ -2146,9 +2173,8 @@ fn qlog_callback(
 }
 
 fn cfToNgtcp2Ctx(cf: *CurlCfilter) ?*CfNgtcp2Ctx {
-    const raw = cf.ctx orelse return null;
     // Both CfNgtcp2Ctx and CfNgtcp2ProxyCtx (whose first field is `q: CfNgtcp2Ctx`) start with CfNgtcp2Ctx.
-    return @ptrCast(@alignCast(raw));
+    return fromOpaque(CfNgtcp2Ctx, cf.ctx);
 }
 
 fn report_consumed_data(
@@ -2184,7 +2210,7 @@ fn recv_pkt(
 ) callconv(.c) CURLcode {
     _ = ifindex;
     if (comptime !use_ngtcp2) return CURLE_NOT_BUILT_IN;
-    const pktx: *PktIoCtx = @ptrCast(@alignCast(userp orelse return CURLE_INTERNAL_ERROR));
+    const pktx = fromOpaque(PktIoCtx, userp) orelse return CURLE_INTERNAL_ERROR;
     const ctx = pktx.ctx;
     const qconn = ctx.qconn orelse return CURLE_QUIC_CONNECT_ERROR;
 
@@ -2397,7 +2423,7 @@ fn progress_egress(
             &ndatalen,
             flags,
             stream_id,
-            @ptrCast(&vec),
+            fromOpaque([*]const ngtcp2_vec, &vec),
             veccnt,
             pktx.ts,
         );
@@ -2605,7 +2631,7 @@ fn cf_ngtcp2_start(
         ctx.q.local_addrlen = @sizeOf(SockaddrStorage);
         const grv = posix_io.getsockname(
             ctx.q.sockfd,
-            @ptrCast(&ctx.q.local_addr),
+            &ctx.q.local_addr,
             &ctx.q.local_addrlen,
         );
         if (grv == -1) {
@@ -2863,8 +2889,7 @@ pub fn Curl_cf_ngtcp2_cmn_query(
             return CURLE_OK;
         },
         CF_QUERY_TIMER_CONNECT => {
-            if (pres2) |p2| {
-                const ts: *curltime = @ptrCast(@alignCast(p2));
+            if (fromOpaque(curltime, pres2)) |ts| {
                 if (ctx.q.got_first_byte) {
                     ts.* = ctx.q.first_byte_at;
                 }
@@ -2872,8 +2897,7 @@ pub fn Curl_cf_ngtcp2_cmn_query(
             return CURLE_OK;
         },
         CF_QUERY_TIMER_APPCONNECT => {
-            if (pres2) |p2| {
-                const ts: *curltime = @ptrCast(@alignCast(p2));
+            if (fromOpaque(curltime, pres2)) |ts| {
                 if (cf.isConnected()) {
                     ts.* = ctx.q.last_io;
                 }
@@ -2893,8 +2917,7 @@ pub fn Curl_cf_ngtcp2_cmn_query(
             return CURLE_OK;
         },
         CF_QUERY_SSL_INFO, CF_QUERY_SSL_CTX_INFO => {
-            if (pres2) |p2| {
-                const info: *vtls_backends.CurlTlsSessionInfo = @ptrCast(@alignCast(p2));
+            if (fromOpaque(vtls_backends.CurlTlsSessionInfo, pres2)) |info| {
                 if (vquic_core.Curl_vquic_tls_get_ssl_info(&ctx.tls, query == CF_QUERY_SSL_CTX_INFO, info)) {
                     return CURLE_OK;
                 }
@@ -2902,8 +2925,7 @@ pub fn Curl_cf_ngtcp2_cmn_query(
             return Curl_cf_def_query(cf, data, query, pres1, pres2);
         },
         CF_QUERY_ALPN_NEGOTIATED => {
-            if (pres2) |p2| {
-                const palpn: *?[*:0]const u8 = @ptrCast(@alignCast(p2));
+            if (fromOpaque(?[*:0]const u8, pres2)) |palpn| {
                 palpn.* = if (cf.isConnected()) "h3" else null;
             }
             return CURLE_OK;
@@ -3007,28 +3029,28 @@ fn cf_ngtcp2_h3_settings(
 
 pub const cf_ngtcp2_cbs: CfNgtcp2Cbs = if (use_ngtcp2) .{
     .q_cbs = .{
-        .client_initial = @ptrCast(&ngtcp2_c.ngtcp2_crypto_client_initial_cb),
-        .recv_crypto_data = @ptrCast(&ngtcp2_c.ngtcp2_crypto_recv_crypto_data_cb),
+        .client_initial = ngtcp2_c.ngtcp2_crypto_client_initial_cb,
+        .recv_crypto_data = ngtcp2_c.ngtcp2_crypto_recv_crypto_data_cb,
         .handshake_completed = Curl_cf_ngtcp2_cb_handshake_completed,
-        .encrypt = @ptrCast(&ngtcp2_c.ngtcp2_crypto_encrypt_cb),
-        .decrypt = @ptrCast(&ngtcp2_c.ngtcp2_crypto_decrypt_cb),
-        .hp_mask = @ptrCast(&ngtcp2_c.ngtcp2_crypto_hp_mask_cb),
+        .encrypt = ngtcp2_c.ngtcp2_crypto_encrypt_cb,
+        .decrypt = ngtcp2_c.ngtcp2_crypto_decrypt_cb,
+        .hp_mask = ngtcp2_c.ngtcp2_crypto_hp_mask_cb,
         .recv_stream_data = Curl_cf_ngtcp2_cb_recv_stream_data,
         .acked_stream_data_offset = Curl_cf_ngtcp2_cb_acked_stream_data_offset,
         .stream_open = Curl_cf_ngtcp2_cb_stream_open,
         .stream_close = Curl_cf_ngtcp2_cb_stream_close,
-        .recv_retry = @ptrCast(&ngtcp2_c.ngtcp2_crypto_recv_retry_cb),
+        .recv_retry = ngtcp2_c.ngtcp2_crypto_recv_retry_cb,
         .extend_max_local_streams_bidi = Curl_cf_ngtcp2_cb_extend_max_local_streams_bidi,
         .rand = Curl_cf_ngtcp2_cb_rand,
         .get_new_connection_id = Curl_cf_ngtcp2_cb_get_new_connection_id,
         .remove_connection_id = Curl_cf_ngtcp2_cb_remove_connection_id,
-        .update_key = @ptrCast(&ngtcp2_c.ngtcp2_crypto_update_key_cb),
+        .update_key = ngtcp2_c.ngtcp2_crypto_update_key_cb,
         .stream_reset = Curl_cf_ngtcp2_cb_stream_reset,
-        .delete_crypto_aead_ctx = @ptrCast(&ngtcp2_c.ngtcp2_crypto_delete_crypto_aead_ctx_cb),
-        .delete_crypto_cipher_ctx = @ptrCast(&ngtcp2_c.ngtcp2_crypto_delete_crypto_cipher_ctx_cb),
-        .get_path_challenge_data = @ptrCast(&ngtcp2_c.ngtcp2_crypto_get_path_challenge_data_cb),
+        .delete_crypto_aead_ctx = ngtcp2_c.ngtcp2_crypto_delete_crypto_aead_ctx_cb,
+        .delete_crypto_cipher_ctx = ngtcp2_c.ngtcp2_crypto_delete_crypto_cipher_ctx_cb,
+        .get_path_challenge_data = ngtcp2_c.ngtcp2_crypto_get_path_challenge_data_cb,
         .stream_stop_sending = Curl_cf_ngtcp2_cb_stream_stop_sending,
-        .version_negotiation = @ptrCast(&ngtcp2_c.ngtcp2_crypto_version_negotiation_cb),
+        .version_negotiation = ngtcp2_c.ngtcp2_crypto_version_negotiation_cb,
         .recv_rx_key = Curl_cf_ngtcp2_cb_recv_rx_key,
         .recv_tx_key = Curl_cf_ngtcp2_cb_recv_tx_key,
     },
@@ -3086,7 +3108,7 @@ fn cf_ngtcp2_adjust_pollset(
         if (sock != CURL_SOCKET_BAD) {
             return headers_sock.Curl_pollset_change(
                 data,
-                @ptrCast(@alignCast(ps)),
+                fromOpaque(headers_sock.EasyPollset, ps).?,
                 sock,
                 (if (want_recv) headers_sock.CURL_POLL_IN else 0) |
                     (if (want_send) headers_sock.CURL_POLL_OUT else 0),
@@ -3167,7 +3189,7 @@ fn cb_h3_readfunction(
 ) callconv(.c) ngtcp2_ssize {
     _ = conn;
     _ = stream_user_data;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return NGHTTP3_ERR_CALLBACK_FAILURE));
+    const ctx = fromOpaque(CfNgtcp2Ctx, user_data) orelse return NGHTTP3_ERR_CALLBACK_FAILURE;
     const sdata = Curl_cf_ngtcp2_get_xfer(ctx, stream_id) orelse return NGHTTP3_ERR_CALLBACK_FAILURE;
     const stream = h3StreamCtx(ctx, sdata) orelse return NGHTTP3_ERR_CALLBACK_FAILURE;
 
@@ -3238,9 +3260,8 @@ fn h3_stream_open(
     if (result != CURLE_OK) return result;
 
     const nheader = io_buffers.Curl_dynhds_count(&h2_headers);
-    const nva_raw = mem.calloc(nheader, @sizeOf(nghttp3_nv)) orelse return CURLE_OUT_OF_MEMORY;
-    defer mem.free(nva_raw);
-    const nva: [*]nghttp3_nv = @ptrCast(@alignCast(nva_raw));
+    const nva = mem.callocMany(nghttp3_nv, nheader) orelse return CURLE_OUT_OF_MEMORY;
+    defer mem.destroy(nva);
 
     var i: usize = 0;
     while (i < nheader) : (i += 1) {
@@ -3289,7 +3310,7 @@ fn cf_ngtcp2_send(
 ) callconv(.c) CURLcode {
     pnwritten.* = 0;
     if (comptime !use_ngtcp2) return CURLE_NOT_BUILT_IN;
-    const buf: [*]const u8 = @ptrCast(buf_raw orelse return CURLE_BAD_FUNCTION_ARGUMENT);
+    const buf = fromOpaque([*]const u8, buf_raw) orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     const ctx = cfToNgtcp2Ctx(cf) orelse return CURLE_SEND_ERROR;
 
     var save: CfCallData = undefined;
@@ -3485,6 +3506,30 @@ pub var Curl_cft_http3 = CurlCftype{
     .query = cf_ngtcp2_query,
 };
 
+fn insertNgtcp2FilterAfterInner(
+    cf_at: *CurlCfilter,
+    origin: ?*CurlPeer,
+    peer: ?*CurlPeer,
+) error{ OutOfMemory, CreateFailed }!*CurlCfilter {
+    const ctx = mem.create(CfNgtcp2Ctx) orelse return error.OutOfMemory;
+    errdefer mem.freeTyped(ctx);
+
+    var result = Curl_cf_ngtcp2_ctx_init(ctx, origin, peer, &cf_ngtcp2_cbs);
+    if (result != CURLE_OK) {
+        return if (result == CURLE_OUT_OF_MEMORY) error.OutOfMemory else error.CreateFailed;
+    }
+    errdefer Curl_cf_ngtcp2_ctx_cleanup(ctx);
+
+    var cf: ?*CurlCfilter = null;
+    result = Curl_cf_create(&cf, &Curl_cft_http3, ctx);
+    if (result != CURLE_OK) {
+        return if (result == CURLE_OUT_OF_MEMORY) error.OutOfMemory else error.CreateFailed;
+    }
+
+    Curl_conn_cf_insert_after(cf_at, cf.?);
+    return cf.?;
+}
+
 pub fn Curl_cf_ngtcp2_insert_after(
     cf_at: *CurlCfilter,
     origin: ?*CurlPeer,
@@ -3493,26 +3538,52 @@ pub fn Curl_cf_ngtcp2_insert_after(
 ) callconv(.c) CURLcode {
     pcf.* = null;
     if (comptime !use_ngtcp2) return CURLE_NOT_BUILT_IN;
+    pcf.* = insertNgtcp2FilterAfterInner(cf_at, origin, peer) catch |err| return switch (err) {
+        error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+        error.CreateFailed => CURLE_FAILED_INIT,
+    };
+    return CURLE_OK;
+}
 
-    const raw = mem.calloc(1, @sizeOf(CfNgtcp2Ctx)) orelse return CURLE_OUT_OF_MEMORY;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(raw));
+fn createNgtcp2FilterInner(
+    data: ?*CurlEasy,
+    origin: ?*CurlPeer,
+    peer: ?*CurlPeer,
+    conn: ?*ConnectData,
+    addr: ?*CurlSockaddrEx,
+) error{ OutOfMemory, CreateFailed }!*CurlCfilter {
+    const ctx = mem.create(CfNgtcp2Ctx) orelse return error.OutOfMemory;
+    var ctx_owned = true;
+    errdefer if (ctx_owned) mem.freeTyped(ctx);
+
     var result = Curl_cf_ngtcp2_ctx_init(ctx, origin, peer, &cf_ngtcp2_cbs);
     if (result != CURLE_OK) {
-        mem.freeTyped(ctx);
-        return result;
+        return if (result == CURLE_OUT_OF_MEMORY) error.OutOfMemory else error.CreateFailed;
+    }
+    errdefer if (ctx_owned) Curl_cf_ngtcp2_ctx_cleanup(ctx);
+
+    var cf_ngtcp2: ?*CurlCfilter = null;
+    result = Curl_cf_create(&cf_ngtcp2, &Curl_cft_http3, ctx);
+    if (result != CURLE_OK or cf_ngtcp2 == null) {
+        return if (result == CURLE_OUT_OF_MEMORY) error.OutOfMemory else error.CreateFailed;
+    }
+    ctx_owned = false;
+    errdefer {
+        cf_ngtcp2_destroy(cf_ngtcp2.?, data);
+        mem.freeTyped(cf_ngtcp2);
+    }
+    cf_ngtcp2.?.conn = conn;
+
+    var cf_udp: ?*CurlCfilter = null;
+    result = Curl_cf_udp_create(&cf_udp, data, origin, peer, TRNSPRT_QUIC, conn, addr, null, TRNSPRT_QUIC);
+    if (result != CURLE_OK or cf_udp == null) {
+        return if (result == CURLE_OUT_OF_MEMORY) error.OutOfMemory else error.CreateFailed;
     }
 
-    var cf: ?*CurlCfilter = null;
-    result = Curl_cf_create(&cf, &Curl_cft_http3, ctx);
-    if (result != CURLE_OK) {
-        Curl_cf_ngtcp2_ctx_cleanup(ctx);
-        mem.freeTyped(ctx);
-        return result;
-    }
-
-    Curl_conn_cf_insert_after(cf_at, cf.?);
-    pcf.* = cf;
-    return CURLE_OK;
+    cf_udp.?.conn = cf_ngtcp2.?.conn;
+    cf_udp.?.sockindex = cf_ngtcp2.?.sockindex;
+    cf_ngtcp2.?.next = cf_udp;
+    return cf_ngtcp2.?;
 }
 
 pub fn Curl_cf_ngtcp2_create(
@@ -3525,36 +3596,10 @@ pub fn Curl_cf_ngtcp2_create(
 ) callconv(.c) CURLcode {
     pcf.* = null;
     if (comptime !use_ngtcp2) return CURLE_NOT_BUILT_IN;
-
-    const raw = mem.calloc(1, @sizeOf(CfNgtcp2Ctx)) orelse return CURLE_OUT_OF_MEMORY;
-    const ctx: *CfNgtcp2Ctx = @ptrCast(@alignCast(raw));
-    var result = Curl_cf_ngtcp2_ctx_init(ctx, origin, peer, &cf_ngtcp2_cbs);
-    if (result != CURLE_OK) {
-        mem.freeTyped(ctx);
-        return result;
-    }
-
-    var cf_ngtcp2: ?*CurlCfilter = null;
-    result = Curl_cf_create(&cf_ngtcp2, &Curl_cft_http3, ctx);
-    if (result != CURLE_OK or cf_ngtcp2 == null) {
-        Curl_cf_ngtcp2_ctx_cleanup(ctx);
-        mem.freeTyped(ctx);
-        return result;
-    }
-    cf_ngtcp2.?.conn = conn;
-
-    var cf_udp: ?*CurlCfilter = null;
-    result = Curl_cf_udp_create(&cf_udp, data, origin, peer, TRNSPRT_QUIC, conn, addr, null, TRNSPRT_QUIC);
-    if (result != CURLE_OK or cf_udp == null) {
-        cf_ngtcp2_destroy(cf_ngtcp2.?, data);
-        mem.freeTyped(cf_ngtcp2);
-        return result;
-    }
-
-    cf_udp.?.conn = cf_ngtcp2.?.conn;
-    cf_udp.?.sockindex = cf_ngtcp2.?.sockindex;
-    cf_ngtcp2.?.next = cf_udp;
-    pcf.* = cf_ngtcp2;
+    pcf.* = createNgtcp2FilterInner(data, origin, peer, conn, addr) catch |err| return switch (err) {
+        error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+        error.CreateFailed => CURLE_FAILED_INIT,
+    };
     return CURLE_OK;
 }
 
@@ -3596,8 +3641,7 @@ pub const CfNgtcp2ProxyCtx = struct {
 };
 
 fn cfToProxyCtx(cf: *CurlCfilter) ?*CfNgtcp2ProxyCtx {
-    const raw = cf.ctx orelse return null;
-    return @ptrCast(@alignCast(raw));
+    return fromOpaque(CfNgtcp2ProxyCtx, cf.ctx);
 }
 
 fn qToProxyCtx(q: *CfNgtcp2Ctx) *CfNgtcp2ProxyCtx {
@@ -3684,7 +3728,7 @@ fn cf_ngtcp2_proxy_cb_recv_datagram(
 ) callconv(.c) c_int {
     _ = tconn;
     _ = flags;
-    const q: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return 0));
+    const q = fromOpaque(CfNgtcp2Ctx, user_data) orelse return 0;
     const ctx = qToProxyCtx(q);
     if (!ctx.ts.udp or buflen < 2) return 0;
     // RFC 9298 / RFC 9297 Quarter Stream ID + Context ID (0)
@@ -3713,7 +3757,7 @@ fn cf_ngtcp2_proxy_cb_h3_recv_data(
     _ = conn;
     _ = stream_id;
     _ = stream_user_data;
-    const q: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return NGHTTP3_ERR_CALLBACK_FAILURE));
+    const q = fromOpaque(CfNgtcp2Ctx, user_data) orelse return NGHTTP3_ERR_CALLBACK_FAILURE;
     const ctx = qToProxyCtx(q);
     var nwritten: usize = 0;
     const result = io_buffers.Curl_bufq_write(&ctx.ts.recvbuf, buf, buflen, &nwritten);
@@ -3739,7 +3783,7 @@ fn cf_ngtcp2_proxy_cb_h3_recv_header(
     _ = flags;
     _ = stream_user_data;
     if (comptime !use_ngtcp2) return NGHTTP3_ERR_CALLBACK_FAILURE;
-    const q: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return NGHTTP3_ERR_CALLBACK_FAILURE));
+    const q = fromOpaque(CfNgtcp2Ctx, user_data) orelse return NGHTTP3_ERR_CALLBACK_FAILURE;
     const ctx = qToProxyCtx(q);
     if (ctx.ts.has_final_response) return 0;
 
@@ -3780,7 +3824,7 @@ fn cf_ngtcp2_proxy_cb_h3_end_headers(
     _ = conn;
     _ = stream_id;
     _ = stream_user_data;
-    const q: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return NGHTTP3_ERR_CALLBACK_FAILURE));
+    const q = fromOpaque(CfNgtcp2Ctx, user_data) orelse return NGHTTP3_ERR_CALLBACK_FAILURE;
     const ctx = qToProxyCtx(q);
     const resp = ctx.ts.resp orelse return NGHTTP3_ERR_CALLBACK_FAILURE;
     if (resp.status >= 200) {
@@ -3799,7 +3843,7 @@ fn cf_ngtcp2_proxy_cb_h3_stream_close(
     user_data: ?*anyopaque,
     stream_user_data: ?*anyopaque,
 ) callconv(.c) c_int {
-    const q: *CfNgtcp2Ctx = @ptrCast(@alignCast(user_data orelse return 0));
+    const q = fromOpaque(CfNgtcp2Ctx, user_data) orelse return 0;
     const ctx = qToProxyCtx(q);
     if (ctx.ts.stream) |s| {
         if (s.id == stream_id) {
@@ -3838,29 +3882,29 @@ fn cf_ngtcp2_proxy_h3_settings(
 
 pub const cf_ngtcp2_proxy_cbs: CfNgtcp2Cbs = if (use_ngtcp2) .{
     .q_cbs = .{
-        .client_initial = @ptrCast(&ngtcp2_c.ngtcp2_crypto_client_initial_cb),
-        .recv_crypto_data = @ptrCast(&ngtcp2_c.ngtcp2_crypto_recv_crypto_data_cb),
+        .client_initial = ngtcp2_c.ngtcp2_crypto_client_initial_cb,
+        .recv_crypto_data = ngtcp2_c.ngtcp2_crypto_recv_crypto_data_cb,
         .handshake_completed = Curl_cf_ngtcp2_cb_handshake_completed,
-        .encrypt = @ptrCast(&ngtcp2_c.ngtcp2_crypto_encrypt_cb),
-        .decrypt = @ptrCast(&ngtcp2_c.ngtcp2_crypto_decrypt_cb),
-        .hp_mask = @ptrCast(&ngtcp2_c.ngtcp2_crypto_hp_mask_cb),
+        .encrypt = ngtcp2_c.ngtcp2_crypto_encrypt_cb,
+        .decrypt = ngtcp2_c.ngtcp2_crypto_decrypt_cb,
+        .hp_mask = ngtcp2_c.ngtcp2_crypto_hp_mask_cb,
         .recv_stream_data = Curl_cf_ngtcp2_cb_recv_stream_data,
         .acked_stream_data_offset = Curl_cf_ngtcp2_cb_acked_stream_data_offset,
         .stream_open = Curl_cf_ngtcp2_cb_stream_open,
         .stream_close = Curl_cf_ngtcp2_cb_stream_close,
-        .recv_retry = @ptrCast(&ngtcp2_c.ngtcp2_crypto_recv_retry_cb),
+        .recv_retry = ngtcp2_c.ngtcp2_crypto_recv_retry_cb,
         .extend_max_local_streams_bidi = Curl_cf_ngtcp2_cb_extend_max_local_streams_bidi,
         .rand = Curl_cf_ngtcp2_cb_rand,
         .get_new_connection_id = Curl_cf_ngtcp2_cb_get_new_connection_id,
         .remove_connection_id = Curl_cf_ngtcp2_cb_remove_connection_id,
-        .update_key = @ptrCast(&ngtcp2_c.ngtcp2_crypto_update_key_cb),
+        .update_key = ngtcp2_c.ngtcp2_crypto_update_key_cb,
         .stream_reset = Curl_cf_ngtcp2_cb_stream_reset,
-        .delete_crypto_aead_ctx = @ptrCast(&ngtcp2_c.ngtcp2_crypto_delete_crypto_aead_ctx_cb),
-        .delete_crypto_cipher_ctx = @ptrCast(&ngtcp2_c.ngtcp2_crypto_delete_crypto_cipher_ctx_cb),
+        .delete_crypto_aead_ctx = ngtcp2_c.ngtcp2_crypto_delete_crypto_aead_ctx_cb,
+        .delete_crypto_cipher_ctx = ngtcp2_c.ngtcp2_crypto_delete_crypto_cipher_ctx_cb,
         .recv_datagram = cf_ngtcp2_proxy_cb_recv_datagram,
-        .get_path_challenge_data = @ptrCast(&ngtcp2_c.ngtcp2_crypto_get_path_challenge_data_cb),
+        .get_path_challenge_data = ngtcp2_c.ngtcp2_crypto_get_path_challenge_data_cb,
         .stream_stop_sending = Curl_cf_ngtcp2_cb_stream_stop_sending,
-        .version_negotiation = @ptrCast(&ngtcp2_c.ngtcp2_crypto_version_negotiation_cb),
+        .version_negotiation = ngtcp2_c.ngtcp2_crypto_version_negotiation_cb,
         .recv_rx_key = Curl_cf_ngtcp2_cb_recv_rx_key,
         .recv_tx_key = Curl_cf_ngtcp2_cb_recv_tx_key,
     },
@@ -3904,9 +3948,8 @@ fn proxy_h3_submit(
     if (result != CURLE_OK) return result;
 
     const nheader = io_buffers.Curl_dynhds_count(&h2_headers);
-    const nva_raw = mem.calloc(nheader, @sizeOf(nghttp3_nv)) orelse return CURLE_OUT_OF_MEMORY;
-    defer mem.free(nva_raw);
-    const nva: [*]nghttp3_nv = @ptrCast(@alignCast(nva_raw));
+    const nva = mem.callocMany(nghttp3_nv, nheader) orelse return CURLE_OUT_OF_MEMORY;
+    defer mem.destroy(nva);
 
     var i: usize = 0;
     while (i < nheader) : (i += 1) {
@@ -4157,7 +4200,7 @@ fn cf_ngtcp2_proxy_adjust_pollset(
         if (sock != CURL_SOCKET_BAD) {
             return headers_sock.Curl_pollset_change(
                 data,
-                @ptrCast(@alignCast(ps)),
+                fromOpaque(headers_sock.EasyPollset, ps).?,
                 sock,
                 (if (want_recv) headers_sock.CURL_POLL_IN else 0) |
                     (if (want_send) headers_sock.CURL_POLL_OUT else 0),
@@ -4187,7 +4230,7 @@ fn cf_ngtcp2_proxy_send(
 ) callconv(.c) CURLcode {
     pnwritten.* = 0;
     if (comptime !use_ngtcp2) return CURLE_NOT_BUILT_IN;
-    const buf: [*]const u8 = @ptrCast(buf_raw orelse return CURLE_BAD_FUNCTION_ARGUMENT);
+    const buf = fromOpaque([*]const u8, buf_raw) orelse return CURLE_BAD_FUNCTION_ARGUMENT;
     const ctx = cfToProxyCtx(cf) orelse return CURLE_SEND_ERROR;
     const stream = ctx.ts.stream orelse return CURLE_SEND_ERROR;
 
@@ -4382,6 +4425,31 @@ fn cf_ngtcp2_proxy_ctx_init(
     return result;
 }
 
+fn insertNgtcp2ProxyFilterAfterInner(
+    cf_at: *CurlCfilter,
+    origin: ?*CurlPeer,
+    peer: ?*CurlPeer,
+    tunnel_peer: ?*CurlPeer,
+    tunnel_transport: u8,
+) error{ OutOfMemory, CreateFailed }!void {
+    const ctx = mem.create(CfNgtcp2ProxyCtx) orelse return error.OutOfMemory;
+    errdefer mem.freeTyped(ctx);
+
+    var result = cf_ngtcp2_proxy_ctx_init(ctx, origin, peer, tunnel_peer, tunnel_transport);
+    if (result != CURLE_OK) {
+        return if (result == CURLE_OUT_OF_MEMORY) error.OutOfMemory else error.CreateFailed;
+    }
+    errdefer cf_ngtcp2_proxy_ctx_cleanup(ctx);
+
+    var cf: ?*CurlCfilter = null;
+    result = Curl_cf_create(&cf, &Curl_cft_h3_proxy, ctx);
+    if (result != CURLE_OK) {
+        return if (result == CURLE_OUT_OF_MEMORY) error.OutOfMemory else error.CreateFailed;
+    }
+
+    Curl_conn_cf_insert_after(cf_at, cf.?);
+}
+
 pub fn Curl_cf_ngtcp2_proxy_insert_after(
     cf_at: *CurlCfilter,
     data: ?*CurlEasy,
@@ -4392,25 +4460,54 @@ pub fn Curl_cf_ngtcp2_proxy_insert_after(
 ) callconv(.c) CURLcode {
     _ = data;
     if (comptime !use_proxy_http3) return CURLE_NOT_BUILT_IN;
+    insertNgtcp2ProxyFilterAfterInner(cf_at, origin, peer, tunnel_peer, tunnel_transport) catch |err| return switch (err) {
+        error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+        error.CreateFailed => CURLE_FAILED_INIT,
+    };
+    return CURLE_OK;
+}
 
-    const raw = mem.calloc(1, @sizeOf(CfNgtcp2ProxyCtx)) orelse return CURLE_OUT_OF_MEMORY;
-    const ctx: *CfNgtcp2ProxyCtx = @ptrCast(@alignCast(raw));
+fn createNgtcp2ProxyFilterInner(
+    data: ?*CurlEasy,
+    origin: ?*CurlPeer,
+    peer: ?*CurlPeer,
+    conn: ?*ConnectData,
+    addr: ?*CurlSockaddrEx,
+    tunnel_peer: ?*CurlPeer,
+    tunnel_transport: u8,
+) error{ OutOfMemory, CreateFailed }!*CurlCfilter {
+    const ctx = mem.create(CfNgtcp2ProxyCtx) orelse return error.OutOfMemory;
+    var ctx_owned = true;
+    errdefer if (ctx_owned) mem.freeTyped(ctx);
+
     var result = cf_ngtcp2_proxy_ctx_init(ctx, origin, peer, tunnel_peer, tunnel_transport);
     if (result != CURLE_OK) {
-        mem.freeTyped(ctx);
-        return result;
+        return if (result == CURLE_OUT_OF_MEMORY) error.OutOfMemory else error.CreateFailed;
+    }
+    errdefer if (ctx_owned) cf_ngtcp2_proxy_ctx_cleanup(ctx);
+
+    var cf_h3_proxy: ?*CurlCfilter = null;
+    result = Curl_cf_create(&cf_h3_proxy, &Curl_cft_h3_proxy, ctx);
+    if (result != CURLE_OK or cf_h3_proxy == null) {
+        return if (result == CURLE_OUT_OF_MEMORY) error.OutOfMemory else error.CreateFailed;
+    }
+    ctx_owned = false;
+    errdefer {
+        cf_ngtcp2_proxy_destroy(cf_h3_proxy.?, data);
+        mem.freeTyped(cf_h3_proxy);
+    }
+    cf_h3_proxy.?.conn = conn;
+
+    var cf_udp: ?*CurlCfilter = null;
+    result = Curl_cf_udp_create(&cf_udp, data, origin, peer, TRNSPRT_QUIC, conn, addr, null, TRNSPRT_QUIC);
+    if (result != CURLE_OK or cf_udp == null) {
+        return if (result == CURLE_OUT_OF_MEMORY) error.OutOfMemory else error.CreateFailed;
     }
 
-    var cf: ?*CurlCfilter = null;
-    result = Curl_cf_create(&cf, &Curl_cft_h3_proxy, ctx);
-    if (result != CURLE_OK) {
-        cf_ngtcp2_proxy_ctx_cleanup(ctx);
-        mem.freeTyped(ctx);
-        return result;
-    }
-
-    Curl_conn_cf_insert_after(cf_at, cf.?);
-    return CURLE_OK;
+    cf_udp.?.conn = cf_h3_proxy.?.conn;
+    cf_udp.?.sockindex = cf_h3_proxy.?.sockindex;
+    cf_h3_proxy.?.next = cf_udp;
+    return cf_h3_proxy.?;
 }
 
 pub fn Curl_cf_ngtcp2_proxy_create(
@@ -4427,36 +4524,10 @@ pub fn Curl_cf_ngtcp2_proxy_create(
     pcf.* = null;
     if (comptime !use_proxy_http3) return CURLE_NOT_BUILT_IN;
     std.debug.assert(transport_peer == TRNSPRT_QUIC);
-
-    const raw = mem.calloc(1, @sizeOf(CfNgtcp2ProxyCtx)) orelse return CURLE_OUT_OF_MEMORY;
-    const ctx: *CfNgtcp2ProxyCtx = @ptrCast(@alignCast(raw));
-    var result = cf_ngtcp2_proxy_ctx_init(ctx, origin, peer, tunnel_peer, tunnel_transport);
-    if (result != CURLE_OK) {
-        mem.freeTyped(ctx);
-        return result;
-    }
-
-    var cf_h3_proxy: ?*CurlCfilter = null;
-    result = Curl_cf_create(&cf_h3_proxy, &Curl_cft_h3_proxy, ctx);
-    if (result != CURLE_OK or cf_h3_proxy == null) {
-        cf_ngtcp2_proxy_ctx_cleanup(ctx);
-        mem.freeTyped(ctx);
-        return result;
-    }
-    cf_h3_proxy.?.conn = conn;
-
-    var cf_udp: ?*CurlCfilter = null;
-    result = Curl_cf_udp_create(&cf_udp, data, origin, peer, TRNSPRT_QUIC, conn, addr, null, TRNSPRT_QUIC);
-    if (result != CURLE_OK or cf_udp == null) {
-        cf_ngtcp2_proxy_destroy(cf_h3_proxy.?, data);
-        mem.freeTyped(cf_h3_proxy);
-        return result;
-    }
-
-    cf_udp.?.conn = cf_h3_proxy.?.conn;
-    cf_udp.?.sockindex = cf_h3_proxy.?.sockindex;
-    cf_h3_proxy.?.next = cf_udp;
-    pcf.* = cf_h3_proxy;
+    pcf.* = createNgtcp2ProxyFilterInner(data, origin, peer, conn, addr, tunnel_peer, tunnel_transport) catch |err| return switch (err) {
+        error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+        error.CreateFailed => CURLE_FAILED_INIT,
+    };
     return CURLE_OK;
 }
 
@@ -4611,7 +4682,7 @@ test "vquic_ngtcp2 detached easyMid, magic/xfer_id stream validation, tunnel str
 
         fn mockFree(ptr: ?*anyopaque) callconv(.c) void {
             if (ptr != null and ptr == expected_free_ptr) {
-                const src: [*]const u8 = @ptrCast(ptr.?);
+                const src = fromOpaque([*]const u8, ptr).?;
                 @memcpy(&captured_free_bytes, src[0..@sizeOf(H3StreamCtx)]);
                 captured_stream_free = true;
             }
@@ -4721,8 +4792,7 @@ test "vquic_ngtcp2 detached easyMid, magic/xfer_id stream validation, tunnel str
     test_ext.Curl_cfree = test_ext.mockFree;
     defer test_ext.Curl_cfree = saved_cfree;
 
-    const raw_s = mem.calloc(1, @sizeOf(H3StreamCtx)) orelse return error.OutOfMemory;
-    const temp_s: *H3StreamCtx = @ptrCast(@alignCast(raw_s));
+    const temp_s = mem.create(H3StreamCtx) orelse return error.OutOfMemory;
     temp_s.id = 77;
     temp_s.mid = 3;
     temp_s.xfer_id = 555;
@@ -4730,7 +4800,7 @@ test "vquic_ngtcp2 detached easyMid, magic/xfer_id stream validation, tunnel str
     http1_options.Curl_h1_req_parse_init(&temp_s.h1, 16 * 1024);
 
     @memset(&test_ext.captured_free_bytes, 0);
-    test_ext.expected_free_ptr = @ptrCast(temp_s);
+    test_ext.expected_free_ptr = temp_s;
     test_ext.captured_stream_free = false;
     Curl_cf_ngtcp2_h3_stream_ctx_free(temp_s);
     try std.testing.expect(test_ext.captured_stream_free);

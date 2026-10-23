@@ -3,7 +3,13 @@ const builtin = @import("builtin");
 const backend_options = @import("backend_options");
 const mem = @import("mem.zig");
 const containers = @import("containers.zig");
+const collections = @import("collections.zig");
 const curlx_time_net = @import("curlx_time_net.zig");
+
+inline fn fromOpaque(comptime T: type, raw: anytype) if (@typeInfo(T) == .pointer) ?T else ?*T {
+    const p = mem.toRawPtr(raw) orelse return null;
+    return @ptrCast(@alignCast(p));
+}
 
 pub const CURLcode = c_uint;
 pub const CURLE_OK: CURLcode = 0;
@@ -169,24 +175,22 @@ const CurlActualCall = extern struct {
 };
 
 fn curlThreadCreateThunk(arg: ?*anyopaque) callconv(.c) ?*anyopaque {
-    const ac: *CurlActualCall = @ptrCast(@alignCast(arg.?));
+    const ac = fromOpaque(CurlActualCall, arg).?;
     const func = ac.func;
     const real_arg = ac.arg;
 
-    mem.freeSized(ac, @sizeOf(CurlActualCall));
+    mem.destroy(ac);
     _ = func(real_arg);
     return null;
 }
 
 fn createPosixThread(f: ThreadFunc, arg: ?*anyopaque) error{ OutOfMemory, ThreadCreateFailed }!*usize {
-    const t_raw = mem.malloc(@sizeOf(usize)) orelse return error.OutOfMemory;
-    errdefer mem.freeSized(t_raw, @sizeOf(usize));
+    const t = mem.alloc(usize) orelse return error.OutOfMemory;
+    errdefer mem.destroy(t);
 
-    const ac_raw = mem.malloc(@sizeOf(CurlActualCall)) orelse return error.OutOfMemory;
-    errdefer mem.freeSized(ac_raw, @sizeOf(CurlActualCall));
+    const ac = mem.alloc(CurlActualCall) orelse return error.OutOfMemory;
+    errdefer mem.destroy(ac);
 
-    const t: *usize = @ptrCast(@alignCast(t_raw));
-    const ac: *CurlActualCall = @ptrCast(@alignCast(ac_raw));
     ac.func = f;
     ac.arg = arg;
 
@@ -373,7 +377,7 @@ const libcurl_trc = struct {
 
 fn thrdslotDestroy(tslot: *thrdslot) void {
     condDestroy(&tslot.await_cond);
-    mem.freeSized(tslot, @sizeOf(thrdslot));
+    mem.destroy(tslot);
 }
 
 fn thrdslotDone(tslot: *thrdslot) void {
@@ -385,7 +389,7 @@ fn thrdslotDone(tslot: *thrdslot) void {
 }
 
 fn thrdslotRun(arg: ?*anyopaque) callconv(thread_cc) ThreadReturn {
-    const tslot: *thrdslot = @ptrCast(@alignCast(arg.?));
+    const tslot = fromOpaque(thrdslot, arg).?;
     const tpool = tslot.tpool;
 
     mutexAcquire(&tpool.lock);
@@ -437,40 +441,45 @@ fn thrdslotRun(arg: ?*anyopaque) callconv(thread_cc) ThreadReturn {
     return 0;
 }
 
-fn thrdslotStart(tpool: *curl_thrdpool) CURLcode {
-    const raw = mem.calloc(1, @sizeOf(thrdslot)) orelse return CURLE_OUT_OF_MEMORY;
-    const tslot: *thrdslot = @ptrCast(@alignCast(raw));
+fn thrdslotStartInner(tpool: *curl_thrdpool) error{ OutOfMemory, FailedInit }!void {
+    const tslot = mem.create(thrdslot) orelse return error.OutOfMemory;
     tslot.id = tpool.next_id;
     tpool.next_id +%= 1;
     tslot.tpool = tpool;
     tslot.thread = null;
     condInit(&tslot.await_cond);
+    errdefer thrdslotDestroy(tslot);
 
     tpool.refcount += 1;
     tslot.running = true;
-    tslot.thread = Curl_thread_create(&thrdslotRun, tslot);
-    if (tslot.thread == null) {
+    errdefer {
         tslot.running = false;
         _ = thrdpoolUnlink(tpool, true);
-        thrdslotDestroy(tslot);
-        return CURLE_FAILED_INIT;
     }
 
+    tslot.thread = Curl_thread_create(&thrdslotRun, tslot) orelse return error.FailedInit;
     containers.Curl_llist_append(&tpool.slots, tslot, &tslot.node);
+}
+
+fn thrdslotStart(tpool: *curl_thrdpool) CURLcode {
+    thrdslotStartInner(tpool) catch |err| return switch (err) {
+        error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+        error.FailedInit => CURLE_FAILED_INIT,
+    };
     return CURLE_OK;
 }
 
 fn thrdpoolWakeAll(tpool: *curl_thrdpool) void {
     var e = containers.Curl_llist_head(&tpool.slots);
     while (e) |node| : (e = containers.Curl_node_next(node)) {
-        const tslot: *thrdslot = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+        const tslot = collections.llistElemTyped(thrdslot, node).?;
         Curl_cond_signal(&tslot.await_cond);
     }
 }
 
 fn thrdpoolJoinZombies(tpool: *curl_thrdpool) void {
     while (containers.Curl_llist_head(&tpool.zombies)) |e| {
-        const tslot: *thrdslot = @ptrCast(@alignCast(containers.Curl_node_elem(e).?));
+        const tslot = collections.llistElemTyped(thrdslot, e).?;
         containers.Curl_node_remove(&tslot.node);
         if (tslot.thread != null) {
             mutexRelease(&tpool.lock);
@@ -496,7 +505,7 @@ fn thrdpoolUnlink(tpool: *curl_thrdpool, locked: bool) bool {
     }
     condDestroy(&tpool.await_cond);
     mutexDestroy(&tpool.lock);
-    mem.freeSized(tpool, @sizeOf(curl_thrdpool));
+    mem.destroy(tpool);
     return true;
 }
 
@@ -510,7 +519,7 @@ fn thrdpoolSignal(tpool: *curl_thrdpool, nthreads_in: u32) CURLcode {
     while (e != null and nthreads > 0) {
         const node = e.?;
         const n = containers.Curl_node_next(node);
-        const tslot: *thrdslot = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+        const tslot = collections.llistElemTyped(thrdslot, node).?;
         if (tslot.idle) {
             Curl_cond_signal(&tslot.await_cond);
             nthreads -= 1;
@@ -556,8 +565,7 @@ pub export fn Curl_thrdpool_set_props(
     return result;
 }
 
-pub export fn Curl_thrdpool_create(
-    ptpool: *?*curl_thrdpool,
+fn createThrdpoolInner(
     name: ?[*:0]const u8,
     min_threads: u32,
     max_threads: u32,
@@ -566,13 +574,12 @@ pub export fn Curl_thrdpool_create(
     fn_process: Curl_thrdpool_process_item_cb,
     fn_return: Curl_thrdpool_return_item_cb,
     user_data: ?*anyopaque,
-) callconv(.c) CURLcode {
-    const raw = mem.calloc(1, @sizeOf(curl_thrdpool)) orelse {
-        ptpool.* = null;
-        return CURLE_OUT_OF_MEMORY;
+    out_result: *CURLcode,
+) error{ OutOfMemory, SetPropsFailed }!*curl_thrdpool {
+    const tp = mem.create(curl_thrdpool) orelse {
+        out_result.* = CURLE_OUT_OF_MEMORY;
+        return error.OutOfMemory;
     };
-    var tpool: ?*curl_thrdpool = @ptrCast(@alignCast(raw));
-    const tp = tpool.?;
     tp.refcount = 1;
 
     mutexInit(&tp.lock);
@@ -584,14 +591,40 @@ pub export fn Curl_thrdpool_create(
     tp.fn_return = fn_return;
     tp.fn_user_data = user_data;
     tp.name = name;
-
-    const result = Curl_thrdpool_set_props(tp, min_threads, max_threads, idle_time_ms);
-    if (result != CURLE_OK) {
+    errdefer {
         tp.aborted = true;
         _ = thrdpoolUnlink(tp, false);
-        tpool = null;
     }
-    ptpool.* = tpool;
+
+    const result = Curl_thrdpool_set_props(tp, min_threads, max_threads, idle_time_ms);
+    out_result.* = result;
+    if (result != CURLE_OK) return error.SetPropsFailed;
+    return tp;
+}
+
+pub export fn Curl_thrdpool_create(
+    ptpool: *?*curl_thrdpool,
+    name: ?[*:0]const u8,
+    min_threads: u32,
+    max_threads: u32,
+    idle_time_ms: u32,
+    fn_take: Curl_thrdpool_take_item_cb,
+    fn_process: Curl_thrdpool_process_item_cb,
+    fn_return: Curl_thrdpool_return_item_cb,
+    user_data: ?*anyopaque,
+) callconv(.c) CURLcode {
+    var result: CURLcode = CURLE_OK;
+    ptpool.* = createThrdpoolInner(
+        name,
+        min_threads,
+        max_threads,
+        idle_time_ms,
+        fn_take,
+        fn_process,
+        fn_return,
+        user_data,
+        &result,
+    ) catch null;
     return result;
 }
 
@@ -610,7 +643,7 @@ pub export fn Curl_thrdpool_destroy(tpool: *curl_thrdpool, join: bool) callconv(
     if (containers.Curl_llist_count(&tpool.slots) > 0) {
         var e = containers.Curl_llist_head(&tpool.slots);
         while (e) |node| : (e = containers.Curl_node_next(node)) {
-            const tslot: *thrdslot = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+            const tslot = collections.llistElemTyped(thrdslot, node).?;
             if (tslot.thread != null) {
                 Curl_thread_destroy(&tslot.thread);
             }
@@ -633,7 +666,7 @@ pub export fn Curl_thrdpool_signal(tpool: *curl_thrdpool, nthreads: u32) callcon
 fn thrdpoolAllIdle(tpool: *curl_thrdpool) bool {
     var e = containers.Curl_llist_head(&tpool.slots);
     while (e) |node| : (e = containers.Curl_node_next(node)) {
-        const tslot: *thrdslot = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+        const tslot = collections.llistElemTyped(thrdslot, node).?;
         if (!tslot.idle) return false;
     }
     return true;
@@ -690,7 +723,7 @@ pub export fn Curl_thrdpool_trace(tpool: *curl_thrdpool, data: ?*anyopaque) call
             }
             var e = containers.Curl_llist_head(&tpool.slots);
             while (e) |node| : (e = containers.Curl_node_next(node)) {
-                const tslot: *thrdslot = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+                const tslot = collections.llistElemTyped(thrdslot, node).?;
                 const elapsed_ms: c_longlong = @intCast(curlx_time_net.curlx_ptimediff_ms(&now, &tslot.starttime));
                 if (!tslot.running) {
                     libcurl_trc.Curl_trc_feat_infof(data, feat, "[TPOOL-%s] [%u]: not running", tpool.name, tslot.id);
@@ -766,8 +799,7 @@ fn thrdqItemCreate(
     description: ?[*:0]const u8,
     timeout_ms: timediff_t,
 ) ?*thrdq_item {
-    const raw = mem.calloc(1, @sizeOf(thrdq_item)) orelse return null;
-    const qitem: *thrdq_item = @ptrCast(@alignCast(raw));
+    const qitem = mem.create(thrdq_item) orelse return null;
     qitem.item = item;
     qitem.description = description;
     qitem.fn_free = tqueue.fn_free;
@@ -783,13 +815,12 @@ fn thrdqItemDestroy(qitem: *thrdq_item) void {
     if (qitem.item) |it| {
         qitem.fn_free(it);
     }
-    mem.freeSized(qitem, @sizeOf(thrdq_item));
+    mem.destroy(qitem);
 }
 
 fn thrdqItemListDtor(user_data: ?*anyopaque, elem: ?*anyopaque) callconv(.c) void {
     _ = user_data;
-    if (elem) |p| {
-        const qitem: *thrdq_item = @ptrCast(@alignCast(p));
+    if (fromOpaque(thrdq_item, elem)) |qitem| {
         thrdqItemDestroy(qitem);
     }
 }
@@ -799,7 +830,7 @@ fn thrdqTpoolTake(
     pdescription: *?[*:0]const u8,
     ptimeout_ms: *timediff_t,
 ) callconv(.c) ?*anyopaque {
-    const tqueue: *curl_thrdq = @ptrCast(@alignCast(user_data.?));
+    const tqueue = fromOpaque(curl_thrdq, user_data).?;
     var qitem: ?*thrdq_item = null;
     var fn_event: ?Curl_thrdq_ev_cb = null;
     var fn_user_data: ?*anyopaque = null;
@@ -812,7 +843,7 @@ fn thrdqTpoolTake(
         if (e != null) {
             const now = curlx_time_net.curlx_now();
             while (e) |node| {
-                const qi: *thrdq_item = @ptrCast(@alignCast(containers.Curl_node_take_elem(node).?));
+                const qi = fromOpaque(thrdq_item, containers.Curl_node_take_elem(node)).?;
                 qitem = qi;
                 const timeout_ms: timediff_t = if (qi.timeout_ms == 0)
                     0
@@ -837,16 +868,15 @@ fn thrdqTpoolTake(
     if (fn_event) |cb| {
         cb(tqueue, CURL_THRDQ_EV_ITEM_DONE, fn_user_data);
     }
-    return if (qitem) |qi| @ptrCast(qi) else null;
+    return if (qitem) |qi| qi else null;
 }
 
 fn thrdqTpoolReturn(item: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) void {
-    const qitem: *thrdq_item = @ptrCast(@alignCast(item.?));
-    const tq_raw = user_data orelse {
+    const qitem = fromOpaque(thrdq_item, item).?;
+    const tqueue = fromOpaque(curl_thrdq, user_data) orelse {
         thrdqItemDestroy(qitem);
         return;
     };
-    const tqueue: *curl_thrdq = @ptrCast(@alignCast(tq_raw));
     var fn_event: ?Curl_thrdq_ev_cb = null;
     var fn_user_data: ?*anyopaque = null;
 
@@ -865,7 +895,7 @@ fn thrdqTpoolReturn(item: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) void
 }
 
 fn thrdqTpoolProcess(item: ?*anyopaque) callconv(.c) void {
-    const qitem: *thrdq_item = @ptrCast(@alignCast(item.?));
+    const qitem = fromOpaque(thrdq_item, item).?;
     qitem.fn_process(qitem.item);
 }
 
@@ -888,7 +918,53 @@ fn thrdqUnlink(tqueue: *curl_thrdq, locked: bool, join: bool) void {
         mutexRelease(&tqueue.lock);
     }
     mutexDestroy(&tqueue.lock);
-    mem.freeSized(tqueue, @sizeOf(curl_thrdq));
+    mem.destroy(tqueue);
+}
+
+fn createThrdqInner(
+    name: ?[*:0]const u8,
+    min_threads: u32,
+    max_threads: u32,
+    idle_time_ms: u32,
+    fn_free: Curl_thrdq_item_free_cb,
+    fn_process: Curl_thrdq_item_process_cb,
+    fn_event: ?Curl_thrdq_ev_cb,
+    user_data: ?*anyopaque,
+    out_result: *CURLcode,
+) error{ OutOfMemory, PoolCreateFailed }!*curl_thrdq {
+    const tq = mem.create(curl_thrdq) orelse {
+        out_result.* = CURLE_OUT_OF_MEMORY;
+        return error.OutOfMemory;
+    };
+
+    mutexInit(&tq.lock);
+    condInit(&tq.await_cond);
+    containers.Curl_llist_init(&tq.sendq, &thrdqItemListDtor);
+    containers.Curl_llist_init(&tq.recvq, &thrdqItemListDtor);
+    tq.fn_free = fn_free;
+    tq.fn_process = fn_process;
+    tq.fn_event = fn_event;
+    tq.fn_user_data = user_data;
+    tq.name = name;
+    errdefer {
+        tq.aborted = true;
+        thrdqUnlink(tq, false, true);
+    }
+
+    const result = Curl_thrdpool_create(
+        &tq.tpool,
+        name,
+        min_threads,
+        max_threads,
+        idle_time_ms,
+        &thrdqTpoolTake,
+        &thrdqTpoolProcess,
+        &thrdqTpoolReturn,
+        tq,
+    );
+    out_result.* = result;
+    if (result != CURLE_OK) return error.PoolCreateFailed;
+    return tq;
 }
 
 pub export fn Curl_thrdq_create(
@@ -902,41 +978,18 @@ pub export fn Curl_thrdq_create(
     fn_event: ?Curl_thrdq_ev_cb,
     user_data: ?*anyopaque,
 ) callconv(.c) CURLcode {
-    const raw = mem.calloc(1, @sizeOf(curl_thrdq)) orelse {
-        ptqueue.* = null;
-        return CURLE_OUT_OF_MEMORY;
-    };
-    var tqueue: ?*curl_thrdq = @ptrCast(@alignCast(raw));
-    const tq = tqueue.?;
-
-    mutexInit(&tq.lock);
-    condInit(&tq.await_cond);
-    containers.Curl_llist_init(&tq.sendq, &thrdqItemListDtor);
-    containers.Curl_llist_init(&tq.recvq, &thrdqItemListDtor);
-    tq.fn_free = fn_free;
-    tq.fn_process = fn_process;
-    tq.fn_event = fn_event;
-    tq.fn_user_data = user_data;
-    tq.name = name;
-
-    const result = Curl_thrdpool_create(
-        &tq.tpool,
+    var result: CURLcode = CURLE_OK;
+    ptqueue.* = createThrdqInner(
         name,
         min_threads,
         max_threads,
         idle_time_ms,
-        &thrdqTpoolTake,
-        &thrdqTpoolProcess,
-        &thrdqTpoolReturn,
-        tq,
-    );
-
-    if (result != CURLE_OK) {
-        tq.aborted = true;
-        thrdqUnlink(tq, false, true);
-        tqueue = null;
-    }
-    ptqueue.* = tqueue;
+        fn_free,
+        fn_process,
+        fn_event,
+        user_data,
+        &result,
+    ) catch null;
     return result;
 }
 
@@ -999,7 +1052,7 @@ pub export fn Curl_thrdq_recv(tqueue: *curl_thrdq, pitem: *?*anyopaque) callconv
     if (tqueue.aborted) {
         result = CURLE_RECV_ERROR;
     } else if (containers.Curl_llist_head(&tqueue.recvq)) |e| {
-        const qitem: *thrdq_item = @ptrCast(@alignCast(containers.Curl_node_take_elem(e).?));
+        const qitem = fromOpaque(thrdq_item, containers.Curl_node_take_elem(e)).?;
         pitem.* = qitem.item;
         qitem.item = null;
         thrdqItemDestroy(qitem);
@@ -1023,7 +1076,7 @@ fn thrdqLlistCleanMatches(
     var e = containers.Curl_llist_head(llist);
     while (e) |node| {
         const n = containers.Curl_node_next(node);
-        const qitem: *thrdq_item = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+        const qitem = collections.llistElemTyped(thrdq_item, node).?;
         if (fn_match(qitem.item, match_data)) {
             containers.Curl_node_remove(node);
         }
@@ -1084,12 +1137,12 @@ pub export fn Curl_thrdq_trace(tqueue: *curl_thrdq, data: ?*anyopaque) callconv(
             }
             var e = containers.Curl_llist_head(&tqueue.sendq);
             while (e) |node| : (e = containers.Curl_node_next(node)) {
-                const qitem: *thrdq_item = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+                const qitem = collections.llistElemTyped(thrdq_item, node).?;
                 libcurl_trc.Curl_trc_feat_infof(data, feat, "[TQUEUE-%s] in: %s", tqueue.name, qitem.description);
             }
             e = containers.Curl_llist_head(&tqueue.recvq);
             while (e) |node| : (e = containers.Curl_node_next(node)) {
-                const qitem: *thrdq_item = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+                const qitem = collections.llistElemTyped(thrdq_item, node).?;
                 libcurl_trc.Curl_trc_feat_infof(data, feat, "[TQUEUE-%s] out: %s", tqueue.name, qitem.description);
             }
             mutexRelease(&tqueue.lock);
@@ -1130,7 +1183,7 @@ extern fn Curl_share_unlock(data: ?*anyopaque, type_: c_uint) callconv(.c) c_uin
 extern fn Curl_pgrs_now(data: ?*anyopaque) callconv(.c) *const Curltime;
 
 pub const PslCache = extern struct {
-    psl: ?*const anyopaque,
+    psl: ?*const psl_ctx_t,
     expires: curlx_time_net.time_t,
     flags: c_uint,
 };
@@ -1140,7 +1193,7 @@ pub export fn Curl_psl_destroy(pslcache: ?*PslCache) callconv(.c) void {
         if (cache.psl) |psl| {
             if (comptime backend_options.psl) {
                 if ((cache.flags & 1) != 0) {
-                    psl_free(@ptrCast(@constCast(psl)));
+                    psl_free(@constCast(psl));
                 }
             }
             cache.psl = null;
@@ -1178,7 +1231,7 @@ pub export fn Curl_psl_use(easy: ?*anyopaque) callconv(.c) ?*const anyopaque {
 
                 if (psl != null) {
                     Curl_psl_destroy(pslcache);
-                    pslcache.psl = @ptrCast(psl);
+                    pslcache.psl = psl;
                     pslcache.flags = if (dynamic) 1 else 0;
                     pslcache.expires = expires;
                 }
@@ -1212,11 +1265,9 @@ pub export fn Curl_macos_init() callconv(.c) CURLcode {
         const CopyProxiesFn = *const fn (?*const anyopaque) callconv(.c) ?*const anyopaque;
         const CFReleaseFn = *const fn (*const anyopaque) callconv(.c) void;
         const rtld_default: ?*anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -2))));
-        if (std.c.dlsym(rtld_default, "SCDynamicStoreCopyProxies")) |copy_ptr| {
-            const copyProxies: CopyProxiesFn = @ptrCast(@alignCast(copy_ptr));
+        if (fromOpaque(CopyProxiesFn, std.c.dlsym(rtld_default, "SCDynamicStoreCopyProxies"))) |copyProxies| {
             if (copyProxies(null)) |dict| {
-                if (std.c.dlsym(rtld_default, "CFRelease")) |rel_ptr| {
-                    const cfRelease: CFReleaseFn = @ptrCast(@alignCast(rel_ptr));
+                if (fromOpaque(CFReleaseFn, std.c.dlsym(rtld_default, "CFRelease"))) |cfRelease| {
                     cfRelease(dict);
                 }
             }
@@ -1241,7 +1292,7 @@ const ThreadTestCtx = struct {
     is_curr: bool = false,
 
     fn worker(arg: ?*anyopaque) callconv(thread_cc) ThreadReturn {
-        const self: *ThreadTestCtx = @ptrCast(@alignCast(arg.?));
+        const self = fromOpaque(ThreadTestCtx, arg).?;
         self.thread_id = Curl_thread_get_current_id();
         self.is_curr = Curl_thread_is_current(self.thread_id);
         _ = self.value.fetchAdd(42, .seq_cst);
@@ -1288,23 +1339,22 @@ const ThrdpoolTestCtx = struct {
         pdescription: *?[*:0]const u8,
         ptimeout_ms: *timediff_t,
     ) callconv(.c) ?*anyopaque {
-        const self: *ThrdpoolTestCtx = @ptrCast(@alignCast(user_data.?));
+        const self = fromOpaque(ThrdpoolTestCtx, user_data).?;
         pdescription.* = "pool-item";
         ptimeout_ms.* = 1000;
         if (self.remaining == 0) return null;
         self.remaining -= 1;
-        return @ptrCast(&self.tokens[self.remaining]);
+        return &self.tokens[self.remaining];
     }
 
     fn process(item: ?*anyopaque) callconv(.c) void {
-        const val: *u32 = @ptrCast(@alignCast(item.?));
+        const val = fromOpaque(u32, item).?;
         val.* *= 10;
     }
 
     fn ret(item: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) void {
         _ = item;
-        if (user_data) |ud| {
-            const self: *ThrdpoolTestCtx = @ptrCast(@alignCast(ud));
+        if (fromOpaque(ThrdpoolTestCtx, user_data)) |self| {
             self.returned += 1;
             _ = self.processed.fetchAdd(1, .seq_cst);
         }
@@ -1355,21 +1405,21 @@ const ThrdqTestCtx = struct {
     }
 
     fn processItem(item: ?*anyopaque) callconv(.c) void {
-        const it: *ThrdqTestItem = @ptrCast(@alignCast(item.?));
+        const it = fromOpaque(ThrdqTestItem, item).?;
         it.processed = true;
     }
 
     fn eventCb(tqueue: *const curl_thrdq, ev: c_uint, user_data: ?*anyopaque) callconv(.c) void {
         _ = tqueue;
         if (ev == CURL_THRDQ_EV_ITEM_DONE) {
-            const self: *ThrdqTestCtx = @ptrCast(@alignCast(user_data.?));
+            const self = fromOpaque(ThrdqTestCtx, user_data).?;
             _ = self.events.fetchAdd(1, .seq_cst);
         }
     }
 
     fn matchId(item: ?*anyopaque, match_data: ?*anyopaque) callconv(.c) bool {
-        const it: *ThrdqTestItem = @ptrCast(@alignCast(item.?));
-        const target: *const u32 = @ptrCast(@alignCast(match_data.?));
+        const it = fromOpaque(ThrdqTestItem, item).?;
+        const target = fromOpaque(*const u32, match_data).?;
         return it.id == target.*;
     }
 };
@@ -1398,8 +1448,7 @@ test "Curl_thrdq_create, send, recv, clear, await_done, destroy" {
 
     var i: u32 = 0;
     while (i < 4) : (i += 1) {
-        const raw = mem.calloc(1, @sizeOf(ThrdqTestItem)) orelse return error.OutOfMemory;
-        const item: *ThrdqTestItem = @ptrCast(@alignCast(raw));
+        const item = mem.create(ThrdqTestItem) orelse return error.OutOfMemory;
         item.id = i + 1;
         item.processed = false;
         try std.testing.expectEqual(CURLE_OK, Curl_thrdq_send(tq, item, "item", 0));
@@ -1414,9 +1463,9 @@ test "Curl_thrdq_create, send, recv, clear, await_done, destroy" {
         var out_raw: ?*anyopaque = null;
         const rc = Curl_thrdq_recv(tq, &out_raw);
         if (rc == CURLE_OK) {
-            const it: *ThrdqTestItem = @ptrCast(@alignCast(out_raw.?));
+            const it = fromOpaque(ThrdqTestItem, out_raw).?;
             try std.testing.expect(it.processed);
-            mem.free(it);
+            mem.destroy(it);
             received += 1;
         } else {
             try std.testing.expectEqual(CURLE_AGAIN, rc);
@@ -1442,7 +1491,7 @@ test "Curl_psl_*, Curl_macos_init, Curl_amiga_init" {
     if (comptime backend_options.psl) {
         if (psl_latest(null)) |dyn_psl| {
             cache = .{
-                .psl = @ptrCast(dyn_psl),
+                .psl = dyn_psl,
                 .expires = 200,
                 .flags = 1,
             };
