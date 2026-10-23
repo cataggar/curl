@@ -127,7 +127,23 @@ pub const IpQuadruple = extern struct {
     remote_port: u16,
     local_port: u16,
     transport: u8,
+
+    pub inline fn remoteIpPtr(self: *const IpQuadruple) [*]const u8 {
+        return &self.remote_ip;
+    }
+
+    pub inline fn localIpPtr(self: *const IpQuadruple) [*]const u8 {
+        return &self.local_ip;
+    }
 };
+
+inline fn fromOpaque(comptime T: type, raw: anytype) *T {
+    return @ptrCast(@alignCast(raw));
+}
+
+inline fn cfSocketCtx(cf: *CurlCfilter) *CfSocketCtx {
+    return fromOpaque(CfSocketCtx, cf.ctx.?);
+}
 
 const CfSocketCtx = struct {
     peer: ?*CurlPeer,
@@ -239,8 +255,8 @@ extern fn Curl_cfsock_do_connect(cf: *CurlCfilter, data: ?*CurlEasy, sock: curl_
 extern fn Curl_cfsock_verifyconnect(sockfd: curl_socket_t, psockerr: ?*c_int) callconv(.c) bool;
 extern fn Curl_cfsock_getsockname(data: ?*CurlEasy, sock: curl_socket_t, ssloc: *CurlSockaddrStorage, slen: *curl_socklen_t, sockerr_out: *c_int) callconv(.c) c_int;
 extern fn Curl_cfsock_getpeername(sock: curl_socket_t, ssrem: *CurlSockaddrStorage, plen: *curl_socklen_t, sockerr_out: *c_int) callconv(.c) c_int;
-extern fn Curl_cfsock_swrite(conn: ?*ConnectData, sock: curl_socket_t, buf: *const anyopaque, len: usize, addr: *const CurlSockaddrEx, sockerr_out: *c_int) callconv(.c) isize;
-extern fn Curl_cfsock_sread(sock: curl_socket_t, buf: *anyopaque, len: usize, sockerr_out: *c_int) callconv(.c) isize;
+extern fn Curl_cfsock_swrite(conn: ?*ConnectData, sock: curl_socket_t, buf: [*]const u8, len: usize, addr: *const CurlSockaddrEx, sockerr_out: *c_int) callconv(.c) isize;
+extern fn Curl_cfsock_sread(sock: curl_socket_t, buf: [*]u8, len: usize, sockerr_out: *c_int) callconv(.c) isize;
 extern fn Curl_cfsock_win_update_sndbuf(data: ?*CurlEasy, sock: curl_socket_t, last_query_at: *CurlTime, sndbuf_size: *c_uint) callconv(.c) void;
 extern fn Curl_cfsock_quic_opts(sock: curl_socket_t, addr_family: c_int) callconv(.c) void;
 extern fn Curl_cfsock_get_accepttimeout(data: ?*CurlEasy) callconv(.c) timediff_t;
@@ -305,32 +321,32 @@ pub export fn sockaddr2string(
     addr: [*c]u8,
     port: *u16,
 ) callconv(.c) CURLcode {
-    const sa_ptr: [*]const u8 = @ptrCast(sa orelse {
+    const sa_bytes = fromOpaque([256]u8, sa orelse {
         addr[0] = 0;
         port.* = 0;
         return CURLE_UNSUPPORTED_PROTOCOL;
     });
-    const family = readSaFamily(sa_ptr);
+    const family = readSaFamily(sa_bytes);
     var result: CURLcode = CURLE_UNSUPPORTED_PROTOCOL;
 
     if (family == AF_INET) {
         // struct sockaddr_in: family (2), sin_port (2..4), sin_addr (4..8)
-        result = curlx_inet_ntop(family, @ptrCast(sa_ptr + 4), addr, MAX_IPADR_LEN);
+        result = curlx_inet_ntop(family, &sa_bytes[4], addr, MAX_IPADR_LEN);
         if (result == CURLE_OK) {
-            port.* = std.mem.readInt(u16, sa_ptr[2..4], .big);
+            port.* = std.mem.readInt(u16, sa_bytes[2..4], .big);
             return result;
         }
     } else if (family == AF_INET6) {
         // struct sockaddr_in6: family (2), sin6_port (2..4), sin6_flowinfo (4..8), sin6_addr (8..24)
-        result = curlx_inet_ntop(family, @ptrCast(sa_ptr + 8), addr, MAX_IPADR_LEN);
+        result = curlx_inet_ntop(family, &sa_bytes[8], addr, MAX_IPADR_LEN);
         if (result == CURLE_OK) {
-            port.* = std.mem.readInt(u16, sa_ptr[2..4], .big);
+            port.* = std.mem.readInt(u16, sa_bytes[2..4], .big);
             return result;
         }
     } else if (family == AF_UNIX) {
         const sa_family_size: curl_socklen_t = if (comptime builtin.os.tag.isDarwin()) 1 else 2;
         if (salen > sa_family_size) {
-            const sun_path: [*:0]const u8 = @ptrCast(sa_ptr + 2);
+            const sun_path: [*]const u8 = sa_bytes[2..].ptr;
             _ = curl_msnprintf(addr, MAX_IPADR_LEN, "%s", sun_path);
         } else {
             addr[0] = 0;
@@ -358,7 +374,7 @@ pub export fn Curl_socket_addr_from_ai(
         return CURLE_TOO_LARGE;
 
     if (ai.ai_addr) |src_any| {
-        const src: [*]const u8 = @ptrCast(src_any);
+        const src = fromOpaque([128]u8, src_any);
         @memcpy(addr.sa_addr[0..addr.addrlen], src[0..addr.addrlen]);
     }
     return CURLE_OK;
@@ -389,19 +405,19 @@ pub export fn Curl_socket_close(
     return Curl_cfsock_close_fd(data, conn, 0, sock);
 }
 
-pub export fn Curl_parse_interface(
+fn parseInterfaceChecked(
     input: [*:0]const u8,
     dev: ?*?[*:0]u8,
     iface: ?*?[*:0]u8,
     host: ?*?[*:0]u8,
-) callconv(.c) CURLcode {
+) !void {
     const if_prefix = "if!";
     const host_prefix = "host!";
     const if_host_prefix = "ifhost!";
 
     const len = std.mem.len(input);
     if (len > 512)
-        return CURLE_BAD_FUNCTION_ARGUMENT;
+        return error.BadFunctionArgument;
 
     if (dev) |d| d.* = null;
     if (iface) |i| i.* = null;
@@ -411,63 +427,62 @@ pub export fn Curl_parse_interface(
     if (std.mem.startsWith(u8, slice, if_prefix)) {
         const rest = slice[if_prefix.len..];
         if (rest.len == 0)
-            return CURLE_BAD_FUNCTION_ARGUMENT;
+            return error.BadFunctionArgument;
         if (iface) |i| {
-            const dup = curlx_memdup0(rest.ptr, rest.len);
-            i.* = dup;
-            return if (dup != null) CURLE_OK else CURLE_OUT_OF_MEMORY;
+            i.* = curlx_memdup0(rest.ptr, rest.len) orelse return error.OutOfMemory;
         }
-        return CURLE_OK;
+        return;
     } else if (std.mem.startsWith(u8, slice, host_prefix)) {
         const rest = slice[host_prefix.len..];
         if (rest.len == 0)
-            return CURLE_BAD_FUNCTION_ARGUMENT;
+            return error.BadFunctionArgument;
         if (host) |h| {
-            const dup = curlx_memdup0(rest.ptr, rest.len);
-            h.* = dup;
-            return if (dup != null) CURLE_OK else CURLE_OUT_OF_MEMORY;
+            h.* = curlx_memdup0(rest.ptr, rest.len) orelse return error.OutOfMemory;
         }
-        return CURLE_OK;
+        return;
     } else if (std.mem.startsWith(u8, slice, if_host_prefix)) {
         const rest = slice[if_host_prefix.len..];
-        const bang_idx = std.mem.indexOfScalar(u8, rest, '!') orelse return CURLE_BAD_FUNCTION_ARGUMENT;
+        const bang_idx = std.mem.indexOfScalar(u8, rest, '!') orelse return error.BadFunctionArgument;
         const iface_part = rest[0..bang_idx];
         const host_part = rest[bang_idx + 1 ..];
         if (host_part.len == 0)
-            return CURLE_BAD_FUNCTION_ARGUMENT;
+            return error.BadFunctionArgument;
+        var dup_iface: ?[*:0]u8 = null;
+        errdefer if (dup_iface) |ptr| {
+            mem.freeTyped(ptr);
+            if (iface) |i| i.* = null;
+        };
         if (iface) |i| {
-            const dup = curlx_memdup0(iface_part.ptr, iface_part.len);
-            i.* = dup;
-            if (dup == null)
-                return CURLE_OUT_OF_MEMORY;
+            dup_iface = curlx_memdup0(iface_part.ptr, iface_part.len) orelse return error.OutOfMemory;
+            i.* = dup_iface;
         }
         if (host) |h| {
-            const dup = curlx_memdup0(host_part.ptr, host_part.len);
-            h.* = dup;
-            if (dup == null) {
-                if (iface) |i| {
-                    if (i.*) |ptr| {
-                        mem.free(@ptrCast(ptr));
-                        i.* = null;
-                    }
-                }
-                return CURLE_OUT_OF_MEMORY;
-            }
+            h.* = curlx_memdup0(host_part.ptr, host_part.len) orelse return error.OutOfMemory;
         }
-        return CURLE_OK;
+        return;
     }
 
     if (len == 0)
-        return CURLE_BAD_FUNCTION_ARGUMENT;
+        return error.BadFunctionArgument;
     if (dev) |d| {
-        const dup = curlx_memdup0(slice.ptr, len);
-        d.* = dup;
-        return if (dup != null) CURLE_OK else CURLE_OUT_OF_MEMORY;
+        d.* = curlx_memdup0(slice.ptr, len) orelse return error.OutOfMemory;
     }
+}
+
+pub export fn Curl_parse_interface(
+    input: [*:0]const u8,
+    dev: ?*?[*:0]u8,
+    iface: ?*?[*:0]u8,
+    host: ?*?[*:0]u8,
+) callconv(.c) CURLcode {
+    parseInterfaceChecked(input, dev, iface, host) catch |err| switch (err) {
+        error.BadFunctionArgument => return CURLE_BAD_FUNCTION_ARGUMENT,
+        error.OutOfMemory => return CURLE_OUT_OF_MEMORY,
+    };
     return CURLE_OK;
 }
 
-fn socketConnectResult(data: ?*CurlEasy, ipaddress: [*:0]const u8, sockerr: c_int) CURLcode {
+fn socketConnectResult(data: ?*CurlEasy, ipaddress: [*]const u8, sockerr: c_int) CURLcode {
     if (Curl_cfsock_is_einprogress_or_eagain(sockerr))
         return CURLE_OK;
 
@@ -491,7 +506,7 @@ fn cfSocketCtxInit(ctx: *CfSocketCtx, peer: ?*CurlPeer, addr: *const CurlSockadd
 fn cfSocketCtxFree(ctx_opt: ?*CfSocketCtx) void {
     if (ctx_opt) |ctx| {
         Curl_peer_unlink(&ctx.peer);
-        mem.free(ctx);
+        mem.destroy(ctx);
     }
 }
 
@@ -499,7 +514,7 @@ fn cfSocketShutdown(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c
     const c = cf;
     const d = done;
     if (c.flags & 1 != 0) {
-        const ctx: *CfSocketCtx = @ptrCast(@alignCast(c.ctx.?));
+        const ctx = cfSocketCtx(c);
         if (Curl_trc_cf_is_verbose_fn(c, data)) {
             Curl_trc_cf_infof(data, c, "cf_socket_shutdown, fd=%lld", @as(c_longlong, @intCast(ctx.sock)));
         }
@@ -519,7 +534,7 @@ fn cfSocketDestroy(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) void {
         Curl_trc_cf_infof(data, c, "destroy");
     }
     if (c.ctx) |ctx_any| {
-        const ctx: *CfSocketCtx = @ptrCast(@alignCast(ctx_any));
+        const ctx = fromOpaque(CfSocketCtx, ctx_any);
         if (ctx.sock != CURL_SOCKET_BAD) {
             if (Curl_trc_cf_is_verbose_fn(c, data)) {
                 Curl_trc_cf_infof(data, c, "cf_socket_close, fd=%lld", @as(c_longlong, @intCast(ctx.sock)));
@@ -535,7 +550,7 @@ fn cfSocketDestroy(cf: *CurlCfilter, data: ?*CurlEasy) callconv(.c) void {
 }
 
 fn setLocalIp(cf: *CurlCfilter, data: ?*CurlEasy) void {
-    const ctx: *CfSocketCtx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfSocketCtx(cf);
     ctx.ip.local_ip[0] = 0;
     ctx.ip.local_port = 0;
 
@@ -557,7 +572,7 @@ fn setLocalIp(cf: *CurlCfilter, data: ?*CurlEasy) void {
 }
 
 fn setRemoteIp(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
-    const ctx: *CfSocketCtx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfSocketCtx(cf);
     ctx.ip.transport = ctx.transport;
     const result = sockaddr2string(&ctx.addr.sa_addr, ctx.addr.addrlen, &ctx.ip.remote_ip, &ctx.ip.remote_port);
     if (result != CURLE_OK) {
@@ -570,7 +585,7 @@ fn setRemoteIp(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
 }
 
 fn cfSocketOpen(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
-    const ctx: *CfSocketCtx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfSocketCtx(cf);
     var isconnected: bool = false;
     var result: CURLcode = CURLE_COULDNT_CONNECT;
 
@@ -613,7 +628,7 @@ fn cfSocketOpen(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
 fn cfTcpConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CURLcode {
     const c = cf;
     const d = done;
-    const ctx: *CfSocketCtx = @ptrCast(@alignCast(c.ctx.?));
+    const ctx = cfSocketCtx(c);
     var result: CURLcode = CURLE_COULDNT_CONNECT;
     var rc: c_int = 0;
 
@@ -637,11 +652,11 @@ fn cfTcpConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CU
         const sockerr = Curl_cfsock_get_errno();
         setLocalIp(c, data);
         if (Curl_trc_cf_is_verbose_fn(c, data)) {
-            Curl_trc_cf_infof(data, c, "local address %s port %d...", @as([*:0]const u8, @ptrCast(&ctx.ip.local_ip)), @as(c_int, ctx.ip.local_port));
+            Curl_trc_cf_infof(data, c, "local address %s port %d...", ctx.ip.localIpPtr(), @as(c_int, ctx.ip.local_port));
         }
         if (rc == -1) {
             ctx.sockerr = sockerr;
-            result = socketConnectResult(data, @ptrCast(&ctx.ip.remote_ip), sockerr);
+            result = socketConnectResult(data, ctx.ip.remoteIpPtr(), sockerr);
             if (result != CURLE_OK)
                 return finishTcpConnectErr(c, data, ctx, d, result);
             return CURLE_OK;
@@ -678,7 +693,7 @@ fn cfTcpConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CU
 
 fn finishTcpConnectErr(cf: *CurlCfilter, data: ?*CurlEasy, ctx: *CfSocketCtx, done: *bool, result: CURLcode) CURLcode {
     if (result != CURLE_OK) {
-        var buffer: [STRERROR_LEN]u8 = undefined;
+        var buffer: [STRERROR_LEN:0]u8 = undefined;
         setLocalIp(cf, data);
         if (ctx.sockerr != 0) {
             Curl_cfsock_set_data_os_errno(data, ctx.sockerr);
@@ -694,13 +709,13 @@ fn finishTcpConnectErr(cf: *CurlCfilter, data: ?*CurlEasy, ctx: *CfSocketCtx, do
             const err_msg: [*:0]const u8 = if (ctx.sockerr != 0)
                 curlx_strerror(ctx.sockerr, &buffer, buffer.len)
             else
-                @ptrCast(&buffer);
+                &buffer;
             Curl_infof(
                 data,
                 "connect to %s port %u from %s port %d failed: %s",
-                @as([*:0]const u8, @ptrCast(&ctx.ip.remote_ip)),
+                ctx.ip.remoteIpPtr(),
                 @as(c_uint, ctx.ip.remote_port),
-                @as([*:0]const u8, @ptrCast(&ctx.ip.local_ip)),
+                ctx.ip.localIpPtr(),
                 @as(c_int, ctx.ip.local_port),
                 err_msg,
             );
@@ -712,7 +727,7 @@ fn finishTcpConnectErr(cf: *CurlCfilter, data: ?*CurlEasy, ctx: *CfSocketCtx, do
 
 fn cfSocketAdjustPollset(cf: *CurlCfilter, data: ?*CurlEasy, ps: *EasyPollset) callconv(.c) CURLcode {
     const c = cf;
-    const ctx: *CfSocketCtx = @ptrCast(@alignCast(c.ctx.?));
+    const ctx = cfSocketCtx(c);
     var result: CURLcode = CURLE_OK;
 
     if (ctx.sock != CURL_SOCKET_BAD) {
@@ -746,7 +761,7 @@ fn cfSocketSend(
 ) callconv(.c) CURLcode {
     _ = eos;
     const c = cf;
-    const ctx: *CfSocketCtx = @ptrCast(@alignCast(c.ctx.?));
+    const ctx = cfSocketCtx(c);
     const pnw = pnwritten;
     pnw.* = 0;
 
@@ -754,7 +769,7 @@ fn cfSocketSend(
     Curl_cfsock_set_conn_sock(c.conn, c.sockindex, ctx.sock);
 
     var sockerr: c_int = 0;
-    const rv = Curl_cfsock_swrite(c.conn, ctx.sock, @ptrCast(buf), len, &ctx.addr, &sockerr);
+    const rv = Curl_cfsock_swrite(c.conn, ctx.sock, buf, len, &ctx.addr, &sockerr);
     var result: CURLcode = CURLE_OK;
 
     if (!curlx_sztouz(rv, pnw)) {
@@ -788,12 +803,12 @@ fn cfSocketRecv(
     pnread: *usize,
 ) callconv(.c) CURLcode {
     const c = cf;
-    const ctx: *CfSocketCtx = @ptrCast(@alignCast(c.ctx.?));
+    const ctx = cfSocketCtx(c);
     const pnr = pnread;
     pnr.* = 0;
 
     var sockerr: c_int = 0;
-    const rv = Curl_cfsock_sread(ctx.sock, @ptrCast(buf), len, &sockerr);
+    const rv = Curl_cfsock_sread(ctx.sock, buf, len, &sockerr);
     var result: CURLcode = CURLE_OK;
 
     if (!curlx_sztouz(rv, pnr)) {
@@ -820,13 +835,13 @@ fn cfSocketRecv(
 
 fn cfSocketUpdateData(cf: *CurlCfilter, data: ?*CurlEasy) void {
     if ((cf.flags & 1) != 0 and cf.sockindex == FIRSTSOCKET) {
-        const ctx: *CfSocketCtx = @ptrCast(@alignCast(cf.ctx.?));
+        const ctx = cfSocketCtx(cf);
         Curl_cfsock_set_data_primary_ip(data, &ctx.ip);
     }
 }
 
 fn cfSocketActive(cf: *CurlCfilter, data: ?*CurlEasy) void {
-    const ctx: *CfSocketCtx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfSocketCtx(cf);
     Curl_cfsock_set_conn_sock(cf.conn, cf.sockindex, ctx.sock);
     setLocalIp(cf, data);
     Curl_cfsock_set_conn_ipv6(cf.conn, cf.sockindex, ctx.addr.family);
@@ -843,7 +858,7 @@ fn cfSocketCntrl(
     _ = arg1;
     _ = arg2;
     const c = cf;
-    const ctx: *CfSocketCtx = @ptrCast(@alignCast(c.ctx.?));
+    const ctx = cfSocketCtx(c);
 
     switch (event) {
         CF_CTRL_CONN_INFO_UPDATE => {
@@ -882,7 +897,7 @@ fn cfSocketConnIsAlive(cf: *CurlCfilter, data: ?*CurlEasy, input_pending: *bool)
     ip.* = false;
 
     const ctx_any = c.ctx orelse return false;
-    const ctx: *CfSocketCtx = @ptrCast(@alignCast(ctx_any));
+    const ctx = fromOpaque(CfSocketCtx, ctx_any);
     if (ctx.sock == CURL_SOCKET_BAD)
         return false;
 
@@ -925,11 +940,11 @@ fn cfSocketQuery(
     pres2: ?*anyopaque,
 ) callconv(.c) CURLcode {
     const c = cf;
-    const ctx: *CfSocketCtx = @ptrCast(@alignCast(c.ctx.?));
+    const ctx = cfSocketCtx(c);
 
     switch (query) {
         CF_QUERY_SOCKET => {
-            const out: *curl_socket_t = @ptrCast(@alignCast(pres2.?));
+            const out = fromOpaque(curl_socket_t, pres2.?);
             out.* = ctx.sock;
             return CURLE_OK;
         },
@@ -938,7 +953,7 @@ fn cfSocketQuery(
             return CURLE_OK;
         },
         CF_QUERY_REMOTE_ADDR => {
-            const out: *?*const CurlSockaddrEx = @ptrCast(@alignCast(pres2.?));
+            const out = fromOpaque(?*const CurlSockaddrEx, pres2.?);
             out.* = if ((c.flags & 1) != 0) &ctx.addr else null;
             return CURLE_OK;
         },
@@ -953,7 +968,7 @@ fn cfSocketQuery(
         },
         CF_QUERY_IP_INFO => {
             pres1.?.* = if (ctx.addr.family == AF_INET6) 1 else 0;
-            const out: *IpQuadruple = @ptrCast(@alignCast(pres2.?));
+            const out = fromOpaque(IpQuadruple, pres2.?);
             out.* = ctx.ip;
             return CURLE_OK;
         },
@@ -992,6 +1007,45 @@ pub export var Curl_cft_tcp: CurlCftype = .{
     .query = cfSocketQuery,
 };
 
+fn createSocketFilterChecked(
+    pcf: *?*CurlCfilter,
+    peer: ?*CurlPeer,
+    transport_peer: u8,
+    addr_opt: ?*const CurlSockaddrEx,
+    cft: *const CurlCftype,
+    require_addr: bool,
+    out_result: *CURLcode,
+) !void {
+    pcf.* = null;
+    if (require_addr and addr_opt == null) {
+        out_result.* = CURLE_BAD_FUNCTION_ARGUMENT;
+        return error.BadFunctionArgument;
+    }
+
+    const ctx = mem.create(CfSocketCtx) orelse {
+        out_result.* = CURLE_OUT_OF_MEMORY;
+        return error.OutOfMemory;
+    };
+    errdefer cfSocketCtxFree(ctx);
+    const addr = addr_opt.?;
+
+    var result = cfSocketCtxInit(ctx, peer, addr, transport_peer);
+    if (result != CURLE_OK) {
+        out_result.* = result;
+        return error.InitFailed;
+    }
+
+    var cf: ?*CurlCfilter = null;
+    result = cfilters_progress.Curl_cf_create(&cf, cft, ctx);
+    if (result != CURLE_OK) {
+        if (cf) |c| mem.destroy(c);
+        out_result.* = result;
+        return error.CreateFailed;
+    }
+    pcf.* = cf;
+    out_result.* = CURLE_OK;
+}
+
 fn createSocketFilter(
     pcf: *?*CurlCfilter,
     peer: ?*CurlPeer,
@@ -1000,26 +1054,9 @@ fn createSocketFilter(
     cft: *const CurlCftype,
     require_addr: bool,
 ) CURLcode {
-    pcf.* = null;
-    if (require_addr and addr_opt == null)
-        return CURLE_BAD_FUNCTION_ARGUMENT;
-
-    const raw = mem.calloc(1, @sizeOf(CfSocketCtx)) orelse return CURLE_OUT_OF_MEMORY;
-    const ctx: *CfSocketCtx = @ptrCast(@alignCast(raw));
-    const addr = addr_opt.?;
-
-    var result = cfSocketCtxInit(ctx, peer, addr, transport_peer);
-    var cf: ?*CurlCfilter = null;
-    if (result == CURLE_OK) {
-        result = cfilters_progress.Curl_cf_create(&cf, cft, ctx);
-    }
-    if (result == CURLE_OK) {
-        pcf.* = cf;
-    } else {
-        if (cf) |c| mem.free(c);
-        cfSocketCtxFree(ctx);
-    }
-    return result;
+    var result: CURLcode = CURLE_OK;
+    createSocketFilterChecked(pcf, peer, transport_peer, addr_opt, cft, require_addr, &result) catch return result;
+    return CURLE_OK;
 }
 
 pub export fn Curl_cf_tcp_create(
@@ -1042,10 +1079,10 @@ pub export fn Curl_cf_tcp_create(
 }
 
 fn cfUdpSetupQuic(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
-    const ctx: *CfSocketCtx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfSocketCtx(cf);
     const rc = Curl_cfsock_do_connect(cf, data, ctx.sock, &ctx.addr, false);
     if (rc == -1) {
-        return socketConnectResult(data, @ptrCast(&ctx.ip.remote_ip), Curl_cfsock_get_errno());
+        return socketConnectResult(data, ctx.ip.remoteIpPtr(), Curl_cfsock_get_errno());
     }
     ctx.sock_connected = true;
     setLocalIp(cf, data);
@@ -1057,9 +1094,9 @@ fn cfUdpSetupQuic(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
             "%s socket %lld connected: [%s:%d] -> [%s:%d]",
             label,
             @as(c_longlong, @intCast(ctx.sock)),
-            @as([*:0]const u8, @ptrCast(&ctx.ip.local_ip)),
+            ctx.ip.localIpPtr(),
             @as(c_int, ctx.ip.local_port),
-            @as([*:0]const u8, @ptrCast(&ctx.ip.remote_ip)),
+            ctx.ip.remoteIpPtr(),
             @as(c_int, ctx.ip.remote_port),
         );
     }
@@ -1070,7 +1107,7 @@ fn cfUdpSetupQuic(cf: *CurlCfilter, data: ?*CurlEasy) CURLcode {
 fn cfUdpConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CURLcode {
     const c = cf;
     const d = done;
-    const ctx: *CfSocketCtx = @ptrCast(@alignCast(c.ctx.?));
+    const ctx = cfSocketCtx(c);
     var result: CURLcode = CURLE_COULDNT_CONNECT;
 
     if ((c.flags & 1) != 0) {
@@ -1098,7 +1135,7 @@ fn cfUdpConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CU
                     c,
                     "cf_udp_connect(), opened socket=%lld (%s:%d)",
                     @as(c_longlong, @intCast(ctx.sock)),
-                    @as([*:0]const u8, @ptrCast(&ctx.ip.local_ip)),
+                    ctx.ip.localIpPtr(),
                     @as(c_int, ctx.ip.local_port),
                 );
             }
@@ -1182,7 +1219,7 @@ pub export fn Curl_cf_unix_create(
 }
 
 fn cfTcpAcceptTimeleft(cf: *CurlCfilter, data: ?*CurlEasy) timediff_t {
-    const ctx: *CfSocketCtx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfSocketCtx(cf);
     var timeout_ms = Curl_cfsock_get_accepttimeout(data);
     const other_ms = Curl_timeleft_ms(data);
     if (other_ms != 0 and other_ms < timeout_ms) {
@@ -1196,7 +1233,7 @@ fn cfTcpAcceptTimeleft(cf: *CurlCfilter, data: ?*CurlEasy) timediff_t {
 }
 
 fn cfTcpSetAcceptedRemoteIp(cf: *CurlCfilter, data: ?*CurlEasy) void {
-    const ctx: *CfSocketCtx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cfSocketCtx(cf);
     ctx.ip.remote_ip[0] = 0;
     ctx.ip.remote_port = 0;
 
@@ -1222,7 +1259,7 @@ fn cfTcpSetAcceptedRemoteIp(cf: *CurlCfilter, data: ?*CurlEasy) void {
 fn cfTcpAcceptConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(.c) CURLcode {
     const c = cf;
     const d = done;
-    const ctx: *CfSocketCtx = @ptrCast(@alignCast(c.ctx.?));
+    const ctx = cfSocketCtx(c);
 
     if ((c.flags & 1) != 0) {
         d.* = true;
@@ -1243,7 +1280,7 @@ fn cfTcpAcceptConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(
             c,
             "Checking for incoming on fd=%lld ip=%s:%d",
             @as(c_longlong, @intCast(ctx.sock)),
-            @as([*:0]const u8, @ptrCast(&ctx.ip.local_ip)),
+            ctx.ip.localIpPtr(),
             @as(c_int, ctx.ip.local_port),
         );
     }
@@ -1296,7 +1333,7 @@ fn cfTcpAcceptConnect(cf: *CurlCfilter, data: ?*CurlEasy, done: *bool) callconv(
             c,
             "accepted_set(sock=%lld, remote=%s port=%d)",
             @as(c_longlong, @intCast(ctx.sock)),
-            @as([*:0]const u8, @ptrCast(&ctx.ip.remote_ip)),
+            ctx.ip.remoteIpPtr(),
             @as(c_int, ctx.ip.remote_port),
         );
     }
@@ -1326,17 +1363,20 @@ pub export var Curl_cft_tcp_accept: CurlCftype = .{
     .query = cfSocketQuery,
 };
 
-pub export fn Curl_conn_tcp_listen_set(
+fn connTcpListenSetChecked(
     data: ?*CurlEasy,
     conn: ?*ConnectData,
     sockindex: i8,
     s: *const curl_socket_t,
-) callconv(.c) CURLcode {
+    out_result: *CURLcode,
+) !void {
     Curl_conn_cf_discard_all(data, conn, sockindex);
 
-    const raw = mem.calloc(1, @sizeOf(CfSocketCtx)) orelse return CURLE_OUT_OF_MEMORY;
-    const ctx: *CfSocketCtx = @ptrCast(@alignCast(raw));
-    ctx.* = std.mem.zeroes(CfSocketCtx);
+    const ctx = mem.create(CfSocketCtx) orelse {
+        out_result.* = CURLE_OUT_OF_MEMORY;
+        return error.OutOfMemory;
+    };
+    errdefer cfSocketCtxFree(ctx);
     ctx.transport = TRNSPRT_TCP;
     ctx.sock = s.*;
     ctx.listening = true;
@@ -1345,9 +1385,9 @@ pub export fn Curl_conn_tcp_listen_set(
     var cf: ?*CurlCfilter = null;
     const result = cfilters_progress.Curl_cf_create(&cf, &Curl_cft_tcp_accept, ctx);
     if (result != CURLE_OK) {
-        if (cf) |c| mem.free(c);
-        mem.free(ctx);
-        return result;
+        if (cf) |c| mem.destroy(c);
+        out_result.* = result;
+        return error.CreateFailed;
     }
 
     const c = cf.?;
@@ -1361,10 +1401,21 @@ pub export fn Curl_conn_tcp_listen_set(
             c,
             "set filter for listen socket fd=%lld ip=%s:%d",
             @as(c_longlong, @intCast(ctx.sock)),
-            @as([*:0]const u8, @ptrCast(&ctx.ip.local_ip)),
+            ctx.ip.localIpPtr(),
             @as(c_int, ctx.ip.local_port),
         );
     }
+    out_result.* = CURLE_OK;
+}
+
+pub export fn Curl_conn_tcp_listen_set(
+    data: ?*CurlEasy,
+    conn: ?*ConnectData,
+    sockindex: i8,
+    s: *const curl_socket_t,
+) callconv(.c) CURLcode {
+    var result: CURLcode = CURLE_OK;
+    connTcpListenSetChecked(data, conn, sockindex, s, &result) catch return result;
     return CURLE_OK;
 }
 
@@ -1395,7 +1446,7 @@ pub export fn Curl_cf_socket_peek(
     _ = data;
     if (cfIsSocket(cf)) {
         if (cf.?.ctx) |ctx_any| {
-            const ctx: *CfSocketCtx = @ptrCast(@alignCast(ctx_any));
+            const ctx = fromOpaque(CfSocketCtx, ctx_any);
             if (psock) |ps| ps.* = ctx.sock;
             if (paddr) |pa| pa.* = &ctx.addr;
             if (pip) |pi| pi.* = ctx.ip;
@@ -1921,7 +1972,7 @@ test "Curl_parse_interface parses dev, iface, and host variants" {
     try std.testing.expect(iface == null);
     try std.testing.expect(host == null);
     try std.testing.expectEqualStrings("eth0", std.mem.span(dev.?));
-    mem.free(@ptrCast(dev.?));
+    mem.freeTyped(dev.?);
 
     // if!<iface>
     try std.testing.expectEqual(CURLE_OK, Curl_parse_interface("if!wlan0", &dev, &iface, &host));
@@ -1929,7 +1980,7 @@ test "Curl_parse_interface parses dev, iface, and host variants" {
     try std.testing.expect(iface != null);
     try std.testing.expect(host == null);
     try std.testing.expectEqualStrings("wlan0", std.mem.span(iface.?));
-    mem.free(@ptrCast(iface.?));
+    mem.freeTyped(iface.?);
 
     // host!<host>
     try std.testing.expectEqual(CURLE_OK, Curl_parse_interface("host!127.0.0.1", &dev, &iface, &host));
@@ -1937,7 +1988,7 @@ test "Curl_parse_interface parses dev, iface, and host variants" {
     try std.testing.expect(iface == null);
     try std.testing.expect(host != null);
     try std.testing.expectEqualStrings("127.0.0.1", std.mem.span(host.?));
-    mem.free(@ptrCast(host.?));
+    mem.freeTyped(host.?);
 
     // ifhost!<iface>!<host>
     try std.testing.expectEqual(CURLE_OK, Curl_parse_interface("ifhost!eth0!10.0.0.1", &dev, &iface, &host));
@@ -1946,8 +1997,8 @@ test "Curl_parse_interface parses dev, iface, and host variants" {
     try std.testing.expect(host != null);
     try std.testing.expectEqualStrings("eth0", std.mem.span(iface.?));
     try std.testing.expectEqualStrings("10.0.0.1", std.mem.span(host.?));
-    mem.free(@ptrCast(iface.?));
-    mem.free(@ptrCast(host.?));
+    mem.freeTyped(iface.?);
+    mem.freeTyped(host.?);
 
     // Invalid empty forms
     try std.testing.expectEqual(CURLE_BAD_FUNCTION_ARGUMENT, Curl_parse_interface("", &dev, &iface, &host));
