@@ -32,7 +32,6 @@ extern fn Curl_bufref_memdup0(br: *bufref, ptr: ?*const anyopaque, len: usize) c
 
 extern fn curlx_str_number(linep: *[*:0]const u8, nump: *i64, max: i64) callconv(.c) c_int;
 extern fn curlx_str_single(linep: *[*:0]const u8, byte: u8) callconv(.c) c_int;
-extern fn curlx_memdup0(src: ?[*]const u8, length: usize) callconv(.c) ?*anyopaque;
 
 // ============================================================================
 // Cross-platform C va_list reader
@@ -298,8 +297,12 @@ const PFMT_PRECARG: c_int = 10;
 const PFMT_MANYSEGS: c_int = 11;
 
 const VaInputVal = extern union {
-    str: ?[*]const u8,
+    str: ?[*:0]const u8,
     ptr: ?*anyopaque,
+    i64_ptr: ?*align(1) i64,
+    long_ptr: ?*align(1) c_long,
+    int_ptr: ?*align(1) c_int,
+    short_ptr: ?*align(1) c_short,
     nums: i64,
     numu: u64,
     dnum: f64,
@@ -342,10 +345,6 @@ const MProperty = struct {
     prec: c_int,
     flags: c_uint,
 };
-
-const MpStream = *const fn (u8, *anyopaque) c_int;
-const MpStreamN = *const fn ([*]const u8, usize, *anyopaque) usize;
-const MpFlush = *const fn (*anyopaque) c_int;
 
 fn dollarstring(p_in: [*:0]const u8, end: *[*:0]const u8) c_int {
     var p = p_in;
@@ -758,7 +757,7 @@ fn parsefmt(
         const iptr = &in[i];
         switch (iptr.type) {
             .MTYPE_STRING => {
-                iptr.val = .{ .str = va.nextGp(?[*]const u8) };
+                iptr.val = .{ .str = va.nextGp(?[*:0]const u8) };
             },
             .MTYPE_INTPTR, .MTYPE_PTR => {
                 iptr.val = .{ .ptr = va.nextGp(?*anyopaque) };
@@ -796,16 +795,16 @@ fn parsefmt(
 }
 
 fn streamRun(
-    userp: *anyopaque,
-    stream: MpStream,
-    streamn: ?MpStreamN,
+    userp: anytype,
+    comptime stream: anytype,
+    comptime streamn: anytype,
     buf: [*]const u8,
     len: usize,
     donep: *c_int,
 ) bool {
     if (len == 0) return false;
-    if (streamn) |sn| {
-        const n = sn(buf, len, userp);
+    if (@TypeOf(streamn) != @TypeOf(null)) {
+        const n = streamn(buf, len, userp);
         donep.* += @intCast(n);
         return n != len;
     }
@@ -821,9 +820,9 @@ const pad_zeros: [16:0]u8 = "0000000000000000".*;
 const PAD_RUN: c_int = 16;
 
 fn streamPad(
-    userp: *anyopaque,
-    stream: MpStream,
-    streamn: ?MpStreamN,
+    userp: anytype,
+    comptime stream: anytype,
+    comptime streamn: anytype,
     pad: u8,
     num_in: c_int,
     donep: *c_int,
@@ -839,9 +838,9 @@ fn streamPad(
 }
 
 fn streamZrun(
-    userp: *anyopaque,
-    stream: MpStream,
-    streamn: ?MpStreamN,
+    userp: anytype,
+    comptime stream: anytype,
+    comptime streamn: anytype,
     str: [*]const u8,
     len: usize,
     donep: *c_int,
@@ -853,8 +852,8 @@ fn streamZrun(
 
 inline fn outChar(
     ch: u8,
-    userp: *anyopaque,
-    stream: MpStream,
+    userp: anytype,
+    comptime stream: anytype,
     donep: *c_int,
 ) bool {
     if (stream(ch, userp) != 0) return true;
@@ -863,15 +862,15 @@ inline fn outChar(
 }
 
 fn outDouble(
-    userp: *anyopaque,
-    stream: MpStream,
-    streamn: ?MpStreamN,
+    userp: anytype,
+    comptime stream: anytype,
+    comptime streamn: anytype,
     p: *MProperty,
     dnum: f64,
-    work: *[BUFFSIZE + 2]u8,
+    work: *[BUFFSIZE + 2:0]u8,
     donep: *c_int,
 ) bool {
-    var fmt: [32]u8 = @splat(0);
+    var fmt: [32:0]u8 = @splat(0);
     fmt[0] = '%';
     var fidx: usize = 1;
     const flags = p.flags;
@@ -932,7 +931,7 @@ fn outDouble(
     fidx += 1;
     fmt[fidx] = 0;
 
-    const fmt_z: [*:0]const u8 = @ptrCast(&fmt);
+    const fmt_z: [*:0]const u8 = &fmt;
     if (builtin.os.tag == .windows) {
         var dnum_bits: u64 = @bitCast(dnum);
         _ = stdio_c.vsnprintf(work, BUFFSIZE, fmt_z, @ptrCast(&dnum_bits));
@@ -940,18 +939,18 @@ fn outDouble(
     } else {
         _ = stdio_c.snprintf(work, BUFFSIZE, fmt_z, dnum);
     }
-    const work_z: [*:0]const u8 = @ptrCast(work);
+    const work_z: [*:0]const u8 = work;
     return streamRun(userp, stream, streamn, work, std.mem.len(work_z), donep);
 }
 
 fn outNumber(
-    userp: *anyopaque,
-    stream: MpStream,
-    streamn: ?MpStreamN,
+    userp: anytype,
+    comptime stream: anytype,
+    comptime streamn: anytype,
     p: *MProperty,
     num_in: u64,
     nums: i64,
-    work: *[BUFFSIZE + 2]u8,
+    work: *[BUFFSIZE + 2:0]u8,
     donep: *c_int,
 ) bool {
     var digits: [*]const u8 = &Curl_ldigits;
@@ -1082,11 +1081,11 @@ fn outNumber(
 const nilstr = "(nil)";
 
 fn outString(
-    userp: *anyopaque,
-    stream: MpStream,
-    streamn: ?MpStreamN,
+    userp: anytype,
+    comptime stream: anytype,
+    comptime streamn: anytype,
     p: *MProperty,
-    str_in: ?[*]const u8,
+    str_in: ?[*:0]const u8,
     donep: *c_int,
 ) bool {
     var flags = p.flags;
@@ -1102,7 +1101,7 @@ fn outString(
         } else if (s[0] == 0) {
             len = 0;
         } else {
-            len = std.mem.len(@as([*:0]const u8, @ptrCast(s)));
+            len = std.mem.len(s);
         }
     } else {
         if (prec == -1 or prec >= @as(c_int, @intCast(nilstr.len))) {
@@ -1147,12 +1146,12 @@ fn outString(
 }
 
 fn outPointer(
-    userp: *anyopaque,
-    stream: MpStream,
-    streamn: ?MpStreamN,
+    userp: anytype,
+    comptime stream: anytype,
+    comptime streamn: anytype,
     p: *MProperty,
     ptr: ?*anyopaque,
-    work: *[BUFFSIZE + 2]u8,
+    work: *[BUFFSIZE + 2:0]u8,
     donep: *c_int,
 ) bool {
     if (ptr) |non_null| {
@@ -1176,10 +1175,10 @@ fn outPointer(
 }
 
 fn formatf(
-    userp: *anyopaque,
-    stream: MpStream,
-    streamn: ?MpStreamN,
-    flush: ?MpFlush,
+    userp: anytype,
+    comptime stream: anytype,
+    comptime streamn: anytype,
+    comptime flush: anytype,
     format: [*:0]const u8,
     ap_save: CVaListParam,
 ) c_int {
@@ -1189,7 +1188,7 @@ fn formatf(
 
     var output: [MAX_SEGMENTS]OutSegment = undefined;
     var input: [MAX_PARAMETERS]VaInput = undefined;
-    var work: [BUFFSIZE + 2]u8 = undefined;
+    var work: [BUFFSIZE + 2:0]u8 = undefined;
 
     if (parsefmt(format, &output, &input, &ocount, &icount, ap_save) != PFMT_OK) {
         return 0;
@@ -1263,18 +1262,18 @@ fn formatf(
                 }
             },
             .MTYPE_INTPTR => {
-                if (flush) |fl| {
-                    if (fl(userp) != 0) return done;
+                if (@TypeOf(flush) != @TypeOf(null)) {
+                    if (flush(userp) != 0) return done;
                 }
-                if (iptr.val.ptr) |ptr| {
+                if (iptr.val.ptr != null) {
                     if ((p.flags & FLAGS_LONGLONG) != 0) {
-                        @as(*align(1) i64, @ptrCast(ptr)).* = @intCast(done);
+                        iptr.val.i64_ptr.?.* = @intCast(done);
                     } else if ((p.flags & FLAGS_LONG) != 0) {
-                        @as(*align(1) c_long, @ptrCast(ptr)).* = @intCast(done);
+                        iptr.val.long_ptr.?.* = @intCast(done);
                     } else if ((p.flags & FLAGS_SHORT) == 0) {
-                        @as(*align(1) c_int, @ptrCast(ptr)).* = done;
+                        iptr.val.int_ptr.?.* = done;
                     } else {
-                        @as(*align(1) c_short, @ptrCast(ptr)).* = @truncate(done);
+                        iptr.val.short_ptr.?.* = @truncate(done);
                     }
                 }
             },
@@ -1284,8 +1283,7 @@ fn formatf(
     return done;
 }
 
-fn addbyter(outc: u8, f: *anyopaque) c_int {
-    const infop: *Nsprintf = @ptrCast(@alignCast(f));
+fn addbyter(outc: u8, infop: *Nsprintf) c_int {
     if (infop.length < infop.max) {
         if (infop.buffer) |b| {
             b[0] = outc;
@@ -1297,8 +1295,7 @@ fn addbyter(outc: u8, f: *anyopaque) c_int {
     return 1;
 }
 
-fn addrun(buf: [*]const u8, len_in: usize, f: *anyopaque) usize {
-    const infop: *Nsprintf = @ptrCast(@alignCast(f));
+fn addrun(buf: [*]const u8, len_in: usize, infop: *Nsprintf) usize {
     const fit = infop.max - infop.length;
     const len = @min(len_in, fit);
     if (len != 0) {
@@ -1323,7 +1320,7 @@ pub export fn curl_mvsnprintf(
         .max = maxlength,
     };
 
-    var retcode = formatf(@ptrCast(&info), &addbyter, &addrun, null, format, args);
+    var retcode = formatf(&info, addbyter, addrun, null, format, args);
     if (info.max != 0) {
         if (info.max == info.length) {
             if (info.buffer) |b| {
@@ -1337,8 +1334,7 @@ pub export fn curl_mvsnprintf(
     return retcode;
 }
 
-fn allocFlush(f: *anyopaque) c_int {
-    const infop: *Asprintf = @ptrCast(@alignCast(f));
+fn allocFlush(infop: *Asprintf) c_int {
     if (infop.nstage != 0) {
         const result = curlx_dyn_addn(infop.b, &infop.stage, infop.nstage);
         infop.nstage = 0;
@@ -1366,28 +1362,26 @@ fn allocFits(infop: *const Asprintf, more: usize) bool {
     return total <= infop.b.toobig;
 }
 
-fn allocAddbyter(outc: u8, f: *anyopaque) c_int {
-    const infop: *Asprintf = @ptrCast(@alignCast(f));
-    if (infop.nstage == ASPRINTF_STAGE_SIZE and allocFlush(f) != 0) {
+fn allocAddbyter(outc: u8, infop: *Asprintf) c_int {
+    if (infop.nstage == ASPRINTF_STAGE_SIZE and allocFlush(infop) != 0) {
         return 1;
     }
     if (!allocFits(infop, 1)) {
-        if (allocFlush(f) != 0) return 1;
-        var ch = outc;
-        return allocAddn(infop, @ptrCast(&ch), 1);
+        if (allocFlush(infop) != 0) return 1;
+        const ch = [1]u8{outc};
+        return allocAddn(infop, &ch, 1);
     }
     infop.stage[infop.nstage] = outc;
     infop.nstage += 1;
     return 0;
 }
 
-fn allocAddrun(buf: [*]const u8, len: usize, f: *anyopaque) usize {
-    const infop: *Asprintf = @ptrCast(@alignCast(f));
+fn allocAddrun(buf: [*]const u8, len: usize, infop: *Asprintf) usize {
     var accepted: usize = 0;
     while (accepted < len) {
         var room = ASPRINTF_STAGE_SIZE - infop.nstage;
         if (room == 0) {
-            if (allocFlush(f) != 0) return accepted;
+            if (allocFlush(infop) != 0) return accepted;
             room = ASPRINTF_STAGE_SIZE;
         }
         var n = len - accepted;
@@ -1400,7 +1394,7 @@ fn allocAddrun(buf: [*]const u8, len: usize, f: *anyopaque) usize {
                 infop.nstage += fits;
                 accepted += fits;
             }
-            if (allocFlush(f) != 0) return accepted;
+            if (allocFlush(infop) != 0) return accepted;
             if (allocAddn(infop, buf + accepted, 1) != 0) return accepted;
             accepted += 1;
             continue;
@@ -1412,7 +1406,8 @@ fn allocAddrun(buf: [*]const u8, len: usize, f: *anyopaque) usize {
     return accepted;
 }
 
-pub export fn curlx_dyn_vprintf(dyn: *dynbuf, format: [*:0]const u8, args: CVaListParam) callconv(.c) c_int {
+fn dynVprintfErr(dyn: *dynbuf, format: [*:0]const u8, args: CVaListParam) error{ OutOfMemory, TooLarge }!void {
+    errdefer curlx_dyn_free(dyn);
     var info: Asprintf = .{
         .b = dyn,
         .merr = MERR_OK,
@@ -1420,50 +1415,45 @@ pub export fn curlx_dyn_vprintf(dyn: *dynbuf, format: [*:0]const u8, args: CVaLi
         .stage = undefined,
     };
 
-    _ = formatf(@ptrCast(&info), &allocAddbyter, &allocAddrun, &allocFlush, format, args);
+    _ = formatf(&info, allocAddbyter, allocAddrun, allocFlush, format, args);
     if (info.merr == MERR_OK) {
-        _ = allocFlush(@ptrCast(&info));
+        _ = allocFlush(&info);
     }
     if (info.merr != MERR_OK) {
-        curlx_dyn_free(info.b);
-        return info.merr;
+        return if (info.merr == MERR_TOO_LARGE) error.TooLarge else error.OutOfMemory;
     }
+}
+
+pub export fn curlx_dyn_vprintf(dyn: *dynbuf, format: [*:0]const u8, args: CVaListParam) callconv(.c) c_int {
+    dynVprintfErr(dyn, format, args) catch |err| return switch (err) {
+        error.TooLarge => MERR_TOO_LARGE,
+        error.OutOfMemory => MERR_MEM,
+    };
     return 0;
 }
 
-pub export fn curl_mvaprintf(format: [*:0]const u8, args: CVaListParam) callconv(.c) ?[*:0]u8 {
+fn mvaprintfErr(format: [*:0]const u8, args: CVaListParam) error{ OutOfMemory, TooLarge }![*:0]u8 {
     var dyn: dynbuf = undefined;
     curlx_dyn_init(&dyn, DYN_APRINTF);
-    var info: Asprintf = .{
-        .b = &dyn,
-        .merr = MERR_OK,
-        .nstage = 0,
-        .stage = undefined,
-    };
-
-    _ = formatf(@ptrCast(&info), &allocAddbyter, &allocAddrun, &allocFlush, format, args);
-    if (info.merr == MERR_OK) {
-        _ = allocFlush(@ptrCast(&info));
+    errdefer curlx_dyn_free(&dyn);
+    try dynVprintfErr(&dyn, format, args);
+    if (curlx_dyn_len(&dyn) != 0) {
+        return curlx_dyn_ptr(&dyn) orelse error.OutOfMemory;
     }
-    if (info.merr != MERR_OK) {
-        curlx_dyn_free(info.b);
-        return null;
-    }
-    if (curlx_dyn_len(info.b) != 0) {
-        return curlx_dyn_ptr(info.b);
-    }
-    return mem.strdup("");
+    return mem.strdup("") orelse error.OutOfMemory;
 }
 
-fn storebuffer(outc: u8, f: *anyopaque) c_int {
-    const buffer_ptr: *[*]u8 = @ptrCast(@alignCast(f));
+pub export fn curl_mvaprintf(format: [*:0]const u8, args: CVaListParam) callconv(.c) ?[*:0]u8 {
+    return mvaprintfErr(format, args) catch null;
+}
+
+fn storebuffer(outc: u8, buffer_ptr: *[*]u8) c_int {
     buffer_ptr.*[0] = outc;
     buffer_ptr.* += 1;
     return 0;
 }
 
-fn storerun(buf: [*]const u8, len: usize, f: *anyopaque) usize {
-    const buffer_ptr: *[*]u8 = @ptrCast(@alignCast(f));
+fn storerun(buf: [*]const u8, len: usize, buffer_ptr: *[*]u8) usize {
     @memcpy(buffer_ptr.*[0..len], buf[0..len]);
     buffer_ptr.* += len;
     return len;
@@ -1471,20 +1461,18 @@ fn storerun(buf: [*]const u8, len: usize, f: *anyopaque) usize {
 
 pub export fn curl_mvsprintf(buffer: [*]u8, format: [*:0]const u8, args: CVaListParam) callconv(.c) c_int {
     var buf_cursor = buffer;
-    const retcode = formatf(@ptrCast(&buf_cursor), &storebuffer, &storerun, null, format, args);
+    const retcode = formatf(&buf_cursor, storebuffer, storerun, null, format, args);
     buf_cursor[0] = 0;
     return retcode;
 }
 
-fn fputcWrapper(outc: u8, f: *anyopaque) c_int {
-    const i: *Ioprintf = @ptrCast(@alignCast(f));
+fn fputcWrapper(outc: u8, i: *Ioprintf) c_int {
     const rc = stdio_c.fputc(@intCast(outc), i.fd);
     i.err = (rc == -1);
     return @intFromBool(rc == -1);
 }
 
-fn fwriteWrapper(buf: [*]const u8, len: usize, f: *anyopaque) usize {
-    const i: *Ioprintf = @ptrCast(@alignCast(f));
+fn fwriteWrapper(buf: [*]const u8, len: usize, i: *Ioprintf) usize {
     const n = stdio_c.fwrite(buf, 1, len, i.fd);
     i.err = (n != len);
     return n;
@@ -1495,7 +1483,7 @@ pub export fn curl_mvfprintf(fd: ?*anyopaque, format: [*:0]const u8, args: CVaLi
         .fd = fd,
         .err = false,
     };
-    const n = formatf(@ptrCast(&info), &fputcWrapper, &fwriteWrapper, null, format, args);
+    const n = formatf(&info, fputcWrapper, fwriteWrapper, null, format, args);
     if (info.err) return -1;
     return n;
 }
@@ -1679,8 +1667,7 @@ fn httppostAdd(
     if (src.bufferlength > max_long or namelength > max_long) {
         return null;
     }
-    const raw = mem.calloc(1, @sizeOf(curl_httppost)) orelse return null;
-    const post: *curl_httppost = @ptrCast(@alignCast(raw));
+    const post = mem.create(curl_httppost) orelse return null;
     post.name = @constCast(Curl_bufref_ptr(&src.name));
     post.namelength = @intCast(namelength);
     post.contents = @constCast(Curl_bufref_ptr(&src.value));
@@ -1708,8 +1695,7 @@ fn httppostAdd(
 }
 
 fn forminfoNew() ?*FormInfo {
-    const raw = mem.calloc(1, @sizeOf(FormInfo)) orelse return null;
-    const form_info: *FormInfo = @ptrCast(@alignCast(raw));
+    const form_info = mem.create(FormInfo) orelse return null;
     Curl_bufref_init(&form_info.name);
     Curl_bufref_init(&form_info.value);
     Curl_bufref_init(&form_info.contenttype);
@@ -1775,7 +1761,7 @@ fn formaddCheck(
 
         if (name) |n| {
             if (f.namelength != 0) {
-                const n_bytes: [*]const u8 = @ptrCast(n);
+                const n_bytes: [*]const u8 = n;
                 if (std.mem.indexOfScalar(u8, n_bytes[0..f.namelength], 0) != null) {
                     return CURL_FORMADD_NULL;
                 }
@@ -1815,26 +1801,38 @@ fn freeChain(c_in: ?*curl_httppost) void {
         if (node.more) |more| {
             freeChain(more);
         }
-        mem.free(node);
+        mem.destroy(node);
         c = next;
     }
 }
 
-pub export fn Curl_vformadd(
+fn freeFormInfoNodes(first: ?*FormInfo) void {
+    var fi_opt = first;
+    while (fi_opt) |fi| {
+        const next_fi = fi.more;
+        mem.destroy(fi);
+        fi_opt = next_fi;
+    }
+}
+
+fn vformaddErr(
     httppost: *?*curl_httppost,
     last_post: *?*curl_httppost,
     params: CVaListParam,
-) callconv(.c) CURLFORMcode {
-    const first_form = forminfoNew() orelse return CURL_FORMADD_MEMORY;
+) error{ Memory, OptionTwice, NullArg, UnknownOption, Incomplete, IllegalArray }!void {
+    const first_form = forminfoNew() orelse return error.Memory;
+    defer freeFormInfoNodes(first_form);
+    errdefer freeFormlist(first_form);
+
     var curr: *FormInfo = first_form;
-    var retval: CURLFORMcode = CURL_FORMADD_OK;
     var forms: ?[*]const curl_forms = null;
     var avalue_raw: usize = 0;
     var newchain: ?*curl_httppost = null;
     var lastnode: ?*curl_httppost = null;
+    errdefer freeChain(newchain);
     var va = VaReader.init(params);
 
-    while (retval == CURL_FORMADD_OK) {
+    while (true) {
         var option: CURLformoption = CURLFORM_NOTHING;
         var from_forms = false;
 
@@ -1854,105 +1852,71 @@ pub export fn Curl_vformadd(
 
         switch (option) {
             CURLFORM_ARRAY => {
-                if (from_forms) {
-                    retval = CURL_FORMADD_ILLEGAL_ARRAY;
-                } else {
-                    const arr = va.nextGp(?[*]const curl_forms);
-                    if (arr) |a| {
-                        forms = a;
-                    } else {
-                        retval = CURL_FORMADD_NULL;
-                    }
-                }
+                if (from_forms) return error.IllegalArray;
+                forms = va.nextGp(?[*]const curl_forms) orelse return error.NullArg;
             },
             CURLFORM_PTRNAME, CURLFORM_COPYNAME => {
                 if (option == CURLFORM_PTRNAME) {
                     curr.flags |= CURL_HTTPPOST_PTRNAME;
                 }
-                if (Curl_bufref_ptr(&curr.name) != null) {
-                    retval = CURL_FORMADD_OPTION_TWICE;
-                } else {
-                    const avalue: ?[*:0]u8 = if (from_forms)
-                        (if (avalue_raw != 0) @ptrFromInt(avalue_raw) else null)
-                    else
-                        va.nextGp(?[*:0]u8);
-                    if (avalue) |av| {
-                        Curl_bufref_set(&curr.name, av, 0, null);
-                    } else {
-                        retval = CURL_FORMADD_NULL;
-                    }
-                }
+                if (Curl_bufref_ptr(&curr.name) != null) return error.OptionTwice;
+                const avalue: ?[*:0]u8 = if (from_forms)
+                    (if (avalue_raw != 0) @ptrFromInt(avalue_raw) else null)
+                else
+                    va.nextGp(?[*:0]u8);
+                const av = avalue orelse return error.NullArg;
+                Curl_bufref_set(&curr.name, av, 0, null);
             },
             CURLFORM_NAMELENGTH => {
-                if (curr.namelength != 0) {
-                    retval = CURL_FORMADD_OPTION_TWICE;
-                } else {
-                    const nlen: c_long = if (from_forms)
-                        @bitCast(@as(c_ulong, @truncate(avalue_raw)))
-                    else
-                        va.nextGp(c_long);
-                    curr.namelength = @bitCast(@as(isize, nlen));
-                }
+                if (curr.namelength != 0) return error.OptionTwice;
+                const nlen: c_long = if (from_forms)
+                    @bitCast(@as(c_ulong, @truncate(avalue_raw)))
+                else
+                    va.nextGp(c_long);
+                curr.namelength = @bitCast(@as(isize, nlen));
             },
             CURLFORM_PTRCONTENTS, CURLFORM_COPYCONTENTS => {
                 if (option == CURLFORM_PTRCONTENTS) {
                     curr.flags |= CURL_HTTPPOST_PTRCONTENTS;
                 }
-                if (Curl_bufref_ptr(&curr.value) != null) {
-                    retval = CURL_FORMADD_OPTION_TWICE;
-                } else {
-                    const avalue: ?[*]u8 = if (from_forms)
-                        (if (avalue_raw != 0) @ptrFromInt(avalue_raw) else null)
-                    else
-                        va.nextGp(?[*]u8);
-                    if (avalue) |av| {
-                        Curl_bufref_set(&curr.value, av, 0, null);
-                    } else {
-                        retval = CURL_FORMADD_NULL;
-                    }
-                }
+                if (Curl_bufref_ptr(&curr.value) != null) return error.OptionTwice;
+                const avalue: ?[*]u8 = if (from_forms)
+                    (if (avalue_raw != 0) @ptrFromInt(avalue_raw) else null)
+                else
+                    va.nextGp(?[*]u8);
+                const av = avalue orelse return error.NullArg;
+                Curl_bufref_set(&curr.value, av, 0, null);
             },
             CURLFORM_CONTENTSLENGTH => {
                 const clen: c_long = if (from_forms)
                     @bitCast(@as(c_ulong, @truncate(avalue_raw)))
                 else
                     va.nextGp(c_long);
-                if (clen < 0) {
-                    retval = CURL_FORMADD_INCOMPLETE;
-                } else {
-                    curr.contentslength = @intCast(clen);
-                }
+                if (clen < 0) return error.Incomplete;
+                curr.contentslength = @intCast(clen);
             },
             CURLFORM_CONTENTLEN => {
                 const clen: i64 = if (from_forms)
                     @bitCast(@as(u64, avalue_raw))
                 else
                     va.nextGp(i64);
-                if (clen < 0) {
-                    retval = CURL_FORMADD_INCOMPLETE;
-                } else {
-                    curr.flags |= CURL_HTTPPOST_LARGE;
-                    curr.contentslength = clen;
-                }
+                if (clen < 0) return error.Incomplete;
+                curr.flags |= CURL_HTTPPOST_LARGE;
+                curr.contentslength = clen;
             },
             CURLFORM_FILECONTENT => {
                 if ((curr.flags & (CURL_HTTPPOST_PTRCONTENTS | CURL_HTTPPOST_READFILE)) != 0) {
-                    retval = CURL_FORMADD_OPTION_TWICE;
-                } else {
-                    const avalue: ?[*:0]const u8 = if (from_forms)
-                        (if (avalue_raw != 0) @ptrFromInt(avalue_raw) else null)
-                    else
-                        va.nextGp(?[*:0]const u8);
-                    if (avalue) |av| {
-                        if (Curl_bufref_memdup0(&curr.value, av, std.mem.len(av)) != CURLE_OK) {
-                            retval = CURL_FORMADD_MEMORY;
-                        } else {
-                            curr.flags |= CURL_HTTPPOST_READFILE;
-                        }
-                    } else {
-                        retval = CURL_FORMADD_NULL;
-                    }
+                    return error.OptionTwice;
                 }
+                const avalue: ?[*:0]const u8 = if (from_forms)
+                    (if (avalue_raw != 0) @ptrFromInt(avalue_raw) else null)
+                else
+                    va.nextGp(?[*:0]const u8);
+                const av = avalue orelse return error.NullArg;
+                if (Curl_bufref_memdup0(&curr.value, av, std.mem.len(av)) != CURLE_OK) {
+                    return error.Memory;
+                }
+                curr.flags |= CURL_HTTPPOST_READFILE;
             },
             CURLFORM_FILE => {
                 const avalue: ?[*:0]const u8 = if (from_forms)
@@ -1960,78 +1924,52 @@ pub export fn Curl_vformadd(
                 else
                     va.nextGp(?[*:0]const u8);
                 if (Curl_bufref_ptr(&curr.value) != null) {
-                    if ((curr.flags & CURL_HTTPPOST_FILENAME) != 0) {
-                        if (avalue) |av| {
-                            const form = forminfoNew();
-                            if (form == null or Curl_bufref_memdup0(&form.?.value, av, std.mem.len(av)) != CURLE_OK) {
-                                mem.free(form);
-                                retval = CURL_FORMADD_MEMORY;
-                            } else {
-                                forminfoAdd(form.?, curr);
-                                curr = form.?;
-                            }
-                        } else {
-                            retval = CURL_FORMADD_NULL;
-                        }
-                    } else {
-                        retval = CURL_FORMADD_OPTION_TWICE;
+                    if ((curr.flags & CURL_HTTPPOST_FILENAME) == 0) return error.OptionTwice;
+                    const av = avalue orelse return error.NullArg;
+                    const form = forminfoNew() orelse return error.Memory;
+                    errdefer mem.destroy(form);
+                    if (Curl_bufref_memdup0(&form.value, av, std.mem.len(av)) != CURLE_OK) {
+                        return error.Memory;
                     }
+                    forminfoAdd(form, curr);
+                    curr = form;
                 } else {
-                    if (avalue) |av| {
-                        if (Curl_bufref_memdup0(&curr.value, av, std.mem.len(av)) != CURLE_OK) {
-                            retval = CURL_FORMADD_MEMORY;
-                        } else {
-                            curr.flags |= CURL_HTTPPOST_FILENAME;
-                        }
-                    } else {
-                        retval = CURL_FORMADD_NULL;
+                    const av = avalue orelse return error.NullArg;
+                    if (Curl_bufref_memdup0(&curr.value, av, std.mem.len(av)) != CURLE_OK) {
+                        return error.Memory;
                     }
+                    curr.flags |= CURL_HTTPPOST_FILENAME;
                 }
             },
             CURLFORM_BUFFERPTR => {
                 curr.flags |= CURL_HTTPPOST_PTRBUFFER | CURL_HTTPPOST_BUFFER;
-                if (curr.buffer != null) {
-                    retval = CURL_FORMADD_OPTION_TWICE;
-                } else {
-                    const avalue: ?[*]u8 = if (from_forms)
-                        (if (avalue_raw != 0) @ptrFromInt(avalue_raw) else null)
-                    else
-                        va.nextGp(?[*]u8);
-                    if (avalue) |av| {
-                        curr.buffer = av;
-                        Curl_bufref_set(&curr.value, av, 0, null);
-                    } else {
-                        retval = CURL_FORMADD_NULL;
-                    }
-                }
+                if (curr.buffer != null) return error.OptionTwice;
+                const avalue: ?[*]u8 = if (from_forms)
+                    (if (avalue_raw != 0) @ptrFromInt(avalue_raw) else null)
+                else
+                    va.nextGp(?[*]u8);
+                const av = avalue orelse return error.NullArg;
+                curr.buffer = av;
+                Curl_bufref_set(&curr.value, av, 0, null);
             },
             CURLFORM_BUFFERLENGTH => {
-                if (curr.bufferlength != 0) {
-                    retval = CURL_FORMADD_OPTION_TWICE;
-                } else {
-                    const blen: c_long = if (from_forms)
-                        @bitCast(@as(c_ulong, @truncate(avalue_raw)))
-                    else
-                        va.nextGp(c_long);
-                    curr.bufferlength = @bitCast(@as(isize, blen));
-                }
+                if (curr.bufferlength != 0) return error.OptionTwice;
+                const blen: c_long = if (from_forms)
+                    @bitCast(@as(c_ulong, @truncate(avalue_raw)))
+                else
+                    va.nextGp(c_long);
+                curr.bufferlength = @bitCast(@as(isize, blen));
             },
             CURLFORM_STREAM => {
                 curr.flags |= CURL_HTTPPOST_CALLBACK;
-                if (curr.userp != null) {
-                    retval = CURL_FORMADD_OPTION_TWICE;
-                } else {
-                    const avalue: ?*anyopaque = if (from_forms)
-                        (if (avalue_raw != 0) @ptrFromInt(avalue_raw) else null)
-                    else
-                        va.nextGp(?*anyopaque);
-                    if (avalue) |av| {
-                        curr.userp = av;
-                        Curl_bufref_set(&curr.value, av, 0, null);
-                    } else {
-                        retval = CURL_FORMADD_NULL;
-                    }
-                }
+                if (curr.userp != null) return error.OptionTwice;
+                const avalue: ?*anyopaque = if (from_forms)
+                    (if (avalue_raw != 0) @ptrFromInt(avalue_raw) else null)
+                else
+                    va.nextGp(?*anyopaque);
+                const av = avalue orelse return error.NullArg;
+                curr.userp = av;
+                Curl_bufref_set(&curr.value, av, 0, null);
             },
             CURLFORM_CONTENTTYPE => {
                 const avalue: ?[*:0]const u8 = if (from_forms)
@@ -2039,28 +1977,20 @@ pub export fn Curl_vformadd(
                 else
                     va.nextGp(?[*:0]const u8);
                 if (Curl_bufref_ptr(&curr.contenttype) != null) {
-                    if ((curr.flags & CURL_HTTPPOST_FILENAME) != 0) {
-                        if (avalue) |av| {
-                            const form = forminfoNew();
-                            if (form == null or Curl_bufref_memdup0(&form.?.contenttype, av, std.mem.len(av)) != CURLE_OK) {
-                                mem.free(form);
-                                retval = CURL_FORMADD_MEMORY;
-                            } else {
-                                forminfoAdd(form.?, curr);
-                                curr = form.?;
-                            }
-                        } else {
-                            retval = CURL_FORMADD_NULL;
-                        }
-                    } else {
-                        retval = CURL_FORMADD_OPTION_TWICE;
+                    if ((curr.flags & CURL_HTTPPOST_FILENAME) == 0) return error.OptionTwice;
+                    const av = avalue orelse return error.NullArg;
+                    const form = forminfoNew() orelse return error.Memory;
+                    errdefer mem.destroy(form);
+                    if (Curl_bufref_memdup0(&form.contenttype, av, std.mem.len(av)) != CURLE_OK) {
+                        return error.Memory;
                     }
-                } else if (avalue) |av| {
-                    if (Curl_bufref_memdup0(&curr.contenttype, av, std.mem.len(av)) != CURLE_OK) {
-                        retval = CURL_FORMADD_MEMORY;
-                    }
+                    forminfoAdd(form, curr);
+                    curr = form;
                 } else {
-                    retval = CURL_FORMADD_NULL;
+                    const av = avalue orelse return error.NullArg;
+                    if (Curl_bufref_memdup0(&curr.contenttype, av, std.mem.len(av)) != CURLE_OK) {
+                        return error.Memory;
+                    }
                 }
             },
             CURLFORM_CONTENTHEADER => {
@@ -2068,59 +1998,56 @@ pub export fn Curl_vformadd(
                     (if (avalue_raw != 0) @ptrFromInt(avalue_raw) else null)
                 else
                     va.nextGp(?*curl_slist);
-                if (curr.contentheader != null) {
-                    retval = CURL_FORMADD_OPTION_TWICE;
-                } else {
-                    curr.contentheader = list;
-                }
+                if (curr.contentheader != null) return error.OptionTwice;
+                curr.contentheader = list;
             },
             CURLFORM_FILENAME, CURLFORM_BUFFER => {
                 const avalue: ?[*:0]const u8 = if (from_forms)
                     (if (avalue_raw != 0) @ptrFromInt(avalue_raw) else null)
                 else
                     va.nextGp(?[*:0]const u8);
-                if (Curl_bufref_ptr(&curr.showfilename) != null) {
-                    retval = CURL_FORMADD_OPTION_TWICE;
-                } else {
-                    const av_len = if (avalue) |av| std.mem.len(av) else 0;
-                    if (Curl_bufref_memdup0(&curr.showfilename, avalue, av_len) != CURLE_OK) {
-                        retval = CURL_FORMADD_MEMORY;
-                    }
+                if (Curl_bufref_ptr(&curr.showfilename) != null) return error.OptionTwice;
+                const av_len = if (avalue) |av| std.mem.len(av) else 0;
+                if (Curl_bufref_memdup0(&curr.showfilename, avalue, av_len) != CURLE_OK) {
+                    return error.Memory;
                 }
             },
-            else => {
-                retval = CURL_FORMADD_UNKNOWN_OPTION;
-            },
+            else => return error.UnknownOption,
         }
     }
 
-    if (retval == CURL_FORMADD_OK) {
-        retval = formaddCheck(first_form, &newchain, &lastnode);
+    const check_rc = formaddCheck(first_form, &newchain, &lastnode);
+    if (check_rc != CURL_FORMADD_OK) {
+        return switch (check_rc) {
+            CURL_FORMADD_INCOMPLETE => error.Incomplete,
+            CURL_FORMADD_NULL => error.NullArg,
+            CURL_FORMADD_ILLEGAL_ARRAY => error.IllegalArray,
+            else => error.Memory,
+        };
     }
 
-    if (retval != CURL_FORMADD_OK) {
-        freeFormlist(first_form);
-    }
-
-    var fi_opt: ?*FormInfo = first_form;
-    while (fi_opt) |fi| {
-        const next_fi = fi.more;
-        mem.free(fi);
-        fi_opt = next_fi;
-    }
-
-    if (retval == CURL_FORMADD_OK) {
-        if (last_post.*) |lp| {
-            lp.next = newchain;
-        } else {
-            httppost.* = newchain;
-        }
-        last_post.* = lastnode;
+    if (last_post.*) |lp| {
+        lp.next = newchain;
     } else {
-        freeChain(newchain);
+        httppost.* = newchain;
     }
+    last_post.* = lastnode;
+}
 
-    return retval;
+pub export fn Curl_vformadd(
+    httppost: *?*curl_httppost,
+    last_post: *?*curl_httppost,
+    params: CVaListParam,
+) callconv(.c) CURLFORMcode {
+    vformaddErr(httppost, last_post, params) catch |err| return switch (err) {
+        error.Memory => CURL_FORMADD_MEMORY,
+        error.OptionTwice => CURL_FORMADD_OPTION_TWICE,
+        error.NullArg => CURL_FORMADD_NULL,
+        error.UnknownOption => CURL_FORMADD_UNKNOWN_OPTION,
+        error.Incomplete => CURL_FORMADD_INCOMPLETE,
+        error.IllegalArray => CURL_FORMADD_ILLEGAL_ARRAY,
+    };
+    return CURL_FORMADD_OK;
 }
 
 pub export fn curl_formget(
@@ -2139,7 +2066,7 @@ pub export fn curl_formget(
 
     while (result == CURLE_OK) {
         var buffer: [8192]u8 = undefined;
-        const nread = Curl_mime_read(&buffer, 1, buffer.len, @ptrCast(&toppart));
+        const nread = Curl_mime_read(&buffer, 1, buffer.len, &toppart);
         if (nread == 0) break;
         if (nread > buffer.len or append_cb(arg, &buffer, nread) != nread) {
             result = CURLE_READ_ERROR;
@@ -2160,28 +2087,126 @@ pub export fn curl_formfree(form_in: ?*curl_httppost) callconv(.c) void {
         curl_formfree(form.more);
 
         if ((form.flags & @as(c_long, CURL_HTTPPOST_PTRNAME)) == 0) {
-            mem.free(form.name);
+            mem.freeTyped(form.name);
         }
         const no_free_contents_mask: c_long = @intCast(CURL_HTTPPOST_PTRCONTENTS | CURL_HTTPPOST_BUFFER | CURL_HTTPPOST_CALLBACK);
         if ((form.flags & no_free_contents_mask) == 0) {
-            mem.free(form.contents);
+            mem.freeTyped(form.contents);
         }
-        mem.free(form.contenttype);
-        mem.free(form.showfilename);
-        mem.free(form);
+        mem.freeTyped(form.contenttype);
+        mem.freeTyped(form.showfilename);
+        mem.destroy(form);
         form = next orelse break;
     }
 }
 
-fn setname(part: *curl_mimepart, name: ?[*]const u8, len: usize) CURLcode {
+fn setname(part: *curl_mimepart, name: ?[*:0]const u8, len: usize) CURLcode {
     if (name == null or len == 0) {
-        return curl_mime_name(part, if (name) |n| @ptrCast(n) else null);
+        return curl_mime_name(part, name);
     }
-    const zname_raw = curlx_memdup0(name, len) orelse return CURLE_OUT_OF_MEMORY;
-    const zname: [*:0]u8 = @ptrCast(zname_raw);
-    const result = curl_mime_name(part, zname);
-    mem.free(zname_raw);
-    return result;
+    const zname = mem.memdup0(name.?, len) orelse return CURLE_OUT_OF_MEMORY;
+    defer mem.freeTyped(zname);
+    return curl_mime_name(part, zname);
+}
+
+fn getformdataErr(
+    data: ?*anyopaque,
+    finalform: *curl_mimepart,
+    post_in: ?*curl_httppost,
+    fread_func: ?curl_read_callback,
+) error{ OutOfMemory, BadArgument, ReadError, TooLarge, RewindFailed }!void {
+    Curl_mime_cleanpart(finalform);
+    errdefer Curl_mime_cleanpart(finalform);
+
+    var post = post_in orelse return;
+
+    const form = curl_mime_init(data) orelse return error.OutOfMemory;
+    if (curl_mime_subparts(finalform, form) != CURLE_OK)
+        return error.OutOfMemory;
+
+    while (true) {
+        var multipart = form;
+        if (post.more != null) {
+            const part = curl_mime_addpart(form) orelse return error.OutOfMemory;
+            if (post.namelength < 0) return error.BadArgument;
+            if (setname(part, post.name, @intCast(post.namelength)) != CURLE_OK)
+                return error.OutOfMemory;
+            multipart = curl_mime_init(data) orelse return error.OutOfMemory;
+            if (curl_mime_subparts(part, multipart) != CURLE_OK)
+                return error.OutOfMemory;
+        }
+
+        var file_opt: ?*curl_httppost = post;
+        while (file_opt) |file| : (file_opt = file.more) {
+            const part = curl_mime_addpart(multipart) orelse return error.OutOfMemory;
+            if (curl_mime_headers(part, file.contentheader, 0) != CURLE_OK)
+                return error.OutOfMemory;
+            if (file.contenttype != null) {
+                if (curl_mime_type(part, file.contenttype) != CURLE_OK)
+                    return error.OutOfMemory;
+            }
+            if (post.more == null) {
+                if (post.namelength < 0) return error.BadArgument;
+                if (setname(part, post.name, @intCast(post.namelength)) != CURLE_OK)
+                    return error.OutOfMemory;
+            }
+
+            var clen: i64 = @intCast(post.contentslength);
+            if ((post.flags & @as(c_long, CURL_HTTPPOST_LARGE)) != 0) {
+                clen = post.contentlen;
+            }
+
+            var result: CURLcode = CURLE_OK;
+            if ((post.flags & @as(c_long, CURL_HTTPPOST_FILENAME | CURL_HTTPPOST_READFILE)) != 0) {
+                const contents_str = if (file.contents) |c| std.mem.span(c) else "";
+                if (std.mem.eql(u8, contents_str, "-")) {
+                    result = curl_mime_data_cb(
+                        part,
+                        -1,
+                        &stdio_c.fread,
+                        &os_leaf.curlx_fseek,
+                        null,
+                        stdio_streams.getStdin(),
+                    );
+                } else {
+                    result = curl_mime_filedata(part, file.contents);
+                }
+                if (result == CURLE_OK and (post.flags & @as(c_long, CURL_HTTPPOST_READFILE)) != 0) {
+                    result = curl_mime_filename(part, null);
+                }
+            } else if ((post.flags & @as(c_long, CURL_HTTPPOST_BUFFER)) != 0) {
+                const blen: usize = if (post.bufferlength > 0)
+                    @intCast(post.bufferlength)
+                else
+                    CURL_ZERO_TERMINATED;
+                result = curl_mime_data(part, post.buffer, blen);
+            } else if ((post.flags & @as(c_long, CURL_HTTPPOST_CALLBACK)) != 0) {
+                if (clen == 0) clen = -1;
+                result = curl_mime_data_cb(part, clen, fread_func, null, null, post.userp);
+            } else if (clen < 0) {
+                return error.BadArgument;
+            } else {
+                const uclen: usize = if (clen == 0) CURL_ZERO_TERMINATED else @intCast(clen);
+                result = curl_mime_data(part, post.contents, uclen);
+            }
+
+            if (result == CURLE_OK and post.showfilename != null) {
+                const show_mask: c_long = @intCast(CURL_HTTPPOST_FILENAME | CURL_HTTPPOST_BUFFER | CURL_HTTPPOST_CALLBACK);
+                if (post.more != null or (post.flags & show_mask) != 0) {
+                    result = curl_mime_filename(part, post.showfilename);
+                }
+            }
+            if (result != CURLE_OK) {
+                return switch (result) {
+                    CURLE_READ_ERROR => error.ReadError,
+                    CURLE_BAD_FUNCTION_ARGUMENT => error.BadArgument,
+                    else => error.OutOfMemory,
+                };
+            }
+        }
+
+        post = post.next orelse break;
+    }
 }
 
 pub export fn Curl_getformdata(
@@ -2190,121 +2215,14 @@ pub export fn Curl_getformdata(
     post_in: ?*curl_httppost,
     fread_func: ?curl_read_callback,
 ) callconv(.c) CURLcode {
-    var result: CURLcode = CURLE_OK;
-    Curl_mime_cleanpart(finalform);
-
-    var post = post_in orelse return result;
-
-    const form = curl_mime_init(data);
-    if (form == null) {
-        result = CURLE_OUT_OF_MEMORY;
-    }
-    if (result == CURLE_OK) {
-        result = curl_mime_subparts(finalform, form);
-    }
-
-    while (result == CURLE_OK) {
-        var multipart = form;
-        if (post.more != null) {
-            const part = curl_mime_addpart(form);
-            if (part == null) {
-                result = CURLE_OUT_OF_MEMORY;
-            }
-            if (result == CURLE_OK) {
-                if (post.namelength < 0) {
-                    result = CURLE_BAD_FUNCTION_ARGUMENT;
-                } else {
-                    const n_ptr: ?[*]const u8 = if (post.name) |n| @ptrCast(n) else null;
-                    result = setname(part.?, n_ptr, @intCast(post.namelength));
-                }
-            }
-            if (result == CURLE_OK) {
-                multipart = curl_mime_init(data);
-                if (multipart == null) {
-                    result = CURLE_OUT_OF_MEMORY;
-                }
-            }
-            if (result == CURLE_OK) {
-                result = curl_mime_subparts(part.?, multipart);
-            }
-        }
-
-        var file_opt: ?*curl_httppost = post;
-        while (result == CURLE_OK and file_opt != null) : (file_opt = file_opt.?.more) {
-            const file = file_opt.?;
-            const part = curl_mime_addpart(multipart);
-            if (part == null) {
-                result = CURLE_OUT_OF_MEMORY;
-            }
-            if (result == CURLE_OK) {
-                result = curl_mime_headers(part.?, file.contentheader, 0);
-            }
-            if (result == CURLE_OK and file.contenttype != null) {
-                result = curl_mime_type(part.?, file.contenttype);
-            }
-            if (result == CURLE_OK and post.more == null) {
-                if (post.namelength < 0) {
-                    result = CURLE_BAD_FUNCTION_ARGUMENT;
-                } else {
-                    const n_ptr: ?[*]const u8 = if (post.name) |n| @ptrCast(n) else null;
-                    result = setname(part.?, n_ptr, @intCast(post.namelength));
-                }
-            }
-            if (result == CURLE_OK) {
-                var clen: i64 = @intCast(post.contentslength);
-                if ((post.flags & @as(c_long, CURL_HTTPPOST_LARGE)) != 0) {
-                    clen = post.contentlen;
-                }
-
-                if ((post.flags & @as(c_long, CURL_HTTPPOST_FILENAME | CURL_HTTPPOST_READFILE)) != 0) {
-                    const contents_str = if (file.contents) |c| std.mem.span(c) else "";
-                    if (std.mem.eql(u8, contents_str, "-")) {
-                        result = curl_mime_data_cb(
-                            part.?,
-                            -1,
-                            &stdio_c.fread,
-                            &os_leaf.curlx_fseek,
-                            null,
-                            stdio_streams.getStdin(),
-                        );
-                    } else {
-                        result = curl_mime_filedata(part.?, file.contents);
-                    }
-                    if (result == CURLE_OK and (post.flags & @as(c_long, CURL_HTTPPOST_READFILE)) != 0) {
-                        result = curl_mime_filename(part.?, null);
-                    }
-                } else if ((post.flags & @as(c_long, CURL_HTTPPOST_BUFFER)) != 0) {
-                    const blen: usize = if (post.bufferlength > 0)
-                        @intCast(post.bufferlength)
-                    else
-                        CURL_ZERO_TERMINATED;
-                    result = curl_mime_data(part.?, post.buffer, blen);
-                } else if ((post.flags & @as(c_long, CURL_HTTPPOST_CALLBACK)) != 0) {
-                    if (clen == 0) clen = -1;
-                    result = curl_mime_data_cb(part.?, clen, fread_func, null, null, post.userp);
-                } else if (clen < 0) {
-                    result = CURLE_BAD_FUNCTION_ARGUMENT;
-                } else {
-                    const uclen: usize = if (clen == 0) CURL_ZERO_TERMINATED else @intCast(clen);
-                    const c_ptr: ?[*]const u8 = if (post.contents) |c| @ptrCast(c) else null;
-                    result = curl_mime_data(part.?, c_ptr, uclen);
-                }
-            }
-            if (result == CURLE_OK and post.showfilename != null) {
-                const show_mask: c_long = @intCast(CURL_HTTPPOST_FILENAME | CURL_HTTPPOST_BUFFER | CURL_HTTPPOST_CALLBACK);
-                if (post.more != null or (post.flags & show_mask) != 0) {
-                    result = curl_mime_filename(part.?, post.showfilename);
-                }
-            }
-        }
-
-        post = post.next orelse break;
-    }
-
-    if (result != CURLE_OK) {
-        Curl_mime_cleanpart(finalform);
-    }
-    return result;
+    getformdataErr(data, finalform, post_in, fread_func) catch |err| return switch (err) {
+        error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+        error.BadArgument => CURLE_BAD_FUNCTION_ARGUMENT,
+        error.ReadError => CURLE_READ_ERROR,
+        error.TooLarge => CURLE_TOO_LARGE,
+        error.RewindFailed => CURLE_BAD_FUNCTION_ARGUMENT,
+    };
+    return CURLE_OK;
 }
 
 // ============================================================================
@@ -2318,46 +2236,44 @@ const use_c_vastart = switch (builtin.cpu.arch) {
 };
 
 const variadic_impl = if (use_c_vastart) struct {
+    inline fn vaListParam(ap: *std.builtin.VaList) CVaListParam {
+        return if (builtin.cpu.arch == .x86_64) ap else @ptrCast(ap.*);
+    }
+
     pub fn curl_msnprintf(buffer: ?[*]u8, maxlength: usize, format: [*:0]const u8, ...) callconv(.c) c_int {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        return curl_mvsnprintf(buffer, maxlength, format, param);
+        return curl_mvsnprintf(buffer, maxlength, format, vaListParam(&ap));
     }
 
     pub fn curl_maprintf(format: [*:0]const u8, ...) callconv(.c) ?[*:0]u8 {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        return curl_mvaprintf(format, param);
+        return curl_mvaprintf(format, vaListParam(&ap));
     }
 
     pub fn curl_msprintf(buffer: [*]u8, format: [*:0]const u8, ...) callconv(.c) c_int {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        return curl_mvsprintf(buffer, format, param);
+        return curl_mvsprintf(buffer, format, vaListParam(&ap));
     }
 
     pub fn curl_mfprintf(fd: ?*anyopaque, format: [*:0]const u8, ...) callconv(.c) c_int {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        return curl_mvfprintf(fd, format, param);
+        return curl_mvfprintf(fd, format, vaListParam(&ap));
     }
 
     pub fn curl_mprintf(format: [*:0]const u8, ...) callconv(.c) c_int {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        return curl_mvprintf(format, param);
+        return curl_mvprintf(format, vaListParam(&ap));
     }
 
     pub fn curl_formadd(httppost: *?*curl_httppost, last_post: *?*curl_httppost, ...) callconv(.c) CURLFORMcode {
         var ap = @cVaStart();
         defer @cVaEnd(&ap);
-        const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
-        return Curl_vformadd(httppost, last_post, param);
+        return Curl_vformadd(httppost, last_post, vaListParam(&ap));
     }
 } else if (builtin.cpu.arch == .x86_64 and builtin.os.tag == .windows) struct {
     pub fn curl_msnprintf() callconv(.naked) void {
@@ -2702,8 +2618,8 @@ test "curl_formadd, curl_formget, and curl_formfree" {
     try std.testing.expectEqualStrings("value1", std.mem.span(post.?.contents.?));
 
     const forms_arr = [_]curl_forms{
-        .{ .option = CURLFORM_COPYNAME, .value = @ptrCast("arr_field") },
-        .{ .option = CURLFORM_COPYCONTENTS, .value = @ptrCast("arr_val") },
+        .{ .option = CURLFORM_COPYNAME, .value = "arr_field" },
+        .{ .option = CURLFORM_COPYCONTENTS, .value = "arr_val" },
         .{ .option = CURLFORM_END, .value = null },
     };
     const rc2 = curl_formadd(

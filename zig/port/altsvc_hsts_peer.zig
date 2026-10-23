@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const backend_options = @import("backend_options");
 const mem = @import("mem.zig");
+const collections = @import("collections.zig");
 const primitives = @import("primitives.zig");
 const containers_mod = @import("containers.zig");
 const curlx_parse_mod = @import("curlx_parse.zig");
@@ -17,7 +18,7 @@ const containers = struct {
     pub const Curl_llist_node = containers_mod.Curl_llist_node;
     pub const Curl_llist_dtor = containers_mod.Curl_llist_dtor;
     pub const curl_slist = containers_mod.curl_slist;
-    pub const dynbuf = containers_mod.dynbuf;
+    pub const dynbuf = os_leaf.Dynbuf;
 
     pub extern fn Curl_llist_init(l: *Curl_llist, dtor: ?Curl_llist_dtor) callconv(.c) void;
     pub extern fn Curl_llist_append(list: *Curl_llist, p: ?*const anyopaque, ne: *Curl_llist_node) callconv(.c) void;
@@ -47,7 +48,16 @@ const curlx_parse = struct {
     pub extern fn curlx_str_cspn(linep: *?[*:0]const u8, out: *Curl_str, reject: [*:0]const u8) callconv(.c) c_int;
     pub extern fn curlx_str_trimblanks(out: *Curl_str) callconv(.c) void;
     pub extern fn curlx_str_passblanks(linep: *?[*:0]const u8) callconv(.c) void;
+    pub const str_until_raw = @extern(*const fn (linep: *?[*]const u8, out: *Curl_str, max: usize, delim: u8) callconv(.c) c_int, .{ .name = "curlx_str_until" });
+    pub const str_number_raw = @extern(*const fn (linep: *?[*]const u8, nump: *i64, max: i64) callconv(.c) c_int, .{ .name = "curlx_str_number" });
 };
+
+const strnequal_raw = @extern(*const fn (s1: [*]const u8, s2: [*:0]const u8, n: usize) callconv(.c) c_int, .{ .name = "curl_strnequal" });
+
+inline fn callocWithTail(comptime T: type, total_bytes: usize) ?*T {
+    const raw = mem.callocSlice(u8, total_bytes) orelse return null;
+    return @ptrCast(@alignCast(raw.ptr));
+}
 const time_t = curlx_time_net.time_t;
 const TIME_T_MAX: time_t = std.math.maxInt(time_t);
 const CURL_OFF_T_MAX: i64 = std.math.maxInt(i64);
@@ -177,7 +187,6 @@ extern fn Curl_is_ipv4addr(address: [*:0]const u8) callconv(.c) bool;
 extern fn Curl_uc_to_curlcode(uc: urlapi.CURLUcode) callconv(.c) c_uint;
 extern fn Curl_get_scheme(scheme: [*:0]const u8) callconv(.c) ?*const CurlScheme;
 extern fn Curl_ssl_supports(data: ?*anyopaque, ssl_option: c_uint) callconv(.c) bool;
-extern fn curlx_memdup0(src: ?[*]const u8, length: usize) callconv(.c) ?[*:0]u8;
 
 extern const Curl_scheme_http: CurlScheme;
 extern const Curl_scheme_https: CurlScheme;
@@ -290,7 +299,7 @@ pub const CurlPeer = if (builtin.os.tag == .windows) extern struct {
     port: u16,
     _pad: u16 = 0,
     flags: u32,
-    user_hostname: [1]u8,
+    user_hostname: [0:0]u8,
 
     pub fn unixSocket(self: *const CurlPeer) bool {
         return (self.flags & 1) != 0;
@@ -318,7 +327,7 @@ pub const CurlPeer = if (builtin.os.tag == .windows) extern struct {
     scopeid: u32,
     port: u16,
     flags: u8,
-    user_hostname: [1]u8,
+    user_hostname: [0:0]u8,
 
     pub fn unixSocket(self: *const CurlPeer) bool {
         return (self.flags & 1) != 0;
@@ -356,13 +365,19 @@ const PeerParse = struct {
 };
 
 fn peerParseClear(pp: *PeerParse) void {
-    mem.free(pp.tmp_host_user);
-    mem.free(pp.tmp_host);
-    mem.free(pp.tmp_zoneid);
+    mem.freeTyped(pp.tmp_host_user);
+    mem.freeTyped(pp.tmp_host);
+    mem.freeTyped(pp.tmp_zoneid);
     pp.* = .{};
 }
 
 fn peerCreate(pp: *PeerParse, ppeer: *?*CurlPeer) c_uint {
+    return peerCreateErr(pp, ppeer) catch |err| switch (err) {
+        error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+    };
+}
+
+fn peerCreateErr(pp: *PeerParse, ppeer: *?*CurlPeer) error{OutOfMemory}!c_uint {
     const scheme = pp.scheme orelse return CURLE_FAILED_INIT;
     if (pp.host.len == 0 and (scheme.flags & PROTOPT_NONETWORK) == 0) {
         return CURLE_FAILED_INIT;
@@ -375,14 +390,14 @@ fn peerCreate(pp: *PeerParse, ppeer: *?*CurlPeer) c_uint {
     const zone_alen: usize = if (pp.zoneid.len != 0) pp.zoneid.len + 1 else 0;
 
     const total_size = @sizeOf(CurlPeer) + pp.host_user.len + host_alen + zone_alen;
-    const raw = mem.calloc(1, total_size) orelse return CURLE_OUT_OF_MEMORY;
-    const peer: *CurlPeer = @ptrCast(@alignCast(raw));
+    const peer = callocWithTail(CurlPeer, total_size) orelse return error.OutOfMemory;
+    errdefer mem.destroy(peer);
 
-    const user_host_base: [*]u8 = @ptrCast(&peer.user_hostname);
+    const user_host_base: [*:0]u8 = &peer.user_hostname;
 
     peer.refcount = 1;
     peer.scheme = scheme;
-    peer.hostname = @ptrCast(user_host_base);
+    peer.hostname = user_host_base;
     peer.port = pp.port;
     peer.scopeid = pp.scopeid;
     peer.setIpv6(pp.ipv6);
@@ -396,16 +411,16 @@ fn peerCreate(pp: *PeerParse, ppeer: *?*CurlPeer) c_uint {
     }
 
     if (host_alen != 0) {
-        const host_dst = user_host_base + pp.host_user.len + 1;
-        peer.hostname = @ptrCast(host_dst);
+        const host_dst: [*:0]u8 = user_host_base + pp.host_user.len + 1;
+        peer.hostname = host_dst;
         if (pp.host.str) |s| {
             @memcpy(host_dst[0..pp.host.len], s[0..pp.host.len]);
         }
     }
 
     if (zone_alen != 0) {
-        const zone_dst = user_host_base + pp.host_user.len + 1 + host_alen;
-        peer.zoneid = @ptrCast(zone_dst);
+        const zone_dst: [*:0]u8 = user_host_base + pp.host_user.len + 1 + host_alen;
+        peer.zoneid = zone_dst;
         if (pp.zoneid.str) |s| {
             @memcpy(zone_dst[0..pp.zoneid.len], s[0..pp.zoneid.len]);
         }
@@ -433,9 +448,9 @@ fn peerParseHost(data: ?*anyopaque, pp: *PeerParse, scan_for_ipv6: bool) c_uint 
     if (pp.host_user.len == 0) return CURLE_FAILED_INIT;
 
     if (hu_str[0] == '[') {
-        var s: ?[*:0]const u8 = @ptrCast(hu_str + 1);
+        var s: ?[*]const u8 = hu_str + 1;
         var tmp: Curl_str = .{ .str = null, .len = 0 };
-        if (curlx_parse.curlx_str_until(&s, &tmp, pp.host_user.len - 1, ']') != 0) {
+        if (curlx_parse.str_until_raw(&s, &tmp, pp.host_user.len - 1, ']') != 0) {
             return CURLE_URL_MALFORMAT;
         }
         const tmp_ptr = tmp.str orelse return CURLE_URL_MALFORMAT;
@@ -448,7 +463,7 @@ fn peerParseHost(data: ?*anyopaque, pp: *PeerParse, scan_for_ipv6: bool) c_uint 
         if (comptime (backend_options.idn != .none)) {
             if (!netrc_addr_idn.Curl_is_ASCII_str(&pp.host_user)) {
                 if (pp.tmp_host_user == null) {
-                    pp.tmp_host_user = curlx_memdup0(hu_str, pp.host_user.len);
+                    pp.tmp_host_user = mem.memdup0(hu_str, pp.host_user.len);
                     if (pp.tmp_host_user == null) return CURLE_OUT_OF_MEMORY;
                 }
                 const result = netrc_addr_idn.Curl_idn_decode(pp.tmp_host_user.?, &pp.tmp_host);
@@ -460,10 +475,10 @@ fn peerParseHost(data: ?*anyopaque, pp: *PeerParse, scan_for_ipv6: bool) c_uint 
         }
         if (scan_for_ipv6 and Curl_looks_like_ipv6(hu_str, pp.host_user.len, true, &pp.host, &pp.zoneid)) {
             if (pp.host_user.len < MAX_IPADR_LEN) {
-                var tmp: [MAX_IPADR_LEN]u8 = undefined;
+                var tmp: [MAX_IPADR_LEN:0]u8 = undefined;
                 @memcpy(tmp[0..pp.host_user.len], hu_str[0..pp.host_user.len]);
                 tmp[pp.host_user.len] = 0;
-                pp.ipv6 = !Curl_is_ipv4addr(@ptrCast(&tmp));
+                pp.ipv6 = !Curl_is_ipv4addr(&tmp);
             } else {
                 pp.ipv6 = true;
             }
@@ -538,7 +553,7 @@ pub export fn Curl_peer_unlink(ppeer: *?*CurlPeer) callconv(.c) void {
             peer.refcount -= 1;
         }
         if (peer.refcount == 0) {
-            mem.free(peer);
+            mem.destroy(peer);
         }
     }
 }
@@ -604,9 +619,9 @@ pub export fn Curl_peer_from_url(
     }
     defer {
         peerParseClear(&pp);
-        mem.free(scheme);
-        mem.free(hostname);
-        mem.free(zoneid);
+        mem.freeTyped(scheme);
+        mem.freeTyped(hostname);
+        mem.freeTyped(zoneid);
     }
 
     pp.scheme = if (scheme) |s| Curl_get_scheme(s) else null;
@@ -639,9 +654,9 @@ pub export fn Curl_peer_from_url(
     }
 
     if (port_override != 0) {
-        var portbuf: [16]u8 = undefined;
-        _ = curl_msnprintf(&portbuf, portbuf.len, "%d", @as(c_int, port_override));
-        uc = urlapi.curl_url_set(uh, .CURLUPART_PORT, @ptrCast(&portbuf), 0);
+        var portbuf: [15:0]u8 = undefined;
+        _ = curl_msnprintf(&portbuf, portbuf.len + 1, "%d", @as(c_int, port_override));
+        uc = urlapi.curl_url_set(uh, .CURLUPART_PORT, &portbuf, 0);
         if (uc != .CURLUE_OK) {
             return CURLE_OUT_OF_MEMORY;
         }
@@ -722,7 +737,7 @@ pub export fn Curl_peer_from_connect_to(
 
     if (pp.host_user.len == 0) {
         port_switch = true;
-        const uh_ptr: [*:0]const u8 = @ptrCast(&dest.user_hostname);
+        const uh_ptr: [*:0]const u8 = &dest.user_hostname;
         pp.host_user.str = uh_ptr;
         pp.host_user.len = std.mem.len(uh_ptr);
     }
@@ -807,7 +822,7 @@ pub export fn Curl_peer_from_proxy_url(
     Curl_peer_unlink(ppeer);
     defer {
         peerParseClear(&pp);
-        mem.free(scheme);
+        mem.freeTyped(scheme);
     }
 
     pp.port = CURL_DEFAULT_PROXY_PORT;
@@ -856,12 +871,12 @@ pub export fn Curl_peer_from_proxy_url(
     uc = urlapi.curl_url_get(uh, .CURLUPART_PORT, &portptr, urlapi.CURLU_NO_DEFAULT_PORT);
     if (uc == .CURLUE_OUT_OF_MEMORY) return CURLE_OUT_OF_MEMORY;
     if (portptr) |pptr| {
+        defer mem.freeTyped(pptr);
         var num: i64 = 0;
         var p: ?[*:0]const u8 = pptr;
         if (curlx_parse.curlx_str_number(&p, &num, std.math.maxInt(u16)) == 0) {
             pp.port = @intCast(num);
         }
-        mem.free(pptr);
     } else {
         if (default_proxyport != 0) {
             pp.port = default_proxyport;
@@ -928,6 +943,7 @@ pub const Altsvc = extern struct {
     expires: time_t,
     node: containers.Curl_llist_node,
     persist: u8,
+    hosts: [0:0]u8 = .{},
 };
 
 pub const Altsvcinfo = extern struct {
@@ -960,6 +976,19 @@ fn altsvcCreateId(
     srcport: usize,
     dstport: usize,
 ) ?*Altsvc {
+    return altsvcCreateIdErr(srchost_in, hlen_in, dsthost_in, dlen_in, srcalpnid, dstalpnid, srcport, dstport) catch null;
+}
+
+fn altsvcCreateIdErr(
+    srchost_in: [*]const u8,
+    hlen_in: usize,
+    dsthost_in: [*]const u8,
+    dlen_in: usize,
+    srcalpnid: c_uint,
+    dstalpnid: c_uint,
+    srcport: usize,
+    dstport: usize,
+) error{OutOfMemory}!?*Altsvc {
     var srchost = srchost_in;
     var hlen = hlen_in;
     var dsthost = dsthost_in;
@@ -978,17 +1007,17 @@ fn altsvcCreateId(
     if (hlen == 0 or dlen == 0) return null;
 
     const total = @sizeOf(Altsvc) + (hlen + 1) + (dlen + 1);
-    const raw = mem.calloc(1, total) orelse return null;
-    const as: *Altsvc = @ptrCast(@alignCast(raw));
-    const base: [*]u8 = @ptrCast(raw);
+    const as = callocWithTail(Altsvc, total) orelse return error.OutOfMemory;
+    errdefer mem.destroy(as);
+    const base: [*:0]u8 = &as.hosts;
 
-    const src_ptr = base + @sizeOf(Altsvc);
+    const src_ptr: [*:0]u8 = base;
     @memcpy(src_ptr[0..hlen], srchost[0..hlen]);
-    as.src.host = @ptrCast(src_ptr);
+    as.src.host = src_ptr;
 
-    const dst_ptr = base + @sizeOf(Altsvc) + hlen + 1;
+    const dst_ptr: [*:0]u8 = base + hlen + 1;
     @memcpy(dst_ptr[0..dlen], dsthost[0..dlen]);
-    as.dst.host = @ptrCast(dst_ptr);
+    as.dst.host = dst_ptr;
 
     as.src.alpnid = srcalpnid;
     as.dst.alpnid = dstalpnid;
@@ -1016,9 +1045,9 @@ fn altsvcCreate(
 fn altsvcAppend(asi: *Altsvcinfo, as: *Altsvc) void {
     while (containers.Curl_llist_count(&asi.list) >= MAX_ALTSVC_ENTRIES) {
         const e = containers.Curl_llist_head(&asi.list) orelse break;
-        const oldas = containers.Curl_node_elem(e);
+        const oldas = collections.llistElemTyped(Altsvc, e);
         containers.Curl_node_remove(e);
-        mem.free(oldas);
+        mem.destroy(oldas);
     }
     containers.Curl_llist_append(&asi.list, as, &as.node);
 }
@@ -1057,7 +1086,7 @@ fn altsvcAdd(asi: *Altsvcinfo, line_in: [*:0]const u8) c_uint {
         return CURLE_OK;
     }
 
-    var dbuf: [MAX_ALTSVC_DATELEN + 1]u8 = undefined;
+    var dbuf: [MAX_ALTSVC_DATELEN:0]u8 = undefined;
     var expires: time_t = 0;
     const now = altsvcNowTime();
 
@@ -1065,7 +1094,7 @@ fn altsvcAdd(asi: *Altsvcinfo, line_in: [*:0]const u8) c_uint {
         @memcpy(dbuf[0..date.len], ds[0..date.len]);
     }
     dbuf[date.len] = 0;
-    _ = Curl_getdate_capped(@ptrCast(&dbuf), &expires);
+    _ = Curl_getdate_capped(&dbuf, &expires);
 
     if (now < expires) {
         const as = altsvcCreate(&srchost, &dsthost, &srcalpn, &dstalpn, @intCast(srcport), @intCast(dstport)) orelse return CURLE_OUT_OF_MEMORY;
@@ -1126,8 +1155,8 @@ fn altsvcOut(as: *Altsvc, fp: ?*anyopaque) c_uint {
 }
 
 pub export fn Curl_altsvc_init() callconv(.c) ?*Altsvcinfo {
-    const raw = mem.calloc(1, @sizeOf(Altsvcinfo)) orelse return null;
-    const asi: *Altsvcinfo = @ptrCast(@alignCast(raw));
+    const asi = mem.create(Altsvcinfo) orelse return null;
+    errdefer mem.destroy(asi);
     containers.Curl_llist_init(&asi.list, null);
 
     var flags: c_long = CURLALTSVC_H1;
@@ -1142,7 +1171,7 @@ pub export fn Curl_altsvc_init() callconv(.c) ?*Altsvcinfo {
 pub export fn Curl_altsvc_load(asi: *Altsvcinfo, file: [*:0]const u8) callconv(.c) c_uint {
     var result: c_uint = CURLE_OK;
 
-    mem.free(asi.filename);
+    mem.freeTyped(asi.filename);
     asi.filename = mem.strdup(file);
     if (asi.filename == null) return CURLE_OUT_OF_MEMORY;
 
@@ -1150,11 +1179,11 @@ pub export fn Curl_altsvc_load(asi: *Altsvcinfo, file: [*:0]const u8) callconv(.
         if (isFpNotDir(fp)) {
             var eof = false;
             var buf: os_leaf.Dynbuf = undefined;
-            containers.curlx_dyn_init(@ptrCast(&buf), MAX_ALTSVC_LINE);
+            containers.curlx_dyn_init(&buf, MAX_ALTSVC_LINE);
             while (true) {
                 result = os_leaf.Curl_get_line(&buf, fp, &eof);
                 if (result == CURLE_OK) {
-                    var lineptr: ?[*:0]const u8 = containers.curlx_dyn_ptr(@ptrCast(&buf));
+                    var lineptr: ?[*:0]const u8 = containers.curlx_dyn_ptr(&buf);
                     curlx_parse.curlx_str_passblanks(&lineptr);
                     if (curlx_parse.curlx_str_single(&lineptr, '#') != 0) {
                         if (lineptr) |lp| {
@@ -1164,7 +1193,7 @@ pub export fn Curl_altsvc_load(asi: *Altsvcinfo, file: [*:0]const u8) callconv(.
                 }
                 if (result != CURLE_OK or eof) break;
             }
-            containers.curlx_dyn_free(@ptrCast(&buf));
+            containers.curlx_dyn_free(&buf);
         }
         _ = fclose(fp);
     }
@@ -1185,13 +1214,13 @@ pub export fn Curl_altsvc_cleanup(asip: *?*Altsvcinfo) callconv(.c) void {
     if (asip.*) |altsvc| {
         var e = containers.Curl_llist_head(&altsvc.list);
         while (e) |node| {
-            const as = containers.Curl_node_elem(node);
+            const as = collections.llistElemTyped(Altsvc, node);
             const n = containers.Curl_node_next(node);
-            mem.free(as);
+            mem.destroy(as);
             e = n;
         }
-        mem.free(altsvc.filename);
-        mem.free(altsvc);
+        mem.freeTyped(altsvc.filename);
+        mem.destroy(altsvc);
         asip.* = null;
     }
 }
@@ -1217,7 +1246,7 @@ pub export fn Curl_altsvc_save(data: ?*anyopaque, asi_opt: ?*Altsvcinfo, file_in
         );
         var e = containers.Curl_llist_head(&asi.list);
         while (e) |node| {
-            const as: *Altsvc = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+            const as = collections.llistElemTyped(Altsvc, node).?;
             const n = containers.Curl_node_next(node);
             result = altsvcOut(as, out);
             if (result != CURLE_OK) break;
@@ -1231,7 +1260,7 @@ pub export fn Curl_altsvc_save(data: ?*anyopaque, asi_opt: ?*Altsvcinfo, file_in
             _ = unlink(tempstore.?);
         }
     }
-    mem.free(tempstore);
+    mem.freeTyped(tempstore);
     return result;
 }
 
@@ -1248,7 +1277,7 @@ fn hostcompare(host: [*:0]const u8, check: [*:0]const u8) bool {
 fn altsvcFlush(asi: *Altsvcinfo, origin: *const CurlPeer, origin_alpnid: c_uint) void {
     var e = containers.Curl_llist_head(&asi.list);
     while (e) |node| {
-        const as: *Altsvc = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+        const as = collections.llistElemTyped(Altsvc, node).?;
         const n = containers.Curl_node_next(node);
         if (origin_alpnid == as.src.alpnid and
             origin.port == as.src.port and
@@ -1256,7 +1285,7 @@ fn altsvcFlush(asi: *Altsvcinfo, origin: *const CurlPeer, origin_alpnid: c_uint)
             hostcompare(origin.hostname, as.src.host.?))
         {
             containers.Curl_node_remove(node);
-            mem.free(as);
+            mem.destroy(as);
         }
         e = n;
     }
@@ -1295,9 +1324,9 @@ fn altsvcParseParams(pp: *?[*:0]const u8, pmaxage: *time_t, ppersist: *bool) voi
 
         if (keyword != 0) {
             if (val.str) |vs| {
-                var vp: ?[*:0]const u8 = @ptrCast(vs);
+                var vp: ?[*]const u8 = vs;
                 const vend: [*]const u8 = vs + val.len;
-                if (curlx_parse.curlx_str_number(&vp, &num, CURL_OFF_T_MAX) != 0) break;
+                if (curlx_parse.str_number_raw(&vp, &num, CURL_OFF_T_MAX) != 0) break;
                 if (vp == null or @intFromPtr(vp.?) != @intFromPtr(vend)) break;
                 if (keyword == 1) {
                     if (num > CAP_ALTSVC_MAX_AGE) num = CAP_ALTSVC_MAX_AGE;
@@ -1446,11 +1475,11 @@ pub export fn Curl_altsvc_lookup(
         const now = altsvcNowTime();
 
         while (e) |node| {
-            const as: *Altsvc = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+            const as = collections.llistElemTyped(Altsvc, node).?;
             const n = containers.Curl_node_next(node);
             if (as.expires < now) {
                 containers.Curl_node_remove(node);
-                mem.free(as);
+                mem.destroy(as);
                 e = n;
                 continue;
             }
@@ -1489,12 +1518,12 @@ pub const StsEntry = if (builtin.os.tag == .windows) extern struct {
     node: containers.Curl_llist_node,
     expires: i64,
     includeSubDomains: u32,
-    host: [1]u8,
+    host: [0:0]u8,
 } else extern struct {
     node: containers.Curl_llist_node,
     expires: i64,
     includeSubDomains: u8,
-    host: [1]u8,
+    host: [0:0]u8,
 };
 
 pub const Hsts = extern struct {
@@ -1504,15 +1533,15 @@ pub const Hsts = extern struct {
 };
 
 pub const CurlHstsEntry = if (builtin.os.tag == .windows) extern struct {
-    name: ?[*]u8,
+    name: ?[*:0]u8,
     namelen: usize,
     includeSubDomains: u32,
-    expire: [18]u8,
+    expire: [17:0]u8,
 } else extern struct {
-    name: ?[*]u8,
+    name: ?[*:0]u8,
     namelen: usize,
     includeSubDomains: u8,
-    expire: [18]u8,
+    expire: [17:0]u8,
 };
 
 pub const CurlIndex = extern struct {
@@ -1524,8 +1553,8 @@ pub const HstsReadCallback = *const fn (easy: ?*anyopaque, e: *CurlHstsEntry, us
 pub const HstsWriteCallback = *const fn (easy: ?*anyopaque, e: *CurlHstsEntry, i: *CurlIndex, userp: ?*anyopaque) callconv(.c) c_uint;
 
 pub export fn Curl_hsts_init() callconv(.c) ?*Hsts {
-    const raw = mem.calloc(1, @sizeOf(Hsts)) orelse return null;
-    const h: *Hsts = @ptrCast(@alignCast(raw));
+    const h = mem.create(Hsts) orelse return null;
+    errdefer mem.destroy(h);
     containers.Curl_llist_init(&h.list, null);
     return h;
 }
@@ -1534,13 +1563,13 @@ pub export fn Curl_hsts_cleanup(hp: *?*Hsts) callconv(.c) void {
     if (hp.*) |h| {
         var e = containers.Curl_llist_head(&h.list);
         while (e) |node| {
-            const sts = containers.Curl_node_elem(node);
+            const sts = collections.llistElemTyped(StsEntry, node);
             const n = containers.Curl_node_next(node);
-            mem.free(sts);
+            mem.destroy(sts);
             e = n;
         }
-        mem.free(h.filename);
-        mem.free(h);
+        mem.freeTyped(h.filename);
+        mem.destroy(h);
         hp.* = null;
     }
 }
@@ -1548,23 +1577,27 @@ pub export fn Curl_hsts_cleanup(hp: *?*Hsts) callconv(.c) void {
 fn hstsAppend(h: *Hsts, sts: *StsEntry) void {
     if (containers.Curl_llist_count(&h.list) == MAX_HSTS_ENTRIES) {
         if (containers.Curl_llist_head(&h.list)) |e| {
-            const oldsts = containers.Curl_node_elem(e);
+            const oldsts = collections.llistElemTyped(StsEntry, e);
             containers.Curl_node_remove(e);
-            mem.free(oldsts);
+            mem.destroy(oldsts);
         }
     }
     containers.Curl_llist_append(&h.list, sts, &sts.node);
 }
 
 fn hstsCreate(h: *Hsts, hostname: [*]const u8, hlen_in: usize, subdomains: bool, expires: i64) c_uint {
+    return hstsCreateErr(h, hostname, hlen_in, subdomains, expires) catch CURLE_OUT_OF_MEMORY;
+}
+
+fn hstsCreateErr(h: *Hsts, hostname: [*]const u8, hlen_in: usize, subdomains: bool, expires: i64) error{OutOfMemory}!c_uint {
     var hlen = hlen_in;
     if (hlen != 0 and hostname[hlen - 1] == '.') {
         hlen -= 1;
     }
     if (hlen != 0) {
-        const raw = mem.calloc(1, @sizeOf(StsEntry) + hlen) orelse return CURLE_OUT_OF_MEMORY;
-        const sts: *StsEntry = @ptrCast(@alignCast(raw));
-        const host_dst: [*]u8 = @ptrCast(&sts.host);
+        const sts = callocWithTail(StsEntry, @sizeOf(StsEntry) + hlen) orelse return error.OutOfMemory;
+        errdefer mem.destroy(sts);
+        const host_dst: [*]u8 = &sts.host;
         @memcpy(host_dst[0..hlen], hostname[0..hlen]);
         sts.expires = expires;
         sts.includeSubDomains = if (subdomains) 1 else 0;
@@ -1577,9 +1610,9 @@ pub export fn Curl_hsts_copy(dst: *Hsts, src: *Hsts) callconv(.c) c_uint {
     const now = hstsNowTime();
     var e = containers.Curl_llist_head(&src.list);
     while (e) |node| {
-        const sts: *StsEntry = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+        const sts = collections.llistElemTyped(StsEntry, node).?;
         if (sts.expires > now) {
-            const host_ptr: [*:0]const u8 = @ptrCast(&sts.host);
+            const host_ptr: [*:0]const u8 = &sts.host;
             const result = hstsCreate(dst, host_ptr, std.mem.len(host_ptr), (sts.includeSubDomains & 1) != 0, sts.expires);
             if (result != CURLE_OK) return result;
         }
@@ -1602,27 +1635,27 @@ pub export fn hsts_check(h_opt: ?*Hsts, hostname: [*]const u8, hlen_in: usize, s
 
     var e = containers.Curl_llist_head(&h.list);
     while (e) |node| {
-        const sts: *StsEntry = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+        const sts = collections.llistElemTyped(StsEntry, node).?;
         const n = containers.Curl_node_next(node);
         if (sts.expires <= now) {
             containers.Curl_node_remove(&sts.node);
-            mem.free(sts);
+            mem.destroy(sts);
             e = n;
             continue;
         }
-        const sts_host: [*:0]const u8 = @ptrCast(&sts.host);
+        const sts_host: [*:0]const u8 = &sts.host;
         const ntail = std.mem.len(sts_host);
         if (subdomain and (sts.includeSubDomains & 1) != 0 and ntail < hlen) {
             const offs = hlen - ntail;
             if (hostname[offs - 1] == '.' and
-                primitives.curl_strnequal(@ptrCast(hostname + offs), sts_host, ntail) != 0 and
+                strnequal_raw(hostname + offs, sts_host, ntail) != 0 and
                 ntail > blen)
             {
                 bestsub = sts;
                 blen = ntail;
             }
         }
-        if (hlen == ntail and primitives.curl_strnequal(@ptrCast(hostname), sts_host, hlen) != 0) {
+        if (hlen == ntail and strnequal_raw(hostname, sts_host, hlen) != 0) {
             return sts;
         }
         e = n;
@@ -1675,8 +1708,8 @@ pub export fn Curl_hsts_parse(h: *Hsts, hostname: [*:0]const u8, header: [*:0]co
 
         if (assign and curlx_parse.curlx_str_casecompare(&word, "max-age") != 0) {
             if (gotma) return CURLE_BAD_FUNCTION_ARGUMENT;
-            var vp: ?[*:0]const u8 = if (val.str) |vs| @ptrCast(vs) else null;
-            const rc = curlx_parse.curlx_str_number(&vp, &expires, CAP_HSTS_MAX_AGE);
+            var vp: ?[*]const u8 = val.str;
+            const rc = curlx_parse.str_number_raw(&vp, &expires, CAP_HSTS_MAX_AGE);
             if (rc == curlx_parse.STRE_OVERFLOW) {
                 expires = CAP_HSTS_MAX_AGE;
             } else if (rc != 0) {
@@ -1697,7 +1730,7 @@ pub export fn Curl_hsts_parse(h: *Hsts, hostname: [*:0]const u8, header: [*:0]co
     if (expires == 0) {
         if (hsts_check(h, hostname, hlen, false)) |sts| {
             containers.Curl_node_remove(&sts.node);
-            mem.free(sts);
+            mem.destroy(sts);
         }
         return CURLE_OK;
     }
@@ -1726,7 +1759,7 @@ fn hstsPush(
 ) c_uint {
     var e: CurlHstsEntry = std.mem.zeroes(CurlHstsEntry);
     var stamp: Tm = std.mem.zeroes(Tm);
-    const sts_host: [*:0]u8 = @ptrCast(&sts.host);
+    const sts_host: [*:0]u8 = &sts.host;
 
     e.name = sts_host;
     e.namelen = std.mem.len(sts_host);
@@ -1737,7 +1770,7 @@ fn hstsPush(
         if (result != CURLE_OK) return result;
         _ = curl_msnprintf(
             &e.expire,
-            e.expire.len,
+            e.expire.len + 1,
             "%d%02d%02d %02d:%02d:%02d",
             stamp.tm_year + 1900,
             stamp.tm_mon + 1,
@@ -1747,7 +1780,7 @@ fn hstsPush(
             stamp.tm_sec,
         );
     } else {
-        primitives.curlx_strcopy(&e.expire, e.expire.len, UNLIMITED, UNLIMITED.len);
+        primitives.curlx_strcopy(&e.expire, e.expire.len + 1, UNLIMITED, UNLIMITED.len);
     }
 
     const sc = hsts_write(data, &e, i, hsts_write_userp);
@@ -1757,7 +1790,7 @@ fn hstsPush(
 
 fn hstsOut(sts: *StsEntry, fp: ?*anyopaque) void {
     var stamp: Tm = std.mem.zeroes(Tm);
-    const sts_host: [*:0]const u8 = @ptrCast(&sts.host);
+    const sts_host: [*:0]const u8 = &sts.host;
     const dot_prefix: [*:0]const u8 = if ((sts.includeSubDomains & 1) != 0) "." else "";
 
     if (sts.expires != TIME_T_MAX) {
@@ -1807,7 +1840,7 @@ pub export fn Curl_hsts_save(
             );
             var e = containers.Curl_llist_head(&h.list);
             while (e) |node| {
-                const sts: *StsEntry = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+                const sts = collections.llistElemTyped(StsEntry, node).?;
                 const n = containers.Curl_node_next(node);
                 hstsOut(sts, out);
                 e = n;
@@ -1820,7 +1853,7 @@ pub export fn Curl_hsts_save(
                 _ = unlink(tempstore.?);
             }
         }
-        mem.free(tempstore);
+        mem.freeTyped(tempstore);
     }
 
     if (hsts_write_opt) |hsts_write| {
@@ -1830,7 +1863,7 @@ pub export fn Curl_hsts_save(
         };
         var e = containers.Curl_llist_head(&h.list);
         while (e) |node| {
-            const sts: *StsEntry = @ptrCast(@alignCast(containers.Curl_node_elem(node).?));
+            const sts = collections.llistElemTyped(StsEntry, node).?;
             var stop = false;
             const n = containers.Curl_node_next(node);
             result = hstsPush(data, &i, sts, &stop, hsts_write, hsts_write_userp);
@@ -1851,7 +1884,7 @@ fn hstsAddHostExpire(
     subdomain_in: bool,
 ) c_uint {
     var result: c_uint = CURLE_OK;
-    var dbuf: [MAX_HSTS_DATELEN + 1]u8 = undefined;
+    var dbuf: [MAX_HSTS_DATELEN:0]u8 = undefined;
     var expires: time_t = 0;
     const now = hstsNowTime();
     var host = host_in;
@@ -1865,7 +1898,7 @@ fn hstsAddHostExpire(
     if (std.mem.eql(u8, dbuf[0..explen], UNLIMITED)) {
         expires = TIME_T_MAX;
     } else {
-        _ = Curl_getdate_capped(@ptrCast(&dbuf), &expires);
+        _ = Curl_getdate_capped(&dbuf, &expires);
     }
 
     if (expires <= now) return CURLE_OK;
@@ -1885,8 +1918,8 @@ fn hstsAddHostExpire(
             result = hstsCreate(h, host, hostlen, subdomain, expires);
         } else {
             const entry = e.?;
-            const entry_host: [*:0]const u8 = @ptrCast(&entry.host);
-            if (hostlen == std.mem.len(entry_host) and primitives.curl_strnequal(@ptrCast(host), entry_host, hostlen) != 0) {
+            const entry_host: [*:0]const u8 = &entry.host;
+            if (hostlen == std.mem.len(entry_host) and strnequal_raw(host, entry_host, hostlen) != 0) {
                 if (expires > entry.expires) {
                     entry.expires = expires;
                 }
@@ -1920,10 +1953,10 @@ fn hstsAdd(h: *Hsts, line_in: [*:0]const u8) c_uint {
 fn hstsPull(data: ?*anyopaque, h: *Hsts, hsts_read_opt: ?HstsReadCallback, hsts_read_userp: ?*anyopaque) c_uint {
     if (hsts_read_opt) |hsts_read| {
         while (true) {
-            var buffer: [MAX_HSTS_HOSTLEN + 1]u8 = undefined;
+            var buffer: [MAX_HSTS_HOSTLEN:0]u8 = undefined;
             var e: CurlHstsEntry = std.mem.zeroes(CurlHstsEntry);
             e.name = &buffer;
-            e.namelen = buffer.len - 1;
+            e.namelen = MAX_HSTS_HOSTLEN;
             e.includeSubDomains = 0;
             e.expire[0] = 0;
             e.expire[MAX_HSTS_DATELEN] = 0;
@@ -1932,11 +1965,11 @@ fn hstsPull(data: ?*anyopaque, h: *Hsts, hsts_read_opt: ?HstsReadCallback, hsts_
 
             const sc = hsts_read(data, &e, hsts_read_userp);
             if (sc == CURLSTS_OK) {
-                const name_ptr: [*:0]const u8 = @ptrCast(e.name orelse return CURLE_BAD_FUNCTION_ARGUMENT);
+                const name_ptr: [*:0]const u8 = e.name orelse return CURLE_BAD_FUNCTION_ARGUMENT;
                 if (name_ptr[0] == 0 or e.expire[MAX_HSTS_DATELEN] != 0 or name_ptr[MAX_HSTS_HOSTLEN] != 0) {
                     return CURLE_BAD_FUNCTION_ARGUMENT;
                 }
-                const date: [*:0]const u8 = if (e.expire[0] != 0) @ptrCast(&e.expire) else UNLIMITED;
+                const date: [*:0]const u8 = if (e.expire[0] != 0) &e.expire else UNLIMITED;
                 const result = hstsAddHostExpire(
                     h,
                     name_ptr,
@@ -1960,7 +1993,7 @@ pub export fn Curl_hsts_loadfile(data: ?*anyopaque, h: *Hsts, file: [*:0]const u
     _ = data;
     var result: c_uint = CURLE_OK;
 
-    mem.free(h.filename);
+    mem.freeTyped(h.filename);
     h.filename = mem.strdup(file);
     if (h.filename == null) return CURLE_OUT_OF_MEMORY;
 
@@ -1968,11 +2001,11 @@ pub export fn Curl_hsts_loadfile(data: ?*anyopaque, h: *Hsts, file: [*:0]const u
         if (isFpNotDir(fp)) {
             var buf: os_leaf.Dynbuf = undefined;
             var eof = false;
-            containers.curlx_dyn_init(@ptrCast(&buf), MAX_HSTS_LINE);
+            containers.curlx_dyn_init(&buf, MAX_HSTS_LINE);
             while (true) {
                 result = os_leaf.Curl_get_line(&buf, fp, &eof);
                 if (result == CURLE_OK) {
-                    var lineptr: ?[*:0]const u8 = containers.curlx_dyn_ptr(@ptrCast(&buf));
+                    var lineptr: ?[*:0]const u8 = containers.curlx_dyn_ptr(&buf);
                     curlx_parse.curlx_str_passblanks(&lineptr);
                     if (lineptr) |lp| {
                         if (lp[0] != '#' and std.mem.len(lp) > 1) {
@@ -1982,7 +2015,7 @@ pub export fn Curl_hsts_loadfile(data: ?*anyopaque, h: *Hsts, file: [*:0]const u
                 }
                 if (result != CURLE_OK or eof) break;
             }
-            containers.curlx_dyn_free(@ptrCast(&buf));
+            containers.curlx_dyn_free(&buf);
         }
         _ = fclose(fp);
     }
@@ -2051,7 +2084,7 @@ pub const CurlCftype = extern struct {
 pub const CurlCfilter = if (builtin.os.tag == .windows) extern struct {
     cft: *const CurlCftype,
     next: ?*CurlCfilter,
-    ctx: ?*anyopaque,
+    ctx: ?*CfSetupCtx,
     conn: ?*anyopaque,
     sockindex: i8,
     _pad: [3]u8 = .{ 0, 0, 0 },
@@ -2066,7 +2099,7 @@ pub const CurlCfilter = if (builtin.os.tag == .windows) extern struct {
 } else extern struct {
     cft: *const CurlCftype,
     next: ?*CurlCfilter,
-    ctx: ?*anyopaque,
+    ctx: ?*CfSetupCtx,
     conn: ?*anyopaque,
     sockindex: i8,
     flags: u8,
@@ -2089,7 +2122,7 @@ extern fn Curl_cf_def_conn_is_alive(cf: *CurlCfilter, data: ?*anyopaque, input_p
 extern fn Curl_cf_def_conn_keep_alive(cf: *CurlCfilter, data: ?*anyopaque) callconv(.c) c_uint;
 extern fn Curl_cf_def_query(cf: *CurlCfilter, data: ?*anyopaque, query: c_int, pres1: ?*c_int, pres2: ?*anyopaque) callconv(.c) c_uint;
 
-extern fn Curl_cf_create(pcf: *?*CurlCfilter, cft: *const CurlCftype, ctx: ?*anyopaque) callconv(.c) c_uint;
+extern fn Curl_cf_create(pcf: *?*CurlCfilter, cft: *const CurlCftype, ctx: ?*CfSetupCtx) callconv(.c) c_uint;
 extern fn Curl_conn_cf_add(data: ?*anyopaque, conn: ?*anyopaque, sockindex: i8, cf: *CurlCfilter) callconv(.c) void;
 extern fn Curl_conn_cf_insert_after(cf_at: *CurlCfilter, cf_new: *CurlCfilter) callconv(.c) void;
 extern fn Curl_conn_cf_connect(cf: *CurlCfilter, data: ?*anyopaque, done: *bool) callconv(.c) c_uint;
@@ -2161,7 +2194,7 @@ const CfSetupState = enum(c_int) {
     done = 6,
 };
 
-const CfSetupCtx = struct {
+const CfSetupCtx = extern struct {
     state: CfSetupState,
     ssl_mode: c_int,
     transport: u8,
@@ -2176,7 +2209,7 @@ const CfSetupCtx = struct {
 };
 
 fn cfSetupAddHaproxy(cf: *CurlCfilter, data: ?*anyopaque) c_uint {
-    const ctx: *CfSetupCtx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctx.?;
     var result: c_uint = CURLE_OK;
 
     if (@backingInt(ctx.state) < @backingInt(CfSetupState.cnnct_haproxy)) {
@@ -2202,7 +2235,7 @@ fn cfSetupAddHaproxy(cf: *CurlCfilter, data: ?*anyopaque) c_uint {
 }
 
 fn cfSetupAddSocks(cf: *CurlCfilter, data: ?*anyopaque) c_uint {
-    const ctx: *CfSetupCtx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctx.?;
     var result: c_uint = CURLE_OK;
 
     if (@backingInt(ctx.state) < @backingInt(CfSetupState.cnnct_socks) and ctx.socks_peer != null) {
@@ -2235,7 +2268,7 @@ fn cfSetupAddSocks(cf: *CurlCfilter, data: ?*anyopaque) c_uint {
 }
 
 fn cfSetupAddHttpProxy(cf: *CurlCfilter, data: ?*anyopaque) c_uint {
-    const ctx: *CfSetupCtx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctx.?;
     var result: c_uint = CURLE_OK;
 
     if (@backingInt(ctx.state) < @backingInt(CfSetupState.cnnct_http_proxy) and
@@ -2282,7 +2315,7 @@ fn connGetFirstOrigin(ctx: *const CfSetupCtx, conn: ?*anyopaque, sockindex: i8) 
 }
 
 fn cfSetupAddIpHappy(cf: *CurlCfilter, data: ?*anyopaque) c_uint {
-    const ctx: *CfSetupCtx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctx.?;
     var result: c_uint = CURLE_OK;
 
     if (@backingInt(ctx.state) < @backingInt(CfSetupState.cnnct_eyeballs)) {
@@ -2333,7 +2366,7 @@ fn cfSetupAddIpHappy(cf: *CurlCfilter, data: ?*anyopaque) c_uint {
 }
 
 fn cfSetupAddOriginFilters(cf: *CurlCfilter, data: ?*anyopaque) c_uint {
-    const ctx: *CfSetupCtx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctx.?;
     var result: c_uint = CURLE_OK;
 
     if (@backingInt(ctx.state) < @backingInt(CfSetupState.cnnct_ssl)) {
@@ -2393,7 +2426,7 @@ fn cfSetupAddOriginFilters(cf: *CurlCfilter, data: ?*anyopaque) c_uint {
 }
 
 fn cfSetupConnectSteps(cf: *CurlCfilter, data: ?*anyopaque, done: *bool) c_uint {
-    const ctx: *CfSetupCtx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctx.?;
     var result: c_uint = CURLE_OK;
 
     if (cf.isConnected()) {
@@ -2441,7 +2474,7 @@ fn cfSetupConnectSteps(cf: *CurlCfilter, data: ?*anyopaque, done: *bool) c_uint 
 }
 
 fn cfSetupConnect(cf: *CurlCfilter, data: ?*anyopaque, done: *bool) callconv(.c) c_uint {
-    const ctx: *CfSetupCtx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = cf.ctx.?;
     while (true) {
         const result = cfSetupConnectSteps(cf, data, done);
         if (result == CURLE_AGAIN) {
@@ -2462,7 +2495,7 @@ fn cfSetupDestroy(cf: *CurlCfilter, data: ?*anyopaque) callconv(.c) void {
     if (Curl_trc_cf_is_verbose(cf, data)) {
         Curl_trc_cf_infof(data, cf, "destroy");
     }
-    mem.free(cf.ctx);
+    mem.destroy(cf.ctx);
     cf.ctx = null;
 }
 
@@ -2495,12 +2528,43 @@ fn cfSetupCreate(
     ip_version: u8,
     setup_flags: u8,
 ) c_uint {
-    var cf: ?*CurlCfilter = null;
-    const raw = mem.calloc(1, @sizeOf(CfSetupCtx)) orelse {
-        pcf.* = null;
-        return CURLE_OUT_OF_MEMORY;
+    return cfSetupCreateErr(
+        pcf,
+        transport,
+        ssl_mode,
+        socks_peer,
+        socks_creds,
+        http_peer,
+        socks_type,
+        http_type,
+        ip_version,
+        setup_flags,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => CURLE_OUT_OF_MEMORY,
     };
-    const ctx: *CfSetupCtx = @ptrCast(@alignCast(raw));
+}
+
+fn cfSetupCreateErr(
+    pcf: *?*CurlCfilter,
+    transport: u8,
+    ssl_mode: c_int,
+    socks_peer: ?*CurlPeer,
+    socks_creds: ?*anyopaque,
+    http_peer: ?*CurlPeer,
+    socks_type: u8,
+    http_type: u8,
+    ip_version: u8,
+    setup_flags: u8,
+) error{OutOfMemory}!c_uint {
+    var cf: ?*CurlCfilter = null;
+    const ctx = mem.create(CfSetupCtx) orelse {
+        pcf.* = null;
+        return error.OutOfMemory;
+    };
+    errdefer {
+        mem.destroy(ctx);
+        pcf.* = null;
+    }
     ctx.* = .{
         .state = .init,
         .ssl_mode = ssl_mode,
@@ -2517,7 +2581,7 @@ fn cfSetupCreate(
 
     const result = Curl_cf_create(&cf, &Curl_cft_setup, ctx);
     if (result != CURLE_OK) {
-        mem.free(ctx);
+        mem.destroy(ctx);
         pcf.* = null;
         return result;
     }
@@ -2633,12 +2697,11 @@ fn mntfyTypeFlag(t: u32) u32 {
 }
 
 fn mntfyChunkCreate() ?*MntfyChunk {
-    const raw = mem.calloc(1, @sizeOf(MntfyChunk)) orelse return null;
-    return @ptrCast(@alignCast(raw));
+    return mem.create(MntfyChunk);
 }
 
 fn mntfyChunkDestroy(chunk: ?*MntfyChunk) void {
-    mem.free(chunk);
+    mem.destroy(chunk);
 }
 
 fn mntfyChunkReset(chunk: *MntfyChunk) void {
