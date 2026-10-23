@@ -410,6 +410,7 @@ pub fn addLibtests(
             .optimize = optimize,
             .link_libc = true,
         }),
+        .use_llvm = true,
     });
 
     const os_tag = target.result.os.tag;

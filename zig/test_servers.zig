@@ -110,6 +110,7 @@ pub fn addCurlInfoExe(
     return b.addExecutable(.{
         .name = "curlinfo",
         .root_module = mod,
+        .use_llvm = true,
     });
 }
 
@@ -193,6 +194,7 @@ pub fn addServersExe(
     const exe = b.addExecutable(.{
         .name = "servers",
         .root_module = mod,
+        .use_llvm = true,
     });
     if (os_tag != .windows) {
         exe.pie = true;

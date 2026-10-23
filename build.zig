@@ -9,7 +9,13 @@ const test_conformance = @import("zig/test_conformance.zig");
 const test_pytest = @import("zig/test_pytest.zig");
 
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
+    var target_query = b.standardTargetOptionsQueryOnly(.{});
+    if ((target_query.cpu_arch orelse b.graph.host.result.cpu.arch) == .x86_64 and
+        !std.Target.x86.featureSetHas(target_query.cpu_features_add, .avx512f))
+    {
+        target_query.cpu_features_sub.addFeature(@backingInt(std.Target.x86.Feature.avx512f));
+    }
+    const target = b.resolveTargetQuery(target_query);
     if (b.graph.release_mode == .any) {
         b.graph.release_mode = .safe;
     }
