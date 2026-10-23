@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const mem = @import("mem.zig");
 
 pub const curl_off_t = i64;
 pub const timediff_t = i64;
@@ -272,17 +273,12 @@ extern fn getenv(name: [*:0]const u8) callconv(.c) ?[*:0]const u8;
 extern fn malloc(size: usize) callconv(.c) ?*anyopaque;
 extern fn free(ptr: ?*anyopaque) callconv(.c) void;
 
-fn curlx_free(p: ?*anyopaque) void {
-    free(p);
+fn curlx_free(p: anytype) void {
+    mem.free(p);
 }
 
 fn curlx_strdup(src: [*:0]const u8) ?[*:0]u8 {
-    const len = std.mem.len(src);
-    const total = std.math.add(usize, len, 1) catch return null;
-    const raw = malloc(total) orelse return null;
-    const dst: [*]u8 = @ptrCast(raw);
-    @memcpy(dst[0..total], src[0..total]);
-    return @ptrCast(dst);
+    return mem.strdup(src);
 }
 
 extern fn curl_getenv(name: [*:0]const u8) callconv(.c) ?[*:0]u8;
@@ -732,7 +728,7 @@ export fn tool_debug_cb(
     info_type: c_uint,
     data: [*]u8,
     size: usize,
-    userdata: ?*anyopaque,
+    userdata: ?*OperationConfig,
 ) callconv(.c) c_int {
     _ = userdata;
     const g = tool_zig_get_global();
@@ -958,8 +954,9 @@ fn write_linked_location(curl: ?*CURL, location: [*]const u8, loclen: usize, str
     _ = fwrite(location, loclen, 1, stream);
 }
 
-fn parse_filename(ptr: [*]const u8, len: usize, stop_in: u8) ?[*:0]u8 {
-    const copy = curlx_memdup0(ptr, len) orelse return null;
+fn parseFilenameInner(ptr: [*]const u8, len: usize, stop_in: u8) error{InvalidFilename}![*:0]u8 {
+    const copy = curlx_memdup0(ptr, len) orelse return error.InvalidFilename;
+    errdefer curlx_free(copy);
     var p: [*:0]u8 = copy;
     var stop = stop_in;
     if (stop != 0) {
@@ -981,18 +978,12 @@ fn parse_filename(ptr: [*]const u8, len: usize, stop_in: u8) ?[*:0]u8 {
 
     if (findLastCharMut(p, '/')) |q| {
         p = q + 1;
-        if (p[0] == 0) {
-            curlx_free(copy);
-            return null;
-        }
+        if (p[0] == 0) return error.InvalidFilename;
     }
 
     if (findLastCharMut(p, '\\')) |q| {
         p = q + 1;
-        if (p[0] == 0) {
-            curlx_free(copy);
-            return null;
-        }
+        if (p[0] == 0) return error.InvalidFilename;
     }
 
     if (findCharMut(p, '\r')) |q| {
@@ -1007,6 +998,11 @@ fn parse_filename(ptr: [*]const u8, len: usize, stop_in: u8) ?[*:0]u8 {
         std.mem.copyForwards(u8, copy[0 .. plen + 1], p[0 .. plen + 1]);
     }
 
+    return copy;
+}
+
+fn parse_filename(ptr: [*]const u8, len: usize, stop_in: u8) ?[*:0]u8 {
+    const copy = parseFilenameInner(ptr, len, stop_in) catch return null;
     return tool_zig_sanitize_filename(copy);
 }
 
@@ -1030,19 +1026,21 @@ export fn tool_write_headers(hdrcbdata: *HdrCbData, stream: ?*FILE) callconv(.c)
     return rc;
 }
 
-fn buffer_header(hdrcbdata: *HdrCbData, str: [*]const u8, cb: usize) usize {
+fn bufferHeaderInner(hdrcbdata: *HdrCbData, str: [*]const u8, cb: usize) error{OutOfMemory}!usize {
     const headlist = tool_zig_hdrcb_headlist(hdrcbdata);
-    if (curlx_memdup0(str, cb)) |clone| {
-        const entry = slist_wc_append(headlist, clone);
-        curlx_free(clone);
-        if (entry) |e| {
-            tool_zig_hdrcb_set_headlist(hdrcbdata, e);
-            return cb;
-        }
+    errdefer {
+        slist_wc_free_all(headlist);
+        tool_zig_hdrcb_set_headlist(hdrcbdata, null);
     }
-    slist_wc_free_all(headlist);
-    tool_zig_hdrcb_set_headlist(hdrcbdata, null);
-    return CURL_WRITEFUNC_ERROR;
+    const clone = curlx_memdup0(str, cb) orelse return error.OutOfMemory;
+    defer curlx_free(clone);
+    const entry = slist_wc_append(headlist, clone) orelse return error.OutOfMemory;
+    tool_zig_hdrcb_set_headlist(hdrcbdata, entry);
+    return cb;
+}
+
+fn buffer_header(hdrcbdata: *HdrCbData, str: [*]const u8, cb: usize) usize {
+    return bufferHeaderInner(hdrcbdata, str, cb) catch CURL_WRITEFUNC_ERROR;
 }
 
 fn save_etag(etag_h_in: [*]const u8, endp: [*]const u8, etag_save: *OutStruct) usize {
@@ -1074,11 +1072,10 @@ fn save_etag(etag_h_in: [*]const u8, endp: [*]const u8, etag_save: *OutStruct) u
     return 0;
 }
 
-fn set_filename(outs: *OutStruct, per: *per_transfer, filename: [*:0]u8) bool {
-    if (tool_zig_outs_stream(outs) != null) {
-        curlx_free(filename);
-        return false;
-    }
+fn setFilenameInner(outs: *OutStruct, per: *per_transfer, filename: [*:0]u8) error{SetFilenameFailed}!void {
+    errdefer curlx_free(filename);
+    if (tool_zig_outs_stream(outs) != null) return error.SetFilenameFailed;
+
     if (tool_zig_outs_alloc_filename(outs)) {
         curlx_free(tool_zig_outs_filename(outs));
         tool_zig_outs_set_filename(outs, null);
@@ -1086,16 +1083,19 @@ fn set_filename(outs: *OutStruct, per: *per_transfer, filename: [*:0]u8) bool {
 
     const config = tool_zig_per_config(per).?;
     if (tool_zig_config_output_dir(config)) |out_dir| {
-        const f = curl_maprintf("%s/%s", out_dir, filename);
+        const f = curl_maprintf("%s/%s", out_dir, filename) orelse return error.SetFilenameFailed;
+        defer curl_free(f);
         curlx_free(filename);
-        if (f == null) return false;
-        const dup = curlx_strdup(f.?);
-        curl_free(f);
+        const dup = curlx_strdup(f);
         tool_zig_outs_set_filename(outs, dup);
-        if (dup == null) return false;
+        if (dup == null) return error.SetFilenameFailed;
     } else {
         tool_zig_outs_set_filename(outs, filename);
     }
+}
+
+fn set_filename(outs: *OutStruct, per: *per_transfer, filename: [*:0]u8) bool {
+    setFilenameInner(outs, per, filename) catch return false;
     return true;
 }
 
@@ -1176,8 +1176,8 @@ fn content_disposition(
     return 0;
 }
 
-export fn tool_header_cb(ptr: [*]u8, size: usize, nmemb: usize, userdata: ?*anyopaque) callconv(.c) usize {
-    const per: *per_transfer = @ptrCast(@alignCast(userdata orelse return CURL_WRITEFUNC_ERROR));
+export fn tool_header_cb(ptr: [*]u8, size: usize, nmemb: usize, userdata: ?*per_transfer) callconv(.c) usize {
+    const per = userdata orelse return CURL_WRITEFUNC_ERROR;
     const config = tool_zig_per_config(per) orelse return CURL_WRITEFUNC_ERROR;
     const hdrcbdata = tool_zig_per_hdrcbdata(per);
     const outs = tool_zig_per_outs(per);
@@ -1352,7 +1352,7 @@ fn update_width(bar: *ProgressData) void {
 }
 
 export fn tool_progress_cb(
-    clientp: ?*anyopaque,
+    clientp: ?*per_transfer,
     dltotal: curl_off_t,
     dlnow: curl_off_t,
     ultotal: curl_off_t,
@@ -1360,7 +1360,7 @@ export fn tool_progress_cb(
 ) callconv(.c) c_int {
     var now: curltime = .{};
     curlx_pnow(&now);
-    const per: *per_transfer = @ptrCast(@alignCast(clientp orelse return 0));
+    const per = clientp orelse return 0;
     const config = tool_zig_per_config(per).?;
     const bar = tool_zig_per_progressbar(per);
 
@@ -1454,8 +1454,8 @@ export fn progressbarinit(bar: *ProgressData, config: ?*OperationConfig) callcon
 // 7. src/tool_cb_rea.c
 // ============================================================================
 
-export fn tool_read_cb(buffer: [*]u8, sz: usize, nmemb: usize, userdata: ?*anyopaque) callconv(.c) usize {
-    const per: *per_transfer = @ptrCast(@alignCast(userdata orelse return 0));
+export fn tool_read_cb(buffer: [*]u8, sz: usize, nmemb: usize, userdata: ?*per_transfer) callconv(.c) usize {
+    const per = userdata orelse return 0;
     const config = tool_zig_per_config(per) orelse return 0;
 
     const uploadfilesize = tool_zig_per_uploadfilesize(per);
@@ -1504,7 +1504,7 @@ export fn tool_read_cb(buffer: [*]u8, sz: usize, nmemb: usize, userdata: ?*anyop
 }
 
 export fn tool_readbusy_cb(
-    clientp: ?*anyopaque,
+    clientp: ?*per_transfer,
     dltotal: curl_off_t,
     dlnow: curl_off_t,
     ultotal: curl_off_t,
@@ -1513,7 +1513,7 @@ export fn tool_readbusy_cb(
     _ = dltotal;
     _ = dlnow;
     _ = ultotal;
-    const per: *per_transfer = @ptrCast(@alignCast(clientp orelse return 0));
+    const per = clientp orelse return 0;
     const config = tool_zig_per_config(per) orelse return 0;
     const ReadBusyState = struct {
         var ulprev: curl_off_t = 0;
@@ -1539,8 +1539,8 @@ export fn tool_readbusy_cb(
 // 8. src/tool_cb_see.c
 // ============================================================================
 
-export fn tool_seek_cb(userdata: ?*anyopaque, offset: curl_off_t, whence: c_int) callconv(.c) c_int {
-    const per: *per_transfer = @ptrCast(@alignCast(userdata orelse return CURL_SEEKFUNC_FAIL));
+export fn tool_seek_cb(userdata: ?*per_transfer, offset: curl_off_t, whence: c_int) callconv(.c) c_int {
+    const per = userdata orelse return CURL_SEEKFUNC_FAIL;
     return tool_zig_seek_fd(tool_zig_per_infd(per), offset, whence);
 }
 
@@ -1557,7 +1557,7 @@ const IPPROTO_MPTCP: c_int = 262;
 const CURL_SOCKET_BAD: curl_socket_t = if (builtin.os.tag == .windows) ~@as(curl_socket_t, 0) else -1;
 
 export fn tool_socket_open_mptcp_cb(
-    clientp: ?*anyopaque,
+    clientp: ?*OperationConfig,
     purpose: c_uint,
     addr: *curl_sockaddr,
 ) callconv(.c) curl_socket_t {
@@ -1575,7 +1575,7 @@ export fn tool_socket_open_mptcp_cb(
 }
 
 export fn tool_sockopt_cb(
-    clientp: ?*anyopaque,
+    clientp: ?*OperationConfig,
     curlfd: curl_socket_t,
     purpose: c_uint,
 ) callconv(.c) c_int {
@@ -1678,8 +1678,8 @@ export fn tool_create_output_file(outs: *OutStruct, config_opt: ?*OperationConfi
     return true;
 }
 
-export fn tool_write_cb(buffer: [*]u8, sz: usize, nmemb: usize, userdata: ?*anyopaque) callconv(.c) usize {
-    const per: *per_transfer = @ptrCast(@alignCast(userdata orelse return CURL_WRITEFUNC_ERROR));
+export fn tool_write_cb(buffer: [*]u8, sz: usize, nmemb: usize, userdata: ?*per_transfer) callconv(.c) usize {
+    const per = userdata orelse return CURL_WRITEFUNC_ERROR;
     const outs = tool_zig_per_outs(per);
     const config = tool_zig_per_config(per) orelse return CURL_WRITEFUNC_ERROR;
     const bytes = sz * nmemb;
@@ -1768,13 +1768,13 @@ export fn max5data(bytes_in: curl_off_t, max5: [*]u8, mlen: usize) callconv(.c) 
 }
 
 export fn xferinfo_cb(
-    clientp: ?*anyopaque,
+    clientp: ?*per_transfer,
     dltotal: curl_off_t,
     dlnow: curl_off_t,
     ultotal: curl_off_t,
     ulnow: curl_off_t,
 ) callconv(.c) c_int {
-    const per: *per_transfer = @ptrCast(@alignCast(clientp orelse return 0));
+    const per = clientp orelse return 0;
     const config = tool_zig_per_config(per).?;
     tool_zig_per_set_dltotal(per, dltotal);
     tool_zig_per_set_dlnow(per, dlnow);
