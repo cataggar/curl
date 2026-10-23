@@ -167,10 +167,10 @@ jobs:
       - name: Install conformance test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libssl-dev zlib1g-dev libzstd-dev libnghttp2-dev libbrotli-dev libpsl-dev libidn2-dev libssh2-1-dev openssh-server openssh-client libldap-dev libkrb5-dev pkg-config
+          sudo apt-get install -y --no-install-recommends libssl-dev zlib1g-dev libzstd-dev libnghttp2-dev libbrotli-dev libpsl-dev libidn2-dev libssh2-1-dev openssh-server openssh-client libldap-dev libkrb5-dev pkg-config valgrind
 
       - name: Run upstream conformance tests (${{ matrix.range }})
-        run: zig build test-conformance -Dtest-range="${{ matrix.range }}" -Dssl=openssl -Dzlib=true -Dzstd=true -Dnghttp2=true -Dbrotli=true -Dpsl=true -Didn=libidn2 -Dssh=libssh2 -Dldap=openldap -Dgssapi=true
+        run: zig build test-conformance -Dtest-range="${{ matrix.range }}" -Dvalgrind=true -Dtest-jobs=4 -Dssl=openssl -Dzlib=true -Dzstd=true -Dnghttp2=true -Dbrotli=true -Dpsl=true -Didn=libidn2 -Dssh=libssh2 -Dldap=openldap -Dgssapi=true
 
   pytest:
     name: HTTP Pytest (ubuntu-latest)
