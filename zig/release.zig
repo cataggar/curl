@@ -2096,25 +2096,17 @@ pub fn renderReleaseNotes(
 
     return std.fmt.allocPrint(
         allocator,
-        \\**Install:**
+        \\**Install with [ghr](https://cataggar.github.io/ghr/):**
         \\
         \\```console
         \\ghr install {s}@{s}
         \\```
-        \\
-        \\## Highlights
-        \\
-        \\- **Six-platform Zig-built `curl` CLI archives.** Publishes `linux-musl-x64`, `linux-musl-arm64`, `macos-x64`, `macos-arm64`, `windows-x64`, and `windows-arm64` archives (`curl-{s}-<platform>.tar.gz`) with GitHub build provenance attestations and zero SBOM or SPDX assets.
-        \\- **All 25 protocols and full feature set across all 6 platforms.** Supports `DICT, FILE, FTP, FTPS, GOPHER, GOPHERS, HTTP, HTTPS, IMAP, IMAPS, LDAP, LDAPS, MQTT, MQTTS, POP3, POP3S, RTSP, SCP, SFTP, SMTP, SMTPS, TELNET, TFTP, WS, WSS` and features `SSL, HSTS, HTTP2, HTTP3, HTTPS-proxy, HTTPSIG, HTTPSRR, AsynchDNS, asyn-rr, IDN, IPv6, Kerberos, Largefile, libz, brotli, zstd, PSL, SPNEGO, alt-svc, proxy-HTTP3, threadsafe, UnixSockets` (`GSS-API` on Linux/macOS, `AppleSecTrust` on macOS, `SSPI` and `Unicode` on Windows).
-        \\- **Native Windows OS integration on Windows x64 and Arm64.** Windows archives enable Schannel TLS (`-Dssl=schannel`), WinIDN (`-Didn=winidn`), WinLDAP (`-Dldap=winldap`), and Windows SSPI (`-Dsspi=true`) alongside bundled compression, HTTP/2, HTTP/3, SSH, PSL, and c-ares backends.
-        \\- **Zero external third-party shared library dependencies.** Linux musl binaries are statically linked; macOS binaries link only system `libSystem.B.dylib` and Apple `Security`/`CoreFoundation` frameworks.
         \\
         \\{s}
     ,
         .{
             repository_name,
             tag,
-            version,
             comparison_line,
         },
     ) catch return error.OutOfMemory;
@@ -3763,11 +3755,13 @@ test "end-to-end packaging, allowlist verification, and SBOM/sidecar rejection" 
         &diagnostic,
     );
     defer allocator.free(notes);
+    try std.testing.expect(std.mem.indexOf(u8, notes, "**Install with [ghr](https://cataggar.github.io/ghr/):**") != null);
     try std.testing.expect(std.mem.indexOf(u8, notes, "ghr install cataggar/curl@v8.23.0-zig.1") != null);
     try std.testing.expect(std.mem.indexOf(u8, notes, "Distribution Identity") == null);
+    try std.testing.expect(std.mem.indexOf(u8, notes, "## Highlights") == null);
     try std.testing.expect(std.mem.indexOf(u8, notes, "Platform Coverage & Runtime Requirements") == null);
     try std.testing.expect(std.mem.indexOf(u8, notes, "Known Limitations") == null);
-    try std.testing.expect(std.mem.indexOf(u8, notes, "curl-8.23.0-zig.1-<platform>.tar.gz") != null);
+    try std.testing.expect(std.mem.indexOf(u8, notes, "**Commits:** https://github.com/cataggar/curl/commits/v8.23.0-zig.1") != null);
 }
 
 test "Publisher.parseRelease and validateRemoteAssets enforce draft-first publication contract" {
