@@ -119,7 +119,7 @@ extern fn curlx_dyn_addf(s: *dynbuf, fmt: [*:0]const u8, ...) callconv(.c) CURLc
 extern fn curlx_dyn_ptr(s: *const dynbuf) callconv(.c) ?[*:0]u8;
 extern fn curlx_dyn_len(s: *const dynbuf) callconv(.c) usize;
 
-extern fn curlx_base64_encode(inputbuff: [*]const u8, insize: usize, outptr: *?[*]u8, outlen: *usize) callconv(.c) CURLcode;
+extern fn curlx_base64_encode(inputbuff: [*]const u8, insize: usize, outptr: *?[*:0]u8, outlen: *usize) callconv(.c) CURLcode;
 extern fn curl_strequal(first: ?[*:0]const u8, second: ?[*:0]const u8) callconv(.c) c_int;
 extern fn curlx_uztoui(uznum: usize) callconv(.c) c_uint;
 extern fn curlx_uztoul(uznum: usize) callconv(.c) c_ulong;
@@ -129,7 +129,7 @@ extern fn Curl_rand_hex(data: ?*anyopaque, rnd: [*]u8, num: usize) callconv(.c) 
 extern fn Curl_peer_unlink(peerp: *?*anyopaque) callconv(.c) void;
 extern fn Curl_creds_unlink(credsp: *?*Curl_creds) callconv(.c) void;
 extern fn Curl_bufref_set(br: *bufref, ptr: ?*const anyopaque, len: usize, dtor: ?*const fn (?*anyopaque) callconv(.c) void) callconv(.c) void;
-extern fn Curl_bufref_ptr(br: *const bufref) callconv(.c) ?[*]const u8;
+extern fn Curl_bufref_ptr(br: *const bufref) callconv(.c) ?[*:0]const u8;
 extern fn Curl_bufref_len(br: *const bufref) callconv(.c) usize;
 extern fn Curl_infof(data: ?*anyopaque, fmt: [*:0]const u8, ...) callconv(.c) void;
 extern fn Curl_failf(data: ?*anyopaque, fmt: [*:0]const u8, ...) callconv(.c) void;
@@ -143,14 +143,14 @@ inline fn isBlank(c: u8) bool {
 
 fn safeFreeStr(ptr: *?[*:0]u8) void {
     if (ptr.*) |p| {
-        mem.free(@ptrCast(p));
+        mem.freeTyped(p);
         ptr.* = null;
     }
 }
 
 fn safeFreeBytes(ptr: *?[*]u8) void {
     if (ptr.*) |p| {
-        mem.free(@ptrCast(p));
+        mem.freeTyped(p);
         ptr.* = null;
     }
 }
@@ -347,7 +347,7 @@ fn authDecodeDigestMd5Message(
     if (chlg_len == 0) {
         return CURLE_BAD_CONTENT_ENCODING;
     }
-    const chlg_ptr: [*:0]const u8 = @ptrCast(Curl_bufref_ptr(chlg) orelse return CURLE_BAD_CONTENT_ENCODING);
+    const chlg_ptr = Curl_bufref_ptr(chlg) orelse return CURLE_BAD_CONTENT_ENCODING;
 
     if (!authDigestGetKeyValue(chlg_ptr, "nonce=\"", nonce, nlen, '"')) {
         return CURLE_BAD_CONTENT_ENCODING;
@@ -372,6 +372,40 @@ pub fn isDigestSupportedRfc() callconv(.c) bool {
     return true;
 }
 
+fn formatDigestMd5Response(
+    user_str: [*:0]const u8,
+    realm_cstr: [*:0]const u8,
+    nonce_cstr: [*:0]const u8,
+    cnonce_cstr: [*:0]const u8,
+    nc: c_uint,
+    spn: [*:0]const u8,
+    resp_hash_cstr: [*:0]const u8,
+    qop: [*:0]const u8,
+) error{OutOfMemory}![*:0]u8 {
+    var uname: ?[*:0]u8 = authDigestStringQuoted(user_str) orelse return error.OutOfMemory;
+    defer safeFreeStr(&uname);
+    var rname: ?[*:0]u8 = authDigestStringQuoted(realm_cstr) orelse return error.OutOfMemory;
+    defer safeFreeStr(&rname);
+    var nname: ?[*:0]u8 = authDigestStringQuoted(nonce_cstr) orelse return error.OutOfMemory;
+    defer safeFreeStr(&nname);
+    var cname: ?[*:0]u8 = authDigestStringQuoted(cnonce_cstr) orelse return error.OutOfMemory;
+    defer safeFreeStr(&cname);
+    var suri: ?[*:0]u8 = authDigestStringQuoted(spn) orelse return error.OutOfMemory;
+    defer safeFreeStr(&suri);
+
+    return curl_maprintf(
+        "username=\"%s\",realm=\"%s\",nonce=\"%s\",cnonce=\"%s\",nc=\"%08x\",digest-uri=\"%s\",response=%s,qop=%s",
+        uname.?,
+        rname.?,
+        nname.?,
+        cname.?,
+        nc,
+        suri.?,
+        resp_hash_cstr,
+        qop,
+    ) orelse error.OutOfMemory;
+}
+
 pub fn createDigestMd5MessageHostRfc(
     data: ?*anyopaque,
     hostname: [*:0]const u8,
@@ -381,20 +415,20 @@ pub fn createDigestMd5MessageHostRfc(
     out: *bufref,
 ) callconv(.c) CURLcode {
     var digest: [16]u8 = undefined;
-    var HA1_hex: [33]u8 = undefined;
-    var HA2_hex: [33]u8 = undefined;
-    var resp_hash_hex: [33]u8 = undefined;
-    var nonce: [64]u8 = undefined;
-    var realm: [128]u8 = undefined;
-    var algorithm: [64]u8 = undefined;
-    var qop_options: [64]u8 = undefined;
+    var HA1_hex: [32:0]u8 = undefined;
+    var HA2_hex: [32:0]u8 = undefined;
+    var resp_hash_hex: [32:0]u8 = undefined;
+    var nonce: [63:0]u8 = undefined;
+    var realm: [127:0]u8 = undefined;
+    var algorithm: [63:0]u8 = undefined;
+    var qop_options: [63:0]u8 = undefined;
     var qop_values: c_int = 0;
-    var cnonce: [33]u8 = undefined;
+    var cnonce: [32:0]u8 = undefined;
     const nc: c_uint = 1;
     const method: [*:0]const u8 = "AUTHENTICATE";
     const qop: [*:0]const u8 = DIGEST_QOP_VALUE_STRING_AUTH;
 
-    var result = Curl_rand_hex(data, &cnonce, cnonce.len);
+    var result = Curl_rand_hex(data, &cnonce, cnonce.len + 1);
     if (result != CURLE_OK) {
         return result;
     }
@@ -402,24 +436,24 @@ pub fn createDigestMd5MessageHostRfc(
     result = authDecodeDigestMd5Message(
         chlg,
         &nonce,
-        nonce.len,
+        nonce.len + 1,
         &realm,
-        realm.len,
+        realm.len + 1,
         &algorithm,
-        algorithm.len,
+        algorithm.len + 1,
         &qop_options,
-        qop_options.len,
+        qop_options.len + 1,
     );
     if (result != CURLE_OK) {
         return result;
     }
 
-    const alg_cstr: [*:0]const u8 = @ptrCast(&algorithm);
+    const alg_cstr: [*:0]const u8 = &algorithm;
     if (!std.mem.eql(u8, std.mem.span(alg_cstr), "md5-sess")) {
         return CURLE_BAD_CONTENT_ENCODING;
     }
 
-    const qop_opt_cstr: [*:0]const u8 = @ptrCast(&qop_options);
+    const qop_opt_cstr: [*:0]const u8 = &qop_options;
     result = authDigestGetQopValues(qop_opt_cstr, &qop_values);
     if (result != CURLE_OK) {
         return result;
@@ -432,9 +466,9 @@ pub fn createDigestMd5MessageHostRfc(
     var ctxt = crypto.Curl_MD5_init(&crypto.Curl_DIGEST_MD5[0]) orelse return CURLE_OUT_OF_MEMORY;
     const user_str: [*:0]const u8 = creds.user orelse "";
     const passwd_str: [*:0]const u8 = creds.passwd orelse "";
-    const realm_cstr: [*:0]const u8 = @ptrCast(&realm);
-    const nonce_cstr: [*:0]const u8 = @ptrCast(&nonce);
-    const cnonce_cstr: [*:0]const u8 = @ptrCast(&cnonce);
+    const realm_cstr: [*:0]const u8 = &realm;
+    const nonce_cstr: [*:0]const u8 = &nonce;
+    const cnonce_cstr: [*:0]const u8 = &cnonce;
 
     _ = crypto.Curl_MD5_update(ctxt, user_str, curlx_uztoui(std.mem.len(user_str)));
     _ = crypto.Curl_MD5_update(ctxt, ":", 1);
@@ -457,11 +491,9 @@ pub fn createDigestMd5MessageHostRfc(
 
     const service: [*:0]const u8 = creds.sasl_service orelse default_service;
     const spn = FormatSpn(service, hostname, null) orelse return CURLE_OUT_OF_MEMORY;
+    defer mem.freeTyped(spn);
 
-    ctxt = crypto.Curl_MD5_init(&crypto.Curl_DIGEST_MD5[0]) orelse {
-        mem.free(@ptrCast(spn));
-        return CURLE_OUT_OF_MEMORY;
-    };
+    ctxt = crypto.Curl_MD5_init(&crypto.Curl_DIGEST_MD5[0]) orelse return CURLE_OUT_OF_MEMORY;
     _ = crypto.Curl_MD5_update(ctxt, method, curlx_uztoui(std.mem.len(method)));
     _ = crypto.Curl_MD5_update(ctxt, ":", 1);
     _ = crypto.Curl_MD5_update(ctxt, spn, curlx_uztoui(std.mem.len(spn)));
@@ -471,18 +503,15 @@ pub fn createDigestMd5MessageHostRfc(
         _ = curl_msnprintf(HA2_hex[2 * i ..].ptr, 3, "%02x", @as(c_uint, digest[i]));
     }
 
-    ctxt = crypto.Curl_MD5_init(&crypto.Curl_DIGEST_MD5[0]) orelse {
-        mem.free(@ptrCast(spn));
-        return CURLE_OUT_OF_MEMORY;
-    };
+    ctxt = crypto.Curl_MD5_init(&crypto.Curl_DIGEST_MD5[0]) orelse return CURLE_OUT_OF_MEMORY;
     _ = crypto.Curl_MD5_update(ctxt, &HA1_hex, 32);
     _ = crypto.Curl_MD5_update(ctxt, ":", 1);
     _ = crypto.Curl_MD5_update(ctxt, nonce_cstr, curlx_uztoui(std.mem.len(nonce_cstr)));
     _ = crypto.Curl_MD5_update(ctxt, ":", 1);
 
-    var nc_buf: [9]u8 = undefined;
-    _ = curl_msnprintf(&nc_buf, nc_buf.len, "%08x", nc);
-    const nc_cstr: [*:0]const u8 = @ptrCast(&nc_buf);
+    var nc_buf: [8:0]u8 = undefined;
+    _ = curl_msnprintf(&nc_buf, nc_buf.len + 1, "%08x", nc);
+    const nc_cstr: [*:0]const u8 = &nc_buf;
     _ = crypto.Curl_MD5_update(ctxt, nc_cstr, curlx_uztoui(std.mem.len(nc_cstr)));
     _ = crypto.Curl_MD5_update(ctxt, ":", 1);
     _ = crypto.Curl_MD5_update(ctxt, cnonce_cstr, curlx_uztoui(std.mem.len(cnonce_cstr)));
@@ -496,40 +525,21 @@ pub fn createDigestMd5MessageHostRfc(
         _ = curl_msnprintf(resp_hash_hex[2 * i ..].ptr, 3, "%02x", @as(c_uint, digest[i]));
     }
 
-    var uname: ?[*:0]u8 = authDigestStringQuoted(user_str);
-    var rname: ?[*:0]u8 = authDigestStringQuoted(realm_cstr);
-    var nname: ?[*:0]u8 = authDigestStringQuoted(nonce_cstr);
-    var cname: ?[*:0]u8 = authDigestStringQuoted(cnonce_cstr);
-    var suri: ?[*:0]u8 = authDigestStringQuoted(spn);
-    var response: ?[*:0]u8 = null;
+    const resp_ptr = formatDigestMd5Response(
+        user_str,
+        realm_cstr,
+        nonce_cstr,
+        cnonce_cstr,
+        nc,
+        spn,
+        &resp_hash_hex,
+        qop,
+    ) catch return CURLE_OUT_OF_MEMORY;
+    defer mem.freeTyped(resp_ptr);
 
-    if (uname != null and rname != null and nname != null and cname != null and suri != null) {
-        const resp_hash_cstr: [*:0]const u8 = @ptrCast(&resp_hash_hex);
-        response = curl_maprintf(
-            "username=\"%s\",realm=\"%s\",nonce=\"%s\",cnonce=\"%s\",nc=\"%08x\",digest-uri=\"%s\",response=%s,qop=%s",
-            uname.?,
-            rname.?,
-            nname.?,
-            cname.?,
-            nc,
-            suri.?,
-            resp_hash_cstr,
-            qop,
-        );
-    }
-
-    safeFreeStr(&uname);
-    safeFreeStr(&rname);
-    safeFreeStr(&nname);
-    safeFreeStr(&cname);
-    safeFreeStr(&suri);
-    mem.free(@ptrCast(spn));
-
-    const resp_ptr = response orelse return CURLE_OUT_OF_MEMORY;
-    var b64_ptr: ?[*]u8 = null;
+    var b64_ptr: ?[*:0]u8 = null;
     var b64_len: usize = 0;
     result = curlx_base64_encode(resp_ptr, std.mem.len(resp_ptr), &b64_ptr, &b64_len);
-    mem.free(@ptrCast(resp_ptr));
     if (result == CURLE_OK) {
         Curl_bufref_set(out, b64_ptr, b64_len, curl_free);
     }
@@ -542,12 +552,12 @@ pub fn decodeDigestHttpMessageRfc(chlg_in: [*:0]const u8, digest: *DigestDataRfc
     digestCleanupRfc(digest);
     var foundAuth = false;
     var foundAuthInt = false;
-    var content: [DIGEST_MAX_CONTENT_LENGTH]u8 = undefined;
+    var content: [DIGEST_MAX_CONTENT_LENGTH - 1:0]u8 = undefined;
 
     while (chlg[0] != 0) {
         var value = Curl_str{ .str = null, .len = 0 };
         if (Curl_auth_digest_get_pair(chlg, &value, &content, &chlg)) {
-            const content_cstr: [*:0]const u8 = @ptrCast(&content);
+            const content_cstr: [*:0]const u8 = &content;
             if (curlx_str_casecompare(&value, "nonce") != 0) {
                 safeFreeStr(&digest.nonce);
                 digest.nonce = mem.strdup(content_cstr) orelse return CURLE_OUT_OF_MEMORY;
@@ -657,11 +667,10 @@ fn authCreateDigestHttpMessage(
 ) CURLcode {
     var result: CURLcode = CURLE_OK;
     var hashbuf: [32]u8 = @splat(0);
-    var request_digest: [65]u8 = undefined;
-    var ha1: [65]u8 = undefined;
-    var ha2: [65]u8 = undefined;
-    var userh: [65]u8 = undefined;
-    var cnonce: ?[*:0]u8 = null;
+    var request_digest: [64:0]u8 = undefined;
+    var ha1: [64:0]u8 = undefined;
+    var ha2: [64:0]u8 = undefined;
+    var userh: [64:0]u8 = undefined;
     var cnonce_len: usize = 0;
 
     outlen.* = 0;
@@ -678,13 +687,10 @@ fn authCreateDigestHttpMessage(
             return result;
         }
 
-        var cnonce_raw: ?[*]u8 = null;
-        result = curlx_base64_encode(&cnoncebuf, cnoncebuf.len, &cnonce_raw, &cnonce_len);
+        result = curlx_base64_encode(&cnoncebuf, cnoncebuf.len, &digest.cnonce, &cnonce_len);
         if (result != CURLE_OK) {
             return result;
         }
-        cnonce = if (cnonce_raw) |p| @ptrCast(p) else null;
-        digest.cnonce = cnonce;
     }
 
     const userp: [*:0]const u8 = creds.user orelse "";
@@ -696,7 +702,7 @@ fn authCreateDigestHttpMessage(
     if (digest.isUserhash()) {
         const hashthis = curl_maprintf("%s:%s", userp, realm_str) orelse return CURLE_OUT_OF_MEMORY;
         result = hash(&hashbuf, hashthis, std.mem.len(hashthis));
-        mem.free(@ptrCast(hashthis));
+        mem.freeTyped(hashthis);
         if (result != CURLE_OK) {
             return result;
         }
@@ -706,17 +712,17 @@ fn authCreateDigestHttpMessage(
     {
         const hashthis = curl_maprintf("%s:%s:%s", userp, realm_str, passwdp) orelse return CURLE_OUT_OF_MEMORY;
         result = hash(&hashbuf, hashthis, std.mem.len(hashthis));
-        mem.free(@ptrCast(hashthis));
+        mem.freeTyped(hashthis);
         if (result != CURLE_OK) {
             return result;
         }
         convert_to_ascii(&hashbuf, &ha1);
 
         if ((digest.algo & SESSION_ALGO) != 0) {
-            const ha1_cstr: [*:0]const u8 = @ptrCast(&ha1);
+            const ha1_cstr: [*:0]const u8 = &ha1;
             const sess_str = curl_maprintf("%s:%s:%s", ha1_cstr, nonce_str, cnonce_str) orelse return CURLE_OUT_OF_MEMORY;
             result = hash(&hashbuf, sess_str, std.mem.len(sess_str));
-            mem.free(@ptrCast(sess_str));
+            mem.freeTyped(sess_str);
             if (result != CURLE_OK) {
                 return result;
             }
@@ -732,15 +738,15 @@ fn authCreateDigestHttpMessage(
 
         if (digest.qop) |qop_ptr| {
             if (curl_strequal(qop_ptr, "auth-int") != 0) {
-                var hashed: [65]u8 = undefined;
+                var hashed: [64:0]u8 = undefined;
                 const body_ptr: [*]const u8 = body orelse "";
                 result = hash(&hashbuf, body_ptr, blen);
                 if (result == CURLE_OK) {
                     convert_to_ascii(&hashbuf, &hashed);
-                    const hashed_cstr: [*:0]const u8 = @ptrCast(&hashed);
+                    const hashed_cstr: [*:0]const u8 = &hashed;
                     const prev = hashthis.?;
                     hashthis = curl_maprintf("%s:%s", prev, hashed_cstr);
-                    mem.free(@ptrCast(prev));
+                    mem.freeTyped(prev);
                 }
                 if (result != CURLE_OK) {
                     safeFreeStr(&hashthis);
@@ -751,7 +757,7 @@ fn authCreateDigestHttpMessage(
 
         const ht = hashthis orelse return CURLE_OUT_OF_MEMORY;
         result = hash(&hashbuf, ht, std.mem.len(ht));
-        mem.free(@ptrCast(ht));
+        mem.freeTyped(ht);
         if (result != CURLE_OK) {
             return result;
         }
@@ -759,8 +765,8 @@ fn authCreateDigestHttpMessage(
     }
 
     {
-        const ha1_cstr: [*:0]const u8 = @ptrCast(&ha1);
-        const ha2_cstr: [*:0]const u8 = @ptrCast(&ha2);
+        const ha1_cstr: [*:0]const u8 = &ha1;
+        const ha2_cstr: [*:0]const u8 = &ha2;
         var hashthis: ?[*:0]u8 = null;
         if (digest.qop) |qop_ptr| {
             hashthis = curl_maprintf(
@@ -777,7 +783,7 @@ fn authCreateDigestHttpMessage(
         }
         const ht = hashthis orelse return CURLE_OUT_OF_MEMORY;
         result = hash(&hashbuf, ht, std.mem.len(ht));
-        mem.free(@ptrCast(ht));
+        mem.freeTyped(ht);
         if (result != CURLE_OK) {
             return result;
         }
@@ -789,7 +795,7 @@ fn authCreateDigestHttpMessage(
     var response: dynbuf = .{};
     curlx_dyn_init(&response, 4096);
 
-    const user_to_quote: [*:0]const u8 = if (digest.isUserhash()) @ptrCast(&userh) else userp;
+    const user_to_quote: [*:0]const u8 = if (digest.isUserhash()) &userh else userp;
     var userp_quoted: ?[*:0]u8 = authDigestStringQuoted(user_to_quote);
     var realm_quoted: ?[*:0]u8 = authDigestStringQuoted(realm_str);
     var nonce_quoted: ?[*:0]u8 = authDigestStringQuoted(nonce_str);
@@ -834,7 +840,7 @@ fn authCreateDigestHttpMessage(
         }
     }
 
-    const req_digest_cstr: [*:0]const u8 = @ptrCast(&request_digest);
+    const req_digest_cstr: [*:0]const u8 = &request_digest;
     result = curlx_dyn_addf(&response, ", response=\"%s\"", req_digest_cstr);
     if (result != CURLE_OK) {
         return result;
@@ -997,7 +1003,7 @@ pub const TimeStamp = i64;
 pub const SecBuffer = extern struct {
     cbBuffer: c_ulong = 0,
     BufferType: c_ulong = 0,
-    pvBuffer: ?*anyopaque = null,
+    pvBuffer: ?[*]u8 = null,
 };
 
 pub const SecBufferDesc = extern struct {
@@ -1030,7 +1036,7 @@ pub const SEC_WINNT_AUTH_IDENTITY = extern struct {
 pub const DigestDataSspi = extern struct {
     creds: ?*Curl_creds = null,
     origin: ?*anyopaque = null,
-    input_token: ?[*]u8 = null,
+    input_token: ?[*:0]u8 = null,
     input_token_len: usize = 0,
     http_context: ?*CtxtHandle = null,
 };
@@ -1125,7 +1131,7 @@ fn createDigestMd5MessageHostSspi(
     out: *bufref,
 ) callconv(.c) CURLcode {
     var result: CURLcode = CURLE_OK;
-    var response: ?[*]u8 = null;
+    var response: ?[*:0]u8 = null;
     var rlen: usize = 0;
     var handle: CredHandle = .{};
     var context: CtxtHandle = .{};
@@ -1144,53 +1150,49 @@ fn createDigestMd5MessageHostSspi(
     }
 
     const spn = Curl_auth_build_spn(service, hostname, null) orelse return CURLE_OUT_OF_MEMORY;
+    defer mem.freeTyped(spn);
 
     const userp: [*:0]const u8 = creds.user orelse "";
     const passwdp: [*:0]const u8 = creds.passwd orelse "";
     if (userp[0] != 0) {
         result = Curl_create_sspi_identity(userp, passwdp, &identity);
         if (result != CURLE_OK) {
-            mem.free(@ptrCast(spn));
             return result;
         }
         p_identity = &identity;
     } else {
         p_identity = null;
     }
+    defer Curl_sspi_free_identity(p_identity);
 
-    const sec_fn = Curl_pSecFn orelse {
-        Curl_sspi_free_identity(p_identity);
-        mem.free(@ptrCast(spn));
-        return CURLE_AUTH_ERROR;
-    };
+    const sec_fn = Curl_pSecFn orelse return CURLE_AUTH_ERROR;
 
     var status = sec_fn.AcquireCredentialsHandleA(
         null,
         "WDigest",
         SECPKG_CRED_OUTBOUND,
         null,
-        @ptrCast(p_identity),
+        p_identity,
         null,
         null,
         &handle,
         &expiry,
     );
     if (status != SEC_E_OK) {
-        Curl_sspi_free_identity(p_identity);
-        mem.free(@ptrCast(spn));
         return CURLE_LOGIN_DENIED;
     }
+    defer _ = sec_fn.FreeCredentialsHandle(&handle);
 
     chlg_desc.ulVersion = SECBUFFER_VERSION;
     chlg_desc.cBuffers = 1;
-    chlg_desc.pBuffers = @ptrCast(&chlg_buf);
+    chlg_desc.pBuffers = (&chlg_buf)[0..1].ptr;
     chlg_buf.BufferType = SECBUFFER_TOKEN;
-    chlg_buf.pvBuffer = @ptrCast(@constCast(Curl_bufref_ptr(chlg)));
+    chlg_buf.pvBuffer = @constCast(Curl_bufref_ptr(chlg));
     chlg_buf.cbBuffer = curlx_uztoul(Curl_bufref_len(chlg));
 
     resp_desc.ulVersion = SECBUFFER_VERSION;
     resp_desc.cBuffers = 1;
-    resp_desc.pBuffers = @ptrCast(&resp_buf);
+    resp_desc.pBuffers = (&resp_buf)[0..1].ptr;
     resp_buf.BufferType = SECBUFFER_TOKEN;
     resp_buf.pvBuffer = null;
     resp_buf.cbBuffer = 0;
@@ -1214,11 +1216,7 @@ fn createDigestMd5MessageHostSspi(
         status = sec_fn.CompleteAuthToken(&context, &resp_desc);
     }
 
-    mem.free(@ptrCast(spn));
-
     if (status != SEC_E_OK and status != SEC_I_CONTINUE_NEEDED) {
-        _ = sec_fn.FreeCredentialsHandle(&handle);
-        Curl_sspi_free_identity(p_identity);
         if (status == SEC_E_INSUFFICIENT_MEMORY) {
             return CURLE_OUT_OF_MEMORY;
         }
@@ -1226,12 +1224,9 @@ fn createDigestMd5MessageHostSspi(
     }
 
     _ = sec_fn.DeleteSecurityContext(&context);
-    _ = sec_fn.FreeCredentialsHandle(&handle);
-    Curl_sspi_free_identity(p_identity);
 
     if (resp_buf.pvBuffer) |pv| {
-        const pv_bytes: [*]const u8 = @ptrCast(pv);
-        result = curlx_base64_encode(pv_bytes, resp_buf.cbBuffer, &response, &rlen);
+        result = curlx_base64_encode(pv, resp_buf.cbBuffer, &response, &rlen);
         if (result == CURLE_OK) {
             Curl_bufref_set(out, response, rlen, curl_free);
         }
@@ -1244,19 +1239,19 @@ fn createDigestMd5MessageHostSspi(
 fn overrideSspiHttpRealm(chlg_in: [*:0]const u8, identity: *SEC_WINNT_AUTH_IDENTITY) callconv(.c) CURLcode {
     var chlg = chlg_in;
     var value = Curl_str{ .str = null, .len = 0 };
-    var content: [DIGEST_MAX_CONTENT_LENGTH]u8 = undefined;
+    var content: [DIGEST_MAX_CONTENT_LENGTH - 1:0]u8 = undefined;
 
     if (identity.Domain == null or identity.DomainLength == 0) {
         while (chlg[0] != 0) {
             if (Curl_auth_digest_get_pair(chlg, &value, &content, &chlg)) {
                 if (curlx_str_casecompare(&value, "realm") != 0) {
                     if (identity.Domain) |dom| {
-                        mem.free(@ptrCast(dom));
+                        mem.freeTyped(dom);
                     }
-                    const content_cstr: [*:0]const u8 = @ptrCast(&content);
+                    const content_cstr: [*:0]const u8 = &content;
                     const tchar_ptr = mem.strdup(content_cstr) orelse return CURLE_OUT_OF_MEMORY;
                     identity.Domain = tchar_ptr;
-                    identity.DomainLength = curlx_uztoul(std.mem.len(@as([*:0]const u8, @ptrCast(tchar_ptr))));
+                    identity.DomainLength = curlx_uztoul(std.mem.len(tchar_ptr));
                     identity.Flags = 0x1; // SEC_WINNT_AUTH_IDENTITY_ANSI
                 }
             } else {
@@ -1284,14 +1279,14 @@ fn decodeDigestHttpMessageSspi(chlg: [*:0]const u8, digest: *DigestDataSspi) cal
     if (digest.input_token != null) {
         var stale = false;
         var value = Curl_str{ .str = null, .len = 0 };
-        var content: [DIGEST_MAX_CONTENT_LENGTH]u8 = undefined;
+        var content: [DIGEST_MAX_CONTENT_LENGTH - 1:0]u8 = undefined;
         var p = chlg;
 
         while (p[0] != 0) {
             if (!Curl_auth_digest_get_pair(p, &value, &content, &p)) {
                 break;
             }
-            const content_cstr: [*:0]const u8 = @ptrCast(&content);
+            const content_cstr: [*:0]const u8 = &content;
             if (curlx_str_casecompare(&value, "stale") != 0 and
                 curl_strequal(content_cstr, "true") != 0)
             {
@@ -1317,10 +1312,9 @@ fn decodeDigestHttpMessageSspi(chlg: [*:0]const u8, digest: *DigestDataSspi) cal
         }
     }
 
-    const tok = mem.malloc(chlg_len + 1) orelse return CURLE_OUT_OF_MEMORY;
-    const tok_bytes: [*]u8 = @ptrCast(tok);
+    const tok_bytes = mem.allocMany(u8, chlg_len + 1) orelse return CURLE_OUT_OF_MEMORY;
     @memcpy(tok_bytes[0 .. chlg_len + 1], chlg[0 .. chlg_len + 1]);
-    digest.input_token = tok_bytes;
+    digest.input_token = tok_bytes[0..chlg_len :0].ptr;
     digest.input_token_len = chlg_len;
 
     return CURLE_OK;
@@ -1366,57 +1360,44 @@ fn createDigestHttpMessageSspi(
     if (result != CURLE_OK) {
         return result;
     }
+    p_identity = &identity;
+    defer Curl_sspi_free_identity(p_identity);
 
     if (digest.input_token) |in_tok| {
-        if (overrideSspiHttpRealm(@ptrCast(in_tok), &identity) != CURLE_OK) {
-            Curl_sspi_free_identity(&identity);
+        if (overrideSspiHttpRealm(in_tok, &identity) != CURLE_OK) {
             return CURLE_OUT_OF_MEMORY;
         }
     }
 
-    p_identity = &identity;
+    var target_uri: ?[*:0]u8 = mem.strdup(uripath) orelse return CURLE_OUT_OF_MEMORY;
+    defer safeFreeStr(&target_uri);
+    var target_method: ?[*:0]u8 = mem.strdup(request) orelse return CURLE_OUT_OF_MEMORY;
+    defer safeFreeStr(&target_method);
 
-    const target_uri = mem.strdup(uripath) orelse {
-        Curl_sspi_free_identity(p_identity);
-        return CURLE_OUT_OF_MEMORY;
-    };
-    const target_method = mem.strdup(request) orelse {
-        mem.free(@ptrCast(target_uri));
-        Curl_sspi_free_identity(p_identity);
-        return CURLE_OUT_OF_MEMORY;
-    };
-
-    const sec_fn = Curl_pSecFn orelse {
-        mem.free(@ptrCast(target_method));
-        mem.free(@ptrCast(target_uri));
-        Curl_sspi_free_identity(p_identity);
-        return CURLE_AUTH_ERROR;
-    };
+    const sec_fn = Curl_pSecFn orelse return CURLE_AUTH_ERROR;
 
     var status = sec_fn.AcquireCredentialsHandleA(
         null,
         "WDigest",
         SECPKG_CRED_OUTBOUND,
         null,
-        @ptrCast(p_identity),
+        p_identity,
         null,
         null,
         &cred_handle,
         &expiry,
     );
     if (status != SEC_E_OK) {
-        mem.free(@ptrCast(target_method));
-        mem.free(@ptrCast(target_uri));
-        Curl_sspi_free_identity(p_identity);
         return CURLE_LOGIN_DENIED;
     }
+    defer _ = sec_fn.FreeCredentialsHandle(&cred_handle);
 
     chlg_desc.ulVersion = SECBUFFER_VERSION;
     chlg_desc.cBuffers = 5;
     chlg_desc.pBuffers = &chlg_buf;
     chlg_buf[0].BufferType = SECBUFFER_TOKEN;
     if (digest.input_token) |in_tok| {
-        chlg_buf[0].pvBuffer = @ptrCast(in_tok);
+        chlg_buf[0].pvBuffer = in_tok;
         chlg_buf[0].cbBuffer = curlx_uztoul(digest.input_token_len);
         has_input_token = true;
     } else {
@@ -1424,8 +1405,8 @@ fn createDigestHttpMessageSspi(
         chlg_buf[0].cbBuffer = 0;
     }
     chlg_buf[1].BufferType = SECBUFFER_PKG_PARAMS;
-    chlg_buf[1].pvBuffer = @ptrCast(target_method);
-    chlg_buf[1].cbBuffer = curlx_uztoul(std.mem.len(@as([*:0]const u8, @ptrCast(target_method))));
+    chlg_buf[1].pvBuffer = target_method.?;
+    chlg_buf[1].cbBuffer = curlx_uztoul(std.mem.len(target_method.?));
     chlg_buf[2].BufferType = SECBUFFER_PKG_PARAMS;
     chlg_buf[2].pvBuffer = null;
     chlg_buf[2].cbBuffer = 0;
@@ -1434,33 +1415,29 @@ fn createDigestHttpMessageSspi(
     chlg_buf[3].cbBuffer = 0;
     chlg_buf[4].BufferType = SECBUFFER_PADDING;
     if (body != null and blen > 0) {
-        var hashed: [33]u8 = undefined;
+        var hashed: [32:0]u8 = undefined;
         var hashbuf: [16]u8 = undefined;
         result = crypto.Curl_md5it(&hashbuf, body.?, blen);
         if (result == CURLE_OK) {
             authDigestMd5ToAscii(&hashbuf, &hashed);
-            const hashed_cstr: [*:0]const u8 = @ptrCast(&hashed);
-            chlg_buf[4].pvBuffer = @ptrCast(mem.strdup(hashed_cstr));
+            const hashed_cstr: [*:0]const u8 = &hashed;
+            chlg_buf[4].pvBuffer = mem.strdup(hashed_cstr);
             chlg_buf[4].cbBuffer = 32;
         }
     } else {
         chlg_buf[4].pvBuffer = null;
         chlg_buf[4].cbBuffer = 0;
     }
+    defer safeFreeBytes(&chlg_buf[4].pvBuffer);
 
     resp_desc.ulVersion = SECBUFFER_VERSION;
     resp_desc.cBuffers = 1;
-    resp_desc.pBuffers = @ptrCast(&resp_buf);
+    resp_desc.pBuffers = (&resp_buf)[0..1].ptr;
     resp_buf.BufferType = SECBUFFER_TOKEN;
 
     if (digest.http_context != null) {
-        status = sec_fn.QueryContextAttributesA(digest.http_context.?, SECPKG_ATTR_SIZES, @ptrCast(&sizes));
+        status = sec_fn.QueryContextAttributesA(digest.http_context.?, SECPKG_ATTR_SIZES, &sizes);
         if (status != SEC_E_OK) {
-            mem.free(@ptrCast(target_method));
-            mem.free(@ptrCast(target_uri));
-            mem.free(chlg_buf[4].pvBuffer);
-            _ = sec_fn.FreeCredentialsHandle(&cred_handle);
-            Curl_sspi_free_identity(p_identity);
             return CURLE_OUT_OF_MEMORY;
         }
         token_max = sizes.cbMaxToken;
@@ -1468,22 +1445,15 @@ fn createDigestHttpMessageSspi(
         token_max = 4096;
     }
 
-    resp_buf.pvBuffer = mem.malloc(token_max);
-    if (resp_buf.pvBuffer == null) {
-        mem.free(@ptrCast(target_method));
-        mem.free(@ptrCast(target_uri));
-        mem.free(chlg_buf[4].pvBuffer);
-        _ = sec_fn.FreeCredentialsHandle(&cred_handle);
-        Curl_sspi_free_identity(p_identity);
-        return CURLE_OUT_OF_MEMORY;
-    }
+    resp_buf.pvBuffer = mem.allocMany(u8, token_max) orelse return CURLE_OUT_OF_MEMORY;
+    defer safeFreeBytes(&resp_buf.pvBuffer);
     resp_buf.cbBuffer = curlx_uztoul(token_max);
 
     var output_context: CtxtHandle = .{};
     status = sec_fn.InitializeSecurityContextA(
         &cred_handle,
         digest.http_context,
-        @ptrCast(target_uri),
+        target_uri.?,
         ISC_REQ_USE_HTTP_STYLE | ISC_REQ_USE_SUPPLIED_CREDS,
         0,
         SECURITY_NATIVE_DREP,
@@ -1494,18 +1464,15 @@ fn createDigestHttpMessageSspi(
         &attrs,
         &expiry,
     );
-    mem.free(@ptrCast(target_method));
-    mem.free(@ptrCast(target_uri));
-    mem.free(chlg_buf[4].pvBuffer);
+    safeFreeStr(&target_method);
+    safeFreeStr(&target_uri);
+    safeFreeBytes(&chlg_buf[4].pvBuffer);
 
     if (status == SEC_I_COMPLETE_NEEDED or status == SEC_I_COMPLETE_AND_CONTINUE) {
         status = sec_fn.CompleteAuthToken(&cred_handle, &resp_desc);
     }
 
     if (status != SEC_E_OK and status != SEC_I_CONTINUE_NEEDED) {
-        _ = sec_fn.FreeCredentialsHandle(&cred_handle);
-        mem.free(resp_buf.pvBuffer);
-        Curl_sspi_free_identity(p_identity);
         digestCleanupSspi(digest);
         if (status == SEC_E_INSUFFICIENT_MEMORY) {
             return CURLE_OUT_OF_MEMORY;
@@ -1514,39 +1481,26 @@ fn createDigestHttpMessageSspi(
     }
 
     const out_len: usize = resp_buf.cbBuffer;
-    const out_alloc = mem.malloc(out_len + 1) orelse {
-        _ = sec_fn.FreeCredentialsHandle(&cred_handle);
-        mem.free(resp_buf.pvBuffer);
-        Curl_sspi_free_identity(p_identity);
-        return CURLE_OUT_OF_MEMORY;
-    };
-    const out_bytes: [*]u8 = @ptrCast(out_alloc);
+    const out_bytes = mem.allocMany(u8, out_len + 1) orelse return CURLE_OUT_OF_MEMORY;
     if (resp_buf.pvBuffer) |pv| {
-        const pv_bytes: [*]const u8 = @ptrCast(pv);
-        @memcpy(out_bytes[0..out_len], pv_bytes[0..out_len]);
+        @memcpy(out_bytes[0..out_len], pv[0..out_len]);
     }
     out_bytes[out_len] = 0;
-    outptr.* = @ptrCast(out_bytes);
+    outptr.* = out_bytes[0..out_len :0].ptr;
     outlen.* = out_len;
 
-    mem.free(resp_buf.pvBuffer);
+    safeFreeBytes(&resp_buf.pvBuffer);
 
     if (digest.http_context == null) {
-        const ctx_mem = mem.calloc(1, @sizeOf(CtxtHandle)) orelse {
+        digest.http_context = mem.create(CtxtHandle) orelse {
             _ = sec_fn.DeleteSecurityContext(&output_context);
-            _ = sec_fn.FreeCredentialsHandle(&cred_handle);
-            Curl_sspi_free_identity(p_identity);
             return CURLE_OUT_OF_MEMORY;
         };
-        digest.http_context = @ptrCast(@alignCast(ctx_mem));
     }
     digest.http_context.?.* = output_context;
 
-    _ = sec_fn.FreeCredentialsHandle(&cred_handle);
-    Curl_sspi_free_identity(p_identity);
-
     if (has_input_token) {
-        safeFreeBytes(&digest.input_token);
+        safeFreeStr(&digest.input_token);
         digest.input_token_len = 0;
     }
 
@@ -1554,14 +1508,14 @@ fn createDigestHttpMessageSspi(
 }
 
 fn digestCleanupSspi(digest: *DigestDataSspi) callconv(.c) void {
-    safeFreeBytes(&digest.input_token);
+    safeFreeStr(&digest.input_token);
     digest.input_token_len = 0;
 
     if (digest.http_context) |ctx| {
         if (Curl_pSecFn) |sec_fn| {
             _ = sec_fn.DeleteSecurityContext(ctx);
         }
-        mem.free(@ptrCast(ctx));
+        mem.destroy(ctx);
         digest.http_context = null;
     }
 
@@ -1715,10 +1669,27 @@ fn scrubAndFreeSecBuffer(buf: *SecBuffer) void {
         if (buf.cbBuffer > 0) {
             mem.secureZero(ptr, @intCast(buf.cbBuffer));
         }
-        mem.free(ptr);
+        mem.freeTyped(ptr);
         buf.pvBuffer = null;
         buf.cbBuffer = 0;
     }
+}
+
+fn allocSocks5WrapBuffers(wrap_sec_buf: *[3]SecBuffer, sizes: SecPkgContext_Sizes, gss_enc: u8) error{OutOfMemory}!void {
+    wrap_sec_buf[0].cbBuffer = sizes.cbSecurityTrailer;
+    wrap_sec_buf[0].BufferType = SECBUFFER_TOKEN;
+    wrap_sec_buf[0].pvBuffer = mem.allocMany(u8, sizes.cbSecurityTrailer) orelse return error.OutOfMemory;
+    errdefer scrubAndFreeSecBuffer(&wrap_sec_buf[0]);
+
+    wrap_sec_buf[1].cbBuffer = 1;
+    wrap_sec_buf[1].BufferType = SECBUFFER_DATA;
+    wrap_sec_buf[1].pvBuffer = mem.allocMany(u8, 1) orelse return error.OutOfMemory;
+    errdefer scrubAndFreeSecBuffer(&wrap_sec_buf[1]);
+    wrap_sec_buf[1].pvBuffer.?[0] = gss_enc;
+
+    wrap_sec_buf[2].cbBuffer = sizes.cbBlockSize;
+    wrap_sec_buf[2].BufferType = SECBUFFER_PADDING;
+    wrap_sec_buf[2].pvBuffer = mem.allocMany(u8, sizes.cbBlockSize) orelse return error.OutOfMemory;
 }
 
 fn socks5GssapiNegotiateSspi(
@@ -1761,10 +1732,11 @@ fn socks5GssapiNegotiateSspi(
     const sec_fn = Curl_pSecFn orelse return CURLE_COULDNT_CONNECT;
 
     const proxy_hostname: [*:0]const u8 = proxy_hostname_opt orelse "";
-    const service_Principal: [*:0]u8 = if (std.mem.indexOfScalar(u8, std.mem.span(service), '/') != null)
+    var service_Principal: ?[*:0]u8 = if (std.mem.indexOfScalar(u8, std.mem.span(service), '/') != null)
         (curl_maprintf("%s", service) orelse return CURLE_OUT_OF_MEMORY)
     else
         (Curl_auth_build_spn(service, proxy_hostname, null) orelse return CURLE_OUT_OF_MEMORY);
+    defer safeFreeStr(&service_Principal);
 
     @memset(std.mem.asBytes(&cred_handle), 0);
     @memset(std.mem.asBytes(&sspi_context), 0);
@@ -1782,7 +1754,6 @@ fn socks5GssapiNegotiateSspi(
     );
     if (checkSspiErr(data, status, "AcquireCredentialsHandle")) {
         Curl_failf(data, "Failed to acquire credentials.");
-        mem.free(@ptrCast(service_Principal));
         _ = sec_fn.FreeCredentialsHandle(&cred_handle);
         return CURLE_COULDNT_CONNECT;
     }
@@ -1793,7 +1764,7 @@ fn socks5GssapiNegotiateSspi(
     while (true) {
         outbuf_desc.ulVersion = SECBUFFER_VERSION;
         outbuf_desc.cBuffers = 1;
-        outbuf_desc.pBuffers = @ptrCast(&out_sec_buf);
+        outbuf_desc.pBuffers = (&out_sec_buf)[0..1].ptr;
         out_sec_buf.BufferType = SECBUFFER_TOKEN;
         out_sec_buf.pvBuffer = null;
         out_sec_buf.cbBuffer = 0;
@@ -1808,7 +1779,7 @@ fn socks5GssapiNegotiateSspi(
         status = sec_fn.InitializeSecurityContextA(
             &cred_handle,
             p_context,
-            service_Principal,
+            service_Principal.?,
             req_flags,
             0,
             SECURITY_NATIVE_DREP,
@@ -1826,7 +1797,6 @@ fn socks5GssapiNegotiateSspi(
 
         if (checkSspiErr(data, status, "InitializeSecurityContext")) {
             Curl_failf(data, "Failed to initialise security context.");
-            mem.free(@ptrCast(service_Principal));
             _ = sec_fn.DeleteSecurityContext(&sspi_context);
             _ = sec_fn.FreeCredentialsHandle(&cred_handle);
             if (out_sec_buf.pvBuffer) |p| {
@@ -1839,7 +1809,6 @@ fn socks5GssapiNegotiateSspi(
         if (out_sec_buf.cbBuffer != 0) {
             us_length = socks5EncodeTokenHeader(&sspi_recv_token, 1, @intCast(out_sec_buf.cbBuffer)) orelse {
                 Curl_failf(data, "Failed to send SSPI authentication token.");
-                mem.free(@ptrCast(service_Principal));
                 if (out_sec_buf.pvBuffer) |p| {
                     if (out_sec_buf.cbBuffer > 0) mem.secureZero(p, @intCast(out_sec_buf.cbBuffer));
                     _ = sec_fn.FreeContextBuffer(p);
@@ -1850,18 +1819,19 @@ fn socks5GssapiNegotiateSspi(
             };
 
             code = socks5SspiSend(cf_next, data, sock, &sspi_recv_token, 4);
-            if (code == CURLE_OK and out_sec_buf.pvBuffer != null) {
-                code = socks5SspiSend(
-                    cf_next,
-                    data,
-                    sock,
-                    @ptrCast(out_sec_buf.pvBuffer),
-                    out_sec_buf.cbBuffer,
-                );
+            if (code == CURLE_OK) {
+                if (out_sec_buf.pvBuffer) |pv| {
+                    code = socks5SspiSend(
+                        cf_next,
+                        data,
+                        sock,
+                        pv,
+                        out_sec_buf.cbBuffer,
+                    );
+                }
             }
             if (code != CURLE_OK) {
                 Curl_failf(data, "Failed to send SSPI authentication token.");
-                mem.free(@ptrCast(service_Principal));
                 if (out_sec_buf.pvBuffer) |p| {
                     if (out_sec_buf.cbBuffer > 0) mem.secureZero(p, @intCast(out_sec_buf.cbBuffer));
                     _ = sec_fn.FreeContextBuffer(p);
@@ -1886,7 +1856,6 @@ fn socks5GssapiNegotiateSspi(
         code = socks5SspiRecv(cf_next, data, sock, &sspi_recv_token, 4);
         if (code != CURLE_OK) {
             Curl_failf(data, "Failed to receive SSPI authentication response.");
-            mem.free(@ptrCast(service_Principal));
             _ = sec_fn.DeleteSecurityContext(&sspi_context);
             _ = sec_fn.FreeCredentialsHandle(&cred_handle);
             return CURLE_COULDNT_CONNECT;
@@ -1894,7 +1863,6 @@ fn socks5GssapiNegotiateSspi(
 
         if (sspi_recv_token[0] != 1) {
             Curl_failf(data, "Received invalid version in initial SOCKS5 response.");
-            mem.free(@ptrCast(service_Principal));
             _ = sec_fn.DeleteSecurityContext(&sspi_context);
             _ = sec_fn.FreeCredentialsHandle(&cred_handle);
             return CURLE_COULDNT_CONNECT;
@@ -1902,7 +1870,6 @@ fn socks5GssapiNegotiateSspi(
 
         if (sspi_recv_token[1] == 255) {
             Curl_failf(data, "User was rejected by the SOCKS5 server (%u %u).", @as(c_uint, sspi_recv_token[0]), @as(c_uint, sspi_recv_token[1]));
-            mem.free(@ptrCast(service_Principal));
             _ = sec_fn.DeleteSecurityContext(&sspi_context);
             _ = sec_fn.FreeCredentialsHandle(&cred_handle);
             return CURLE_COULDNT_CONNECT;
@@ -1910,7 +1877,6 @@ fn socks5GssapiNegotiateSspi(
 
         if (sspi_recv_token[1] != 1) {
             Curl_failf(data, "Invalid SSPI authentication response type (%u %u).", @as(c_uint, sspi_recv_token[0]), @as(c_uint, sspi_recv_token[1]));
-            mem.free(@ptrCast(service_Principal));
             _ = sec_fn.DeleteSecurityContext(&sspi_context);
             _ = sec_fn.FreeCredentialsHandle(&cred_handle);
             return CURLE_COULDNT_CONNECT;
@@ -1918,29 +1884,25 @@ fn socks5GssapiNegotiateSspi(
 
         us_length = socks5DecodeTokenLength(sspi_recv_token[0..4]) orelse {
             Curl_failf(data, "Invalid zero-length SSPI authentication token.");
-            mem.free(@ptrCast(service_Principal));
             _ = sec_fn.DeleteSecurityContext(&sspi_context);
             _ = sec_fn.FreeCredentialsHandle(&cred_handle);
             return CURLE_COULDNT_CONNECT;
         };
 
         inbuf_desc.cBuffers = 1;
-        inbuf_desc.pBuffers = @ptrCast(&in_sec_buf);
+        inbuf_desc.pBuffers = (&in_sec_buf)[0..1].ptr;
         inbuf_desc.ulVersion = SECBUFFER_VERSION;
         in_sec_buf.BufferType = SECBUFFER_TOKEN;
         in_sec_buf.cbBuffer = us_length;
-        in_sec_buf.pvBuffer = mem.malloc(in_sec_buf.cbBuffer);
-        if (in_sec_buf.pvBuffer == null) {
-            mem.free(@ptrCast(service_Principal));
+        in_sec_buf.pvBuffer = mem.allocMany(u8, in_sec_buf.cbBuffer) orelse {
             _ = sec_fn.DeleteSecurityContext(&sspi_context);
             _ = sec_fn.FreeCredentialsHandle(&cred_handle);
             return CURLE_OUT_OF_MEMORY;
-        }
+        };
 
-        code = socks5SspiRecv(cf_next, data, sock, @ptrCast(in_sec_buf.pvBuffer), in_sec_buf.cbBuffer);
+        code = socks5SspiRecv(cf_next, data, sock, in_sec_buf.pvBuffer.?, in_sec_buf.cbBuffer);
         if (code != CURLE_OK) {
             Curl_failf(data, "Failed to receive SSPI authentication token.");
-            mem.free(@ptrCast(service_Principal));
             scrubAndFreeSecBuffer(&in_sec_buf);
             _ = sec_fn.DeleteSecurityContext(&sspi_context);
             _ = sec_fn.FreeCredentialsHandle(&cred_handle);
@@ -1949,18 +1911,18 @@ fn socks5GssapiNegotiateSspi(
         p_context = &sspi_context;
     }
 
-    mem.free(@ptrCast(service_Principal));
+    safeFreeStr(&service_Principal);
 
-    status = sec_fn.QueryContextAttributesA(&sspi_context, SECPKG_ATTR_NAMES, @ptrCast(&names));
+    status = sec_fn.QueryContextAttributesA(&sspi_context, SECPKG_ATTR_NAMES, &names);
     _ = sec_fn.FreeCredentialsHandle(&cred_handle);
     if (checkSspiErr(data, status, "QueryContextAttribute")) {
         _ = sec_fn.DeleteSecurityContext(&sspi_context);
-        _ = sec_fn.FreeContextBuffer(@ptrCast(names.sUserName));
+        _ = sec_fn.FreeContextBuffer(names.sUserName);
         Curl_failf(data, "Failed to determine username.");
         return CURLE_COULDNT_CONNECT;
     }
     Curl_infof(data, "SOCKS5 server authenticated user %s with SSPI.", names.sUserName orelse "");
-    _ = sec_fn.FreeContextBuffer(@ptrCast(names.sUserName));
+    _ = sec_fn.FreeContextBuffer(names.sUserName);
 
     var gss_enc: u8 = 0;
     if ((sspi_ret_flags & ISC_REQ_CONFIDENTIALITY) != 0) {
@@ -1985,40 +1947,17 @@ fn socks5GssapiNegotiateSspi(
             return CURLE_COULDNT_CONNECT;
         }
     } else {
-        status = sec_fn.QueryContextAttributesA(&sspi_context, SECPKG_ATTR_SIZES, @ptrCast(&sizes));
+        status = sec_fn.QueryContextAttributesA(&sspi_context, SECPKG_ATTR_SIZES, &sizes);
         if (checkSspiErr(data, status, "QueryContextAttributes")) {
             _ = sec_fn.DeleteSecurityContext(&sspi_context);
             Curl_failf(data, "Failed to query security context attributes.");
             return CURLE_COULDNT_CONNECT;
         }
 
-        wrap_sec_buf[0].cbBuffer = sizes.cbSecurityTrailer;
-        wrap_sec_buf[0].BufferType = SECBUFFER_TOKEN;
-        wrap_sec_buf[0].pvBuffer = mem.malloc(sizes.cbSecurityTrailer);
-        if (wrap_sec_buf[0].pvBuffer == null) {
+        allocSocks5WrapBuffers(&wrap_sec_buf, sizes, gss_enc) catch {
             _ = sec_fn.DeleteSecurityContext(&sspi_context);
             return CURLE_OUT_OF_MEMORY;
-        }
-
-        wrap_sec_buf[1].cbBuffer = 1;
-        wrap_sec_buf[1].BufferType = SECBUFFER_DATA;
-        wrap_sec_buf[1].pvBuffer = mem.malloc(1);
-        if (wrap_sec_buf[1].pvBuffer == null) {
-            scrubAndFreeSecBuffer(&wrap_sec_buf[0]);
-            _ = sec_fn.DeleteSecurityContext(&sspi_context);
-            return CURLE_OUT_OF_MEMORY;
-        }
-        @as(*u8, @ptrCast(wrap_sec_buf[1].pvBuffer.?)).* = gss_enc;
-
-        wrap_sec_buf[2].cbBuffer = sizes.cbBlockSize;
-        wrap_sec_buf[2].BufferType = SECBUFFER_PADDING;
-        wrap_sec_buf[2].pvBuffer = mem.malloc(sizes.cbBlockSize);
-        if (wrap_sec_buf[2].pvBuffer == null) {
-            scrubAndFreeSecBuffer(&wrap_sec_buf[0]);
-            scrubAndFreeSecBuffer(&wrap_sec_buf[1]);
-            _ = sec_fn.DeleteSecurityContext(&sspi_context);
-            return CURLE_OUT_OF_MEMORY;
-        }
+        };
 
         wrap_desc.cBuffers = 3;
         wrap_desc.pBuffers = &wrap_sec_buf;
@@ -2047,9 +1986,11 @@ fn socks5GssapiNegotiateSspi(
         code = socks5SspiSend(cf_next, data, sock, &sspi_recv_token, 4);
         if (code == CURLE_OK) {
             for (0..3) |k| {
-                if (wrap_sec_buf[k].cbBuffer != 0 and wrap_sec_buf[k].pvBuffer != null) {
-                    code = socks5SspiSend(cf_next, data, sock, @ptrCast(wrap_sec_buf[k].pvBuffer), wrap_sec_buf[k].cbBuffer);
-                    if (code != CURLE_OK) break;
+                if (wrap_sec_buf[k].cbBuffer != 0) {
+                    if (wrap_sec_buf[k].pvBuffer) |pv| {
+                        code = socks5SspiSend(cf_next, data, sock, pv, wrap_sec_buf[k].cbBuffer);
+                        if (code != CURLE_OK) break;
+                    }
                 }
             }
         }
@@ -2091,17 +2032,16 @@ fn socks5GssapiNegotiateSspi(
     };
 
     wrap_sec_buf[0].cbBuffer = us_length;
-    wrap_sec_buf[0].pvBuffer = mem.malloc(us_length);
-    if (wrap_sec_buf[0].pvBuffer == null) {
+    wrap_sec_buf[0].pvBuffer = mem.allocMany(u8, us_length) orelse {
         _ = sec_fn.DeleteSecurityContext(&sspi_context);
         return CURLE_OUT_OF_MEMORY;
-    }
+    };
     wrap_sec_buf[0].BufferType = SECBUFFER_STREAM;
     wrap_sec_buf[1].BufferType = SECBUFFER_DATA;
     wrap_sec_buf[1].cbBuffer = 0;
     wrap_sec_buf[1].pvBuffer = null;
 
-    code = socks5SspiRecv(cf_next, data, sock, @ptrCast(wrap_sec_buf[0].pvBuffer), wrap_sec_buf[0].cbBuffer);
+    code = socks5SspiRecv(cf_next, data, sock, wrap_sec_buf[0].pvBuffer.?, wrap_sec_buf[0].cbBuffer);
     if (code != CURLE_OK) {
         Curl_failf(data, "Failed to receive SSPI encryption type.");
         scrubAndFreeSecBuffer(&wrap_sec_buf[0]);
@@ -2131,7 +2071,7 @@ fn socks5GssapiNegotiateSspi(
             return CURLE_COULDNT_CONNECT;
         }
 
-        const data_bytes: [*]const u8 = @ptrCast(wrap_sec_buf[1].pvBuffer.?);
+        const data_bytes = wrap_sec_buf[1].pvBuffer.?;
         sspi_recv_token[1] = data_bytes[0];
         if (wrap_sec_buf[1].pvBuffer) |p1| {
             mem.secureZero(p1, @intCast(wrap_sec_buf[1].cbBuffer));
@@ -2144,7 +2084,7 @@ fn socks5GssapiNegotiateSspi(
             _ = sec_fn.DeleteSecurityContext(&sspi_context);
             return CURLE_COULDNT_CONNECT;
         }
-        const data_bytes: [*]const u8 = @ptrCast(wrap_sec_buf[0].pvBuffer.?);
+        const data_bytes = wrap_sec_buf[0].pvBuffer.?;
         sspi_recv_token[1] = data_bytes[0];
         scrubAndFreeSecBuffer(&wrap_sec_buf[0]);
     }
@@ -2174,9 +2114,13 @@ pub const gss_OID_set = ?*gss_OID_set_desc;
 
 pub const gss_buffer_desc = extern struct {
     length: usize = 0,
-    value: ?*anyopaque = null,
+    value: ?[*]u8 = null,
 };
 pub const gss_buffer_t = *gss_buffer_desc;
+
+const libc_alloc = struct {
+    extern "c" fn malloc(size: usize) ?[*]u8;
+};
 
 const krb5_oid_bytes = "\x2a\x86\x48\x86\xf7\x12\x01\x02\x02";
 const iakerb_oid_bytes = "\x2b\x06\x01\x05\x02\x05";
@@ -2208,7 +2152,7 @@ pub fn gssMechanismToOid(mech_opt: ?[*:0]const u8) callconv(.c) gss_OID {
 pub const OM_uint32 = u32;
 pub const gss_qop_t = u32;
 pub const gss_cred_usage_t = c_int;
-pub const gss_ctx_id_t = ?*anyopaque;
+pub const gss_ctx_id_t = ?*StubGssCtx;
 pub const gss_name_t = ?*anyopaque;
 pub const gss_cred_id_t = ?*anyopaque;
 pub const gss_channel_bindings_t = ?*anyopaque;
@@ -2368,7 +2312,7 @@ const StubGssCtx = struct {
     have_krb5: bool = false,
     have_ntlm: bool = false,
     flags: OM_uint32 = 0,
-    creds: [MAX_CREDS_LENGTH]u8 = @splat(0),
+    creds: [MAX_CREDS_LENGTH - 1:0]u8 = @splat(0),
 };
 
 fn isStubGssActive() ?[*:0]const u8 {
@@ -2376,6 +2320,34 @@ fn isStubGssActive() ?[*:0]const u8 {
         if (env_ptr[0] != 0) return env_ptr;
     }
     return null;
+}
+
+fn initStubGssCtx(creds_env: [*:0]const u8, req_flags: OM_uint32) error{Invalid}!*StubGssCtx {
+    const ctx = mem.create(StubGssCtx) orelse return error.Invalid;
+    errdefer mem.destroy(ctx);
+    ctx.* = .{};
+    const creds_slice = std.mem.span(creds_env);
+    if (creds_slice.len >= MAX_CREDS_LENGTH) {
+        return error.Invalid;
+    }
+    @memcpy(ctx.creds[0..creds_slice.len], creds_slice);
+    ctx.creds[creds_slice.len] = 0;
+    ctx.have_krb5 = std.mem.indexOf(u8, creds_slice, "KRB5") != null or std.mem.indexOf(u8, creds_slice, "krb5") != null;
+    ctx.have_ntlm = std.mem.indexOf(u8, creds_slice, "NTLM") != null or std.mem.indexOf(u8, creds_slice, "ntlm") != null;
+    if (ctx.have_krb5) {
+        ctx.sent = .krb5;
+    } else if (ctx.have_ntlm) {
+        ctx.sent = .ntlm1;
+    } else {
+        return error.Invalid;
+    }
+    ctx.flags = req_flags;
+    if (std.mem.indexOf(u8, creds_slice, "SOCKS5_CONF") != null) {
+        ctx.flags |= GSS_C_CONF_FLAG;
+    } else if (std.mem.indexOf(u8, creds_slice, "SOCKS5_INTEG") != null) {
+        ctx.flags |= GSS_C_INTEG_FLAG;
+    }
+    return ctx;
 }
 
 fn stubGssInitSecContext(
@@ -2393,9 +2365,9 @@ fn stubGssInitSecContext(
 
     var ctx: *StubGssCtx = undefined;
     if (context_handle.* != null) {
-        ctx = @ptrCast(@alignCast(context_handle.*.?));
+        ctx = context_handle.*.?;
         if (!has_input) return GSS_S_FAILURE;
-        const first_byte = @as([*]const u8, @ptrCast(input_token.?.value.?))[0];
+        const first_byte = input_token.?.value.?[0];
         if (first_byte == 'D') {
             if (ret_flags) |rf| rf.* = ctx.flags;
             output_token.value = null;
@@ -2412,32 +2384,7 @@ fn stubGssInitSecContext(
         }
     } else {
         if (has_input) return GSS_S_FAILURE;
-        const raw = mem.calloc(1, @sizeOf(StubGssCtx)) orelse return GSS_S_FAILURE;
-        ctx = @ptrCast(@alignCast(raw));
-        ctx.* = .{};
-        const creds_slice = std.mem.span(creds_env);
-        if (creds_slice.len >= MAX_CREDS_LENGTH) {
-            mem.free(raw);
-            return GSS_S_FAILURE;
-        }
-        @memcpy(ctx.creds[0..creds_slice.len], creds_slice);
-        ctx.creds[creds_slice.len] = 0;
-        ctx.have_krb5 = std.mem.indexOf(u8, creds_slice, "KRB5") != null or std.mem.indexOf(u8, creds_slice, "krb5") != null;
-        ctx.have_ntlm = std.mem.indexOf(u8, creds_slice, "NTLM") != null or std.mem.indexOf(u8, creds_slice, "ntlm") != null;
-        if (ctx.have_krb5) {
-            ctx.sent = .krb5;
-        } else if (ctx.have_ntlm) {
-            ctx.sent = .ntlm1;
-        } else {
-            mem.free(raw);
-            return GSS_S_FAILURE;
-        }
-        ctx.flags = req_flags;
-        if (std.mem.indexOf(u8, creds_slice, "SOCKS5_CONF") != null) {
-            ctx.flags |= GSS_C_CONF_FLAG;
-        } else if (std.mem.indexOf(u8, creds_slice, "SOCKS5_INTEG") != null) {
-            ctx.flags |= GSS_C_INTEG_FLAG;
-        }
+        ctx = initStubGssCtx(creds_env, req_flags) catch return GSS_S_FAILURE;
         context_handle.* = ctx;
     }
 
@@ -2450,14 +2397,13 @@ fn stubGssInitSecContext(
         _ = gss_release_buffer(&target_min, &target_buf);
     };
     const target_slice: []const u8 = if (target_buf.value != null and target_buf.length > 0)
-        @as([*]const u8, @ptrCast(target_buf.value.?))[0..target_buf.length]
+        target_buf.value.?[0..target_buf.length]
     else
         "unknown";
 
     const tok_cap: usize = 256;
-    const tok_raw = std.c.malloc(tok_cap) orelse return GSS_S_FAILURE;
-    const tok_bytes: [*]u8 = @ptrCast(tok_raw);
-    const creds_str: [*:0]const u8 = @ptrCast(&ctx.creds);
+    const tok_bytes = libc_alloc.malloc(tok_cap) orelse return GSS_S_FAILURE;
+    const creds_str: [*:0]const u8 = &ctx.creds;
     var used: usize = 0;
     const hdr_len = curl_msnprintf(
         tok_bytes,
@@ -2469,7 +2415,7 @@ fn stubGssInitSecContext(
         @as(c_int, @backingInt(ctx.sent)),
     );
     if (hdr_len <= 0) {
-        std.c.free(tok_raw);
+        std.c.free(tok_bytes);
         return GSS_S_FAILURE;
     }
     used = @intCast(hdr_len);
@@ -2479,7 +2425,7 @@ fn stubGssInitSecContext(
         used = pad_target;
     }
     tok_bytes[used] = 0;
-    output_token.value = tok_raw;
+    output_token.value = tok_bytes;
     output_token.length = used;
     if (ret_flags) |rf| rf.* = ctx.flags;
     return GSS_S_CONTINUE_NEEDED;
@@ -2548,7 +2494,7 @@ pub fn gssDeleteSecContext(
     if (isStubGssActive() != null) {
         min.* = 0;
         if (context.*) |ctx_ptr| {
-            mem.free(ctx_ptr);
+            mem.destroy(ctx_ptr);
             context.* = null;
         }
         if (output_token) |ot| {
@@ -2567,7 +2513,7 @@ pub fn gssInquireContext(
 ) callconv(.c) OM_uint32 {
     if (isStubGssActive() != null) {
         minor_status.* = 0;
-        const ctx: *const StubGssCtx = @ptrCast(@alignCast(context orelse return GSS_S_FAILURE));
+        const ctx: *const StubGssCtx = context orelse return GSS_S_FAILURE;
         if (mech_type) |mt| {
             mt.* = switch (ctx.sent) {
                 .krb5 => &curl_krb5_mech_oid,
@@ -2659,10 +2605,10 @@ fn socks5GssWrap(
             output_message_buffer.length = 0;
             return GSS_S_COMPLETE;
         }
-        const out_raw = std.c.malloc(input_message_buffer.length) orelse return GSS_S_FAILURE;
+        const out_raw = libc_alloc.malloc(input_message_buffer.length) orelse return GSS_S_FAILURE;
         @memcpy(
-            @as([*]u8, @ptrCast(out_raw))[0..input_message_buffer.length],
-            @as([*]const u8, @ptrCast(input_message_buffer.value.?))[0..input_message_buffer.length],
+            out_raw[0..input_message_buffer.length],
+            input_message_buffer.value.?[0..input_message_buffer.length],
         );
         output_message_buffer.value = out_raw;
         output_message_buffer.length = input_message_buffer.length;
@@ -2688,10 +2634,10 @@ fn socks5GssUnwrap(
             output_message_buffer.length = 0;
             return GSS_S_COMPLETE;
         }
-        const out_raw = std.c.malloc(input_message_buffer.length) orelse return GSS_S_FAILURE;
+        const out_raw = libc_alloc.malloc(input_message_buffer.length) orelse return GSS_S_FAILURE;
         @memcpy(
-            @as([*]u8, @ptrCast(out_raw))[0..input_message_buffer.length],
-            @as([*]const u8, @ptrCast(input_message_buffer.value.?))[0..input_message_buffer.length],
+            out_raw[0..input_message_buffer.length],
+            input_message_buffer.value.?[0..input_message_buffer.length],
         );
         output_message_buffer.value = out_raw;
         output_message_buffer.length = input_message_buffer.length;
@@ -2725,7 +2671,7 @@ fn displayGssError(status: OM_uint32, status_type: c_int, buf: [*]u8, pos_in: us
                     GSS_LOG_BUFFER_LEN - pos,
                     "%.*s. ",
                     @as(c_int, @intCast(status_string.length)),
-                    @as([*]const u8, @ptrCast(status_string.value.?)),
+                    status_string.value.?,
                 );
                 if (n > 0) {
                     pos += @intCast(n);
@@ -2744,15 +2690,16 @@ pub fn gssLogError(
     major: OM_uint32,
     minor: OM_uint32,
 ) callconv(.c) void {
-    var buf: [GSS_LOG_BUFFER_LEN]u8 = undefined;
+    var buf: [GSS_LOG_BUFFER_LEN - 1:0]u8 = undefined;
     var pos: usize = 0;
 
     if (major != GSS_S_FAILURE) {
         pos = displayGssError(major, GSS_C_GSS_CODE, &buf, pos);
     }
-    _ = displayGssError(minor, GSS_C_MECH_CODE, &buf, pos);
+    pos = displayGssError(minor, GSS_C_MECH_CODE, &buf, pos);
     buf[pos] = 0;
-    Curl_infof(data, "%s%s", prefix, @as([*:0]const u8, @ptrCast(&buf)));
+    const buf_cstr: [*:0]const u8 = &buf;
+    Curl_infof(data, "%s%s", prefix, buf_cstr);
 }
 
 fn gssScrubAndReleaseBuffer(minor_status: *OM_uint32, buf: *gss_buffer_desc) void {
@@ -2815,24 +2762,25 @@ pub fn socks5GssapiNegotiateGss(
     const proxy_hostname: [*:0]const u8 = proxy_hostname_opt orelse "";
 
     if (std.mem.indexOfScalar(u8, service[0..service_length], '/') != null) {
+        const srv_val = mem.allocMany(u8, service_length) orelse return CURLE_OUT_OF_MEMORY;
+        defer mem.freeTyped(srv_val);
+        @memcpy(srv_val[0..service_length], service[0..service_length]);
         var service_name_buf = gss_buffer_desc{
             .length = service_length,
-            .value = @ptrCast(mem.malloc(service_length)),
+            .value = srv_val,
         };
-        if (service_name_buf.value == null) return CURLE_OUT_OF_MEMORY;
-        @memcpy(@as([*]u8, @ptrCast(service_name_buf.value.?))[0..service_length], service[0..service_length]);
         gss_major_status = gss_import_name(&gss_minor_status, &service_name_buf, GSS_C_NO_OID, &server);
-        mem.free(service_name_buf.value);
     } else {
         const host_len = std.mem.len(proxy_hostname);
+        const srv_len = service_length + 1 + host_len;
+        const srv_val = mem.allocMany(u8, srv_len + 1) orelse return CURLE_OUT_OF_MEMORY;
+        defer mem.freeTyped(srv_val);
+        _ = curl_msnprintf(srv_val, srv_len + 1, "%s@%s", service, proxy_hostname);
         var service_name_buf = gss_buffer_desc{
-            .length = service_length + 1 + host_len,
-            .value = @ptrCast(mem.malloc(service_length + 1 + host_len + 1)),
+            .length = srv_len,
+            .value = srv_val,
         };
-        if (service_name_buf.value == null) return CURLE_OUT_OF_MEMORY;
-        _ = curl_msnprintf(@ptrCast(service_name_buf.value.?), service_name_buf.length + 1, "%s@%s", service, proxy_hostname);
         gss_major_status = gss_import_name(&gss_minor_status, &service_name_buf, GSS_C_NT_HOSTBASED_SERVICE, &server);
-        mem.free(service_name_buf.value);
     }
 
     if (checkGssErr(data, gss_major_status, gss_minor_status, "gss_import_name() failed: ")) {
@@ -2884,8 +2832,10 @@ pub fn socks5GssapiNegotiateGss(
             };
 
             var code = socks5SspiSend(cf_next, data, sock, &rcvbuf, 4);
-            if (code == CURLE_OK and gss_send_token.value != null) {
-                code = socks5SspiSend(cf_next, data, sock, @ptrCast(gss_send_token.value.?), send_len);
+            if (code == CURLE_OK) {
+                if (gss_send_token.value) |send_val| {
+                    code = socks5SspiSend(cf_next, data, sock, send_val, send_len);
+                }
             }
             if (code != CURLE_OK) {
                 Curl_failf(data, "Failed to send GSS-API authentication token.");
@@ -2939,14 +2889,14 @@ pub fn socks5GssapiNegotiateGss(
         };
 
         gss_recv_token.length = us_length;
-        gss_recv_token.value = std.c.malloc(us_length);
+        gss_recv_token.value = libc_alloc.malloc(us_length);
         if (gss_recv_token.value == null) {
             _ = gss_release_name(&gss_status, &server);
             _ = gssDeleteSecContext(&gss_status, &gss_context, GSS_C_NO_BUFFER);
             return CURLE_OUT_OF_MEMORY;
         }
 
-        result = Curl_blockread_all(cf, data, @ptrCast(gss_recv_token.value.?), gss_recv_token.length, &nread);
+        result = Curl_blockread_all(cf, data, gss_recv_token.value.?, gss_recv_token.length, &nread);
         if (result != CURLE_OK or nread != us_length) {
             Curl_failf(data, "Failed to receive GSS-API authentication token.");
             _ = gss_release_name(&gss_status, &server);
@@ -2995,11 +2945,12 @@ pub fn socks5GssapiNegotiateGss(
             Curl_failf(data, "Failed to allocate memory.");
             return CURLE_COULDNT_CONNECT;
         }
+        const user_bytes: [*]const u8 = gss_send_token.value orelse "";
         Curl_infof(
             data,
             "SOCKS5 server authenticated user %.*s with GSS-API.",
             @as(c_int, @intCast(gss_send_token.length)),
-            if (gss_send_token.value) |v| @as([*]const u8, @ptrCast(v)) else @as([*]const u8, ""),
+            user_bytes,
         );
         _ = gss_release_name(&gss_status, &gss_client_name);
         gssScrubAndReleaseBuffer(&gss_status, &gss_send_token);
@@ -3044,8 +2995,10 @@ pub fn socks5GssapiNegotiateGss(
             return CURLE_COULDNT_CONNECT;
         };
         var code = socks5SspiSend(cf_next, data, sock, &rcvbuf, 4);
-        if (code == CURLE_OK and gss_w_token.value != null) {
-            code = socks5SspiSend(cf_next, data, sock, @ptrCast(gss_w_token.value.?), wrap_len);
+        if (code == CURLE_OK) {
+            if (gss_w_token.value) |w_val| {
+                code = socks5SspiSend(cf_next, data, sock, w_val, wrap_len);
+            }
         }
         gssScrubAndReleaseBuffer(&gss_status, &gss_w_token);
         if (code != CURLE_OK) {
@@ -3082,13 +3035,13 @@ pub fn socks5GssapiNegotiateGss(
     };
 
     gss_recv_token.length = us_length;
-    gss_recv_token.value = std.c.malloc(gss_recv_token.length);
+    gss_recv_token.value = libc_alloc.malloc(gss_recv_token.length);
     if (gss_recv_token.value == null) {
         _ = gssDeleteSecContext(&gss_status, &gss_context, GSS_C_NO_BUFFER);
         return CURLE_OUT_OF_MEMORY;
     }
 
-    result = Curl_blockread_all(cf, data, @ptrCast(gss_recv_token.value.?), gss_recv_token.length, &nread);
+    result = Curl_blockread_all(cf, data, gss_recv_token.value.?, gss_recv_token.length, &nread);
     if (result != CURLE_OK or nread != us_length) {
         Curl_failf(data, "Failed to receive GSS-API encryption type.");
         gssScrubAndReleaseBuffer(&gss_status, &gss_recv_token);
@@ -3111,7 +3064,7 @@ pub fn socks5GssapiNegotiateGss(
             _ = gssDeleteSecContext(&gss_status, &gss_context, GSS_C_NO_BUFFER);
             return CURLE_COULDNT_CONNECT;
         }
-        rcvbuf[1] = @as([*]const u8, @ptrCast(gss_w_token.value.?))[0];
+        rcvbuf[1] = gss_w_token.value.?[0];
         gssScrubAndReleaseBuffer(&gss_status, &gss_w_token);
     } else {
         if (gss_recv_token.length != 1) {
@@ -3120,7 +3073,7 @@ pub fn socks5GssapiNegotiateGss(
             _ = gssDeleteSecContext(&gss_status, &gss_context, GSS_C_NO_BUFFER);
             return CURLE_COULDNT_CONNECT;
         }
-        rcvbuf[1] = @as([*]const u8, @ptrCast(gss_recv_token.value.?))[0];
+        rcvbuf[1] = gss_recv_token.value.?[0];
         gssScrubAndReleaseBuffer(&gss_status, &gss_recv_token);
     }
 
@@ -3195,47 +3148,49 @@ test "Curl_auth_digest_get_pair basic and quoted pairs" {
     const chlg: [*:0]const u8 = "realm=\"testrealm@host.com\", qop=\"auth,auth-int\", nonce=\"dcd98b7102dd2f0e8b11d0f600bfb0c093\", opaque=\"5ccc069c403ebaf9f0171e9517f40e41\", algorithm=MD5, stale=false";
     var p = chlg;
     var val = Curl_str{ .str = null, .len = 0 };
-    var content: [DIGEST_MAX_CONTENT_LENGTH]u8 = undefined;
+    var content: [DIGEST_MAX_CONTENT_LENGTH - 1:0]u8 = undefined;
+    const content_cstr: [*:0]const u8 = &content;
 
     try std.testing.expect(Curl_auth_digest_get_pair(p, &val, &content, &p));
     try std.testing.expect(curlx_str_casecompare(&val, "realm") != 0);
-    try std.testing.expectEqualStrings("testrealm@host.com", std.mem.span(@as([*:0]const u8, @ptrCast(&content))));
+    try std.testing.expectEqualStrings("testrealm@host.com", std.mem.span(content_cstr));
 
     while (p[0] == ',' or p[0] == ' ') p += 1;
     try std.testing.expect(Curl_auth_digest_get_pair(p, &val, &content, &p));
     try std.testing.expect(curlx_str_casecompare(&val, "qop") != 0);
-    try std.testing.expectEqualStrings("auth,auth-int", std.mem.span(@as([*:0]const u8, @ptrCast(&content))));
+    try std.testing.expectEqualStrings("auth,auth-int", std.mem.span(content_cstr));
 
     while (p[0] == ',' or p[0] == ' ') p += 1;
     try std.testing.expect(Curl_auth_digest_get_pair(p, &val, &content, &p));
     try std.testing.expect(curlx_str_casecompare(&val, "nonce") != 0);
-    try std.testing.expectEqualStrings("dcd98b7102dd2f0e8b11d0f600bfb0c093", std.mem.span(@as([*:0]const u8, @ptrCast(&content))));
+    try std.testing.expectEqualStrings("dcd98b7102dd2f0e8b11d0f600bfb0c093", std.mem.span(content_cstr));
 
     while (p[0] == ',' or p[0] == ' ') p += 1;
     try std.testing.expect(Curl_auth_digest_get_pair(p, &val, &content, &p));
     try std.testing.expect(curlx_str_casecompare(&val, "opaque") != 0);
-    try std.testing.expectEqualStrings("5ccc069c403ebaf9f0171e9517f40e41", std.mem.span(@as([*:0]const u8, @ptrCast(&content))));
+    try std.testing.expectEqualStrings("5ccc069c403ebaf9f0171e9517f40e41", std.mem.span(content_cstr));
 
     while (p[0] == ',' or p[0] == ' ') p += 1;
     try std.testing.expect(Curl_auth_digest_get_pair(p, &val, &content, &p));
     try std.testing.expect(curlx_str_casecompare(&val, "algorithm") != 0);
-    try std.testing.expectEqualStrings("MD5", std.mem.span(@as([*:0]const u8, @ptrCast(&content))));
+    try std.testing.expectEqualStrings("MD5", std.mem.span(content_cstr));
 
     while (p[0] == ',' or p[0] == ' ') p += 1;
     try std.testing.expect(Curl_auth_digest_get_pair(p, &val, &content, &p));
     try std.testing.expect(curlx_str_casecompare(&val, "stale") != 0);
-    try std.testing.expectEqualStrings("false", std.mem.span(@as([*:0]const u8, @ptrCast(&content))));
+    try std.testing.expectEqualStrings("false", std.mem.span(content_cstr));
 }
 
 test "Curl_auth_digest_get_pair escapes and error cases" {
     var val = Curl_str{ .str = null, .len = 0 };
-    var content: [DIGEST_MAX_CONTENT_LENGTH]u8 = undefined;
+    var content: [DIGEST_MAX_CONTENT_LENGTH - 1:0]u8 = undefined;
+    const content_cstr: [*:0]const u8 = &content;
     var endp: [*:0]const u8 = undefined;
 
     // Escaped quote inside quoted string
     const escaped: [*:0]const u8 = "realm=\"a\\\"b\\\\c\"";
     try std.testing.expect(Curl_auth_digest_get_pair(escaped, &val, &content, &endp));
-    try std.testing.expectEqualStrings("a\"b\\c", std.mem.span(@as([*:0]const u8, @ptrCast(&content))));
+    try std.testing.expectEqualStrings("a\"b\\c", std.mem.span(content_cstr));
 
     // Quote inside unquoted value is invalid
     const bad_quote: [*:0]const u8 = "realm=ab\"c";
@@ -3264,7 +3219,7 @@ test "Curl_auth_decode_digest_http_message and RFC 2617 MD5 qop=auth vector" {
     try std.testing.expectEqual(ALGO_MD5, digest.algo);
 
     // Pre-populate RFC 2617 Section 3.5 cnonce "0a4f113b" to verify exact response hash
-    digest.cnonce = @ptrCast(mem.strdup("0a4f113b").?);
+    digest.cnonce = mem.strdup("0a4f113b").?;
 
     var creds = Curl_creds{
         .user = "Mufasa",
@@ -3276,7 +3231,7 @@ test "Curl_auth_decode_digest_http_message and RFC 2617 MD5 qop=auth vector" {
         CURLE_OK,
         createDigestHttpMessageRfc(null, &creds, "/dir/index.html", "GET", null, 0, &digest, &outptr, &outlen),
     );
-    defer mem.free(@ptrCast(outptr));
+    defer mem.freeTyped(outptr);
 
     const resp = outptr.?[0..outlen];
     try std.testing.expect(std.mem.indexOf(u8, resp, "response=\"6629fae49393a05397450978507c4ef1\"") != null);
@@ -3300,7 +3255,7 @@ test "Digest HTTP message algorithms: MD5-sess, SHA-256, SHA-512-256, qop=auth-i
         try std.testing.expectEqual(ALGO_MD5SESS, digest.algo);
         try std.testing.expectEqualStrings("auth-int", std.mem.span(digest.qop.?));
 
-        digest.cnonce = @ptrCast(mem.strdup("0a4f113b").?);
+        digest.cnonce = mem.strdup("0a4f113b").?;
         const body = "entity-body-payload";
         var outptr: ?[*:0]u8 = null;
         var outlen: usize = 0;
@@ -3308,7 +3263,7 @@ test "Digest HTTP message algorithms: MD5-sess, SHA-256, SHA-512-256, qop=auth-i
             CURLE_OK,
             createDigestHttpMessageRfc(null, &creds, "/dir/index.html", "POST", body.ptr, body.len, &digest, &outptr, &outlen),
         );
-        defer mem.free(@ptrCast(outptr));
+        defer mem.freeTyped(outptr);
 
         const resp = outptr.?[0..outlen];
         try std.testing.expect(std.mem.indexOf(u8, resp, "qop=auth-int") != null);
@@ -3334,7 +3289,7 @@ test "Digest HTTP message algorithms: MD5-sess, SHA-256, SHA-512-256, qop=auth-i
             CURLE_OK,
             createDigestHttpMessageRfc(null, &sha256_creds, "/2058", "GET", null, 0, &digest, &outptr, &outlen),
         );
-        defer mem.free(@ptrCast(outptr));
+        defer mem.freeTyped(outptr);
 
         const resp = outptr.?[0..outlen];
         try std.testing.expectEqualStrings(
@@ -3358,14 +3313,14 @@ test "Digest HTTP message algorithms: MD5-sess, SHA-256, SHA-512-256, qop=auth-i
             .user = "Jäsøn Doe",
             .passwd = "Secret, or not?",
         };
-        digest.cnonce = @ptrCast(mem.strdup("NTg6RKcb9boFIAS3KrFK9BGeh+iDa/sm6jUMp2wds69v").?);
+        digest.cnonce = mem.strdup("NTg6RKcb9boFIAS3KrFK9BGeh+iDa/sm6jUMp2wds69v").?;
         var outptr: ?[*:0]u8 = null;
         var outlen: usize = 0;
         try std.testing.expectEqual(
             CURLE_OK,
             createDigestHttpMessageRfc(null, &jdoe_creds, "/dir/index.html", "GET", null, 0, &digest, &outptr, &outlen),
         );
-        defer mem.free(@ptrCast(outptr));
+        defer mem.freeTyped(outptr);
 
         const resp = outptr.?[0..outlen];
         // RFC 7616 Section 3.9.2 SHA-512-256 userhash of "Jäsøn Doe:api@example.org"
@@ -3409,10 +3364,10 @@ test "Digest HTTP message algorithms: MD5-sess, SHA-256, SHA-512-256, qop=auth-i
     var sec_buf = SecBuffer{
         .cbBuffer = 4,
         .BufferType = SECBUFFER_DATA,
-        .pvBuffer = mem.malloc(4),
+        .pvBuffer = mem.allocMany(u8, 4),
     };
     try std.testing.expect(sec_buf.pvBuffer != null);
-    @memcpy(@as([*]u8, @ptrCast(sec_buf.pvBuffer.?))[0..4], "tok!");
+    @memcpy(sec_buf.pvBuffer.?[0..4], "tok!");
     scrubAndFreeSecBuffer(&sec_buf);
     try std.testing.expect(sec_buf.pvBuffer == null);
     try std.testing.expectEqual(@as(c_ulong, 0), sec_buf.cbBuffer);

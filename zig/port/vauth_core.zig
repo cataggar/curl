@@ -309,17 +309,21 @@ const gsasl_impl = struct {
         gsasl: *gsasldata,
     ) callconv(.c) bool {
         _ = data;
-        var res = gsasl_init(&gsasl.ctx);
-        if (res != GSASL_OK) {
-            return false;
+        gsaslInitAndStart(mech, gsasl) catch return false;
+        return true;
+    }
+
+    fn gsaslInitAndStart(mech: [*:0]const u8, gsasl: *gsasldata) error{GsaslError}!void {
+        if (gsasl_init(&gsasl.ctx) != GSASL_OK) {
+            return error.GsaslError;
         }
-        res = gsasl_client_start(gsasl.ctx, mech, &gsasl.client);
-        if (res != GSASL_OK) {
+        errdefer {
             gsasl_done(gsasl.ctx);
             gsasl.ctx = null;
-            return false;
         }
-        return true;
+        if (gsasl_client_start(gsasl.ctx, mech, &gsasl.client) != GSASL_OK) {
+            return error.GsaslError;
+        }
     }
 
     pub export fn Curl_auth_gsasl_start(
@@ -650,10 +654,10 @@ pub export fn Curl_ntlm_core_mk_nt_hash(
         return CURLE_OUT_OF_MEMORY;
     }
     const pw: [*]u8 = if (len > 0)
-        (mem.malloc(len * 2) orelse return CURLE_OUT_OF_MEMORY)
+        (mem.allocMany(u8, len * 2) orelse return CURLE_OUT_OF_MEMORY)
     else
-        @ptrCast(mem.strdup("") orelse return CURLE_OUT_OF_MEMORY);
-    defer mem.free(pw);
+        (mem.strdup("") orelse return CURLE_OUT_OF_MEMORY);
+    defer mem.freeTyped(pw);
 
     asciiToUnicodeLe(pw, password, len);
 
@@ -687,8 +691,8 @@ pub export fn Curl_ntlm_core_mk_ntlmv2_hash(
     }
 
     const identity_len = (userlen + domlen) * 2;
-    const identity = mem.malloc(identity_len + 1) orelse return CURLE_OUT_OF_MEMORY;
-    defer mem.free(identity);
+    const identity = mem.allocMany(u8, identity_len + 1) orelse return CURLE_OUT_OF_MEMORY;
+    defer mem.freeTyped(identity);
 
     asciiUppercaseToUnicodeLe(identity, user, userlen);
     asciiToUnicodeLe(identity + (userlen << 1), domain, domlen);
@@ -710,10 +714,23 @@ pub export fn Curl_ntlm_core_mk_ntlmv2_resp(
     ntresp: *?[*]u8,
     ntresp_len: *c_uint,
 ) callconv(.c) CURLcode {
+    return mkNtlmv2RespInner(ntlmv2hash, challenge_client, ntlm, ntresp, ntresp_len) catch |err| switch (err) {
+        error.OutOfMemory, error.CryptoFailed => CURLE_OUT_OF_MEMORY,
+    };
+}
+
+fn mkNtlmv2RespInner(
+    ntlmv2hash: [*]const u8,
+    challenge_client: [*]const u8,
+    ntlm: *const ntlmdata,
+    ntresp: *?[*]u8,
+    ntresp_len: *c_uint,
+) error{ OutOfMemory, CryptoFailed }!CURLcode {
     const blob_len: u32 = 32 +% ntlm.target_info_len;
     const len: u32 = @as(u32, crypto.HMAC_MD5_LENGTH) +% blob_len;
 
-    const ptr = mem.calloc(1, len) orelse return CURLE_OUT_OF_MEMORY;
+    const ptr = mem.callocMany(u8, len) orelse return error.OutOfMemory;
+    errdefer mem.freeTyped(ptr);
 
     const filetime = time2filetime(c_time.now());
     ptr[16] = 0x01;
@@ -723,8 +740,7 @@ pub export fn Curl_ntlm_core_mk_ntlmv2_resp(
     std.mem.writeInt(u64, ptr[24..32], filetime, .little);
     @memcpy(ptr[32..40], challenge_client[0..8]);
     if (ntlm.target_info_len > 0) {
-        if (ntlm.target_info) |ti| {
-            const ti_bytes: [*]const u8 = @ptrCast(ti);
+        if (ntlm.target_info) |ti_bytes| {
             @memcpy(ptr[44 .. 44 + ntlm.target_info_len], ti_bytes[0..ntlm.target_info_len]);
         }
     }
@@ -740,7 +756,7 @@ pub export fn Curl_ntlm_core_mk_ntlmv2_resp(
         &hmac_output,
     );
     if (result != CURLE_OK) {
-        mem.free(ptr);
+        mem.freeTyped(ptr);
         return result;
     }
 
@@ -796,7 +812,7 @@ pub const ntlmdata = extern struct {
     flags: c_uint = 0,
     nonce: [8]u8 = @splat(0),
     target_info_len: c_uint = 0,
-    target_info: ?*anyopaque = null,
+    target_info: ?[*]u8 = null,
 };
 
 fn ntlmDecodeType2Target(
@@ -821,13 +837,13 @@ fn ntlmDecodeType2Target(
                 return CURLE_BAD_CONTENT_ENCODING;
             }
 
-            mem.free(ntlm.target_info);
-            const dup = mem.malloc(target_info_len) orelse {
+            if (ntlm.target_info) |ti| mem.freeTyped(ti);
+            const dup = mem.allocMany(u8, target_info_len) orelse {
                 ntlm.target_info = null;
                 return CURLE_OUT_OF_MEMORY;
             };
             @memcpy(dup[0..target_info_len], type2[target_info_offset .. target_info_offset + target_info_len]);
-            ntlm.target_info = @ptrCast(dup);
+            ntlm.target_info = dup;
         }
     }
 
@@ -1051,7 +1067,7 @@ pub fn Curl_auth_create_ntlm_type3_message(
 
 pub fn Curl_auth_cleanup_ntlm(ntlm: *ntlmdata) callconv(.c) void {
     if (ntlm.target_info) |ti| {
-        mem.free(ti);
+        mem.freeTyped(ti);
         ntlm.target_info = null;
     }
     ntlm.target_info_len = 0;
