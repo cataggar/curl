@@ -4,6 +4,7 @@ const mem = @import("mem.zig");
 const primitives_mod = @import("primitives.zig");
 const os_leaf_mod = @import("os_leaf.zig");
 const containers_mod = @import("containers.zig");
+const doh_hostip_easy = @import("doh_hostip_easy.zig");
 const backend_options = @import("backend_options");
 
 pub const CURLcode = c_uint;
@@ -135,15 +136,7 @@ const containers = struct {
     }
 };
 
-fn memdup0(src: [*]const u8, len: usize) ?[*:0]u8 {
-    const total = std.math.add(usize, len, 1) catch return null;
-    const dst = mem.malloc(total) orelse return null;
-    if (len > 0) {
-        @memcpy(dst[0..len], src[0..len]);
-    }
-    dst[len] = 0;
-    return @ptrCast(dst);
-}
+const memdup0 = mem.memdup0;
 
 // ============================================================================
 // Sibling Zig module externs (always available in both build and test)
@@ -316,7 +309,7 @@ const c_ext = struct {
         data: ?*Curl_easy,
         pupload: *bool,
         pinfilesize: *curl_off_t,
-        ppostfields: *?[*]const u8,
+        ppostfields: *?[*:0]const u8,
         ppostfieldsize: *curl_off_t,
         pcrlf: *bool,
     ) callconv(.c) void;
@@ -355,7 +348,7 @@ const c_ext = struct {
         pwriteit: *?curl_write_callback,
         puser_ptr: *?*anyopaque,
     ) callconv(.c) void;
-    extern fn Curl_rtsp_get_rtp_channel_mask(data: ?*Curl_easy) callconv(.c) [*]u8;
+    extern fn Curl_rtsp_get_rtp_channel_mask(data: ?*Curl_easy) callconv(.c) *[32]u8;
     extern fn Curl_rtsp_get_session_id(data: ?*Curl_easy) callconv(.c) ?[*:0]const u8;
     extern fn Curl_rtsp_set_session_id(data: ?*Curl_easy, mem_ptr: [*:0]u8) callconv(.c) CURLcode;
 };
@@ -1409,18 +1402,18 @@ pub export fn Curl_wildcard_dtor(wcp: *?*WildcardData) callconv(.c) void {
     mem.free(wc.pattern);
     wc.pattern = null;
     wc.state = CURLWC_INIT;
-    mem.freeSized(wc, @sizeOf(WildcardData));
+    mem.freeTyped(wc);
     wcp.* = null;
 }
 
 pub export fn Curl_ftp_parselist_data_alloc() callconv(.c) ?*ftp_parselist_data {
-    return @ptrCast(@alignCast(mem.calloc(1, @sizeOf(ftp_parselist_data))));
+    return mem.create(ftp_parselist_data);
 }
 
 pub export fn Curl_ftp_parselist_data_free(parserp: *?*ftp_parselist_data) callconv(.c) void {
     const parser = parserp.* orelse return;
     containers.Curl_fileinfo_cleanup(parser.file_data);
-    mem.freeSized(parser, @sizeOf(ftp_parselist_data));
+    mem.freeTyped(parser);
     parserp.* = null;
 }
 
@@ -1522,16 +1515,16 @@ fn ftpPlInsertFinfo(data: ?*Curl_easy, parser: *ftp_parselist_data) CURLcode {
     infop.b_used = io_buffers.curlx_dyn_len(&finfo.buf);
 
     const offsets = &parser.offsets;
-    infop.filename = @ptrCast(b_ptr + offsets.filename);
-    infop.strings.time = @ptrCast(b_ptr + offsets.time);
+    infop.filename = b_ptr + offsets.filename;
+    infop.strings.time = b_ptr + offsets.time;
     if (offsets.perm != 0)
-        infop.strings.perm = @ptrCast(b_ptr + offsets.perm);
+        infop.strings.perm = b_ptr + offsets.perm;
     if (offsets.user != 0)
-        infop.strings.user = @ptrCast(b_ptr + offsets.user);
+        infop.strings.user = b_ptr + offsets.user;
     if (offsets.group != 0)
-        infop.strings.group = @ptrCast(b_ptr + offsets.group);
+        infop.strings.group = b_ptr + offsets.group;
     if (infop.filetype == CURLFILETYPE_SYMLINK) {
-        infop.strings.target = @ptrCast(b_ptr + offsets.target);
+        infop.strings.target = b_ptr + offsets.target;
     }
 
     const fname_slice = std.mem.span(infop.filename.?);
@@ -1615,7 +1608,7 @@ fn unixLineParser(
                     } else if (c == '\n') {
                         mem_ptr[parser.item_length - 1] = 0;
                         if (parser.item_length >= 6 and std.mem.eql(u8, mem_ptr[0..6], "total ")) {
-                            var endptr: ?[*:0]const u8 = @ptrCast(mem_ptr + 6);
+                            var endptr: ?[*:0]const u8 = mem_ptr + 6;
                             curlx_str_passblanks(&endptr);
                             while (primitives.curlx_isdigit(endptr.?[0])) {
                                 endptr = endptr.? + 1;
@@ -1692,7 +1685,7 @@ fn unixLineParser(
                 PL_UNIX_HLINKS_NUMBER => {
                     parser.item_length += 1;
                     if (c == ' ') {
-                        var p: ?[*:0]const u8 = @ptrCast(mem_ptr + parser.item_offset);
+                        var p: ?[*:0]const u8 = mem_ptr + parser.item_offset;
                         var hlinks: curl_off_t = 0;
                         mem_ptr[parser.item_offset + parser.item_length - 1] = 0;
                         if (curlx_str_number(&p, &hlinks, std.math.maxInt(c_long)) == 0) {
@@ -1774,7 +1767,7 @@ fn unixLineParser(
                 PL_UNIX_SIZE_NUMBER => {
                     parser.item_length += 1;
                     if (c == ' ') {
-                        var p: ?[*:0]const u8 = @ptrCast(mem_ptr + parser.item_offset);
+                        var p: ?[*:0]const u8 = mem_ptr + parser.item_offset;
                         var fsize: curl_off_t = 0;
                         mem_ptr[parser.item_offset + parser.item_length - 1] = 0;
                         if (curlx_str_number(&p, &fsize, std.math.maxInt(curl_off_t)) == 0) {
@@ -2048,7 +2041,7 @@ fn winntLineParser(
                             infop.filetype = CURLFILETYPE_DIRECTORY;
                             infop.size = 0;
                         } else {
-                            var endptr: ?[*:0]const u8 = @ptrCast(dirorsize);
+                            var endptr: ?[*:0]const u8 = dirorsize;
                             if (curlx_str_number(&endptr, &infop.size, std.math.maxInt(curl_off_t)) != 0) {
                                 return CURLE_FTP_BAD_FILE_LIST;
                             }
@@ -2104,14 +2097,55 @@ fn winntLineParser(
     return result;
 }
 
+fn ftpParselistStep(
+    data: ?*Curl_easy,
+    parser: *ftp_parselist_data,
+    finfo: *fileinfo,
+    c: u8,
+) error{ParseFailed}!void {
+    errdefer {
+        if (parser.file_data) |fd| {
+            containers.Curl_fileinfo_cleanup(fd);
+            parser.file_data = null;
+        }
+    }
+
+    if (io_buffers.curlx_dyn_addn(&finfo.buf, (&c)[0..1].ptr, 1) != CURLE_OK) {
+        parser.err = CURLE_OUT_OF_MEMORY;
+        return error.ParseFailed;
+    }
+
+    const result: CURLcode = switch (parser.os_type) {
+        .UNKNOWN => blk: {
+            if (primitives.curlx_isdigit(c)) {
+                parser.os_type = .WIN_NT;
+                parser.nt_main = .DATE;
+                parser.nt_sub = 0;
+                break :blk winntLineParser(data, parser, finfo, c);
+            } else {
+                parser.os_type = .UNIX;
+                parser.unix_main = .TOTALSIZE;
+                parser.unix_sub = PL_UNIX_TOTALSIZE_INIT;
+                break :blk unixLineParser(data, parser, finfo, c);
+            }
+        },
+        .UNIX => unixLineParser(data, parser, finfo, c),
+        .WIN_NT => winntLineParser(data, parser, finfo, c),
+    };
+
+    if (result != CURLE_OK) {
+        parser.err = result;
+        return error.ParseFailed;
+    }
+}
+
 pub export fn Curl_ftp_parselist(
     buffer: [*]u8,
     size: usize,
     nmemb: usize,
-    connptr: ?*anyopaque,
+    data: ?*Curl_easy,
 ) callconv(.c) usize {
     const bufflen = size * nmemb;
-    const data: ?*Curl_easy = @ptrCast(connptr);
     var wc_opt: ?*WildcardData = null;
     var fnmatch_opt: ?curl_fnmatch_callback = null;
     var fnmatch_data: ?*anyopaque = null;
@@ -2125,7 +2159,6 @@ pub export fn Curl_ftp_parselist(
     const parser = ftpwc.parser orelse return CURL_WRITEFUNC_ERROR;
 
     var i: usize = 0;
-    var result: CURLcode = CURLE_OK;
 
     if (parser.err != CURLE_OK) {
         if (parser.file_data) |fd| {
@@ -2135,7 +2168,7 @@ pub export fn Curl_ftp_parselist(
         return bufflen;
     }
 
-    while (i < bufflen) {
+    while (i < bufflen) : (i += 1) {
         const c = buffer[i];
         var finfo: *fileinfo = undefined;
         if (parser.file_data == null) {
@@ -2152,50 +2185,7 @@ pub export fn Curl_ftp_parselist(
             finfo = parser.file_data.?;
         }
 
-        if (io_buffers.curlx_dyn_addn(&finfo.buf, buffer + i, 1) != CURLE_OK) {
-            parser.err = CURLE_OUT_OF_MEMORY;
-            if (parser.file_data) |fd| {
-                containers.Curl_fileinfo_cleanup(fd);
-                parser.file_data = null;
-            }
-            return bufflen;
-        }
-
-        switch (parser.os_type) {
-            .UNKNOWN => {
-                if (primitives.curlx_isdigit(c)) {
-                    parser.os_type = .WIN_NT;
-                    parser.nt_main = .DATE;
-                    parser.nt_sub = 0;
-                } else {
-                    parser.os_type = .UNIX;
-                    parser.unix_main = .TOTALSIZE;
-                    parser.unix_sub = PL_UNIX_TOTALSIZE_INIT;
-                }
-                if (parser.os_type == .UNIX) {
-                    result = unixLineParser(data, parser, finfo, c);
-                } else {
-                    result = winntLineParser(data, parser, finfo, c);
-                }
-            },
-            .UNIX => {
-                result = unixLineParser(data, parser, finfo, c);
-            },
-            .WIN_NT => {
-                result = winntLineParser(data, parser, finfo, c);
-            },
-        }
-
-        if (result != CURLE_OK) {
-            parser.err = result;
-            if (parser.file_data) |fd| {
-                containers.Curl_fileinfo_cleanup(fd);
-                parser.file_data = null;
-            }
-            return bufflen;
-        }
-
-        i += 1;
+        ftpParselistStep(data, parser, finfo, c) catch return bufflen;
     }
     return bufflen;
 }
@@ -2283,16 +2273,17 @@ fn rtpPktLength(p: []const u8) usize {
 
 const CURL_POLL_OUT: c_int = 2;
 
+inline fn rtspEasy(data: ?*Curl_easy) ?*RTSP {
+    return doh_hostip_easy.metaGetTyped(RTSP, data, CURL_META_RTSP_EASY);
+}
+
+inline fn rtspConn(conn: ?*connectdata) ?*rtsp_conn {
+    return doh_hostip_easy.connMetaGetTyped(rtsp_conn, conn, CURL_META_RTSP_CONN);
+}
+
 fn rtspDoPollset(data: ?*Curl_easy, ps: ?*easy_pollset) callconv(.c) CURLcode {
     if (builtin.is_test) return CURLE_OK;
     return c_ext.Curl_pollset_change(data, ps, c_ext.Curl_rtsp_get_firstsocket(data), CURL_POLL_OUT, 0);
-}
-
-fn rtspEasyDtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callconv(.c) void {
-    _ = key;
-    _ = klen;
-    const p = entry orelse return;
-    mem.freeSized(p, @sizeOf(RTSP));
 }
 
 fn rtspConnDtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callconv(.c) void {
@@ -2300,18 +2291,18 @@ fn rtspConnDtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callcon
     _ = klen;
     const rtspc: *rtsp_conn = @ptrCast(@alignCast(entry orelse return));
     io_buffers.curlx_dyn_free(&rtspc.buf);
-    mem.freeSized(rtspc, @sizeOf(rtsp_conn));
+    mem.freeTyped(rtspc);
 }
 
 fn rtspSetupConnection(data: ?*Curl_easy, conn: ?*connectdata) callconv(.c) CURLcode {
     if (builtin.is_test) return CURLE_OK;
-    const rtspc: *rtsp_conn = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(rtsp_conn)) orelse return CURLE_OUT_OF_MEMORY));
+    const rtspc = mem.create(rtsp_conn) orelse return CURLE_OUT_OF_MEMORY;
     io_buffers.curlx_dyn_init(&rtspc.buf, MAX_RTP_BUFFERSIZE);
     if (c_ext.Curl_conn_meta_set(conn, CURL_META_RTSP_CONN, rtspc, &rtspConnDtor) != CURLE_OK)
         return CURLE_OUT_OF_MEMORY;
 
-    const rtsp: *RTSP = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(RTSP)) orelse return CURLE_OUT_OF_MEMORY));
-    if (c_ext.Curl_meta_set(data, CURL_META_RTSP_EASY, rtsp, &rtspEasyDtor) != CURLE_OK)
+    const rtsp = mem.create(RTSP) orelse return CURLE_OUT_OF_MEMORY;
+    if (doh_hostip_easy.metaSetTyped(RTSP, data, CURL_META_RTSP_EASY, rtsp) != CURLE_OK)
         return CURLE_OUT_OF_MEMORY;
 
     return CURLE_OK;
@@ -2326,7 +2317,7 @@ fn rtspConnIsDead(data: ?*Curl_easy, conn: ?*connectdata) callconv(.c) bool {
 fn rtspConnect(data: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
     if (builtin.is_test) return CURLE_OK;
     const conn = c_ext.Curl_rtsp_get_conn(data);
-    const rtspc: *rtsp_conn = @ptrCast(@alignCast(c_ext.Curl_conn_meta_get(conn, CURL_META_RTSP_CONN) orelse return CURLE_FAILED_INIT));
+    const rtspc = rtspConn(conn) orelse return CURLE_FAILED_INIT;
 
     c_ext.Curl_rtsp_init_cseq(data);
     rtspc.rtp_channel = -1;
@@ -2338,8 +2329,8 @@ fn rtspDone(data: ?*Curl_easy, status: CURLcode, premature_in: bool) callconv(.c
     if (builtin.is_test) return CURLE_OK;
     var premature = premature_in;
     const conn = c_ext.Curl_rtsp_get_conn(data);
-    const rtspc: *rtsp_conn = @ptrCast(@alignCast(c_ext.Curl_conn_meta_get(conn, CURL_META_RTSP_CONN) orelse return CURLE_FAILED_INIT));
-    const rtsp: *RTSP = @ptrCast(@alignCast(c_ext.Curl_meta_get(data, CURL_META_RTSP_EASY) orelse return CURLE_FAILED_INIT));
+    const rtspc = rtspConn(conn) orelse return CURLE_FAILED_INIT;
+    const rtsp = rtspEasy(data) orelse return CURLE_FAILED_INIT;
     const rtspreq = c_ext.Curl_rtsp_get_rtspreq(data);
 
     if (rtspreq == CURL_RTSPREQ_RECEIVE)
@@ -2385,7 +2376,7 @@ fn rtspSetupBody(data: ?*Curl_easy, rtspreq: u8, reqp: *dynbuf) CURLcode {
     {
         var upload: bool = false;
         var infilesize: curl_off_t = 0;
-        var postfields: ?[*]const u8 = null;
+        var postfields: ?[*:0]const u8 = null;
         var postfieldsize: curl_off_t = 0;
         var crlf: bool = false;
         c_ext.Curl_rtsp_get_body_info(data, &upload, &infilesize, &postfields, &postfieldsize, &crlf);
@@ -2402,7 +2393,7 @@ fn rtspSetupBody(data: ?*Curl_easy, rtspreq: u8, reqp: *dynbuf) CURLcode {
                 const plen: usize = if (postfieldsize >= 0)
                     @intCast(postfieldsize)
                 else
-                    std.mem.len(@as([*:0]const u8, @ptrCast(pf)));
+                    std.mem.len(pf);
                 req_clen = @intCast(plen);
                 result = c_ext.Curl_creader_set_buf(data, pf, plen);
             } else if (infilesize >= 0) {
@@ -2507,9 +2498,7 @@ const RtspBlocks = struct {
     transport_alloc: bool = false,
 };
 
-fn rtspSetupRequest(data: ?*Curl_easy, b: *RtspBlocks, rtspreq: u8) CURLcode {
-    if (builtin.is_test) return CURLE_OK;
-    var result: CURLcode = CURLE_OK;
+fn rtspSetupRequestInner(data: ?*Curl_easy, b: *RtspBlocks, rtspreq: u8, out_code: *CURLcode) !void {
     const conn = c_ext.Curl_rtsp_get_conn(data);
 
     var session_id: ?[*:0]const u8 = null;
@@ -2538,16 +2527,31 @@ fn rtspSetupRequest(data: ?*Curl_easy, b: *RtspBlocks, rtspreq: u8) CURLcode {
     b.session_id = session_id;
     b.stream_uri = stream_uri orelse "*";
 
+    errdefer {
+        if (b.transport_alloc) {
+            mem.free(b.transport);
+            b.transport = null;
+            b.transport_alloc = false;
+        }
+        mem.free(b.accept_encoding);
+        b.accept_encoding = null;
+        mem.free(b.referrer);
+        b.referrer = null;
+    }
+
     b.transport = checkHeaders(data, "Transport");
     if (rtspreq == CURL_RTSPREQ_SETUP and b.transport == null) {
         if (opt_transport) |tr| {
-            result = rtspHeaderAlloc("Transport", tr, &b.transport);
-            if (result != CURLE_OK)
-                return result;
+            const rc = rtspHeaderAlloc("Transport", tr, &b.transport);
+            if (rc != CURLE_OK) {
+                out_code.* = rc;
+                return error.RtspSetupFailed;
+            }
             b.transport_alloc = true;
         } else {
             failf0(data, "Refusing to issue an RTSP SETUP without a Transport: header.");
-            return CURLE_BAD_FUNCTION_ARGUMENT;
+            out_code.* = CURLE_BAD_FUNCTION_ARGUMENT;
+            return error.RtspSetupFailed;
         }
     }
 
@@ -2555,13 +2559,15 @@ fn rtspSetupRequest(data: ?*Curl_easy, b: *RtspBlocks, rtspreq: u8) CURLcode {
         b.accept = if (checkHeaders(data, "Accept") != null) null else "Accept: application/sdp\r\n";
 
         if (checkHeaders(data, "Accept-Encoding") == null and opt_encoding != null) {
-            result = rtspHeaderAlloc("Accept-Encoding", opt_encoding, &b.accept_encoding);
-            if (result != CURLE_OK)
-                return result;
+            const rc = rtspHeaderAlloc("Accept-Encoding", opt_encoding, &b.accept_encoding);
+            if (rc != CURLE_OK) {
+                out_code.* = rc;
+                return error.RtspSetupFailed;
+            }
         }
     }
 
-    result = c_ext.Curl_http_output_auth(
+    const auth_rc = c_ext.Curl_http_output_auth(
         data,
         conn,
         b.request orelse "",
@@ -2570,39 +2576,50 @@ fn rtspSetupRequest(data: ?*Curl_easy, b: *RtspBlocks, rtspreq: u8) CURLcode {
         null,
         false,
     );
-    if (result != CURLE_OK)
-        return result;
+    if (auth_rc != CURLE_OK) {
+        out_code.* = auth_rc;
+        return error.RtspSetupFailed;
+    }
 
     c_ext.Curl_rtsp_get_auth_headers(data, &b.hd_proxy_auth, &b.hd_auth);
 
     if (opt_referer != null and checkHeaders(data, "Referer") == null) {
-        b.referrer = curl_maprintf("Referer: %s\r\n", opt_referer.?);
-        if (b.referrer == null)
-            result = CURLE_OUT_OF_MEMORY;
+        b.referrer = curl_maprintf("Referer: %s\r\n", opt_referer.?) orelse {
+            out_code.* = CURLE_OUT_OF_MEMORY;
+            return error.RtspSetupFailed;
+        };
     }
 
-    if (result == CURLE_OK and use_range and
+    if (use_range and
         (rtspreq == CURL_RTSPREQ_PLAY or
             rtspreq == CURL_RTSPREQ_PAUSE or
             rtspreq == CURL_RTSPREQ_RECORD) and
         checkHeaders(data, "Range") == null and range_str != null)
     {
-        result = rtspHeaderAlloc("Range", range_str, rangeline_ptr);
-        if (result == CURLE_OK)
-            b.range = rangeline_ptr.*;
+        const rc = rtspHeaderAlloc("Range", range_str, rangeline_ptr);
+        if (rc != CURLE_OK) {
+            out_code.* = rc;
+            return error.RtspSetupFailed;
+        }
+        b.range = rangeline_ptr.*;
     }
+}
 
-    return result;
+fn rtspSetupRequest(data: ?*Curl_easy, b: *RtspBlocks, rtspreq: u8) CURLcode {
+    if (builtin.is_test) return CURLE_OK;
+    var result: CURLcode = CURLE_OK;
+    rtspSetupRequestInner(data, b, rtspreq, &result) catch return result;
+    return CURLE_OK;
 }
 
 fn rtspDo(data: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
     if (builtin.is_test) return CURLE_OK;
     var result: CURLcode = CURLE_OK;
     const rtspreq = c_ext.Curl_rtsp_get_rtspreq(data);
-    const rtsp: *RTSP = @ptrCast(@alignCast(c_ext.Curl_meta_get(data, CURL_META_RTSP_EASY) orelse {
+    const rtsp = rtspEasy(data) orelse {
         done.* = true;
         return CURLE_FAILED_INIT;
-    }));
+    };
     var req_buffer: dynbuf = undefined;
     var block = RtspBlocks{};
 
@@ -2988,7 +3005,7 @@ fn rtspRtpWriteResp(
 ) callconv(.c) CURLcode {
     if (builtin.is_test) return CURLE_OK;
     const conn = c_ext.Curl_rtsp_get_conn(data);
-    const rtspc: *rtsp_conn = @ptrCast(@alignCast(c_ext.Curl_conn_meta_get(conn, CURL_META_RTSP_CONN) orelse return CURLE_FAILED_INIT));
+    const rtspc = rtspConn(conn) orelse return CURLE_FAILED_INIT;
     var result: CURLcode = CURLE_OK;
     var consumed: usize = 0;
     var buf_slice: []const u8 = buf_in[0..blen_in];
@@ -3071,8 +3088,8 @@ fn rtspRtpWriteRespHd(
     return rtspRtpWriteResp(data, buf, blen, is_eos);
 }
 
-fn checkPrefix(prefix: []const u8, str: [*:0]const u8) bool {
-    return primitives.curl_strnequal(str, @ptrCast(prefix.ptr), prefix.len) != 0;
+fn checkPrefix(prefix: [:0]const u8, str: [*:0]const u8) bool {
+    return primitives.curl_strnequal(str, prefix.ptr, prefix.len) != 0;
 }
 
 pub fn rtspParseTransportMask(
@@ -3140,7 +3157,7 @@ pub export fn Curl_rtsp_parseheader(
     if (checkPrefix("CSeq:", header)) {
         if (builtin.is_test) return CURLE_OK;
         var cseq: curl_off_t = 0;
-        const rtsp: *RTSP = @ptrCast(@alignCast(c_ext.Curl_meta_get(data, CURL_META_RTSP_EASY) orelse return CURLE_FAILED_INIT));
+        const rtsp = rtspEasy(data) orelse return CURLE_FAILED_INIT;
         var p: ?[*:0]const u8 = header + 5;
         curlx_str_passblanks(&p);
         if (curlx_str_number(&p, &cseq, std.math.maxInt(u32)) != 0) {
@@ -3175,12 +3192,12 @@ pub export fn Curl_rtsp_parseheader(
             }
         } else {
             const dup = memdup0(start, idlen) orelse return CURLE_OUT_OF_MEMORY;
-            if (c_ext.Curl_rtsp_set_session_id(data, @ptrCast(dup)) != CURLE_OK)
+            if (c_ext.Curl_rtsp_set_session_id(data, dup) != CURLE_OK)
                 return CURLE_OUT_OF_MEMORY;
         }
     } else if (checkPrefix("Transport:", header)) {
         if (builtin.is_test) return CURLE_OK;
-        const mask_ptr: *[32]u8 = @ptrCast(c_ext.Curl_rtsp_get_rtp_channel_mask(data));
+        const mask_ptr = c_ext.Curl_rtsp_get_rtp_channel_mask(data);
         return rtspParseTransportMask(data, header + 10, mask_ptr);
     }
     return CURLE_OK;
@@ -3258,7 +3275,7 @@ test "Curl_ftp_parselist_data_alloc, free, permission parser, and wildcard init/
     try std.testing.expectEqual(@as(c_uint, 0o4755), ftpPlGetPermission("rwsr-xr-x"));
     try std.testing.expectEqual(@as(c_uint, 0o1777), ftpPlGetPermission("rwxrwxrwt"));
 
-    var wc_ptr: ?*WildcardData = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(WildcardData))));
+    var wc_ptr: ?*WildcardData = mem.create(WildcardData);
     try std.testing.expect(wc_ptr != null);
     Curl_wildcard_init(wc_ptr.?);
     try std.testing.expectEqual(CURLWC_INIT, wc_ptr.?.state);

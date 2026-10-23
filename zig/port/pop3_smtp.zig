@@ -8,6 +8,7 @@ const io_buffers = @import("io_buffers.zig");
 const cookie_getinfo_trc = @import("cookie_getinfo_trc.zig");
 const netrc_addr_idn = @import("netrc_addr_idn.zig");
 const crypto = @import("crypto.zig");
+const doh_hostip_easy = @import("doh_hostip_easy.zig");
 
 const CURLcode = c_uint;
 const CURLE_OK: CURLcode = 0;
@@ -49,6 +50,8 @@ const URLDEC_NO_CTRL: c_uint = 3;
 const CURL_CR_CONTENT_ENCODE: c_uint = 3;
 
 const pingpong = cookie_getinfo_trc.pingpong;
+const Curl_easy = doh_hostip_easy.Curl_easy;
+const connectdata = doh_hostip_easy.connectdata;
 const bufref = containers.bufref;
 const curl_slist = containers.curl_slist;
 const bufq = io_buffers.bufq;
@@ -131,14 +134,23 @@ const CURL_META_POP3_CONN: [*:0]const u8 = "meta:proto:pop3:conn";
 const CURL_META_SMTP_EASY: [*:0]const u8 = "meta:proto:smtp:easy";
 const CURL_META_SMTP_CONN: [*:0]const u8 = "meta:proto:smtp:conn";
 
-const Curl_meta_dtor = *const fn (key: ?*const anyopaque, key_len: usize, entry: ?*anyopaque) callconv(.c) void;
+inline fn pop3Easy(data: ?*anyopaque) ?*POP3 {
+    return doh_hostip_easy.metaGetTyped(POP3, data, CURL_META_POP3_EASY);
+}
+
+inline fn pop3Conn(conn: ?*anyopaque) ?*pop3_conn {
+    return doh_hostip_easy.connMetaGetTyped(pop3_conn, conn, CURL_META_POP3_CONN);
+}
+
+inline fn smtpEasy(data: ?*anyopaque) ?*SMTP {
+    return doh_hostip_easy.metaGetTyped(SMTP, data, CURL_META_SMTP_EASY);
+}
+
+inline fn smtpConn(conn: ?*anyopaque) ?*smtp_conn {
+    return doh_hostip_easy.connMetaGetTyped(smtp_conn, conn, CURL_META_SMTP_CONN);
+}
 
 // Extern C functions from libcurl & Zig port modules
-extern fn Curl_conn_meta_get(conn: ?*anyopaque, key: [*:0]const u8) callconv(.c) ?*anyopaque;
-extern fn Curl_conn_meta_set(conn: ?*anyopaque, key: [*:0]const u8, meta_data: ?*anyopaque, meta_dtor: Curl_meta_dtor) callconv(.c) CURLcode;
-extern fn Curl_meta_get(data: ?*anyopaque, key: [*:0]const u8) callconv(.c) ?*anyopaque;
-extern fn Curl_meta_set(data: ?*anyopaque, key: [*:0]const u8, meta_data: ?*anyopaque, meta_dtor: Curl_meta_dtor) callconv(.c) CURLcode;
-
 extern fn Curl_pp_sendf(data: ?*anyopaque, pp: *pingpong, fmt: [*:0]const u8, ...) callconv(.c) CURLcode;
 extern fn Curl_pp_disconnect(pp: *pingpong) callconv(.c) CURLcode;
 extern fn Curl_pp_moredata(pp: *const pingpong) callconv(.c) bool;
@@ -148,6 +160,10 @@ extern fn Curl_bufref_ptr(br: *const bufref) callconv(.c) ?[*:0]const u8;
 extern fn curlx_memdup0(src: ?[*]const u8, length: usize) callconv(.c) ?[*:0]u8;
 extern fn curlx_str_number(linep: *[*:0]const u8, nump: *i64, max: i64) callconv(.c) c_int;
 extern fn curl_maprintf(format: [*:0]const u8, ...) callconv(.c) ?[*:0]u8;
+
+const Curl_meta_dtor = ?*const fn (key: ?*const anyopaque, key_len: usize, meta_data: ?*anyopaque) callconv(.c) void;
+extern fn Curl_conn_meta_set(conn: ?*anyopaque, key: [*:0]const u8, meta_data: ?*anyopaque, meta_dtor: Curl_meta_dtor) callconv(.c) CURLcode;
+extern fn Curl_meta_set(data: ?*anyopaque, key: [*:0]const u8, meta_data: ?*anyopaque, meta_dtor: Curl_meta_dtor) callconv(.c) CURLcode;
 
 extern fn Curl_client_write(data: ?*anyopaque, type_flags: c_int, buf: [*]const u8, blen: usize) callconv(.c) CURLcode;
 extern fn Curl_debug(data: ?*anyopaque, info_type: c_uint, ptr: [*]const u8, size: usize) callconv(.c) void;
@@ -266,7 +282,7 @@ const pop3_conn = extern struct {
 };
 
 const pop3_cmd = struct {
-    name: []const u8,
+    name: [:0]const u8,
     nlen: u16,
     multiline: bool,
     multiline_with_args: bool,
@@ -295,7 +311,7 @@ const pop3cmds = [_]pop3_cmd{
 
 fn pop3_is_multiline(cmdline: [*:0]const u8) bool {
     for (pop3cmds) |cmd| {
-        if (primitives.curl_strnequal(cmdline, @ptrCast(cmd.name.ptr), cmd.nlen) != 0) {
+        if (primitives.curl_strnequal(cmdline, cmd.name.ptr, cmd.nlen) != 0) {
             if (cmdline[cmd.nlen] == 0)
                 return cmd.multiline;
             if (cmdline[cmd.nlen] == ' ')
@@ -319,15 +335,14 @@ const saslpop3 = SASLproto{
 };
 
 fn pop3_endofresp(
-    data: ?*anyopaque,
-    conn: ?*anyopaque,
-    line: [*]const u8,
+    data: ?*Curl_easy,
+    conn: ?*connectdata,
+    line: [*:0]const u8,
     len: usize,
     resp: *c_int,
 ) callconv(.c) bool {
     _ = data;
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return true;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return true;
 
     if (len >= 4 and std.mem.eql(u8, line[0..4], "-ERR")) {
         resp.* = '-';
@@ -360,8 +375,7 @@ fn pop3_endofresp(
 
 fn pop3_get_message(data: ?*anyopaque, out: *bufref) callconv(.c) CURLcode {
     const conn = Curl_pop3_smtp_get_conn(data);
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
     const msg_ptr = containers.curlx_dyn_ptr(&pop3c.pp.recvbuf);
     var len = pop3c.pp.nfinal;
 
@@ -389,14 +403,12 @@ fn pop3_get_message(data: ?*anyopaque, out: *bufref) callconv(.c) CURLcode {
 
 fn pop3_state(data: ?*anyopaque, newstate: pop3state) void {
     const conn = Curl_pop3_smtp_get_conn(data);
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return;
     pop3c.state = newstate;
 }
 
 fn pop3_perform_capa(data: ?*anyopaque, conn: ?*anyopaque) CURLcode {
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
 
     Curl_pop3_smtp_sasl_set_authmechs(&pop3c.sasl, SASL_AUTH_NONE);
     Curl_pop3_smtp_sasl_set_authused(&pop3c.sasl, SASL_AUTH_NONE);
@@ -410,8 +422,7 @@ fn pop3_perform_capa(data: ?*anyopaque, conn: ?*anyopaque) CURLcode {
 }
 
 fn pop3_perform_starttls(data: ?*anyopaque, conn: ?*anyopaque) CURLcode {
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
 
     const result = Curl_pp_sendf(data, &pop3c.pp, "%s", @as([*:0]const u8, "STLS"));
     if (result == CURLE_OK)
@@ -421,8 +432,7 @@ fn pop3_perform_starttls(data: ?*anyopaque, conn: ?*anyopaque) CURLcode {
 }
 
 fn pop3_perform_upgrade_tls(data: ?*anyopaque, conn: ?*anyopaque) CURLcode {
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
 
     var ssldone: bool = false;
     var result = Curl_pop3_smtp_upgrade_tls(data, conn, false, &ssldone);
@@ -434,8 +444,7 @@ fn pop3_perform_upgrade_tls(data: ?*anyopaque, conn: ?*anyopaque) CURLcode {
 }
 
 fn pop3_perform_user(data: ?*anyopaque, conn: ?*anyopaque) CURLcode {
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
 
     if (!Curl_pop3_smtp_conn_has_creds(conn)) {
         pop3_state(data, .POP3_STOP);
@@ -451,8 +460,7 @@ fn pop3_perform_user(data: ?*anyopaque, conn: ?*anyopaque) CURLcode {
 }
 
 fn pop3_perform_apop(data: ?*anyopaque, conn: ?*anyopaque) CURLcode {
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
 
     if (!Curl_pop3_smtp_easy_has_creds(data)) {
         pop3_state(data, .POP3_STOP);
@@ -474,7 +482,7 @@ fn pop3_perform_apop(data: ?*anyopaque, conn: ?*anyopaque) CURLcode {
         return result;
 
     const hex_chars = "0123456789abcdef";
-    var secret: [33]u8 = undefined;
+    var secret: [32:0]u8 = undefined;
     for (digest, 0..) |b, i| {
         secret[2 * i] = hex_chars[b >> 4];
         secret[2 * i + 1] = hex_chars[b & 0x0f];
@@ -482,7 +490,7 @@ fn pop3_perform_apop(data: ?*anyopaque, conn: ?*anyopaque) CURLcode {
     secret[32] = 0;
 
     const user: [*:0]const u8 = Curl_pop3_smtp_get_conn_user(conn) orelse "";
-    result = Curl_pp_sendf(data, &pop3c.pp, "APOP %s %s", user, @as([*:0]const u8, @ptrCast(&secret)));
+    result = Curl_pp_sendf(data, &pop3c.pp, "APOP %s %s", user, @as([*:0]const u8, &secret));
     if (result == CURLE_OK)
         pop3_state(data, .POP3_APOP);
 
@@ -491,8 +499,7 @@ fn pop3_perform_apop(data: ?*anyopaque, conn: ?*anyopaque) CURLcode {
 
 fn pop3_perform_auth(data: ?*anyopaque, mech: [*:0]const u8, initresp: *const bufref) callconv(.c) CURLcode {
     const conn = Curl_pop3_smtp_get_conn(data);
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
 
     const ir = Curl_bufref_ptr(initresp);
     if (ir) |ir_str| {
@@ -505,8 +512,7 @@ fn pop3_perform_auth(data: ?*anyopaque, mech: [*:0]const u8, initresp: *const bu
 fn pop3_continue_auth(data: ?*anyopaque, mech: [*:0]const u8, resp: *const bufref) callconv(.c) CURLcode {
     _ = mech;
     const conn = Curl_pop3_smtp_get_conn(data);
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
 
     const r = Curl_bufref_ptr(resp) orelse @as([*:0]const u8, "");
     return Curl_pp_sendf(data, &pop3c.pp, "%s", r);
@@ -515,15 +521,13 @@ fn pop3_continue_auth(data: ?*anyopaque, mech: [*:0]const u8, resp: *const bufre
 fn pop3_cancel_auth(data: ?*anyopaque, mech: [*:0]const u8) callconv(.c) CURLcode {
     _ = mech;
     const conn = Curl_pop3_smtp_get_conn(data);
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
 
     return Curl_pp_sendf(data, &pop3c.pp, "*");
 }
 
 fn pop3_perform_authentication(data: ?*anyopaque, conn: ?*anyopaque) CURLcode {
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
     var result: CURLcode = CURLE_OK;
     var progress: c_uint = SASL_IDLE;
 
@@ -555,10 +559,8 @@ fn pop3_perform_authentication(data: ?*anyopaque, conn: ?*anyopaque) CURLcode {
 
 fn pop3_perform_command(data: ?*anyopaque) CURLcode {
     const conn = Curl_pop3_smtp_get_conn(data);
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
-    const pop3_raw = Curl_meta_get(data, CURL_META_POP3_EASY) orelse return CURLE_FAILED_INIT;
-    const pop3: *POP3 = @ptrCast(@alignCast(pop3_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
+    const pop3 = pop3Easy(data) orelse return CURLE_FAILED_INIT;
 
     const id_str: [*:0]const u8 = if (pop3.id) |id| id else "";
     var command: [*:0]const u8 = undefined;
@@ -590,8 +592,7 @@ fn pop3_perform_command(data: ?*anyopaque) CURLcode {
 }
 
 fn pop3_perform_quit(data: ?*anyopaque, conn: ?*anyopaque) CURLcode {
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
 
     const result = Curl_pp_sendf(data, &pop3c.pp, "%s", @as([*:0]const u8, "QUIT"));
     if (result == CURLE_OK)
@@ -604,8 +605,7 @@ fn pop3_state_servergreet_resp(data: ?*anyopaque, pop3code: c_int, instate: pop3
     _ = instate;
     var result: CURLcode = CURLE_OK;
     const conn = Curl_pop3_smtp_get_conn(data);
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
     const line_opt = containers.curlx_dyn_ptr(&pop3c.pp.recvbuf);
     const len = pop3c.pp.nfinal;
 
@@ -638,8 +638,7 @@ fn pop3_state_capa_resp(data: ?*anyopaque, pop3code: c_int, instate: pop3state) 
     _ = instate;
     var result: CURLcode = CURLE_OK;
     const conn = Curl_pop3_smtp_get_conn(data);
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
     const line_opt = containers.curlx_dyn_ptr(&pop3c.pp.recvbuf);
     var len = pop3c.pp.nfinal;
 
@@ -696,8 +695,7 @@ fn pop3_state_capa_resp(data: ?*anyopaque, pop3code: c_int, instate: pop3state) 
 fn pop3_state_starttls_resp(data: ?*anyopaque, conn: ?*anyopaque, pop3code: c_int, instate: pop3state) CURLcode {
     _ = instate;
     var result: CURLcode = CURLE_OK;
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
 
     if (pop3c.pp.overflow != 0)
         return CURLE_WEIRD_SERVER_REPLY;
@@ -721,8 +719,7 @@ fn pop3_state_auth_resp(data: ?*anyopaque, pop3code: c_int, instate: pop3state) 
     _ = instate;
     var result: CURLcode = CURLE_OK;
     const conn = Curl_pop3_smtp_get_conn(data);
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
     var progress: c_uint = SASL_IDLE;
 
     result = Curl_pop3_smtp_sasl_continue(&pop3c.sasl, data, pop3code, &progress);
@@ -762,8 +759,7 @@ fn pop3_state_user_resp(data: ?*anyopaque, pop3code: c_int, instate: pop3state) 
     _ = instate;
     var result: CURLcode = CURLE_OK;
     const conn = Curl_pop3_smtp_get_conn(data);
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
 
     if (pop3code != '+') {
         Curl_pop3_smtp_failf_int(data, "Access denied. %c", pop3code);
@@ -794,10 +790,8 @@ fn pop3_state_command_resp(data: ?*anyopaque, pop3code: c_int, instate: pop3stat
     _ = instate;
     var result: CURLcode = CURLE_OK;
     const conn = Curl_pop3_smtp_get_conn(data);
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
-    const pop3_raw = Curl_meta_get(data, CURL_META_POP3_EASY) orelse return CURLE_FAILED_INIT;
-    const pop3: *POP3 = @ptrCast(@alignCast(pop3_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
+    const pop3 = pop3Easy(data) orelse return CURLE_FAILED_INIT;
     const pp = &pop3c.pp;
 
     if (pop3code != '+') {
@@ -833,11 +827,10 @@ fn pop3_state_command_resp(data: ?*anyopaque, pop3code: c_int, instate: pop3stat
     return result;
 }
 
-fn pop3_statemachine(data: ?*anyopaque, conn: ?*anyopaque) callconv(.c) CURLcode {
+fn pop3_statemachine(data: ?*Curl_easy, conn: ?*connectdata) callconv(.c) CURLcode {
     var result: CURLcode = CURLE_OK;
     var pop3code: c_int = 0;
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
     const pp = &pop3c.pp;
     var nread: usize = 0;
 
@@ -883,8 +876,7 @@ inline fn Curl_pp_MoreSend(data: ?*anyopaque, pp: *pingpong) CURLcode {
 
 fn pop3_multi_statemach(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
     const conn = Curl_pop3_smtp_get_conn(data);
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
 
     const result = Curl_pop3_smtp_pp_statemach(data, &pop3c.pp, false, false);
     done.* = (pop3c.state == .POP3_STOP);
@@ -892,8 +884,7 @@ fn pop3_multi_statemach(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
 }
 
 fn pop3_block_statemach(data: ?*anyopaque, conn: ?*anyopaque, disconnecting: bool) CURLcode {
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
     var result: CURLcode = CURLE_OK;
 
     while (pop3c.state != .POP3_STOP and result == CURLE_OK)
@@ -906,9 +897,9 @@ fn pop3_easy_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callc
     _ = key;
     _ = klen;
     const pop3: *POP3 = @ptrCast(@alignCast(entry orelse return));
-    if (pop3.id) |id| mem.free(@ptrCast(id));
-    if (pop3.custom) |cust| mem.free(@ptrCast(cust));
-    mem.freeSized(pop3, @sizeOf(POP3));
+    if (pop3.id) |id| mem.free(id);
+    if (pop3.custom) |cust| mem.free(cust);
+    mem.freeTyped(pop3);
 }
 
 fn pop3_conn_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callconv(.c) void {
@@ -916,26 +907,24 @@ fn pop3_conn_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callc
     _ = klen;
     const pop3c: *pop3_conn = @ptrCast(@alignCast(entry orelse return));
     _ = Curl_pp_disconnect(&pop3c.pp);
-    if (pop3c.apoptimestamp) |ts| mem.free(@ptrCast(ts));
-    mem.freeSized(pop3c, @sizeOf(pop3_conn));
+    if (pop3c.apoptimestamp) |ts| mem.free(ts);
+    mem.freeTyped(pop3c);
 }
 
 fn pop3_init(data: ?*anyopaque) CURLcode {
-    const pop3_raw = mem.calloc(1, @sizeOf(POP3)) orelse return CURLE_OUT_OF_MEMORY;
-    return Curl_meta_set(data, CURL_META_POP3_EASY, pop3_raw, pop3_easy_dtor);
+    const pop3 = mem.create(POP3) orelse return CURLE_OUT_OF_MEMORY;
+    return Curl_meta_set(data, CURL_META_POP3_EASY, mem.toRawPtr(pop3), pop3_easy_dtor);
 }
 
 fn pop3_pollset(data: ?*anyopaque, ps: ?*anyopaque) callconv(.c) CURLcode {
     const conn = Curl_pop3_smtp_get_conn(data);
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
     return Curl_pop3_smtp_pp_pollset(data, &pop3c.pp, ps);
 }
 
 fn pop3_connect(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
     const conn = Curl_pop3_smtp_get_conn(data);
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
     const pp = &pop3c.pp;
 
     done.* = false;
@@ -953,19 +942,18 @@ fn pop3_connect(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
 
 fn pop3_done(data: ?*anyopaque, status: CURLcode, premature: bool) callconv(.c) CURLcode {
     _ = premature;
-    const pop3_raw = Curl_meta_get(data, CURL_META_POP3_EASY) orelse return CURLE_OK;
-    const pop3: *POP3 = @ptrCast(@alignCast(pop3_raw));
+    const pop3 = pop3Easy(data) orelse return CURLE_OK;
 
     if (status != CURLE_OK) {
         Curl_pop3_smtp_connclose(Curl_pop3_smtp_get_conn(data));
     }
 
     if (pop3.id) |id| {
-        mem.free(@ptrCast(id));
+        mem.free(id);
         pop3.id = null;
     }
     if (pop3.custom) |cust| {
-        mem.free(@ptrCast(cust));
+        mem.free(cust);
         pop3.custom = null;
     }
 
@@ -975,8 +963,7 @@ fn pop3_done(data: ?*anyopaque, status: CURLcode, premature: bool) callconv(.c) 
 
 fn pop3_perform(data: ?*anyopaque, connected: *bool, dophase_done: *bool) CURLcode {
     const conn = Curl_pop3_smtp_get_conn(data);
-    const pop3_raw = Curl_meta_get(data, CURL_META_POP3_EASY) orelse return CURLE_FAILED_INIT;
-    const pop3: *POP3 = @ptrCast(@alignCast(pop3_raw));
+    const pop3 = pop3Easy(data) orelse return CURLE_FAILED_INIT;
 
     var result = pop3_perform_command(data);
     if (result != CURLE_OK)
@@ -1008,8 +995,7 @@ fn pop3_do(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
 }
 
 fn pop3_disconnect(data: ?*anyopaque, conn: ?*anyopaque, dead_connection: bool) callconv(.c) CURLcode {
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
 
     if (!dead_connection and Curl_pop3_smtp_get_protoconnstart(conn)) {
         if (pop3_perform_quit(data, conn) == CURLE_OK)
@@ -1019,7 +1005,7 @@ fn pop3_disconnect(data: ?*anyopaque, conn: ?*anyopaque, dead_connection: bool) 
     _ = Curl_pp_disconnect(&pop3c.pp);
 
     if (pop3c.apoptimestamp) |ts| {
-        mem.free(@ptrCast(ts));
+        mem.free(ts);
         pop3c.apoptimestamp = null;
     }
 
@@ -1055,16 +1041,15 @@ fn pop3_regular_transfer(data: ?*anyopaque, dophase_done: *bool) CURLcode {
 }
 
 fn pop3_setup_connection(data: ?*anyopaque, conn: ?*anyopaque) callconv(.c) CURLcode {
-    const pop3c_raw = mem.calloc(1, @sizeOf(pop3_conn)) orelse return CURLE_OUT_OF_MEMORY;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = mem.create(pop3_conn) orelse return CURLE_OUT_OF_MEMORY;
 
-    pop3c.pp.statemachine = @ptrCast(&pop3_statemachine);
-    pop3c.pp.endofresp = @ptrCast(&pop3_endofresp);
+    pop3c.pp.statemachine = pop3_statemachine;
+    pop3c.pp.endofresp = pop3_endofresp;
     pop3c.preftype = POP3_TYPE_ANY;
 
     Curl_pop3_smtp_sasl_init(&pop3c.sasl, data, &saslpop3);
 
-    if (Curl_conn_meta_set(conn, CURL_META_POP3_CONN, pop3c_raw, pop3_conn_dtor) != CURLE_OK)
+    if (Curl_conn_meta_set(conn, CURL_META_POP3_CONN, mem.toRawPtr(pop3c), pop3_conn_dtor) != CURLE_OK)
         return CURLE_OUT_OF_MEMORY;
 
     return pop3_init(data);
@@ -1119,8 +1104,7 @@ fn pop3_parse_url_options(conn: ?*anyopaque, pop3c: *pop3_conn) CURLcode {
 }
 
 fn pop3_parse_url_path(data: ?*anyopaque) CURLcode {
-    const pop3_raw = Curl_meta_get(data, CURL_META_POP3_EASY) orelse return CURLE_FAILED_INIT;
-    const pop3: *POP3 = @ptrCast(@alignCast(pop3_raw));
+    const pop3 = pop3Easy(data) orelse return CURLE_FAILED_INIT;
     const path: [*:0]const u8 = Curl_pop3_smtp_get_up_path(data) orelse "/";
 
     const start: [*:0]const u8 = if (path[0] == '/') path + 1 else path;
@@ -1129,8 +1113,7 @@ fn pop3_parse_url_path(data: ?*anyopaque) CURLcode {
 
 fn pop3_parse_custom_request(data: ?*anyopaque) CURLcode {
     var result: CURLcode = CURLE_OK;
-    const pop3_raw = Curl_meta_get(data, CURL_META_POP3_EASY) orelse return CURLE_FAILED_INIT;
-    const pop3: *POP3 = @ptrCast(@alignCast(pop3_raw));
+    const pop3 = pop3Easy(data) orelse return CURLE_FAILED_INIT;
     const custom = Curl_pop3_smtp_get_customrequest(data);
 
     if (custom) |cust| {
@@ -1143,8 +1126,7 @@ fn pop3_parse_custom_request(data: ?*anyopaque) CURLcode {
 pub export fn Curl_pop3_write(data: ?*anyopaque, str: [*]const u8, nread: usize) callconv(.c) CURLcode {
     var result: CURLcode = CURLE_OK;
     const conn = Curl_pop3_smtp_get_conn(data);
-    const pop3c_raw = Curl_conn_meta_get(conn, CURL_META_POP3_CONN) orelse return CURLE_FAILED_INIT;
-    const pop3c: *pop3_conn = @ptrCast(@alignCast(pop3c_raw));
+    const pop3c = pop3Conn(conn) orelse return CURLE_FAILED_INIT;
     var strip_dot: bool = false;
     var last: usize = 0;
 
@@ -1230,7 +1212,7 @@ pub export fn Curl_pop3_write(data: ?*anyopaque, str: [*]const u8, nread: usize)
 fn pop3_write_resp(data: ?*anyopaque, buf: [*]const u8, blen: usize, is_eos: bool) callconv(.c) CURLcode {
     _ = is_eos;
     const conn = Curl_pop3_smtp_get_conn(data);
-    if (Curl_conn_meta_get(conn, CURL_META_POP3_CONN) == null)
+    if (pop3Conn(conn) == null)
         return CURLE_RECV_ERROR;
     return Curl_pop3_write(data, buf, blen);
 }
@@ -1459,34 +1441,44 @@ const cr_eob = Curl_criter{
     .size = @sizeOf(cr_eob_ctx),
 };
 
-fn cr_eob_insert_after(data: ?*anyopaque) CURLcode {
+fn crEobInsertAfterInner(data: ?*anyopaque, out_code: *CURLcode) !void {
     var reader: ?*Curl_creader = null;
     var result = Curl_creader_create(&reader, data, &cr_eob, CURL_CR_CONTENT_ENCODE);
-    if (result == CURLE_OK) {
-        result = Curl_creader_add(data, reader);
-        if (result != CURLE_OK)
-            Curl_creader_free(data, reader);
+    if (result != CURLE_OK) {
+        out_code.* = result;
+        return error.CreaderFailed;
     }
-    return result;
+    errdefer Curl_creader_free(data, reader);
+
+    result = Curl_creader_add(data, reader);
+    if (result != CURLE_OK) {
+        out_code.* = result;
+        return error.CreaderFailed;
+    }
+}
+
+fn cr_eob_insert_after(data: ?*anyopaque) CURLcode {
+    var result: CURLcode = CURLE_OK;
+    crEobInsertAfterInner(data, &result) catch return result;
+    return CURLE_OK;
 }
 
 fn smtp_endofresp(
-    data: ?*anyopaque,
-    conn: ?*anyopaque,
-    line: [*]const u8,
+    data: ?*Curl_easy,
+    conn: ?*connectdata,
+    line: [*:0]const u8,
     len: usize,
     resp: *c_int,
 ) callconv(.c) bool {
     _ = data;
-    const smtpc_raw = Curl_conn_meta_get(conn, CURL_META_SMTP_CONN) orelse return false;
-    const smtpc: *smtp_conn = @ptrCast(@alignCast(smtpc_raw));
+    const smtpc = smtpConn(conn) orelse return false;
 
     if (len < 4 or !std.ascii.isDigit(line[0]) or !std.ascii.isDigit(line[1]) or !std.ascii.isDigit(line[2]))
         return false;
 
     if (line[3] == ' ' or len == 5) {
-        var tmpline: [6]u8 = @splat(0);
-        var p: [*:0]const u8 = @ptrCast(&tmpline);
+        var tmpline: [5:0]u8 = @splat(0);
+        var p: [*:0]const u8 = &tmpline;
         var code: curl_off_t = 0;
         const copy_len: usize = if (len == 5) 5 else 3;
         @memcpy(tmpline[0..copy_len], line[0..copy_len]);
@@ -1506,8 +1498,7 @@ fn smtp_endofresp(
 
 fn smtp_get_message(data: ?*anyopaque, out: *bufref) callconv(.c) CURLcode {
     const conn = Curl_pop3_smtp_get_conn(data);
-    const smtpc_raw = Curl_conn_meta_get(conn, CURL_META_SMTP_CONN) orelse return CURLE_FAILED_INIT;
-    const smtpc: *smtp_conn = @ptrCast(@alignCast(smtpc_raw));
+    const smtpc = smtpConn(conn) orelse return CURLE_FAILED_INIT;
     const msg_ptr = containers.curlx_dyn_ptr(&smtpc.pp.recvbuf);
     var len = smtpc.pp.nfinal;
 
@@ -1578,8 +1569,7 @@ fn smtp_perform_starttls(data: ?*anyopaque, smtpc: *smtp_conn) CURLcode {
 }
 
 fn smtp_perform_upgrade_tls(data: ?*anyopaque, conn: ?*anyopaque) CURLcode {
-    const smtpc_raw = Curl_conn_meta_get(conn, CURL_META_SMTP_CONN) orelse return CURLE_FAILED_INIT;
-    const smtpc: *smtp_conn = @ptrCast(@alignCast(smtpc_raw));
+    const smtpc = smtpConn(conn) orelse return CURLE_FAILED_INIT;
 
     var ssldone: bool = false;
     var result = Curl_pop3_smtp_upgrade_tls(data, conn, true, &ssldone);
@@ -1592,8 +1582,7 @@ fn smtp_perform_upgrade_tls(data: ?*anyopaque, conn: ?*anyopaque) CURLcode {
 
 fn smtp_perform_auth(data: ?*anyopaque, mech: [*:0]const u8, initresp: *const bufref) callconv(.c) CURLcode {
     const conn = Curl_pop3_smtp_get_conn(data);
-    const smtpc_raw = Curl_conn_meta_get(conn, CURL_META_SMTP_CONN) orelse return CURLE_FAILED_INIT;
-    const smtpc: *smtp_conn = @ptrCast(@alignCast(smtpc_raw));
+    const smtpc = smtpConn(conn) orelse return CURLE_FAILED_INIT;
 
     const ir = Curl_bufref_ptr(initresp);
     if (ir) |ir_str| {
@@ -1606,8 +1595,7 @@ fn smtp_perform_auth(data: ?*anyopaque, mech: [*:0]const u8, initresp: *const bu
 fn smtp_continue_auth(data: ?*anyopaque, mech: [*:0]const u8, resp: *const bufref) callconv(.c) CURLcode {
     _ = mech;
     const conn = Curl_pop3_smtp_get_conn(data);
-    const smtpc_raw = Curl_conn_meta_get(conn, CURL_META_SMTP_CONN) orelse return CURLE_FAILED_INIT;
-    const smtpc: *smtp_conn = @ptrCast(@alignCast(smtpc_raw));
+    const smtpc = smtpConn(conn) orelse return CURLE_FAILED_INIT;
 
     const r = Curl_bufref_ptr(resp) orelse @as([*:0]const u8, "");
     return Curl_pp_sendf(data, &smtpc.pp, "%s", r);
@@ -1616,8 +1604,7 @@ fn smtp_continue_auth(data: ?*anyopaque, mech: [*:0]const u8, resp: *const bufre
 fn smtp_cancel_auth(data: ?*anyopaque, mech: [*:0]const u8) callconv(.c) CURLcode {
     _ = mech;
     const conn = Curl_pop3_smtp_get_conn(data);
-    const smtpc_raw = Curl_conn_meta_get(conn, CURL_META_SMTP_CONN) orelse return CURLE_FAILED_INIT;
-    const smtpc: *smtp_conn = @ptrCast(@alignCast(smtpc_raw));
+    const smtpc = smtpConn(conn) orelse return CURLE_FAILED_INIT;
 
     return Curl_pp_sendf(data, &smtpc.pp, "*");
 }
@@ -1646,10 +1633,8 @@ fn smtp_perform_authentication(data: ?*anyopaque, smtpc: *smtp_conn) CURLcode {
 fn smtp_perform_command(data: ?*anyopaque) CURLcode {
     var result: CURLcode = CURLE_OK;
     const conn = Curl_pop3_smtp_get_conn(data);
-    const smtpc_raw = Curl_conn_meta_get(conn, CURL_META_SMTP_CONN) orelse return CURLE_FAILED_INIT;
-    const smtpc: *smtp_conn = @ptrCast(@alignCast(smtpc_raw));
-    const smtp_raw = Curl_meta_get(data, CURL_META_SMTP_EASY) orelse return CURLE_FAILED_INIT;
-    const smtp: *SMTP = @ptrCast(@alignCast(smtp_raw));
+    const smtpc = smtpConn(conn) orelse return CURLE_FAILED_INIT;
+    const smtp = smtpEasy(data) orelse return CURLE_FAILED_INIT;
 
     if (smtp.rcpt) |rcpt| {
         var utf8: bool = false;
@@ -1683,7 +1668,7 @@ fn smtp_perform_command(data: ?*anyopaque) CURLcode {
             );
 
             netrc_addr_idn.Curl_free_idnconverted_hostname(&host);
-            if (address) |a| mem.free(@ptrCast(a));
+            if (address) |a| mem.free(a);
         } else {
             const rcpt_data: [*:0]const u8 = rcpt.data orelse "";
             utf8 = smtpc.utf8_supported and (std.mem.eql(u8, std.mem.span(custom_str.?), "EXPN"));
@@ -1708,112 +1693,112 @@ fn smtp_perform_command(data: ?*anyopaque) CURLcode {
     return result;
 }
 
-fn smtp_perform_mail(data: ?*anyopaque) CURLcode {
-    var from: ?[*:0]u8 = null;
-    var auth: ?[*:0]u8 = null;
-    var size: ?[*:0]u8 = null;
-    var result: CURLcode = CURLE_OK;
-    const conn = Curl_pop3_smtp_get_conn(data);
-    const smtpc_raw = Curl_conn_meta_get(conn, CURL_META_SMTP_CONN) orelse return CURLE_FAILED_INIT;
-    const smtpc: *smtp_conn = @ptrCast(@alignCast(smtpc_raw));
+fn smtpFormatMailAddr(
+    data: ?*anyopaque,
+    smtpc: *const smtp_conn,
+    raw_addr: [*:0]const u8,
+    utf8: *bool,
+    out_code: *CURLcode,
+) ![*:0]u8 {
+    var address: ?[*:0]u8 = null;
+    var host: netrc_addr_idn.Hostname = std.mem.zeroes(netrc_addr_idn.Hostname);
+    var suffix: [*:0]const u8 = "";
 
+    const result = smtp_parse_address(data, raw_addr, &address, &host, &suffix);
+    if (result != CURLE_OK) {
+        out_code.* = result;
+        return error.SmtpMailFailed;
+    }
+    defer if (address) |a| mem.free(a);
+    defer netrc_addr_idn.Curl_free_idnconverted_hostname(&host);
+
+    if (!utf8.* and smtpc.utf8_supported and
+        ((host.encalloc != null) or
+            !netrc_addr_idn.Curl_is_ASCII_name(address) or
+            !netrc_addr_idn.Curl_is_ASCII_name(host.name)))
+    {
+        utf8.* = true;
+    }
+
+    const addr_str: [*:0]const u8 = address orelse "";
+    const formatted = if (host.name) |hn|
+        curl_maprintf("<%s@%s>%s", addr_str, hn, suffix)
+    else
+        curl_maprintf("<%s>%s", addr_str, suffix);
+
+    return formatted orelse {
+        out_code.* = CURLE_OUT_OF_MEMORY;
+        return error.SmtpMailFailed;
+    };
+}
+
+const SmtpMailParams = struct {
+    from: [*:0]u8,
+    auth: ?[*:0]u8,
+    size: ?[*:0]u8,
+    utf8: bool,
+
+    fn deinit(self: *SmtpMailParams) void {
+        mem.free(self.from);
+        if (self.auth) |a| mem.free(a);
+        if (self.size) |s| mem.free(s);
+    }
+};
+
+fn smtpBuildMailParams(
+    data: ?*anyopaque,
+    smtpc: *const smtp_conn,
+    out_code: *CURLcode,
+) !SmtpMailParams {
     var utf8: bool = false;
 
     const mail_from = Curl_pop3_smtp_get_mail_from(data);
-    if (mail_from != null and mail_from.?[0] != 0) {
-        var address: ?[*:0]u8 = null;
-        var host: netrc_addr_idn.Hostname = std.mem.zeroes(netrc_addr_idn.Hostname);
-        var suffix: [*:0]const u8 = "";
+    const from: [*:0]u8 = if (mail_from != null and mail_from.?[0] != 0)
+        try smtpFormatMailAddr(data, smtpc, mail_from.?, &utf8, out_code)
+    else
+        mem.strdup("<>") orelse {
+            out_code.* = CURLE_OUT_OF_MEMORY;
+            return error.SmtpMailFailed;
+        };
+    errdefer mem.free(from);
 
-        result = smtp_parse_address(data, mail_from.?, &address, &host, &suffix);
-        if (result != CURLE_OK)
-            goto_out(from, auth, size, result);
-        if (result != CURLE_OK)
-            return result;
-
-        utf8 = smtpc.utf8_supported and
-            ((host.encalloc != null) or
-                !netrc_addr_idn.Curl_is_ASCII_name(address) or
-                !netrc_addr_idn.Curl_is_ASCII_name(host.name));
-
-        const addr_str: [*:0]const u8 = address orelse "";
-        if (host.name) |hn| {
-            from = curl_maprintf("<%s@%s>%s", addr_str, hn, suffix);
-            netrc_addr_idn.Curl_free_idnconverted_hostname(&host);
-        } else {
-            from = curl_maprintf("<%s>%s", addr_str, suffix);
-        }
-        if (address) |a| mem.free(@ptrCast(a));
-    } else {
-        from = mem.strdup("<>");
-    }
-
-    if (from == null)
-        return CURLE_OUT_OF_MEMORY;
+    var auth: ?[*:0]u8 = null;
+    errdefer if (auth) |a| mem.free(a);
 
     const mail_auth = Curl_pop3_smtp_get_mail_auth(data);
     if (mail_auth != null and smtpc.sasl.authused != 0) {
         if (mail_auth.?[0] != 0) {
-            var address: ?[*:0]u8 = null;
-            var host: netrc_addr_idn.Hostname = std.mem.zeroes(netrc_addr_idn.Hostname);
-            var suffix: [*:0]const u8 = "";
-
-            result = smtp_parse_address(data, mail_auth.?, &address, &host, &suffix);
-            if (result != CURLE_OK) {
-                if (from) |f| mem.free(@ptrCast(f));
-                return result;
-            }
-
-            if (!utf8 and smtpc.utf8_supported and
-                ((host.encalloc != null) or
-                    !netrc_addr_idn.Curl_is_ASCII_name(address) or
-                    !netrc_addr_idn.Curl_is_ASCII_name(host.name)))
-            {
-                utf8 = true;
-            }
-
-            const addr_str: [*:0]const u8 = address orelse "";
-            if (host.name) |hn| {
-                auth = curl_maprintf("<%s@%s>%s", addr_str, hn, suffix);
-                netrc_addr_idn.Curl_free_idnconverted_hostname(&host);
-            } else {
-                auth = curl_maprintf("<%s>%s", addr_str, suffix);
-            }
-            if (address) |a| mem.free(@ptrCast(a));
+            auth = try smtpFormatMailAddr(data, smtpc, mail_auth.?, &utf8, out_code);
         } else {
-            auth = mem.strdup("<>");
-        }
-        if (auth == null) {
-            if (from) |f| mem.free(@ptrCast(f));
-            return CURLE_OUT_OF_MEMORY;
+            auth = mem.strdup("<>") orelse {
+                out_code.* = CURLE_OUT_OF_MEMORY;
+                return error.SmtpMailFailed;
+            };
         }
     }
 
-    result = Curl_pop3_smtp_prepare_mail_reader(data);
-    if (result != CURLE_OK) {
-        if (from) |f| mem.free(@ptrCast(f));
-        if (auth) |a| mem.free(@ptrCast(a));
-        return result;
+    const prep_rc = Curl_pop3_smtp_prepare_mail_reader(data);
+    if (prep_rc != CURLE_OK) {
+        out_code.* = prep_rc;
+        return error.SmtpMailFailed;
     }
+
+    var size: ?[*:0]u8 = null;
+    errdefer if (size) |s| mem.free(s);
 
     const infilesize = Curl_pop3_smtp_get_infilesize(data);
     if (smtpc.size_supported and infilesize > 0) {
-        size = curl_maprintf("%lld", @as(c_longlong, infilesize));
-        if (size == null) {
-            if (from) |f| mem.free(@ptrCast(f));
-            if (auth) |a| mem.free(@ptrCast(a));
-            return CURLE_OUT_OF_MEMORY;
-        }
+        size = curl_maprintf("%lld", @as(c_longlong, infilesize)) orelse {
+            out_code.* = CURLE_OUT_OF_MEMORY;
+            return error.SmtpMailFailed;
+        };
     }
 
     if (smtpc.utf8_supported and !utf8) {
-        const smtp_raw = Curl_meta_get(data, CURL_META_SMTP_EASY) orelse {
-            if (from) |f| mem.free(@ptrCast(f));
-            if (auth) |a| mem.free(@ptrCast(a));
-            if (size) |s| mem.free(@ptrCast(s));
-            return CURLE_FAILED_INIT;
+        const smtp = smtpEasy(data) orelse {
+            out_code.* = CURLE_FAILED_INIT;
+            return error.SmtpMailFailed;
         };
-        const smtp: *SMTP = @ptrCast(@alignCast(smtp_raw));
         var rcpt = smtp.rcpt;
         while (rcpt != null and !utf8) {
             if (!netrc_addr_idn.Curl_is_ASCII_name(rcpt.?.data))
@@ -1822,24 +1807,36 @@ fn smtp_perform_mail(data: ?*anyopaque) CURLcode {
         }
     }
 
+    return .{
+        .from = from,
+        .auth = auth,
+        .size = size,
+        .utf8 = utf8,
+    };
+}
+
+fn smtp_perform_mail(data: ?*anyopaque) CURLcode {
+    var result: CURLcode = CURLE_OK;
+    const conn = Curl_pop3_smtp_get_conn(data);
+    const smtpc = smtpConn(conn) orelse return CURLE_FAILED_INIT;
+
+    var params = smtpBuildMailParams(data, smtpc, &result) catch return result;
+    defer params.deinit();
+
     result = cr_eob_insert_after(data);
     if (result == CURLE_OK) {
         result = Curl_pp_sendf(
             data,
             &smtpc.pp,
             "MAIL FROM:%s%s%s%s%s%s",
-            from.?,
-            @as([*:0]const u8, if (auth != null) " AUTH=" else ""),
-            @as([*:0]const u8, if (auth) |a| a else ""),
-            @as([*:0]const u8, if (size != null) " SIZE=" else ""),
-            @as([*:0]const u8, if (size) |s| s else ""),
-            @as([*:0]const u8, if (utf8) " SMTPUTF8" else ""),
+            params.from,
+            @as([*:0]const u8, if (params.auth != null) " AUTH=" else ""),
+            @as([*:0]const u8, if (params.auth) |a| a else ""),
+            @as([*:0]const u8, if (params.size != null) " SIZE=" else ""),
+            @as([*:0]const u8, if (params.size) |s| s else ""),
+            @as([*:0]const u8, if (params.utf8) " SMTPUTF8" else ""),
         );
     }
-
-    if (from) |f| mem.free(@ptrCast(f));
-    if (auth) |a| mem.free(@ptrCast(a));
-    if (size) |s| mem.free(@ptrCast(s));
 
     if (result == CURLE_OK)
         smtp_state(data, smtpc, .SMTP_MAIL);
@@ -1847,20 +1844,11 @@ fn smtp_perform_mail(data: ?*anyopaque) CURLcode {
     return result;
 }
 
-inline fn goto_out(from: ?[*:0]u8, auth: ?[*:0]u8, size: ?[*:0]u8, result: CURLcode) void {
-    _ = from;
-    _ = auth;
-    _ = size;
-    _ = result;
-}
-
 fn smtp_perform_rcpt_to(data: ?*anyopaque) CURLcode {
     var result: CURLcode = CURLE_OK;
     const conn = Curl_pop3_smtp_get_conn(data);
-    const smtpc_raw = Curl_conn_meta_get(conn, CURL_META_SMTP_CONN) orelse return CURLE_FAILED_INIT;
-    const smtpc: *smtp_conn = @ptrCast(@alignCast(smtpc_raw));
-    const smtp_raw = Curl_meta_get(data, CURL_META_SMTP_EASY) orelse return CURLE_FAILED_INIT;
-    const smtp: *SMTP = @ptrCast(@alignCast(smtp_raw));
+    const smtpc = smtpConn(conn) orelse return CURLE_FAILED_INIT;
+    const smtp = smtpEasy(data) orelse return CURLE_FAILED_INIT;
 
     var address: ?[*:0]u8 = null;
     var host: netrc_addr_idn.Hostname = std.mem.zeroes(netrc_addr_idn.Hostname);
@@ -1881,7 +1869,7 @@ fn smtp_perform_rcpt_to(data: ?*anyopaque) CURLcode {
     }
 
     netrc_addr_idn.Curl_free_idnconverted_hostname(&host);
-    if (address) |a| mem.free(@ptrCast(a));
+    if (address) |a| mem.free(a);
 
     if (result == CURLE_OK)
         smtp_state(data, smtpc, .SMTP_RCPT);
@@ -1932,7 +1920,7 @@ fn smtp_state_ehlo_resp(
         }
     } else if (len >= 4) {
         if (line_opt) |base| {
-            var line: [*:0]const u8 = @ptrCast(base + 4);
+            var line: [*:0]const u8 = base + 4;
             len -= 4;
 
             if (len >= 8 and primitives.curl_strnequal(line, "STARTTLS", 8) != 0) {
@@ -2052,8 +2040,7 @@ fn smtp_state_auth_resp(data: ?*anyopaque, smtpc: *smtp_conn, smtpcode: c_int, i
 fn smtp_state_command_resp(data: ?*anyopaque, smtpc: *smtp_conn, smtpcode: c_int, instate: smtpstate) CURLcode {
     _ = instate;
     var result: CURLcode = CURLE_OK;
-    const smtp_raw = Curl_meta_get(data, CURL_META_SMTP_EASY) orelse return CURLE_FAILED_INIT;
-    const smtp: *SMTP = @ptrCast(@alignCast(smtp_raw));
+    const smtp = smtpEasy(data) orelse return CURLE_FAILED_INIT;
     const line_opt = containers.curlx_dyn_ptr(&smtpc.pp.recvbuf);
     const len = smtpc.pp.nfinal;
 
@@ -2104,8 +2091,7 @@ fn smtp_state_mail_resp(data: ?*anyopaque, smtpc: *smtp_conn, smtpcode: c_int, i
 fn smtp_state_rcpt_resp(data: ?*anyopaque, smtpc: *smtp_conn, smtpcode: c_int, instate: smtpstate) CURLcode {
     _ = instate;
     var result: CURLcode = CURLE_OK;
-    const smtp_raw = Curl_meta_get(data, CURL_META_SMTP_EASY) orelse return CURLE_FAILED_INIT;
-    const smtp: *SMTP = @ptrCast(@alignCast(smtp_raw));
+    const smtp = smtpEasy(data) orelse return CURLE_FAILED_INIT;
 
     const is_smtp_err = (@divTrunc(smtpcode, 100) != 2);
     const is_smtp_blocking_err = (is_smtp_err and !Curl_pop3_smtp_get_mail_rcpt_allowfails(data));
@@ -2165,11 +2151,10 @@ fn smtp_state_postdata_resp(data: ?*anyopaque, smtpc: *smtp_conn, smtpcode: c_in
     return result;
 }
 
-fn smtp_statemachine(data: ?*anyopaque, conn: ?*anyopaque) callconv(.c) CURLcode {
+fn smtp_statemachine(data: ?*Curl_easy, conn: ?*connectdata) callconv(.c) CURLcode {
     var result: CURLcode = CURLE_OK;
     var smtpcode: c_int = 0;
-    const smtpc_raw = Curl_conn_meta_get(conn, CURL_META_SMTP_CONN) orelse return CURLE_FAILED_INIT;
-    const smtpc: *smtp_conn = @ptrCast(@alignCast(smtpc_raw));
+    const smtpc = smtpConn(conn) orelse return CURLE_FAILED_INIT;
     const pp = &smtpc.pp;
     var nread: usize = 0;
 
@@ -2215,8 +2200,7 @@ fn smtp_statemachine(data: ?*anyopaque, conn: ?*anyopaque) callconv(.c) CURLcode
 
 fn smtp_multi_statemach(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
     const conn = Curl_pop3_smtp_get_conn(data);
-    const smtpc_raw = Curl_conn_meta_get(conn, CURL_META_SMTP_CONN) orelse return CURLE_FAILED_INIT;
-    const smtpc: *smtp_conn = @ptrCast(@alignCast(smtpc_raw));
+    const smtpc = smtpConn(conn) orelse return CURLE_FAILED_INIT;
 
     const result = Curl_pop3_smtp_pp_statemach(data, &smtpc.pp, false, false);
     done.* = (smtpc.state == .SMTP_STOP);
@@ -2235,8 +2219,8 @@ fn smtp_easy_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callc
     _ = key;
     _ = klen;
     const smtp: *SMTP = @ptrCast(@alignCast(entry orelse return));
-    if (smtp.custom) |cust| mem.free(@ptrCast(cust));
-    mem.freeSized(smtp, @sizeOf(SMTP));
+    if (smtp.custom) |cust| mem.free(cust);
+    mem.freeTyped(smtp);
 }
 
 fn smtp_conn_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callconv(.c) void {
@@ -2244,26 +2228,24 @@ fn smtp_conn_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callc
     _ = klen;
     const smtpc: *smtp_conn = @ptrCast(@alignCast(entry orelse return));
     _ = Curl_pp_disconnect(&smtpc.pp);
-    if (smtpc.domain) |dom| mem.free(@ptrCast(dom));
-    mem.freeSized(smtpc, @sizeOf(smtp_conn));
+    if (smtpc.domain) |dom| mem.free(dom);
+    mem.freeTyped(smtpc);
 }
 
 fn smtp_init(data: ?*anyopaque) CURLcode {
-    const smtp_raw = mem.calloc(1, @sizeOf(SMTP)) orelse return CURLE_OUT_OF_MEMORY;
-    return Curl_meta_set(data, CURL_META_SMTP_EASY, smtp_raw, smtp_easy_dtor);
+    const smtp = mem.create(SMTP) orelse return CURLE_OUT_OF_MEMORY;
+    return Curl_meta_set(data, CURL_META_SMTP_EASY, mem.toRawPtr(smtp), smtp_easy_dtor);
 }
 
 fn smtp_pollset(data: ?*anyopaque, ps: ?*anyopaque) callconv(.c) CURLcode {
     const conn = Curl_pop3_smtp_get_conn(data);
-    const smtpc_raw = Curl_conn_meta_get(conn, CURL_META_SMTP_CONN) orelse return CURLE_FAILED_INIT;
-    const smtpc: *smtp_conn = @ptrCast(@alignCast(smtpc_raw));
+    const smtpc = smtpConn(conn) orelse return CURLE_FAILED_INIT;
     return Curl_pop3_smtp_pp_pollset(data, &smtpc.pp, ps);
 }
 
 fn smtp_connect(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
     const conn = Curl_pop3_smtp_get_conn(data);
-    const smtpc_raw = Curl_conn_meta_get(conn, CURL_META_SMTP_CONN) orelse return CURLE_FAILED_INIT;
-    const smtpc: *smtp_conn = @ptrCast(@alignCast(smtpc_raw));
+    const smtpc = smtpConn(conn) orelse return CURLE_FAILED_INIT;
     const pp = &smtpc.pp;
 
     done.* = false;
@@ -2286,13 +2268,11 @@ fn smtp_connect(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
 fn smtp_done(data: ?*anyopaque, status: CURLcode, premature: bool) callconv(.c) CURLcode {
     var result: CURLcode = CURLE_OK;
     const conn = Curl_pop3_smtp_get_conn(data);
-    const smtp_raw = Curl_meta_get(data, CURL_META_SMTP_EASY) orelse return CURLE_OK;
-    const smtp: *SMTP = @ptrCast(@alignCast(smtp_raw));
-    const smtpc_raw = Curl_conn_meta_get(conn, CURL_META_SMTP_CONN) orelse return CURLE_FAILED_INIT;
-    const smtpc: *smtp_conn = @ptrCast(@alignCast(smtpc_raw));
+    const smtp = smtpEasy(data) orelse return CURLE_OK;
+    const smtpc = smtpConn(conn) orelse return CURLE_FAILED_INIT;
 
     if (smtp.custom) |cust| {
-        mem.free(@ptrCast(cust));
+        mem.free(cust);
         smtp.custom = null;
     }
 
@@ -2318,8 +2298,7 @@ fn smtp_done(data: ?*anyopaque, status: CURLcode, premature: bool) callconv(.c) 
 fn smtp_perform(data: ?*anyopaque, connected: *bool, dophase_done: *bool) CURLcode {
     var result: CURLcode = CURLE_OK;
     const conn = Curl_pop3_smtp_get_conn(data);
-    const smtp_raw = Curl_meta_get(data, CURL_META_SMTP_EASY) orelse return CURLE_FAILED_INIT;
-    const smtp: *SMTP = @ptrCast(@alignCast(smtp_raw));
+    const smtp = smtpEasy(data) orelse return CURLE_FAILED_INIT;
 
     if (Curl_pop3_smtp_get_req_no_body(data))
         smtp.transfer = PPTRANSFER_INFO;
@@ -2358,8 +2337,7 @@ fn smtp_do(data: ?*anyopaque, done: *bool) callconv(.c) CURLcode {
 }
 
 fn smtp_disconnect(data: ?*anyopaque, conn: ?*anyopaque, dead_connection: bool) callconv(.c) CURLcode {
-    const smtpc_raw = Curl_conn_meta_get(conn, CURL_META_SMTP_CONN) orelse return CURLE_FAILED_INIT;
-    const smtpc: *smtp_conn = @ptrCast(@alignCast(smtpc_raw));
+    const smtpc = smtpConn(conn) orelse return CURLE_FAILED_INIT;
 
     if (!dead_connection and Curl_pop3_smtp_get_protoconnstart(conn)) {
         if (smtp_perform_quit(data, smtpc) == CURLE_OK)
@@ -2369,7 +2347,7 @@ fn smtp_disconnect(data: ?*anyopaque, conn: ?*anyopaque, dead_connection: bool) 
     _ = Curl_pp_disconnect(&smtpc.pp);
 
     if (smtpc.domain) |dom| {
-        mem.free(@ptrCast(dom));
+        mem.free(dom);
         smtpc.domain = null;
     }
 
@@ -2378,8 +2356,7 @@ fn smtp_disconnect(data: ?*anyopaque, conn: ?*anyopaque, dead_connection: bool) 
 
 fn smtp_dophase_done(data: ?*anyopaque, connected: bool) CURLcode {
     _ = connected;
-    const smtp_raw = Curl_meta_get(data, CURL_META_SMTP_EASY) orelse return CURLE_FAILED_INIT;
-    const smtp: *SMTP = @ptrCast(@alignCast(smtp_raw));
+    const smtp = smtpEasy(data) orelse return CURLE_FAILED_INIT;
 
     if (smtp.transfer != PPTRANSFER_BODY)
         Curl_xfer_setup_nop(data);
@@ -2410,15 +2387,14 @@ fn smtp_regular_transfer(data: ?*anyopaque, dophase_done: *bool) CURLcode {
 }
 
 fn smtp_setup_connection(data: ?*anyopaque, conn: ?*anyopaque) callconv(.c) CURLcode {
-    const smtpc_raw = mem.calloc(1, @sizeOf(smtp_conn)) orelse return CURLE_OUT_OF_MEMORY;
-    const smtpc: *smtp_conn = @ptrCast(@alignCast(smtpc_raw));
+    const smtpc = mem.create(smtp_conn) orelse return CURLE_OUT_OF_MEMORY;
 
-    smtpc.pp.statemachine = @ptrCast(&smtp_statemachine);
-    smtpc.pp.endofresp = @ptrCast(&smtp_endofresp);
+    smtpc.pp.statemachine = smtp_statemachine;
+    smtpc.pp.endofresp = smtp_endofresp;
 
     Curl_pop3_smtp_sasl_init(&smtpc.sasl, data, &saslsmtp);
 
-    if (Curl_conn_meta_set(conn, CURL_META_SMTP_CONN, smtpc_raw, smtp_conn_dtor) != CURLE_OK)
+    if (Curl_conn_meta_set(conn, CURL_META_SMTP_CONN, mem.toRawPtr(smtpc), smtp_conn_dtor) != CURLE_OK)
         return CURLE_OUT_OF_MEMORY;
 
     return smtp_init(data);
@@ -2457,15 +2433,14 @@ fn smtp_parse_url_options(conn: ?*anyopaque, smtpc: *smtp_conn) CURLcode {
 
 fn smtp_parse_url_path(data: ?*anyopaque) CURLcode {
     const conn = Curl_pop3_smtp_get_conn(data);
-    const smtpc_raw = Curl_conn_meta_get(conn, CURL_META_SMTP_CONN) orelse return CURLE_FAILED_INIT;
-    const smtpc: *smtp_conn = @ptrCast(@alignCast(smtpc_raw));
+    const smtpc = smtpConn(conn) orelse return CURLE_FAILED_INIT;
     const path: [*:0]const u8 = Curl_pop3_smtp_get_up_path(data) orelse "/";
-    var localhost: [HOST_NAME_MAX + 1]u8 = @splat(0);
+    var localhost: [HOST_NAME_MAX:0]u8 = @splat(0);
 
     var p: [*:0]const u8 = if (path[0] == '/') path + 1 else path;
     if (p[0] == 0) {
-        if (os_leaf.Curl_gethostname(&localhost, @intCast(localhost.len)) == 0) {
-            p = @ptrCast(&localhost);
+        if (os_leaf.Curl_gethostname(&localhost, @intCast(localhost.len + 1)) == 0) {
+            p = &localhost;
         } else {
             p = "localhost";
         }
@@ -2476,8 +2451,7 @@ fn smtp_parse_url_path(data: ?*anyopaque) CURLcode {
 
 fn smtp_parse_custom_request(data: ?*anyopaque) CURLcode {
     var result: CURLcode = CURLE_OK;
-    const smtp_raw = Curl_meta_get(data, CURL_META_SMTP_EASY) orelse return CURLE_FAILED_INIT;
-    const smtp: *SMTP = @ptrCast(@alignCast(smtp_raw));
+    const smtp = smtpEasy(data) orelse return CURLE_FAILED_INIT;
     const custom = Curl_pop3_smtp_get_customrequest(data);
 
     if (custom != null and custom.?[0] != 0) {
@@ -2510,14 +2484,14 @@ fn smtp_parse_address(
     } else {
         if (std.mem.lastIndexOfScalar(u8, d[0..length], '>')) |end_idx| {
             d[end_idx] = 0;
-            suffix.* = @ptrCast(d + end_idx + 1);
+            suffix.* = d + end_idx + 1;
         }
     }
 
     const cur_len = std.mem.len(d);
     if (std.mem.indexOfScalar(u8, d[0..cur_len], '@')) |at_idx| {
         d[at_idx] = 0;
-        host.name = @ptrCast(d + at_idx + 1);
+        host.name = d + at_idx + 1;
         _ = netrc_addr_idn.Curl_idnconvert_hostname(host);
     }
 
@@ -2603,7 +2577,7 @@ test "smtp_parse_address angle brackets, host, and suffix" {
     try std.testing.expectEqualStrings("example.com", std.mem.span(host.name.?));
     try std.testing.expectEqualStrings(" NOTIFY=SUCCESS", std.mem.span(suffix));
     netrc_addr_idn.Curl_free_idnconverted_hostname(&host);
-    mem.free(@ptrCast(addr.?));
+    mem.free(addr.?);
 
     addr = null;
     host = std.mem.zeroes(netrc_addr_idn.Hostname);
@@ -2613,7 +2587,7 @@ test "smtp_parse_address angle brackets, host, and suffix" {
     try std.testing.expectEqualStrings("example.org", std.mem.span(host.name.?));
     try std.testing.expectEqualStrings("", std.mem.span(suffix));
     netrc_addr_idn.Curl_free_idnconverted_hostname(&host);
-    mem.free(@ptrCast(addr.?));
+    mem.free(addr.?);
 
     addr = null;
     host = std.mem.zeroes(netrc_addr_idn.Hostname);
