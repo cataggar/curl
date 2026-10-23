@@ -56,6 +56,10 @@ pub const httpreq = extern struct {
     method: [1]u8,
 };
 
+inline fn fromOpaque(comptime T: type, ptr: anytype) *T {
+    return @ptrCast(@alignCast(ptr));
+}
+
 pub const CURL_CW_FLAG_BLOWUP: u8 = 1 << 0;
 
 pub const Curl_cwriter = extern struct {
@@ -185,7 +189,7 @@ extern fn Curl_proxy_get_tunnel_thru_httpproxy(data: *Curl_easy) callconv(.c) bo
 extern fn Curl_proxy_update_envproxy(data: *Curl_easy, proxy: ?[*:0]const u8) callconv(.c) void;
 extern fn Curl_proxy_conn_set_origin_is_proxy(conn: *connectdata, val: bool) callconv(.c) void;
 extern fn Curl_proxy_conn_get_scheme(conn: *connectdata) callconv(.c) *const Curl_scheme;
-extern fn Curl_proxy_conn_set_scheme(conn: *connectdata, scheme: *const Curl_scheme) callconv(.c) void;
+extern fn Curl_proxy_conn_set_scheme(conn: *connectdata, scheme: *const anyopaque) callconv(.c) void;
 extern fn Curl_proxy_conn_get_socks_proxy(conn: *connectdata) callconv(.c) *proxy_info;
 extern fn Curl_proxy_conn_get_http_proxy(conn: *connectdata) callconv(.c) *proxy_info;
 extern fn Curl_proxy_conn_get_via_peer_ptr(conn: *connectdata) callconv(.c) *?*Curl_peer;
@@ -404,9 +408,9 @@ pub export fn cidr6_match(
 }
 
 fn match_host(
-    token_in: [*]const u8,
+    token_in: [*:0]const u8,
     tokenlen_in: usize,
-    name: [*]const u8,
+    name: [*:0]const u8,
     namelen: usize,
 ) bool {
     var token = token_in;
@@ -421,10 +425,10 @@ fn match_host(
     }
 
     if (tokenlen == namelen) {
-        return primitives.curl_strnequal(@ptrCast(token), @ptrCast(name), namelen) != 0;
+        return primitives.curl_strnequal(token, name, namelen) != 0;
     } else if (tokenlen < namelen) {
         return (name[namelen - tokenlen - 1] == '.') and
-            (primitives.curl_strnequal(@ptrCast(token), @ptrCast(name + (namelen - tokenlen)), tokenlen) != 0);
+            (primitives.curl_strnequal(token, name + (namelen - tokenlen), tokenlen) != 0);
     }
     return false;
 }
@@ -436,7 +440,7 @@ fn match_ip(
     name: [*:0]const u8,
 ) bool {
     var bits: c_int = -1;
-    var checkip: [128]u8 = undefined;
+    var checkip: [128:0]u8 = undefined;
     if (tokenlen >= checkip.len)
         return false;
 
@@ -445,14 +449,14 @@ fn match_ip(
 
     if (std.mem.indexOfScalar(u8, checkip[0..tokenlen], '/')) |slash_idx| {
         var value: i64 = 0;
-        var p: ?[*:0]const u8 = @ptrCast(&checkip[slash_idx + 1]);
+        var p: ?[*:0]const u8 = checkip[slash_idx + 1 .. tokenlen :0].ptr;
         if (curlx_str_number(&p, &value, 128) != 0 or p == null or p.?[0] != 0)
             return false;
         bits = @intCast(value);
         checkip[slash_idx] = 0;
     }
 
-    const checkip_cstr: [*:0]const u8 = @ptrCast(&checkip);
+    const checkip_cstr: [*:0]const u8 = &checkip;
     if (ip_type == .ipv6)
         return cidr6_match(name, checkip_cstr, bits)
     else
@@ -507,7 +511,7 @@ fn check_noproxy_impl(
     while (p != null and p.?[0] != 0) {
         curlx_str_passblanks(&p);
 
-        const token: [*]const u8 = p.?;
+        const token: [*:0]const u8 = p.?;
         var tokenlen: usize = 0;
         while (p.?[0] != 0 and !isBlank(p.?[0]) and p.?[0] != ',') {
             p = p.? + 1;
@@ -537,13 +541,13 @@ fn check_noproxy_impl(
 fn proxy_detect_proxy(data: ?*Curl_easy, scheme: *const Curl_scheme) ?[*:0]u8 {
     var env_name: ?[*:0]const u8 = null;
     var proxy: ?[*:0]u8 = null;
-    var name_buf: [20]u8 = undefined;
+    var name_buf: [20:0]u8 = undefined;
 
     if (scheme != &protocol_version_mime.Curl_scheme_https and
         scheme != &protocol_version_mime.Curl_scheme_http)
     {
         _ = curl_msnprintf(&name_buf, name_buf.len, "%s_proxy", scheme.name);
-        env_name = @ptrCast(&name_buf);
+        env_name = &name_buf;
         proxy = os_leaf.curl_getenv(env_name);
         if (proxy == null) {
             primitives.Curl_strntoupper(&name_buf, &name_buf, name_buf.len);
@@ -820,7 +824,7 @@ pub export fn Curl_proxy_init_conn(
 
     if (http_proxy.peer) |hp_peer| {
         const origin = Curl_proxy_get_origin(data).?;
-        const scheme: *const Curl_scheme = @ptrCast(@alignCast(origin.scheme.?));
+        const scheme = origin.scheme.?;
         var tunnel_proxy = Curl_proxy_get_tunnel_thru_httpproxy(data);
 
         if (!tunnel_proxy) {
@@ -839,7 +843,7 @@ pub export fn Curl_proxy_init_conn(
 
         if (!tunnel_proxy) {
             altsvc_hsts_peer.Curl_peer_link(Curl_proxy_conn_get_origin_ptr(conn), hp_peer);
-            Curl_proxy_conn_set_scheme(conn, @ptrCast(@alignCast(hp_peer.scheme.?)));
+            Curl_proxy_conn_set_scheme(conn, hp_peer.scheme.?);
             Curl_proxy_conn_set_origin_is_proxy(conn, true);
         }
 
@@ -1000,6 +1004,10 @@ pub const cf_proxy_ctx = extern struct {
     }
 };
 
+inline fn getProxyCtx(cf: *const Curl_cfilter) *cf_proxy_ctx {
+    return fromOpaque(cf_proxy_ctx, cf.ctx.?);
+}
+
 fn proxy_http_ver_major(ver: proxy_http_ver) c_int {
     return switch (ver) {
         PROXY_HTTP_V1 => 11,
@@ -1007,6 +1015,91 @@ fn proxy_http_ver_major(ver: proxy_http_ver) c_int {
         PROXY_HTTP_V3 => 30,
         else => 0,
     };
+}
+
+fn httpProxyCreateConnectInner(
+    preq: *?*httpreq,
+    cf: *Curl_cfilter,
+    data: *Curl_easy,
+    dest: *Curl_peer,
+    ver: proxy_http_ver,
+    result_out: *CURLcode,
+) error{ProxyError}!void {
+    const httpversion = proxy_http_ver_major(ver);
+    var req: ?*httpreq = null;
+    errdefer {
+        if (req) |r| Curl_http_req_free(r);
+        preq.* = null;
+    }
+
+    const is_ipv6 = peerIsIpv6(dest);
+    const authority = curl_maprintf(
+        "%s%s%s:%u",
+        @as([*:0]const u8, if (is_ipv6) "[" else ""),
+        dest.hostname,
+        @as([*:0]const u8, if (is_ipv6) "]" else ""),
+        @as(c_uint, dest.port),
+    ) orelse {
+        result_out.* = CURLE_OUT_OF_MEMORY;
+        return error.ProxyError;
+    };
+    defer mem.free(authority);
+
+    result_out.* = Curl_http_req_make(
+        &req,
+        "CONNECT",
+        "CONNECT".len,
+        null,
+        0,
+        authority,
+        std.mem.len(authority),
+        null,
+        0,
+    );
+    if (result_out.* != CURLE_OK) return error.ProxyError;
+
+    const req_ptr = req.?;
+    result_out.* = Curl_http_output_auth(
+        data,
+        cf.conn,
+        "CONNECT",
+        HTTPREQ_GET,
+        req_ptr.authority,
+        null,
+        true,
+    );
+    if (result_out.* != CURLE_OK) return error.ProxyError;
+
+    if (ver == PROXY_HTTP_V1 and
+        Curl_checkProxyheaders(data, cf.conn, "Host", "Host".len) == null)
+    {
+        result_out.* = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, "Host", authority);
+        if (result_out.* != CURLE_OK) return error.ProxyError;
+    }
+
+    if (Curl_proxy_get_hd_proxy_auth(data)) |hd_proxy_auth| {
+        result_out.* = io_buffers.Curl_dynhds_h1_cadd_line(&req_ptr.headers, hd_proxy_auth);
+        if (result_out.* != CURLE_OK) return error.ProxyError;
+    }
+
+    const ua = Curl_proxy_str_useragent(data);
+    if (Curl_checkProxyheaders(data, cf.conn, "User-Agent", "User-Agent".len) == null and
+        ua != null and ua.?[0] != 0)
+    {
+        result_out.* = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, "User-Agent", ua.?);
+        if (result_out.* != CURLE_OK) return error.ProxyError;
+    }
+
+    if (ver == PROXY_HTTP_V1 and
+        Curl_checkProxyheaders(data, cf.conn, "Proxy-Connection", "Proxy-Connection".len) == null)
+    {
+        result_out.* = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, "Proxy-Connection", "Keep-Alive");
+        if (result_out.* != CURLE_OK) return error.ProxyError;
+    }
+
+    result_out.* = dynhds_add_custom(data, true, httpversion, false, &req_ptr.headers);
+    if (result_out.* != CURLE_OK) return error.ProxyError;
+    preq.* = req;
 }
 
 fn http_proxy_create_CONNECT(
@@ -1018,126 +1111,34 @@ fn http_proxy_create_CONNECT(
     ver: proxy_http_ver,
 ) CURLcode {
     _ = peer;
-    const httpversion = proxy_http_ver_major(ver);
     var result: CURLcode = CURLE_OK;
-    var req: ?*httpreq = null;
-
-    const is_ipv6 = peerIsIpv6(dest);
-    const authority = curl_maprintf(
-        "%s%s%s:%u",
-        @as([*:0]const u8, if (is_ipv6) "[" else ""),
-        dest.hostname,
-        @as([*:0]const u8, if (is_ipv6) "]" else ""),
-        @as(c_uint, dest.port),
-    ) orelse {
-        preq.* = null;
-        return CURLE_OUT_OF_MEMORY;
-    };
-    defer mem.free(authority);
-
-    const out_cleanup = struct {
-        fn clean(r: *?*httpreq, res: CURLcode, pr: *?*httpreq) void {
-            if (res != CURLE_OK) {
-                if (r.*) |req_ptr| {
-                    Curl_http_req_free(req_ptr);
-                    r.* = null;
-                }
-            }
-            pr.* = r.*;
-        }
-    }.clean;
-    defer out_cleanup(&req, result, preq);
-
-    result = Curl_http_req_make(
-        &req,
-        "CONNECT",
-        "CONNECT".len,
-        null,
-        0,
-        authority,
-        std.mem.len(authority),
-        null,
-        0,
-    );
-    if (result != CURLE_OK)
-        return result;
-
-    const req_ptr = req.?;
-    const method_cstr: [*:0]const u8 = @ptrCast(&req_ptr.method[0]);
-    result = Curl_http_output_auth(
-        data,
-        cf.conn,
-        method_cstr,
-        HTTPREQ_GET,
-        req_ptr.authority,
-        null,
-        true,
-    );
-    if (result != CURLE_OK)
-        return result;
-
-    if (ver == PROXY_HTTP_V1 and
-        Curl_checkProxyheaders(data, cf.conn, "Host", "Host".len) == null)
-    {
-        result = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, "Host", authority);
-        if (result != CURLE_OK)
-            return result;
-    }
-
-    if (Curl_proxy_get_hd_proxy_auth(data)) |hd_proxy_auth| {
-        result = io_buffers.Curl_dynhds_h1_cadd_line(&req_ptr.headers, hd_proxy_auth);
-        if (result != CURLE_OK)
-            return result;
-    }
-
-    const ua = Curl_proxy_str_useragent(data);
-    if (Curl_checkProxyheaders(data, cf.conn, "User-Agent", "User-Agent".len) == null and
-        ua != null and ua.?[0] != 0)
-    {
-        result = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, "User-Agent", ua.?);
-        if (result != CURLE_OK)
-            return result;
-    }
-
-    if (ver == PROXY_HTTP_V1 and
-        Curl_checkProxyheaders(data, cf.conn, "Proxy-Connection", "Proxy-Connection".len) == null)
-    {
-        result = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, "Proxy-Connection", "Keep-Alive");
-        if (result != CURLE_OK)
-            return result;
-    }
-
-    result = dynhds_add_custom(data, true, httpversion, false, &req_ptr.headers);
-    return result;
+    httpProxyCreateConnectInner(preq, cf, data, dest, ver, &result) catch return result;
+    return CURLE_OK;
 }
 
-fn http_proxy_create_CONNECTUDP(
+fn httpProxyCreateConnectUdpInner(
     preq: *?*httpreq,
     cf: *Curl_cfilter,
     data: *Curl_easy,
     peer: *Curl_peer,
     dest: *Curl_peer,
     ver: proxy_http_ver,
-) CURLcode {
+    result_out: *CURLcode,
+) error{ProxyError}!void {
     var proxy_scheme: [*:0]const u8 = "http";
     const httpversion = proxy_http_ver_major(ver);
     var authority: ?[*:0]u8 = null;
     var path: ?[*:0]u8 = null;
-    var encoded_host: ?[*]u8 = null;
+    var encoded_host: ?[]u8 = null;
     var req: ?*httpreq = null;
-    var result: CURLcode = CURLE_OK;
-
     defer {
-        if (result != CURLE_OK) {
-            if (req) |r| {
-                Curl_http_req_free(r);
-                req = null;
-            }
-        }
         mem.free(authority);
         mem.free(path);
-        mem.free(encoded_host);
-        preq.* = req;
+        mem.freeSlice(encoded_host);
+    }
+    errdefer {
+        if (req) |r| Curl_http_req_free(r);
+        preq.* = null;
     }
 
     const http_proxy = Curl_proxy_conn_get_http_proxy(cf.conn.?);
@@ -1157,45 +1158,46 @@ fn http_proxy_create_CONNECTUDP(
         @as(c_int, peer.port),
     );
     if (authority == null) {
-        result = CURLE_OUT_OF_MEMORY;
-        return result;
+        result_out.* = CURLE_OUT_OF_MEMORY;
+        return error.ProxyError;
     }
 
     if (peerIsIpv6(dest)) {
         const s = dest.hostname;
         const hlen = std.mem.len(s);
-        const enc_raw = mem.malloc(hlen * 3 + 1) orelse {
-            result = CURLE_OUT_OF_MEMORY;
-            return result;
+        const enc_buf = mem.allocSlice(u8, hlen * 3 + 1) orelse {
+            result_out.* = CURLE_OUT_OF_MEMORY;
+            return error.ProxyError;
         };
-        encoded_host = @ptrCast(enc_raw);
-        var d: [*]u8 = encoded_host.?;
+        encoded_host = enc_buf;
+        var out_idx: usize = 0;
         var idx: usize = 0;
         while (s[idx] != 0) : (idx += 1) {
             if (s[idx] == ':') {
-                d[0] = '%';
-                d[1] = '3';
-                d[2] = 'A';
-                d += 3;
+                enc_buf[out_idx] = '%';
+                enc_buf[out_idx + 1] = '3';
+                enc_buf[out_idx + 2] = 'A';
+                out_idx += 3;
             } else {
-                d[0] = s[idx];
-                d += 1;
+                enc_buf[out_idx] = s[idx];
+                out_idx += 1;
             }
         }
-        d[0] = 0;
-        const enc_cstr: [*:0]const u8 = @ptrCast(encoded_host.?);
+        enc_buf[out_idx] = 0;
+        const enc_cstr: [*:0]const u8 = enc_buf[0..out_idx :0].ptr;
         path = curl_maprintf("/.well-known/masque/udp/%s/%u/", enc_cstr, @as(c_uint, dest.port));
     } else {
         path = curl_maprintf("/.well-known/masque/udp/%s/%u/", dest.hostname, @as(c_uint, dest.port));
     }
 
     if (path == null) {
-        result = CURLE_OUT_OF_MEMORY;
-        return result;
+        result_out.* = CURLE_OUT_OF_MEMORY;
+        return error.ProxyError;
     }
 
+    const method_cstr: [*:0]const u8 = if (ver == PROXY_HTTP_V1) "GET" else "CONNECT";
     if (ver == PROXY_HTTP_V1) {
-        result = Curl_http_req_make(
+        result_out.* = Curl_http_req_make(
             &req,
             "GET",
             "GET".len,
@@ -1206,10 +1208,9 @@ fn http_proxy_create_CONNECTUDP(
             path.?,
             std.mem.len(path.?),
         );
-        if (result != CURLE_OK)
-            return result;
+        if (result_out.* != CURLE_OK) return error.ProxyError;
     } else if (ver == PROXY_HTTP_V2 or ver == PROXY_HTTP_V3) {
-        result = Curl_http_req_make(
+        result_out.* = Curl_http_req_make(
             &req,
             "CONNECT",
             "CONNECT".len,
@@ -1220,16 +1221,14 @@ fn http_proxy_create_CONNECTUDP(
             path.?,
             std.mem.len(path.?),
         );
-        if (result != CURLE_OK)
-            return result;
+        if (result_out.* != CURLE_OK) return error.ProxyError;
     } else {
-        result = CURLE_FAILED_INIT;
-        return result;
+        result_out.* = CURLE_FAILED_INIT;
+        return error.ProxyError;
     }
 
     const req_ptr = req.?;
-    const method_cstr: [*:0]const u8 = @ptrCast(&req_ptr.method[0]);
-    result = Curl_http_output_auth(
+    result_out.* = Curl_http_output_auth(
         data,
         cf.conn,
         method_cstr,
@@ -1238,21 +1237,18 @@ fn http_proxy_create_CONNECTUDP(
         null,
         true,
     );
-    if (result != CURLE_OK)
-        return result;
+    if (result_out.* != CURLE_OK) return error.ProxyError;
 
     if (ver == PROXY_HTTP_V1 and
         Curl_checkProxyheaders(data, cf.conn, "Host", "Host".len) == null)
     {
-        result = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, "Host", authority.?);
-        if (result != CURLE_OK)
-            return result;
+        result_out.* = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, "Host", authority.?);
+        if (result_out.* != CURLE_OK) return error.ProxyError;
     }
 
     if (Curl_proxy_get_hd_proxy_auth(data)) |hd_proxy_auth| {
-        result = io_buffers.Curl_dynhds_h1_cadd_line(&req_ptr.headers, hd_proxy_auth);
-        if (result != CURLE_OK)
-            return result;
+        result_out.* = io_buffers.Curl_dynhds_h1_cadd_line(&req_ptr.headers, hd_proxy_auth);
+        if (result_out.* != CURLE_OK) return error.ProxyError;
     }
 
     const ua = Curl_proxy_str_useragent(data);
@@ -1260,42 +1256,49 @@ fn http_proxy_create_CONNECTUDP(
         Curl_checkProxyheaders(data, cf.conn, "User-Agent", "User-Agent".len) == null and
         ua != null and ua.?[0] != 0)
     {
-        result = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, "User-Agent", ua.?);
-        if (result != CURLE_OK)
-            return result;
+        result_out.* = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, "User-Agent", ua.?);
+        if (result_out.* != CURLE_OK) return error.ProxyError;
     }
 
     if (ver == PROXY_HTTP_V1 and
         Curl_checkProxyheaders(data, cf.conn, "Proxy-Connection", "Proxy-Connection".len) == null)
     {
-        result = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, "Proxy-Connection", "Keep-Alive");
-        if (result != CURLE_OK)
-            return result;
+        result_out.* = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, "Proxy-Connection", "Keep-Alive");
+        if (result_out.* != CURLE_OK) return error.ProxyError;
     }
 
     if (ver == PROXY_HTTP_V1) {
-        result = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, "Connection", "Upgrade");
-        if (result != CURLE_OK)
-            return result;
-        result = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, "Upgrade", "connect-udp");
-        if (result != CURLE_OK)
-            return result;
-        result = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, "Capsule-Protocol", "?1");
-        if (result != CURLE_OK)
-            return result;
+        result_out.* = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, "Connection", "Upgrade");
+        if (result_out.* != CURLE_OK) return error.ProxyError;
+        result_out.* = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, "Upgrade", "connect-udp");
+        if (result_out.* != CURLE_OK) return error.ProxyError;
+        result_out.* = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, "Capsule-Protocol", "?1");
+        if (result_out.* != CURLE_OK) return error.ProxyError;
     } else {
-        result = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, ":Protocol", "connect-udp");
-        if (result != CURLE_OK)
-            return result;
+        result_out.* = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, ":Protocol", "connect-udp");
+        if (result_out.* != CURLE_OK) return error.ProxyError;
         if (ver >= PROXY_HTTP_V2) {
-            result = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, "Capsule-Protocol", "?1");
-            if (result != CURLE_OK)
-                return result;
+            result_out.* = io_buffers.Curl_dynhds_cadd(&req_ptr.headers, "Capsule-Protocol", "?1");
+            if (result_out.* != CURLE_OK) return error.ProxyError;
         }
     }
 
-    result = dynhds_add_custom(data, true, httpversion, true, &req_ptr.headers);
-    return result;
+    result_out.* = dynhds_add_custom(data, true, httpversion, true, &req_ptr.headers);
+    if (result_out.* != CURLE_OK) return error.ProxyError;
+    preq.* = req;
+}
+
+fn http_proxy_create_CONNECTUDP(
+    preq: *?*httpreq,
+    cf: *Curl_cfilter,
+    data: *Curl_easy,
+    peer: *Curl_peer,
+    dest: *Curl_peer,
+    ver: proxy_http_ver,
+) CURLcode {
+    var result: CURLcode = CURLE_OK;
+    httpProxyCreateConnectUdpInner(preq, cf, data, peer, dest, ver, &result) catch return result;
+    return CURLE_OK;
 }
 
 pub export fn Curl_http_proxy_create_tunnel_request(
@@ -1321,13 +1324,12 @@ pub export fn Curl_http_proxy_create_tunnel_request(
     else
         "HTTP";
     const udp_str: [*:0]const u8 = if (udp_tunnel) "UDP " else "";
-    const user_host: [*:0]const u8 = @ptrCast(&dest.user_hostname[0]);
     Curl_infof(
         data,
         "Establishing %s proxy %stunnel to %s:%u",
         ver_str,
         udp_str,
-        user_host,
+        &dest.user_hostname,
         @as(c_uint, dest.port),
     );
     return CURLE_OK;
@@ -1420,7 +1422,7 @@ pub export fn Curl_http_proxy_inspect_tunnel_response(
 }
 
 fn http_proxy_cf_connect(cf: *Curl_cfilter, data: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
-    const ctx: *cf_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = getProxyCtx(cf);
     var result: CURLcode = CURLE_OK;
     const udp_tunnel = ctx.tunnel_transport == TRNSPRT_UDP or ctx.tunnel_transport == TRNSPRT_QUIC;
 
@@ -1552,19 +1554,19 @@ fn cf_http_proxy_query(
     pres1: ?*c_int,
     pres2: ?*anyopaque,
 ) callconv(.c) CURLcode {
-    const ctx: *cf_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const ctx = getProxyCtx(cf);
     switch (query) {
         CF_QUERY_HOST_PORT => {
             if (pres1) |p1| p1.* = @intCast(ctx.tunnel_peer.?.port);
             if (pres2) |p2| {
-                const host_out: *?[*:0]const u8 = @ptrCast(@alignCast(p2));
+                const host_out = fromOpaque(?[*:0]const u8, p2);
                 host_out.* = ctx.tunnel_peer.?.hostname;
             }
             return CURLE_OK;
         },
         CF_QUERY_ALPN_NEGOTIATED => {
             if (pres2) |p2| {
-                const palpn: *?[*:0]const u8 = @ptrCast(@alignCast(p2));
+                const palpn = fromOpaque(?[*:0]const u8, p2);
                 palpn.* = null;
             }
             return CURLE_OK;
@@ -1581,13 +1583,13 @@ fn cf_https_proxy_ctx_free(ctx_opt: ?*cf_proxy_ctx) void {
     if (ctx_opt) |ctx| {
         altsvc_hsts_peer.Curl_peer_unlink(&ctx.peer);
         altsvc_hsts_peer.Curl_peer_unlink(&ctx.tunnel_peer);
-        mem.freeSized(ctx, @sizeOf(cf_proxy_ctx));
+        mem.freeTyped(ctx);
     }
 }
 
 fn http_proxy_cf_destroy(cf: *Curl_cfilter, data: ?*Curl_easy) callconv(.c) void {
     if (cf.ctx) |raw| {
-        const ctx: *cf_proxy_ctx = @ptrCast(@alignCast(raw));
+        const ctx = fromOpaque(cf_proxy_ctx, raw);
         Curl_trc_cf_infof(data, cf, "destroy");
         cf_https_proxy_ctx_free(ctx);
     }
@@ -1610,6 +1612,32 @@ pub export var Curl_cft_http_proxy: Curl_cftype = .{
     .query = cf_http_proxy_query,
 };
 
+fn cfHttpProxyInsertAfterInner(
+    cf_at: *Curl_cfilter,
+    peer: *Curl_peer,
+    tunnel_peer: *Curl_peer,
+    tunnel_transport: u8,
+    proxytype: u8,
+    result_out: *CURLcode,
+) error{ProxyError}!void {
+    const ctx = mem.create(cf_proxy_ctx) orelse {
+        result_out.* = CURLE_OUT_OF_MEMORY;
+        return error.ProxyError;
+    };
+    ctx.* = std.mem.zeroes(cf_proxy_ctx);
+    errdefer cf_https_proxy_ctx_free(ctx);
+
+    altsvc_hsts_peer.Curl_peer_link(&ctx.peer, peer);
+    altsvc_hsts_peer.Curl_peer_link(&ctx.tunnel_peer, tunnel_peer);
+    ctx.proxytype = proxytype;
+    ctx.tunnel_transport = tunnel_transport;
+
+    var cf: ?*Curl_cfilter = null;
+    result_out.* = Curl_cf_create(&cf, &Curl_cft_http_proxy, ctx);
+    if (result_out.* != CURLE_OK) return error.ProxyError;
+    Curl_conn_cf_insert_after(cf_at, cf.?);
+}
+
 pub export fn Curl_cf_http_proxy_insert_after(
     cf_at: *Curl_cfilter,
     data: ?*Curl_easy,
@@ -1622,21 +1650,8 @@ pub export fn Curl_cf_http_proxy_insert_after(
     const peer = peer_opt orelse return CURLE_FAILED_INIT;
     const tunnel_peer = tunnel_peer_opt orelse return CURLE_FAILED_INIT;
 
-    const raw_ctx = mem.calloc(1, @sizeOf(cf_proxy_ctx)) orelse return CURLE_OUT_OF_MEMORY;
-    var ctx: ?*cf_proxy_ctx = @ptrCast(@alignCast(raw_ctx));
-    defer cf_https_proxy_ctx_free(ctx);
-
-    altsvc_hsts_peer.Curl_peer_link(&ctx.?.peer, peer);
-    altsvc_hsts_peer.Curl_peer_link(&ctx.?.tunnel_peer, tunnel_peer);
-    ctx.?.proxytype = proxytype;
-    ctx.?.tunnel_transport = tunnel_transport;
-
-    var cf: ?*Curl_cfilter = null;
-    const result = Curl_cf_create(&cf, &Curl_cft_http_proxy, ctx);
-    if (result != CURLE_OK)
-        return result;
-    ctx = null;
-    Curl_conn_cf_insert_after(cf_at, cf.?);
+    var result: CURLcode = CURLE_OK;
+    cfHttpProxyInsertAfterInner(cf_at, peer, tunnel_peer, tunnel_transport, proxytype, &result) catch return result;
     return CURLE_OK;
 }
 
@@ -1699,8 +1714,12 @@ inline fn tunnel_is_failed(ts: ?*const h1_tunnel_state) bool {
     return t.tunnel_state == .H1_TUNNEL_FAILED;
 }
 
+inline fn getH1ProxyCtx(cf: *const Curl_cfilter) *cf_h1_proxy_ctx {
+    return fromOpaque(cf_h1_proxy_ctx, cf.ctx.?);
+}
+
 inline fn h1_proxy_is_udp(cf: *const Curl_cfilter) bool {
-    const pctx: *const cf_h1_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const pctx = getH1ProxyCtx(cf);
     if (pctx.ts) |ts| return ts.udp_tunnel;
     return false;
 }
@@ -1729,8 +1748,8 @@ fn tunnel_init(cf: *Curl_cfilter, data: ?*Curl_easy, pts: *?*h1_tunnel_state) CU
         return CURLE_UNSUPPORTED_PROTOCOL;
     }
 
-    const raw = mem.calloc(1, @sizeOf(h1_tunnel_state)) orelse return CURLE_OUT_OF_MEMORY;
-    const ts: *h1_tunnel_state = @ptrCast(@alignCast(raw));
+    const ts = mem.create(h1_tunnel_state) orelse return CURLE_OUT_OF_MEMORY;
+    ts.* = std.mem.zeroes(h1_tunnel_state);
 
     Curl_infof(data, "allocate connect buffer");
 
@@ -1801,14 +1820,14 @@ fn tunnel_free(ts_opt: ?*h1_tunnel_state, data: ?*Curl_easy) void {
         containers.curlx_dyn_free(&ts.rcvbuf);
         containers.curlx_dyn_free(&ts.request_data);
         Curl_httpchunk_free(data, &ts.ch);
-        mem.freeSized(ts, @sizeOf(h1_tunnel_state));
+        mem.freeTyped(ts);
     }
 }
 
 fn cf_tunnel_free(cf_opt: ?*Curl_cfilter, data: ?*Curl_easy) void {
     if (cf_opt) |cf| {
         if (cf.ctx) |raw| {
-            const pctx: *cf_h1_proxy_ctx = @ptrCast(@alignCast(raw));
+            const pctx = fromOpaque(cf_h1_proxy_ctx, raw);
             if (pctx.ts) |ts| {
                 h1_tunnel_go_state(cf, ts, .H1_TUNNEL_FAILED, data);
                 tunnel_free(ts, data);
@@ -1823,7 +1842,7 @@ inline fn tunnel_want_send(ts: *const h1_tunnel_state) bool {
 }
 
 fn start_CONNECT(cf: *Curl_cfilter, data: *Curl_easy, ts: *h1_tunnel_state) CURLcode {
-    const pctx: *cf_h1_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const pctx = getH1ProxyCtx(cf);
     var req: ?*httpreq = null;
     defer if (req) |r| Curl_http_req_free(r);
 
@@ -1844,7 +1863,7 @@ fn start_CONNECT(cf: *Curl_cfilter, data: *Curl_easy, ts: *h1_tunnel_state) CURL
         ts.headerlines = 0;
         const http_minor = @rem(ts.httpversion, 10);
 
-        result = http1_options.Curl_h1_req_write_head(@ptrCast(req.?), http_minor, &ts.request_data);
+        result = http1_options.Curl_h1_req_write_head(fromOpaque(http1_options.httpreq, req.?), http_minor, &ts.request_data);
         if (result == CURLE_OK) {
             result = Curl_creader_set_null(data);
         }
@@ -2103,9 +2122,9 @@ fn recv_CONNECT_resp(
 
     while (ts.keepon != .KEEPON_DONE) {
         var nread: usize = 0;
-        var byte: u8 = 0;
+        var byte: [1]u8 = .{0};
 
-        result = Curl_conn_recv(data, cf.sockindex, @ptrCast(&byte), 1, &nread);
+        result = Curl_conn_recv(data, cf.sockindex, &byte, 1, &nread);
         if (result == CURLE_AGAIN)
             return CURLE_OK;
 
@@ -2138,7 +2157,7 @@ fn recv_CONNECT_resp(
         if (ts.keepon == .KEEPON_IGNORE) {
             if (ts.chunked_encoding) {
                 var consumed: usize = 0;
-                result = Curl_httpchunk_read(data, &ts.ch, @ptrCast(&byte), 1, &consumed);
+                result = Curl_httpchunk_read(data, &ts.ch, &byte, 1, &consumed);
                 if (result != CURLE_OK)
                     return result;
                 if (Curl_httpchunk_is_done(data, &ts.ch)) {
@@ -2156,7 +2175,7 @@ fn recv_CONNECT_resp(
         }
 
         if (ts.maybe_folded) {
-            if (isBlank(byte)) {
+            if (isBlank(byte[0])) {
                 Curl_http_to_fold(&ts.rcvbuf);
                 ts.leading_unfold = true;
             } else {
@@ -2168,7 +2187,7 @@ fn recv_CONNECT_resp(
         }
 
         if (ts.leading_unfold) {
-            if (isBlank(byte))
+            if (isBlank(byte[0]))
                 continue;
             if (containers.curlx_dyn_addn(&ts.rcvbuf, " ", 1) != CURLE_OK) {
                 Curl_failf(data, "CONNECT response too large");
@@ -2177,12 +2196,12 @@ fn recv_CONNECT_resp(
             ts.leading_unfold = false;
         }
 
-        if (containers.curlx_dyn_addn(&ts.rcvbuf, @ptrCast(&byte), 1) != CURLE_OK) {
+        if (containers.curlx_dyn_addn(&ts.rcvbuf, &byte, 1) != CURLE_OK) {
             Curl_failf(data, "CONNECT response too large");
             return CURLE_RECV_ERROR;
         }
 
-        if (byte != 0x0a) {
+        if (byte[0] != 0x0a) {
             continue;
         } else {
             const linep = containers.curlx_dyn_ptr(&ts.rcvbuf);
@@ -2315,7 +2334,7 @@ fn H1_CONNECT(cf: *Curl_cfilter, data: *Curl_easy, ts: *h1_tunnel_state) CURLcod
 }
 
 fn cf_h1_proxy_connect(cf: *Curl_cfilter, data_opt: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
-    const pctx: *cf_h1_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const pctx = getH1ProxyCtx(cf);
     var ts = pctx.ts;
 
     if (cf.isConnected()) {
@@ -2359,7 +2378,7 @@ fn cf_h1_proxy_adjust_pollset(
     data: ?*Curl_easy,
     ps: *easy_pollset,
 ) callconv(.c) CURLcode {
-    const pctx: *cf_h1_proxy_ctx = @ptrCast(@alignCast(cf.ctx.?));
+    const pctx = getH1ProxyCtx(cf);
     const ts = pctx.ts;
     var result: CURLcode = CURLE_OK;
 
@@ -2390,10 +2409,10 @@ fn cf_h1_proxy_data_pending(cf: *Curl_cfilter, data: ?*const Curl_easy) callconv
 fn cf_h1_proxy_destroy(cf: *Curl_cfilter, data: ?*Curl_easy) callconv(.c) void {
     Curl_trc_cf_infof(data, cf, "destroy");
     if (cf.ctx) |raw| {
-        const pctx: *cf_h1_proxy_ctx = @ptrCast(@alignCast(raw));
+        const pctx = fromOpaque(cf_h1_proxy_ctx, raw);
         cf_tunnel_free(cf, data);
         altsvc_hsts_peer.Curl_peer_unlink(&pctx.peer);
-        mem.freeSized(pctx, @sizeOf(cf_h1_proxy_ctx));
+        mem.freeTyped(pctx);
         cf.ctx = null;
     }
 }
@@ -2405,7 +2424,7 @@ fn cf_h1_proxy_query(
     pres1: ?*c_int,
     pres2: ?*anyopaque,
 ) callconv(.c) CURLcode {
-    const pctx: ?*cf_h1_proxy_ctx = if (cf.ctx) |raw| @ptrCast(@alignCast(raw)) else null;
+    const pctx: ?*cf_h1_proxy_ctx = if (cf.ctx) |raw| fromOpaque(cf_h1_proxy_ctx, raw) else null;
     const ts: ?*h1_tunnel_state = if (pctx) |p| p.ts else null;
 
     switch (query) {
@@ -2414,7 +2433,7 @@ fn cf_h1_proxy_query(
                 if (t.dest) |dest| {
                     if (pres1) |p1| p1.* = @intCast(dest.port);
                     if (pres2) |p2| {
-                        const host_out: *?[*:0]const u8 = @ptrCast(@alignCast(p2));
+                        const host_out = fromOpaque(?[*:0]const u8, p2);
                         host_out.* = dest.hostname;
                     }
                     return CURLE_OK;
@@ -2423,7 +2442,7 @@ fn cf_h1_proxy_query(
         },
         CF_QUERY_ALPN_NEGOTIATED => {
             if (pres2) |p2| {
-                const palpn: *?[*:0]const u8 = @ptrCast(@alignCast(p2));
+                const palpn = fromOpaque(?[*:0]const u8, p2);
                 palpn.* = null;
             }
             return CURLE_OK;
@@ -2453,6 +2472,47 @@ pub export var Curl_cft_h1_proxy: Curl_cftype = .{
     .query = cf_h1_proxy_query,
 };
 
+fn cfH1ProxyInsertAfterInner(
+    cf_at: *Curl_cfilter,
+    data: ?*Curl_easy,
+    peer_opt: ?*Curl_peer,
+    dest: *Curl_peer,
+    httpversion: c_int,
+    udp_tunnel: bool,
+    result_out: *CURLcode,
+) error{ProxyError}!void {
+    const ts = mem.create(h1_tunnel_state) orelse {
+        result_out.* = CURLE_OUT_OF_MEMORY;
+        return error.ProxyError;
+    };
+    ts.* = std.mem.zeroes(h1_tunnel_state);
+    errdefer tunnel_free(ts, data);
+
+    altsvc_hsts_peer.Curl_peer_link(&ts.dest, dest);
+    ts.udp_tunnel = udp_tunnel;
+    ts.httpversion = httpversion;
+    containers.curlx_dyn_init(&ts.rcvbuf, DYN_PROXY_CONNECT_HEADERS);
+    containers.curlx_dyn_init(&ts.request_data, DYN_HTTP_REQUEST);
+    Curl_httpchunk_init(data, &ts.ch, true, true);
+
+    const pctx = mem.create(cf_h1_proxy_ctx) orelse {
+        result_out.* = CURLE_OUT_OF_MEMORY;
+        return error.ProxyError;
+    };
+    pctx.* = std.mem.zeroes(cf_h1_proxy_ctx);
+    errdefer {
+        altsvc_hsts_peer.Curl_peer_unlink(&pctx.peer);
+        mem.freeTyped(pctx);
+    }
+    altsvc_hsts_peer.Curl_peer_link(&pctx.peer, peer_opt);
+    pctx.ts = ts;
+
+    var cf: ?*Curl_cfilter = null;
+    result_out.* = Curl_cf_create(&cf, &Curl_cft_h1_proxy, pctx);
+    if (result_out.* != CURLE_OK) return error.ProxyError;
+    Curl_conn_cf_insert_after(cf_at, cf.?);
+}
+
 pub export fn Curl_cf_h1_proxy_insert_after(
     cf_at: *Curl_cfilter,
     data: ?*Curl_easy,
@@ -2465,31 +2525,8 @@ pub export fn Curl_cf_h1_proxy_insert_after(
     if (httpversion < 10 or httpversion >= 20)
         return CURLE_FAILED_INIT;
 
-    const raw_ts = mem.calloc(1, @sizeOf(h1_tunnel_state)) orelse return CURLE_OUT_OF_MEMORY;
-    var ts: ?*h1_tunnel_state = @ptrCast(@alignCast(raw_ts));
-    defer tunnel_free(ts, data);
-
-    altsvc_hsts_peer.Curl_peer_link(&ts.?.dest, dest);
-    ts.?.udp_tunnel = udp_tunnel;
-    ts.?.httpversion = httpversion;
-    containers.curlx_dyn_init(&ts.?.rcvbuf, DYN_PROXY_CONNECT_HEADERS);
-    containers.curlx_dyn_init(&ts.?.request_data, DYN_HTTP_REQUEST);
-    Curl_httpchunk_init(data, &ts.?.ch, true, true);
-
-    const raw_pctx = mem.calloc(1, @sizeOf(cf_h1_proxy_ctx)) orelse return CURLE_OUT_OF_MEMORY;
-    const pctx: *cf_h1_proxy_ctx = @ptrCast(@alignCast(raw_pctx));
-    altsvc_hsts_peer.Curl_peer_link(&pctx.peer, peer_opt);
-    pctx.ts = ts;
-
-    var cf: ?*Curl_cfilter = null;
-    const result = Curl_cf_create(&cf, &Curl_cft_h1_proxy, pctx);
-    if (result != CURLE_OK) {
-        altsvc_hsts_peer.Curl_peer_unlink(&pctx.peer);
-        mem.freeSized(pctx, @sizeOf(cf_h1_proxy_ctx));
-        return result;
-    }
-    ts = null;
-    Curl_conn_cf_insert_after(cf_at, cf.?);
+    var result: CURLcode = CURLE_OK;
+    cfH1ProxyInsertAfterInner(cf_at, data, peer_opt, dest, httpversion, udp_tunnel, &result) catch return result;
     return CURLE_OK;
 }
 
@@ -2646,13 +2683,17 @@ fn process_trailer(data: ?*Curl_easy, zp: *zlib_writer) CURLcode {
     return result;
 }
 
+inline fn getWriterCtx(comptime T: type, writer: *Curl_cwriter) *T {
+    return fromOpaque(T, writer.ctx);
+}
+
 fn inflate_stream(
     data: ?*Curl_easy,
     writer: *Curl_cwriter,
     wtype: c_int,
     started: zlibInitState,
 ) CURLcode {
-    const zp: *zlib_writer = @ptrCast(@alignCast(writer.ctx));
+    const zp = getWriterCtx(zlib_writer, writer);
     const z = &zp.z;
     const nread = z.avail_in;
     const orig_in = z.next_in;
@@ -2679,7 +2720,7 @@ fn inflate_stream(
             }
         }
 
-        z.next_out = @ptrCast(&zp.buffer[0]);
+        z.next_out = &zp.buffer;
         z.avail_out = @intCast(DECOMPRESS_BUFFER_SIZE);
 
         const status = zlib_c.inflate(z, Z_BLOCK);
@@ -2691,7 +2732,7 @@ fn inflate_stream(
                     data,
                     writer.next,
                     wtype,
-                    @ptrCast(&zp.buffer[0]),
+                    &zp.buffer,
                     DECOMPRESS_BUFFER_SIZE - z.avail_out,
                 );
                 if (result != CURLE_OK) {
@@ -2743,7 +2784,7 @@ fn inflate_stream(
 }
 
 fn deflate_do_init(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) CURLcode {
-    const zp: *zlib_writer = @ptrCast(@alignCast(writer.ctx));
+    const zp = getWriterCtx(zlib_writer, writer);
     const z = &zp.z;
     z.zalloc = zalloc_cb;
     z.zfree = zfree_cb;
@@ -2761,7 +2802,7 @@ fn deflate_do_write(
     buf: [*]const u8,
     nbytes: usize,
 ) callconv(.c) CURLcode {
-    const zp: *zlib_writer = @ptrCast(@alignCast(writer.ctx));
+    const zp = getWriterCtx(zlib_writer, writer);
     const z = &zp.z;
 
     if ((wtype & CLIENTWRITE_BODY) == 0 or nbytes == 0)
@@ -2777,7 +2818,7 @@ fn deflate_do_write(
 }
 
 fn deflate_do_close(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) void {
-    const zp: *zlib_writer = @ptrCast(@alignCast(writer.ctx));
+    const zp = getWriterCtx(zlib_writer, writer);
     const z = &zp.z;
     _ = exit_zlib(data, z, &zp.zlib_init, CURLE_OK);
     mem.secureZero(&zp.buffer, DECOMPRESS_BUFFER_SIZE);
@@ -2797,7 +2838,7 @@ const deflate_encoding: Curl_cwtype = .{
 };
 
 fn gzip_do_init(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) CURLcode {
-    const zp: *zlib_writer = @ptrCast(@alignCast(writer.ctx));
+    const zp = getWriterCtx(zlib_writer, writer);
     const z = &zp.z;
 
     z.zalloc = zalloc_cb;
@@ -2817,7 +2858,7 @@ fn gzip_do_write(
     buf: [*]const u8,
     nbytes: usize,
 ) callconv(.c) CURLcode {
-    const zp: *zlib_writer = @ptrCast(@alignCast(writer.ctx));
+    const zp = getWriterCtx(zlib_writer, writer);
     const z = &zp.z;
 
     if ((wtype & CLIENTWRITE_BODY) == 0 or nbytes == 0)
@@ -2833,7 +2874,7 @@ fn gzip_do_write(
 }
 
 fn gzip_do_close(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) void {
-    const zp: *zlib_writer = @ptrCast(@alignCast(writer.ctx));
+    const zp = getWriterCtx(zlib_writer, writer);
     const z = &zp.z;
     _ = exit_zlib(data, z, &zp.zlib_init, CURLE_OK);
     mem.secureZero(&zp.buffer, DECOMPRESS_BUFFER_SIZE);
@@ -2893,7 +2934,7 @@ fn brotli_map_error(be: BrotliDecoderErrorCode) CURLcode {
 
 fn brotli_do_init(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) CURLcode {
     _ = data;
-    const bp: *brotli_writer = @ptrCast(@alignCast(writer.ctx));
+    const bp = getWriterCtx(brotli_writer, writer);
     bp.br = BrotliDecoderCreateInstance(null, null, null);
     return if (bp.br != null) CURLE_OK else CURLE_OUT_OF_MEMORY;
 }
@@ -2905,7 +2946,7 @@ fn brotli_do_write(
     buf: [*]const u8,
     nbytes: usize,
 ) callconv(.c) CURLcode {
-    const bp: *brotli_writer = @ptrCast(@alignCast(writer.ctx));
+    const bp = getWriterCtx(brotli_writer, writer);
     var result: CURLcode = CURLE_OK;
 
     if ((wtype & CLIENTWRITE_BODY) == 0 or nbytes == 0)
@@ -2964,7 +3005,7 @@ fn brotli_do_write(
 
 fn brotli_do_close(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) void {
     _ = data;
-    const bp: *brotli_writer = @ptrCast(@alignCast(writer.ctx));
+    const bp = getWriterCtx(brotli_writer, writer);
     if (bp.br) |br| {
         BrotliDecoderDestroyInstance(br);
         bp.br = null;
@@ -3013,7 +3054,7 @@ const zstd_c = struct {
 
 fn zstd_do_init(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) CURLcode {
     _ = data;
-    const zp: *zstd_writer = @ptrCast(@alignCast(writer.ctx));
+    const zp = getWriterCtx(zstd_writer, writer);
     zp.zds = zstd_c.ZSTD_createDStream();
     return if (zp.zds != null) CURLE_OK else CURLE_OUT_OF_MEMORY;
 }
@@ -3026,7 +3067,7 @@ fn zstd_do_write(
     nbytes: usize,
 ) callconv(.c) CURLcode {
     var result: CURLcode = CURLE_OK;
-    const zp: *zstd_writer = @ptrCast(@alignCast(writer.ctx));
+    const zp = getWriterCtx(zstd_writer, writer);
     var in: ZSTD_inBuffer = undefined;
     var out: ZSTD_outBuffer = undefined;
     var i: c_int = 0;
@@ -3049,7 +3090,7 @@ fn zstd_do_write(
         }
 
         out.pos = 0;
-        out.dst = @ptrCast(&zp.buffer[0]);
+        out.dst = &zp.buffer;
         out.size = DECOMPRESS_BUFFER_SIZE;
 
         const errorCode = zstd_c.ZSTD_decompressStream(zp.zds.?, &out, &in);
@@ -3061,7 +3102,7 @@ fn zstd_do_write(
                 data,
                 writer.next,
                 wtype,
-                @ptrCast(&zp.buffer[0]),
+                &zp.buffer,
                 out.pos,
             );
             if (result != CURLE_OK)
@@ -3076,7 +3117,7 @@ fn zstd_do_write(
 
 fn zstd_do_close(data: ?*Curl_easy, writer: *Curl_cwriter) callconv(.c) void {
     _ = data;
-    const zp: *zstd_writer = @ptrCast(@alignCast(writer.ctx));
+    const zp = getWriterCtx(zstd_writer, writer);
     if (zp.zds) |zds| {
         _ = zstd_c.ZSTD_freeDStream(zds);
         zp.zds = null;
@@ -3130,30 +3171,31 @@ const transfer_unencoders = blk: {
     };
 };
 
-pub export fn Curl_get_content_encodings() callconv(.c) ?[*:0]u8 {
+fn getContentEncodingsInner() error{OutOfMemory}!?[*:0]u8 {
     var enc: dynbuf = undefined;
-    var result: CURLcode = CURLE_OK;
     containers.curlx_dyn_init(&enc, 255);
+    errdefer containers.curlx_dyn_free(&enc);
 
     for (general_unencoders) |cep_opt| {
-        if (result != CURLE_OK) break;
         const ce = cep_opt orelse break;
         if (primitives.curl_strequal(ce.name, CONTENT_ENCODING_DEFAULT) == 0) {
             if (containers.curlx_dyn_len(&enc) != 0) {
-                result = containers.curlx_dyn_addn(&enc, ", ", 2);
+                if (containers.curlx_dyn_addn(&enc, ", ", 2) != CURLE_OK) return error.OutOfMemory;
             }
-            if (result == CURLE_OK) {
-                result = containers.curlx_dyn_add(&enc, ce.name);
-            }
+            if (containers.curlx_dyn_add(&enc, ce.name) != CURLE_OK) return error.OutOfMemory;
         }
     }
-    if (result == CURLE_OK and containers.curlx_dyn_len(&enc) == 0) {
-        result = containers.curlx_dyn_add(&enc, CONTENT_ENCODING_DEFAULT);
+    if (containers.curlx_dyn_len(&enc) == 0) {
+        if (containers.curlx_dyn_add(&enc, CONTENT_ENCODING_DEFAULT) != CURLE_OK) return error.OutOfMemory;
     }
 
-    if (result == CURLE_OK)
-        return containers.curlx_dyn_ptr(&enc);
-    return null;
+    const ptr = containers.curlx_dyn_ptr(&enc);
+    enc = std.mem.zeroes(dynbuf);
+    return ptr;
+}
+
+pub export fn Curl_get_content_encodings() callconv(.c) ?[*:0]u8 {
+    return getContentEncodingsInner() catch null;
 }
 
 pub export fn Curl_all_content_encodings(buf: [*]u8, blen: usize) callconv(.c) void {
@@ -3225,16 +3267,15 @@ const error_writer: Curl_cwtype = .{
 };
 
 fn find_unencode_writer(
-    name: [*]const u8,
+    name: [*:0]const u8,
     len: usize,
     phase: c_uint,
 ) ?*const Curl_cwtype {
-    const name_c: [*:0]const u8 = @ptrCast(name);
     if (phase == CURL_CW_TRANSFER_DECODE) {
         for (transfer_unencoders) |cep_opt| {
             const cep = cep_opt orelse break;
-            if ((primitives.curl_strnequal(name_c, cep.name, len) != 0 and cep.name[len] == 0) or
-                (cep.alias != null and primitives.curl_strnequal(name_c, cep.alias.?, len) != 0 and cep.alias.?[len] == 0))
+            if ((primitives.curl_strnequal(name, cep.name, len) != 0 and cep.name[len] == 0) or
+                (cep.alias != null and primitives.curl_strnequal(name, cep.alias.?, len) != 0 and cep.alias.?[len] == 0))
             {
                 return cep;
             }
@@ -3242,13 +3283,28 @@ fn find_unencode_writer(
     }
     for (general_unencoders) |cep_opt| {
         const cep = cep_opt orelse break;
-        if ((primitives.curl_strnequal(name_c, cep.name, len) != 0 and cep.name[len] == 0) or
-            (cep.alias != null and primitives.curl_strnequal(name_c, cep.alias.?, len) != 0 and cep.alias.?[len] == 0))
+        if ((primitives.curl_strnequal(name, cep.name, len) != 0 and cep.name[len] == 0) or
+            (cep.alias != null and primitives.curl_strnequal(name, cep.alias.?, len) != 0 and cep.alias.?[len] == 0))
         {
             return cep;
         }
     }
     return null;
+}
+
+fn addUnencodingWriter(
+    data: *Curl_easy,
+    cwt: *const Curl_cwtype,
+    phase: c_uint,
+    result_out: *CURLcode,
+) error{WriterError}!void {
+    var writer: ?*Curl_cwriter = null;
+    result_out.* = Curl_cwriter_create(&writer, data, cwt, phase);
+    if (result_out.* != CURLE_OK) return error.WriterError;
+    errdefer Curl_cwriter_free(data, writer);
+
+    result_out.* = Curl_cwriter_add(data, writer.?);
+    if (result_out.* != CURLE_OK) return error.WriterError;
 }
 
 pub export fn Curl_build_unencoding_stack(
@@ -3266,7 +3322,7 @@ pub export fn Curl_build_unencoding_stack(
             enclist += 1;
         }
 
-        const name: [*]const u8 = enclist;
+        const name: [*:0]const u8 = enclist;
         var namelen: usize = 0;
         while (enclist[0] != 0 and enclist[0] != ',') : (enclist += 1) {
             if (enclist[0] > ' ') {
@@ -3275,22 +3331,21 @@ pub export fn Curl_build_unencoding_stack(
         }
 
         if (namelen != 0) {
-            const name_c: [*:0]const u8 = @ptrCast(name);
             const is_chunked = is_transfer and (namelen == 7) and
-                (primitives.curl_strnequal(name_c, "chunked", 7) != 0);
+                (primitives.curl_strnequal(name, "chunked", 7) != 0);
 
             if ((is_transfer and !Curl_ce_get_http_transfer_encoding(data) and !is_chunked) or
                 (!is_transfer and Curl_ce_get_http_ce_skip(data)))
             {
                 const is_identity = (namelen == 8) and
-                    (primitives.curl_strnequal(name_c, "identity", 8) != 0);
+                    (primitives.curl_strnequal(name, "identity", 8) != 0);
                 if (is_transfer and !Curl_ce_get_http_te_skip(data)) {
                     if (has_chunked) {
                         Curl_failf(
                             data,
                             "A Transfer-Encoding (%.*s) was listed after chunked",
                             @as(c_int, @intCast(namelen)),
-                            name_c,
+                            name,
                         );
                     } else if (is_identity) {
                         if (enclist[0] == 0) break;
@@ -3300,7 +3355,7 @@ pub export fn Curl_build_unencoding_stack(
                             data,
                             "Unsolicited Transfer-Encoding (%.*s) found",
                             @as(c_int, @intCast(namelen)),
-                            name_c,
+                            name,
                         );
                     }
                     return CURLE_BAD_CONTENT_ENCODING;
@@ -3335,16 +3390,8 @@ pub export fn Curl_build_unencoding_stack(
                 if (cwt == null)
                     cwt = &error_writer;
 
-                var writer: ?*Curl_cwriter = null;
-                var result = Curl_cwriter_create(&writer, data, cwt.?, phase);
-                if (result != CURLE_OK)
-                    return result;
-
-                result = Curl_cwriter_add(data, writer.?);
-                if (result != CURLE_OK) {
-                    Curl_cwriter_free(data, writer);
-                    return result;
-                }
+                var result: CURLcode = CURLE_OK;
+                addUnencodingWriter(data, cwt.?, phase, &result) catch return result;
             }
             if (is_chunked)
                 has_chunked = true;
@@ -3557,7 +3604,7 @@ test "Curl_http_proxy_transport, proxy cftypes, and content encodings" {
             .ctx = undefined,
             .phase = CURL_CW_CONTENT_DECODE,
         };
-        sink.ctx = @ptrCast(&sink);
+        sink.ctx = &sink;
 
         var bw = brotli_writer{
             .super = .{
@@ -3568,7 +3615,7 @@ test "Curl_http_proxy_transport, proxy cftypes, and content encodings" {
             },
             .br = null,
         };
-        bw.super.ctx = @ptrCast(&bw);
+        bw.super.ctx = &bw;
 
         Capture.out_len = 0;
         try std.testing.expectEqual(CURLE_OK, brotli_do_init(null, &bw.super));

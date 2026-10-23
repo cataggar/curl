@@ -2,6 +2,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const mem = @import("mem.zig");
 const containers = @import("containers.zig");
+const collections = @import("collections.zig");
+const doh_hostip_easy = @import("doh_hostip_easy.zig");
 const primitives = @import("primitives.zig");
 const curlx_parse = @import("curlx_parse.zig");
 const curlx_time_net = @import("curlx_time_net.zig");
@@ -582,9 +584,25 @@ fn ftp_state(data: *Curl_easy, ftpc: *ftp_conn, newstate: ftpstate) void {
 // Path & Directory Helpers
 // ============================================================================
 
+inline fn fromOpaque(comptime T: type, ptr: anytype) *T {
+    return @ptrCast(@alignCast(ptr));
+}
+
+inline fn getFtpEasy(data: *Curl_easy) ?*FTP {
+    return doh_hostip_easy.metaGetTyped(FTP, data, CURL_META_FTP_EASY);
+}
+
+inline fn getFtpConn(conn: *connectdata) ?*ftp_conn {
+    return doh_hostip_easy.connMetaGetTyped(ftp_conn, conn, CURL_META_FTP_CONN);
+}
+
+inline fn getLcCtx(writer: *Curl_cwriter) *ftp_cw_lc_ctx {
+    return if (writer.ctx) |c| fromOpaque(ftp_cw_lc_ctx, c) else fromOpaque(ftp_cw_lc_ctx, writer);
+}
+
 fn freedirs(ftpc: *ftp_conn) void {
     if (ftpc.dirs) |d| {
-        mem.free(d);
+        mem.freeTyped(d);
         ftpc.dirs = null;
     }
     ftpc.dirdepth = 0;
@@ -622,6 +640,7 @@ fn ftp_parse_url_path(data: *Curl_easy, ftpc: *ftp_conn, ftp: *FTP) CURLcode {
     }
 
     const rawPath = ftpc.rawpath orelse return CURLE_OUT_OF_MEMORY;
+    errdefer freedirs(ftpc);
     var fileName: ?[*:0]u8 = null;
     const filemethod = Curl_ftp_acc_get_ftp_filemethod(data);
 
@@ -640,15 +659,14 @@ fn ftp_parse_url_path(data: *Curl_easy, ftpc: *ftp_conn, ftp: *FTP) CURLcode {
                 if (dirlen == 0)
                     dirlen += 1;
 
-                ftpc.dirs = @ptrCast(@alignCast(mem.calloc(1, @sizeOf(pathcomp))));
+                ftpc.dirs = mem.callocMany(pathcomp, 1);
                 if (ftpc.dirs == null) {
-                    freedirs(ftpc);
                     return CURLE_OUT_OF_MEMORY;
                 }
                 ftpc.dirs.?[0].start = 0;
                 ftpc.dirs.?[0].len = @intCast(dirlen);
                 ftpc.dirdepth = 1;
-                fileName = @ptrCast(rawPath + slash_idx + 1);
+                fileName = rawPath + slash_idx + 1;
             } else {
                 fileName = rawPath;
             }
@@ -657,9 +675,8 @@ fn ftp_parse_url_path(data: *Curl_easy, ftpc: *ftp_conn, ftp: *FTP) CURLcode {
             var curPos: usize = 0;
             const dirAlloc = numof_slashes(rawPath);
             if (dirAlloc > 0) {
-                ftpc.dirs = @ptrCast(@alignCast(mem.calloc(dirAlloc, @sizeOf(pathcomp))));
+                ftpc.dirs = mem.callocMany(pathcomp, dirAlloc);
                 if (ftpc.dirs == null) {
-                    freedirs(ftpc);
                     return CURLE_OUT_OF_MEMORY;
                 }
 
@@ -674,7 +691,6 @@ fn ftp_parse_url_path(data: *Curl_easy, ftpc: *ftp_conn, ftp: *FTP) CURLcode {
                             curPos >= @as(usize, @intCast(std.math.maxInt(c_int))) or
                             ftpc.dirdepth >= 1000)
                         {
-                            freedirs(ftpc);
                             return CURLE_URL_MALFORMAT;
                         }
                         ftpc.dirs.?[i].start = @intCast(curPos);
@@ -685,7 +701,7 @@ fn ftp_parse_url_path(data: *Curl_easy, ftpc: *ftp_conn, ftp: *FTP) CURLcode {
                     curPos = slash_idx + 1;
                 }
             }
-            fileName = @ptrCast(rawPath + curPos);
+            fileName = rawPath + curPos;
         },
     }
 
@@ -757,13 +773,9 @@ fn ftp_cw_lc_write(
     blen_in: usize,
 ) callconv(.c) CURLcode {
     const nl = [_]u8{'\n'};
-    const ctx: *ftp_cw_lc_ctx = if (writer.ctx) |c|
-        @ptrCast(@alignCast(c))
-    else
-        @ptrCast(@alignCast(writer));
+    const ctx = getLcCtx(writer);
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const ftpc_raw = Curl_conn_meta_get(conn, CURL_META_FTP_CONN) orelse return CURLE_FAILED_INIT;
-    const ftpc: *ftp_conn = @ptrCast(@alignCast(ftpc_raw));
+    const ftpc = getFtpConn(conn) orelse return CURLE_FAILED_INIT;
 
     var buf = buf_in;
     var blen = blen_in;
@@ -874,7 +886,7 @@ fn ftp_check_ctrl_on_data_wait(data: *Curl_easy, ftpc: *ftp_conn) CURLcode {
             var len = containers.curlx_dyn_len(&pp.recvbuf);
 
             std.debug.assert((pp.overflow + pp.nfinal) <= len);
-            const r_ptr: [*:0]const u8 = @ptrCast(r_base + pp.nfinal);
+            const r_ptr: [*:0]const u8 = r_base + pp.nfinal;
             len -= pp.nfinal;
 
             if ((len > 3) and isLastLine(r_ptr)) {
@@ -977,8 +989,7 @@ fn getftpresponse(
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
     const sockfd = Curl_ftp_acc_conn_get_sock(conn, FIRSTSOCKET);
     var result: CURLcode = CURLE_OK;
-    const ftpc_raw = Curl_conn_meta_get(conn, CURL_META_FTP_CONN) orelse return CURLE_FAILED_INIT;
-    const ftpc: *ftp_conn = @ptrCast(@alignCast(ftpc_raw));
+    const ftpc = getFtpConn(conn) orelse return CURLE_FAILED_INIT;
     const pp = &ftpc.pp;
     var cache_skip: usize = 0;
 
@@ -1156,14 +1167,14 @@ fn ftp_port_parse_string(
     port_minp: *u16,
     port_maxp: *u16,
     hostp: *?[*:0]const u8,
-    hbuf: *[NI_MAXHOST]u8,
+    hbuf: *[NI_MAXHOST:0]u8,
 ) CURLcode {
     var ip_end: ?[*:0]const u8 = null;
     var addr: ?[*]const u8 = null;
     var addrlen: usize = 0;
     var port_min: u16 = 0;
     var port_max: u16 = 0;
-    var ipstr: [50]u8 = undefined;
+    var ipstr: [50:0]u8 = undefined;
 
     hostp.* = null;
     port_minp.* = 0;
@@ -1179,7 +1190,7 @@ fn ftp_port_parse_string(
         if (std.mem.indexOfScalar(u8, ip_start[0 .. str_len - 1], ']')) |idx| {
             addrlen = idx;
             addr = ip_start;
-            ip_end = @ptrCast(ip_start + idx);
+            ip_end = ip_start + idx;
         }
     } else if (str[0] == ':') {
         ip_end = str;
@@ -1187,7 +1198,7 @@ fn ftp_port_parse_string(
         addr = str;
         if (std.mem.indexOfScalar(u8, str[0..str_len], ':')) |idx| {
             addrlen = idx;
-            ip_end = @ptrCast(str + idx);
+            ip_end = str + idx;
             if (Curl_ftp_acc_is_ipv6_literal(str)) {
                 addrlen = str_len;
                 ip_end = null;
@@ -1200,7 +1211,7 @@ fn ftp_port_parse_string(
     if (ip_end) |end_str| {
         const end_len = std.mem.len(end_str);
         if (std.mem.indexOfScalar(u8, end_str[0..end_len], ':')) |colon_idx| {
-            var portp: ?[*:0]const u8 = @ptrCast(end_str + colon_idx + 1);
+            var portp: ?[*:0]const u8 = end_str + colon_idx + 1;
             var start: curl_off_t = 0;
             var end: curl_off_t = 0;
             if (curlx_str_number(&portp, &start, 0xffff) == 0) {
@@ -1228,18 +1239,18 @@ fn ftp_port_parse_string(
         @memcpy(ipstr[0..addrlen], addr_ptr[0..addrlen]);
         ipstr[addrlen] = 0;
 
-        const rc = Curl_ftp_acc_if2ip(data, conn, @ptrCast(&ipstr), hbuf, hbuf.len);
+        const rc = Curl_ftp_acc_if2ip(data, conn, &ipstr, hbuf, hbuf.len);
         if (rc < 0)
             return CURLE_FTP_PORT_FAILED;
         switch (rc) {
             IF2IP_NOT_FOUND => {
                 @memcpy(hbuf[0..addrlen], addr_ptr[0..addrlen]);
                 hbuf[addrlen] = 0;
-                hostp.* = @ptrCast(hbuf);
+                hostp.* = hbuf;
             },
             IF2IP_AF_NOT_SUPPORTED => return CURLE_FTP_PORT_FAILED,
             IF2IP_FOUND => {
-                hostp.* = @ptrCast(hbuf);
+                hostp.* = hbuf;
             },
             else => {},
         }
@@ -1259,7 +1270,7 @@ fn ftp_port_send_command(
     ai: ?*const Curl_addrinfo,
 ) CURLcode {
     const mode = [_][*:0]const u8{ "EPRT", "PORT" };
-    var myhost: [256]u8 = @splat(0);
+    var myhost: [256:0]u8 = @splat(0);
     var is_ipv4: bool = false;
     var is_ipv6: bool = false;
     var port: u16 = 0;
@@ -1284,11 +1295,12 @@ fn ftp_port_send_command(
 
         if (fcmd == .EPRT) {
             const af_num: c_int = if (is_ipv4) 1 else 2;
+            const myhost_c: [*:0]const u8 = &myhost;
             result = ppSendf(
                 data,
                 &ftpc.pp,
                 "%s |%d|%s|%hu|",
-                .{ mode[@backingInt(fcmd)], af_num, @as([*:0]const u8, @ptrCast(&myhost)), @as(c_uint, port) },
+                .{ mode[@backingInt(fcmd)], af_num, myhost_c, @as(c_uint, port) },
             );
             if (result != CURLE_OK) {
                 failf(data, "Failure sending EPRT command: %s", .{
@@ -1299,7 +1311,7 @@ fn ftp_port_send_command(
             break;
         }
         if (fcmd == .PORT) {
-            var target: [256 + 32]u8 = undefined;
+            var target: [256 + 32:0]u8 = undefined;
             var source_idx: usize = 0;
             var dest_idx: usize = 0;
 
@@ -1319,7 +1331,7 @@ fn ftp_port_send_command(
                 @as(c_int, port & 0xff),
             );
 
-            result = ftp_send_command(data, ftpc, mode[@backingInt(fcmd)], @ptrCast(&target));
+            result = ftp_send_command(data, ftpc, mode[@backingInt(fcmd)], &target);
             if (result != CURLE_OK) {
                 failf(data, "Failure sending PORT command: %s", .{
                     curl_easy_strerror(result),
@@ -1343,7 +1355,7 @@ fn ftp_state_use_port(
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
     var portsock: curl_socket_t = CURL_SOCKET_BAD;
 
-    var hbuf: [NI_MAXHOST]u8 = @splat(0);
+    var hbuf: [NI_MAXHOST:0]u8 = @splat(0);
     var res: ?*const Curl_addrinfo = null;
     var ai: ?*const Curl_addrinfo = null;
     var dns_entry: ?*Curl_dns_entry = null;
@@ -1360,7 +1372,7 @@ fn ftp_state_use_port(
     if (result == CURLE_OK and host == null) {
         result = Curl_ftp_acc_port_default_host(data, conn, &ss_buf, &sslen, &hbuf, hbuf.len);
         if (result == CURLE_OK) {
-            host = @ptrCast(&hbuf);
+            host = &hbuf;
             non_local = false;
         }
     }
@@ -1684,10 +1696,8 @@ fn ftp_state_user(
 
 fn ftp_do_more(data: *Curl_easy, more: *c_int) callconv(.c) CURLcode {
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const ftpc_raw = Curl_conn_meta_get(conn, CURL_META_FTP_CONN) orelse return CURLE_FAILED_INIT;
-    const ftpc: *ftp_conn = @ptrCast(@alignCast(ftpc_raw));
-    const ftp_raw = Curl_meta_get(data, CURL_META_FTP_EASY) orelse return CURLE_FAILED_INIT;
-    const ftp: *FTP = @ptrCast(@alignCast(ftp_raw));
+    const ftpc = getFtpConn(conn) orelse return CURLE_FAILED_INIT;
+    const ftp = getFtpEasy(data) orelse return CURLE_FAILED_INIT;
     var result: CURLcode = CURLE_OK;
     var connected: bool = false;
     var complete: bool = false;
@@ -1895,8 +1905,8 @@ fn ftp_state_mdtm_resp(
             const pp = &ftpc.pp;
             const resp = containers.curlx_dyn_ptr(&pp.recvbuf).? + 4;
             var showtime: bool = false;
-            if (ftp_213_date(@ptrCast(resp), &year, &month, &day, &hour, &minute, &second)) {
-                var timebuf: [24]u8 = undefined;
+            if (ftp_213_date(resp, &year, &month, &day, &hour, &minute, &second)) {
+                var timebuf: [24:0]u8 = undefined;
                 _ = curl_msnprintf(
                     &timebuf,
                     timebuf.len,
@@ -1908,7 +1918,7 @@ fn ftp_state_mdtm_resp(
                     minute,
                     second,
                 );
-                if (Curl_getdate_capped(@ptrCast(&timebuf), Curl_ftp_acc_get_info_filetime_ptr(data)) == 0)
+                if (Curl_getdate_capped(&timebuf, Curl_ftp_acc_get_info_filetime_ptr(data)) == 0)
                     showtime = true;
             }
 
@@ -2108,7 +2118,7 @@ fn ftp_state_size_resp(
         if (len > 4) {
             const start = buf + 4;
             const search_len = len - 4;
-            var fdigit_ptr: [*]const u8 = start;
+            var fdigit_ptr: [*:0]const u8 = start;
             if (std.mem.indexOfScalar(u8, start[0..search_len], '\r')) |cr_idx| {
                 var idx = cr_idx;
                 if (idx > 0) {
@@ -2119,7 +2129,7 @@ fn ftp_state_size_resp(
                 }
                 fdigit_ptr = start + idx;
             }
-            var fdigit: ?[*:0]const u8 = @ptrCast(fdigit_ptr);
+            var fdigit: ?[*:0]const u8 = fdigit_ptr;
             if (curlx_str_number(&fdigit, &filesize, CURL_OFF_T_MAX) != 0)
                 filesize = -1;
         }
@@ -2240,7 +2250,7 @@ fn ftp_state_get_resp(
             if (len >= 7) {
                 var i: usize = 0;
                 while (i < len - 7) : (i += 1) {
-                    var c: ?[*:0]const u8 = @ptrCast(buf + i);
+                    var c: ?[*:0]const u8 = buf + i;
                     var what: curl_off_t = 0;
                     if (curlx_str_number(&c, &what, CURL_OFF_T_MAX) == 0 and
                         curlx_str_single(&c, ' ') == 0 and
@@ -2394,8 +2404,7 @@ fn ftp_statemach(data: *Curl_easy, ftpc: *ftp_conn, done: *bool) CURLcode {
 
 fn ftp_multi_statemach(data: *Curl_easy, done: *bool) callconv(.c) CURLcode {
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const ftpc_raw = Curl_conn_meta_get(conn, CURL_META_FTP_CONN) orelse return CURLE_FAILED_INIT;
-    const ftpc: *ftp_conn = @ptrCast(@alignCast(ftpc_raw));
+    const ftpc = getFtpConn(conn) orelse return CURLE_FAILED_INIT;
     return ftp_statemach(data, ftpc, done);
 }
 
@@ -2436,14 +2445,13 @@ inline fn pathpiece(ftpc: *const ftp_conn, num: usize) [*]const u8 {
 fn ftp_connect(data: *Curl_easy, done: *bool) callconv(.c) CURLcode {
     var result: CURLcode = CURLE_OK;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const ftpc_raw = Curl_conn_meta_get(conn, CURL_META_FTP_CONN) orelse return CURLE_FAILED_INIT;
-    const ftpc: *ftp_conn = @ptrCast(@alignCast(ftpc_raw));
+    const ftpc = getFtpConn(conn) orelse return CURLE_FAILED_INIT;
     const pp = &ftpc.pp;
 
     done.* = false;
 
-    pp.statemachine = @ptrCast(&ftp_pp_statemachine);
-    pp.endofresp = @ptrCast(&ftp_endofresp);
+    pp.statemachine = &ftp_pp_statemachine;
+    pp.endofresp = &ftp_endofresp;
 
     if (Curl_conn_is_ssl(conn, FIRSTSOCKET)) {
         result = Curl_conn_connect(data, FIRSTSOCKET, true, done);
@@ -2619,7 +2627,7 @@ pub fn match_pasv_6nums(p_in: [*:0]const u8, array: *[6]c_uint) bool {
         if (i != 0) {
             if (p.?[0] != ',')
                 return false;
-            p = @ptrCast(p.? + 1);
+            p = p.? + 1;
         }
         if (curlx_str_number(&p, &num, 0xff) != 0)
             return false;
@@ -2640,16 +2648,16 @@ fn ftp_state_pasv_resp(
     var newport: u16 = 0;
     const recv_ptr = containers.curlx_dyn_ptr(&pp.recvbuf).?;
     const recv_len = containers.curlx_dyn_len(&pp.recvbuf);
-    var str: [*:0]const u8 = if (recv_len >= 4) @ptrCast(recv_ptr + 4) else recv_ptr;
+    var str: [*:0]const u8 = if (recv_len >= 4) recv_ptr + 4 else recv_ptr;
 
     if ((ftpc.count1 == 0) and (ftpcode == 229)) {
         const str_slice = std.mem.span(str);
         var valid_epsv: bool = false;
         if (std.mem.indexOfScalar(u8, str_slice, '(')) |open_idx| {
-            const ptr: [*:0]const u8 = @ptrCast(str + open_idx + 1);
+            const ptr: [*:0]const u8 = str + open_idx + 1;
             const sep = ptr[0];
             if (sep != 0 and (ptr[1] == sep) and (ptr[2] == sep) and isDigit(ptr[3])) {
-                var p: ?[*:0]const u8 = @ptrCast(ptr + 3);
+                var p: ?[*:0]const u8 = ptr + 3;
                 var num: curl_off_t = 0;
                 if (curlx_str_number(&p, &num, 0xffff) != 0 or num < 1 or (p.?[0] != sep)) {
                     failf(data, "Illegal port number in EPSV reply", .{});
@@ -2776,10 +2784,11 @@ fn ftp_pwd_resp(
     if (ftpcode == 257) {
         const recv_ptr = containers.curlx_dyn_ptr(&pp.recvbuf).?;
         const recv_len = containers.curlx_dyn_len(&pp.recvbuf);
-        var ptr: [*:0]const u8 = if (recv_len >= 4) @ptrCast(recv_ptr + 4) else recv_ptr;
+        var ptr: [*:0]const u8 = if (recv_len >= 4) recv_ptr + 4 else recv_ptr;
         var entry_extracted: bool = false;
         var out: dynbuf = undefined;
         containers.curlx_dyn_init(&out, 1000);
+        errdefer containers.curlx_dyn_free(&out);
 
         while (ptr[0] != '\n' and ptr[0] != 0 and ptr[0] != '"') : (ptr += 1) {}
 
@@ -2797,13 +2806,11 @@ fn ftp_pwd_resp(
                     }
                 } else {
                     if (isCntrl(ptr[0])) {
-                        containers.curlx_dyn_free(&out);
                         return CURLE_WEIRD_SERVER_REPLY;
                     }
                     result = containers.curlx_dyn_addn(&out, ptr, 1);
                 }
                 if (result != CURLE_OK) {
-                    containers.curlx_dyn_free(&out);
                     return result;
                 }
             }
@@ -2814,7 +2821,6 @@ fn ftp_pwd_resp(
             if (ftpc.server_os == null and dir[0] != '/') {
                 result = ppSendf(data, &ftpc.pp, "%s", .{"SYST"});
                 if (result != CURLE_OK) {
-                    containers.curlx_dyn_free(&out);
                     return result;
                 }
             }
@@ -2822,6 +2828,7 @@ fn ftp_pwd_resp(
             if (ftpc.entrypath) |ep|
                 mem.free(ep);
             ftpc.entrypath = dir;
+            out = std.mem.zeroes(dynbuf);
             infof(data, "Entry path is '%s'", .{ftpc.entrypath.?});
             result = Curl_ftp_acc_set_most_recent_ftp_entrypath(data, ftpc.entrypath.?);
             if (result != CURLE_OK)
@@ -2892,15 +2899,15 @@ fn ftp_use_ssl(conn: *connectdata, ftpc: *const ftp_conn) u8 {
 }
 
 fn ftp_pp_statemachine(
-    data: *Curl_easy,
-    conn: *connectdata,
+    data_opt: ?*Curl_easy,
+    conn_opt: ?*connectdata,
 ) callconv(.c) CURLcode {
+    const data = data_opt orelse return CURLE_FAILED_INIT;
+    const conn = conn_opt orelse return CURLE_FAILED_INIT;
     var result: CURLcode = CURLE_OK;
     var ftpcode: c_int = 0;
-    const ftpc_raw = Curl_conn_meta_get(conn, CURL_META_FTP_CONN) orelse return CURLE_FAILED_INIT;
-    const ftpc: *ftp_conn = @ptrCast(@alignCast(ftpc_raw));
-    const ftp_raw = Curl_meta_get(data, CURL_META_FTP_EASY) orelse return CURLE_FAILED_INIT;
-    const ftp: *FTP = @ptrCast(@alignCast(ftp_raw));
+    const ftpc = getFtpConn(conn) orelse return CURLE_FAILED_INIT;
+    const ftp = getFtpEasy(data) orelse return CURLE_FAILED_INIT;
     const pp = &ftpc.pp;
     var nread: usize = 0;
 
@@ -2988,7 +2995,7 @@ fn ftp_pp_statemachine(
             if (ftpcode == 215) {
                 const recv_ptr = containers.curlx_dyn_ptr(&pp.recvbuf).?;
                 const recv_len = containers.curlx_dyn_len(&pp.recvbuf);
-                var ptr: [*:0]const u8 = if (recv_len >= 4) @ptrCast(recv_ptr + 4) else recv_ptr;
+                var ptr: [*:0]const u8 = if (recv_len >= 4) recv_ptr + 4 else recv_ptr;
                 while (ptr[0] == ' ') : (ptr += 1) {}
                 const start: [*]const u8 = ptr;
                 var os_len: usize = 0;
@@ -2999,9 +3006,9 @@ fn ftp_pp_statemachine(
                 const os = curlx_memdup0(start, os_len) orelse return CURLE_OUT_OF_MEMORY;
 
                 if (primitives.curl_strequal(os, "OS/400") != 0) {
+                    errdefer mem.free(os);
                     result = ppSendf(data, &ftpc.pp, "%s", .{"SITE NAMEFMT 1"});
                     if (result != CURLE_OK) {
-                        mem.free(os);
                         return result;
                     }
                     if (ftpc.server_os) |old_os|
@@ -3354,10 +3361,8 @@ fn ftp_done(
     premature: bool,
 ) callconv(.c) CURLcode {
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_OK;
-    const ftp_raw = Curl_meta_get(data, CURL_META_FTP_EASY) orelse return CURLE_OK;
-    const ftp: *FTP = @ptrCast(@alignCast(ftp_raw));
-    const ftpc_raw = Curl_conn_meta_get(conn, CURL_META_FTP_CONN) orelse return CURLE_OK;
-    const ftpc: *ftp_conn = @ptrCast(@alignCast(ftpc_raw));
+    const ftp = getFtpEasy(data) orelse return CURLE_OK;
+    const ftpc = getFtpConn(conn) orelse return CURLE_OK;
     var result: CURLcode = CURLE_OK;
 
     result = ftp_done_status(data, ftpc, status, premature);
@@ -3380,15 +3385,13 @@ fn ftp_done(
 
 fn ftp_pollset(data: *Curl_easy, ps: *easy_pollset) callconv(.c) CURLcode {
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_OK;
-    const ftpc_raw = Curl_conn_meta_get(conn, CURL_META_FTP_CONN) orelse return CURLE_OK;
-    const ftpc: *ftp_conn = @ptrCast(@alignCast(ftpc_raw));
+    const ftpc = getFtpConn(conn) orelse return CURLE_OK;
     return Curl_ftp_acc_pp_pollset(data, &ftpc.pp, ps);
 }
 
 fn ftp_domore_pollset(data: *Curl_easy, ps: *easy_pollset) callconv(.c) CURLcode {
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_OK;
-    const ftpc_raw = Curl_conn_meta_get(conn, CURL_META_FTP_CONN) orelse return CURLE_OK;
-    const ftpc: *ftp_conn = @ptrCast(@alignCast(ftpc_raw));
+    const ftpc = getFtpConn(conn) orelse return CURLE_OK;
     trcFtp(data, "[%s] ftp_domore_pollset()", .{ftp_cstate(ftpc)});
 
     if (ftpc.state != .FTP_STOP) {
@@ -3455,10 +3458,8 @@ fn ftp_dophase_done(
 
 fn ftp_doing(data: *Curl_easy, dophase_done: *bool) callconv(.c) CURLcode {
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const ftpc_raw = Curl_conn_meta_get(conn, CURL_META_FTP_CONN) orelse return CURLE_FAILED_INIT;
-    const ftpc: *ftp_conn = @ptrCast(@alignCast(ftpc_raw));
-    const ftp_raw = Curl_meta_get(data, CURL_META_FTP_EASY) orelse return CURLE_FAILED_INIT;
-    const ftp: *FTP = @ptrCast(@alignCast(ftp_raw));
+    const ftpc = getFtpConn(conn) orelse return CURLE_FAILED_INIT;
+    const ftp = getFtpEasy(data) orelse return CURLE_FAILED_INIT;
 
     var result = ftp_statemach(data, ftpc, dophase_done);
 
@@ -3500,8 +3501,7 @@ fn ftp_disconnect(
     conn: *connectdata,
     dead_connection: bool,
 ) callconv(.c) CURLcode {
-    const ftpc_raw = Curl_conn_meta_get(conn, CURL_META_FTP_CONN) orelse return CURLE_FAILED_INIT;
-    const ftpc: *ftp_conn = @ptrCast(@alignCast(ftpc_raw));
+    const ftpc = getFtpConn(conn) orelse return CURLE_FAILED_INIT;
 
     ftpc.shutdown = true;
     if (dead_connection or Curl_pp_needs_flush(data, &ftpc.pp))
@@ -3517,11 +3517,11 @@ fn ftp_disconnect(
 
 fn wc_data_dtor(ptr: ?*anyopaque) callconv(.c) void {
     const ftpwc_raw = ptr orelse return;
-    const ftpwc: *ftp_wc = @ptrCast(@alignCast(ftpwc_raw));
+    const ftpwc = fromOpaque(ftp_wc, ftpwc_raw);
     if (ftpwc.parser != null) {
-        sasl_rtsp_ftplist.Curl_ftp_parselist_data_free(@ptrCast(&ftpwc.parser));
+        sasl_rtsp_ftplist.Curl_ftp_parselist_data_free(&ftpwc.parser);
     }
-    mem.freeSized(ftpwc, @sizeOf(ftp_wc));
+    mem.freeTyped(ftpwc);
 }
 
 fn init_wc_data(
@@ -3535,7 +3535,7 @@ fn init_wc_data(
 
     const path_len = std.mem.len(path);
     if (std.mem.lastIndexOfScalar(u8, path[0..path_len], '/')) |idx| {
-        const last_slash: [*:0]u8 = @ptrCast(path + idx + 1);
+        const last_slash: [*:0]u8 = path + idx + 1;
         if (last_slash[0] == 0) {
             wildcard.state = sasl_rtsp_ftplist.CURLWC_CLEAN;
             return ftp_parse_url_path(data, ftpc, ftp);
@@ -3556,29 +3556,23 @@ fn init_wc_data(
         }
     }
 
-    const ftpwc_raw = mem.calloc(1, @sizeOf(ftp_wc));
-    if (ftpwc_raw == null) {
+    errdefer {
         if (wildcard.pattern) |pat| {
             mem.free(pat);
             wildcard.pattern = null;
         }
         wildcard.dtor = null;
         wildcard.ftpwc = null;
-        return CURLE_OUT_OF_MEMORY;
     }
-    const ftpwc: *ftp_wc = @ptrCast(@alignCast(ftpwc_raw.?));
+
+    const ftpwc = mem.create(ftp_wc) orelse return CURLE_OUT_OF_MEMORY;
+    errdefer mem.freeTyped(ftpwc);
 
     ftpwc.parser = sasl_rtsp_ftplist.Curl_ftp_parselist_data_alloc();
     if (ftpwc.parser == null) {
-        mem.freeSized(ftpwc, @sizeOf(ftp_wc));
-        if (wildcard.pattern) |pat| {
-            mem.free(pat);
-            wildcard.pattern = null;
-        }
-        wildcard.dtor = null;
-        wildcard.ftpwc = null;
         return CURLE_OUT_OF_MEMORY;
     }
+    errdefer sasl_rtsp_ftplist.Curl_ftp_parselist_data_free(&ftpwc.parser);
 
     wildcard.ftpwc = ftpwc;
     wildcard.dtor = wc_data_dtor;
@@ -3588,27 +3582,11 @@ fn init_wc_data(
 
     result = ftp_parse_url_path(data, ftpc, ftp);
     if (result != CURLE_OK) {
-        sasl_rtsp_ftplist.Curl_ftp_parselist_data_free(@ptrCast(&ftpwc.parser));
-        mem.freeSized(ftpwc, @sizeOf(ftp_wc));
-        if (wildcard.pattern) |pat| {
-            mem.free(pat);
-            wildcard.pattern = null;
-        }
-        wildcard.dtor = null;
-        wildcard.ftpwc = null;
         return result;
     }
 
     wildcard.path = mem.strdup(ftp.path.?);
     if (wildcard.path == null) {
-        sasl_rtsp_ftplist.Curl_ftp_parselist_data_free(@ptrCast(&ftpwc.parser));
-        mem.freeSized(ftpwc, @sizeOf(ftp_wc));
-        if (wildcard.pattern) |pat| {
-            mem.free(pat);
-            wildcard.pattern = null;
-        }
-        wildcard.dtor = null;
-        wildcard.ftpwc = null;
         return CURLE_OUT_OF_MEMORY;
     }
 
@@ -3639,7 +3617,7 @@ fn wc_statemach(
                 return result;
             },
             sasl_rtsp_ftplist.CURLWC_MATCHING => {
-                const ftpwc: *ftp_wc = @ptrCast(@alignCast(wildcard.ftpwc.?));
+                const ftpwc = wildcard.ftpwc.?;
                 wildcard.state = sasl_rtsp_ftplist.CURLWC_DOWNLOADING;
 
                 if (sasl_rtsp_ftplist.Curl_ftp_parselist_geterror(ftpwc.parser.?) != 0) {
@@ -3655,7 +3633,7 @@ fn wc_statemach(
             sasl_rtsp_ftplist.CURLWC_DOWNLOADING => {
                 const list = &wildcard.filelist;
                 const head = containers.Curl_llist_head(list).?;
-                const finfo: *curl_fileinfo = @ptrCast(@alignCast(containers.Curl_node_elem(head).?));
+                const finfo = collections.llistElemTyped(curl_fileinfo, head).?;
 
                 const enc = curl_easy_escape(null, finfo.filename, 0) orelse return CURLE_OUT_OF_MEMORY;
                 const tmp_path = curl_maprintf("%s%s", wildcard.path.?, enc);
@@ -3721,8 +3699,7 @@ fn wc_statemach(
             },
             sasl_rtsp_ftplist.CURLWC_CLEAN => {
                 result = CURLE_OK;
-                if (wildcard.ftpwc) |fw| {
-                    const ftpwc: *ftp_wc = @ptrCast(@alignCast(fw));
+                if (wildcard.ftpwc) |ftpwc| {
                     result = sasl_rtsp_ftplist.Curl_ftp_parselist_geterror(ftpwc.parser.?);
                 }
                 wildcard.state = if (result != CURLE_OK)
@@ -3779,10 +3756,8 @@ fn ftp_regular_transfer(
 fn ftp_do(data: *Curl_easy, done: *bool) callconv(.c) CURLcode {
     var result: CURLcode = CURLE_OK;
     const conn = Curl_ftp_acc_get_conn(data) orelse return CURLE_FAILED_INIT;
-    const ftpc_raw = Curl_conn_meta_get(conn, CURL_META_FTP_CONN) orelse return CURLE_FAILED_INIT;
-    const ftpc: *ftp_conn = @ptrCast(@alignCast(ftpc_raw));
-    const ftp_raw = Curl_meta_get(data, CURL_META_FTP_EASY) orelse return CURLE_FAILED_INIT;
-    const ftp: *FTP = @ptrCast(@alignCast(ftp_raw));
+    const ftpc = getFtpConn(conn) orelse return CURLE_FAILED_INIT;
+    const ftp = getFtpEasy(data) orelse return CURLE_FAILED_INIT;
 
     done.* = false;
     ftpc.wait_data_conn = false;
@@ -3792,10 +3767,10 @@ fn ftp_do(data: *Curl_easy, done: *bool) callconv(.c) CURLcode {
         result = Curl_cwriter_create(&ftp_lc_writer, data, &ftp_cw_lc, CURL_CW_CONTENT_DECODE);
         if (result != CURLE_OK)
             return result;
+        errdefer Curl_cwriter_free(data, ftp_lc_writer);
 
         result = Curl_cwriter_add(data, ftp_lc_writer.?);
         if (result != CURLE_OK) {
-            Curl_cwriter_free(data, ftp_lc_writer);
             return result;
         }
     }
@@ -3829,17 +3804,17 @@ fn ftp_easy_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callco
     _ = key;
     _ = klen;
     const ftp_raw = entry orelse return;
-    const ftp: *FTP = @ptrCast(@alignCast(ftp_raw));
+    const ftp = fromOpaque(FTP, ftp_raw);
     if (ftp.pathalloc) |pa|
         mem.free(pa);
-    mem.freeSized(ftp, @sizeOf(FTP));
+    mem.freeTyped(ftp);
 }
 
 fn ftp_conn_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callconv(.c) void {
     _ = key;
     _ = klen;
     const ftpc_raw = entry orelse return;
-    const ftpc: *ftp_conn = @ptrCast(@alignCast(ftpc_raw));
+    const ftpc = fromOpaque(ftp_conn, ftpc_raw);
     freedirs(ftpc);
     if (ftpc.account) |acct|
         mem.free(acct);
@@ -3852,7 +3827,7 @@ fn ftp_conn_dtor(key: ?*const anyopaque, klen: usize, entry: ?*anyopaque) callco
     if (ftpc.server_os) |os|
         mem.free(os);
     _ = Curl_pp_disconnect(&ftpc.pp);
-    mem.freeSized(ftpc, @sizeOf(ftp_conn));
+    mem.freeTyped(ftpc);
 }
 
 fn type_url_check(data: *Curl_easy, ftp: *FTP) void {
@@ -3873,27 +3848,24 @@ fn type_url_check(data: *Curl_easy, ftp: *FTP) void {
 fn ftp_setup_connection(data: *Curl_easy, conn: *connectdata) callconv(.c) CURLcode {
     const result: CURLcode = CURLE_OK;
 
-    const ftp_raw = mem.calloc(1, @sizeOf(FTP)) orelse return CURLE_OUT_OF_MEMORY;
-    const ftp: *FTP = @ptrCast(@alignCast(ftp_raw));
+    const ftp = mem.create(FTP) orelse return CURLE_OUT_OF_MEMORY;
     if (Curl_meta_set(data, CURL_META_FTP_EASY, ftp, ftp_easy_dtor) != CURLE_OK)
         return CURLE_OUT_OF_MEMORY;
 
-    const ftpc_raw = mem.calloc(1, @sizeOf(ftp_conn)) orelse return CURLE_OUT_OF_MEMORY;
-    const ftpc: *ftp_conn = @ptrCast(@alignCast(ftpc_raw));
+    const ftpc = mem.create(ftp_conn) orelse return CURLE_OUT_OF_MEMORY;
     if (Curl_conn_meta_set(conn, CURL_META_FTP_CONN, ftpc, ftp_conn_dtor) != CURLE_OK)
         return CURLE_OUT_OF_MEMORY;
+    errdefer Curl_conn_meta_remove(conn, CURL_META_FTP_CONN);
 
     if (Curl_ftp_acc_get_str_ftp_account(data)) |acct_str| {
         ftpc.account = mem.strdup(acct_str);
         if (ftpc.account == null) {
-            Curl_conn_meta_remove(conn, CURL_META_FTP_CONN);
             return CURLE_OUT_OF_MEMORY;
         }
     }
     if (Curl_ftp_acc_get_str_ftp_alternative_to_user(data)) |alt_str| {
         ftpc.alternative_to_user = mem.strdup(alt_str);
         if (ftpc.alternative_to_user == null) {
-            Curl_conn_meta_remove(conn, CURL_META_FTP_CONN);
             return CURLE_OUT_OF_MEMORY;
         }
     }
@@ -3915,14 +3887,8 @@ pub export fn Curl_ftp_conns_match(
     needle: *connectdata,
     conn: *connectdata,
 ) callconv(.c) bool {
-    const nftpc_raw = Curl_conn_meta_get(needle, CURL_META_FTP_CONN);
-    const cftpc_raw = Curl_conn_meta_get(conn, CURL_META_FTP_CONN);
-
-    if (nftpc_raw == null or cftpc_raw == null)
-        return false;
-
-    const nftpc: *ftp_conn = @ptrCast(@alignCast(nftpc_raw.?));
-    const cftpc: *ftp_conn = @ptrCast(@alignCast(cftpc_raw.?));
+    const nftpc = getFtpConn(needle) orelse return false;
+    const cftpc = getFtpConn(conn) orelse return false;
 
     if (primitives.Curl_timestrcmp(nftpc.account, cftpc.account) != 0 or
         primitives.Curl_timestrcmp(nftpc.alternative_to_user, cftpc.alternative_to_user) != 0 or
