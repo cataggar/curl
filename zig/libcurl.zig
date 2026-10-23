@@ -294,6 +294,7 @@ pub fn addLibcurl(b: *std.Build, options: Options) *std.Build.Step.Compile {
         .name = "curl",
         .linkage = options.linkage,
         .root_module = mod,
+        .use_llvm = true,
     });
 
     if (os_tag == .linux) {

@@ -21,6 +21,7 @@ pub fn addCurlExe(
             .optimize = optimize,
             .link_libc = true,
         }),
+        .use_llvm = true,
     });
 
     const os_tag = target.result.os.tag;
@@ -96,6 +97,7 @@ pub fn addCurlToolLib(
             .optimize = optimize,
             .link_libc = true,
         }),
+        .use_llvm = true,
     });
     if (target.result.os.tag != .windows) {
         lib.root_module.pic = true;

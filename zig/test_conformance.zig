@@ -9,14 +9,26 @@ pub fn addConformanceStep(
         "test-range",
         "Optional test range or arguments passed to runtests.pl (e.g. \"1 to 399\")",
     );
+    const valgrind = b.option(
+        bool,
+        "valgrind",
+        "Enable Valgrind memcheck in conformance tests (pass false to pass -n to runtests.pl)",
+    ) orelse true;
+    const test_jobs = b.option(
+        usize,
+        "test-jobs",
+        "Number of parallel jobs (-jN) for runtests.pl",
+    ) orelse 2;
 
     const run_cmd = b.addSystemCommand(&.{
         "perl",
         "./runtests.pl",
         "-a",
-        "-n",
-        "-j2",
+        b.fmt("-j{d}", .{test_jobs}),
     });
+    if (!valgrind) {
+        run_cmd.addArg("-n");
+    }
     if (test_range) |range| {
         var it = std.mem.tokenizeAny(u8, range, " \t");
         while (it.next()) |arg| {

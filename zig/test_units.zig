@@ -134,6 +134,7 @@ pub fn setupUnitTests(
             .optimize = optimize,
             .link_libc = true,
         }),
+        .use_llvm = true,
     });
     if (os_tag != .windows) {
         units_exe.pie = true;
@@ -260,6 +261,7 @@ pub fn setupUnitTests(
             .optimize = optimize,
             .link_libc = true,
         }),
+        .use_llvm = true,
     });
     if (os_tag != .windows) {
         tunits_exe.pie = true;
