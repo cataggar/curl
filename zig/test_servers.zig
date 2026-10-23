@@ -239,6 +239,7 @@ pub fn addTestServersStep(
     shared: bool,
 ) *std.Build.Step {
     const curlinfo_exe = addCurlInfoExe(b, target, optimize, backend_options_step);
+    curlinfo_exe.use_llvm = libcurl_lib.use_llvm;
     b.installArtifact(curlinfo_exe);
 
     const servers_exe = addServersExe(

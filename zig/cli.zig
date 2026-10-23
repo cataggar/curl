@@ -27,7 +27,7 @@ pub fn addCurlExe(
     if (os_tag != .windows) {
         exe.pie = true;
         exe.root_module.pic = true;
-        if (optimize != .debug) {
+        if (optimize != .debug and (libcurl_lib.use_llvm orelse true)) {
             exe.root_module.stack_protector = true;
         }
     }

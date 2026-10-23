@@ -242,6 +242,7 @@ pub fn setupUnitTests(
 
     // 2. Build `tests/tunit/tunits`
     const curltool_lib = cli.addCurlToolLib(b, target, optimize);
+    curltool_lib.use_llvm = libcurl_lib.use_llvm;
     curltool_lib.root_module.addOptions("backend_options", backend_options_step);
     backends.applyCMacros(curltool_lib.root_module, target, backend_opts);
 
