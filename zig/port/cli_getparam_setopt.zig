@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const mem = @import("mem.zig");
 
 const c = struct {
     extern fn malloc(size: usize) ?*anyopaque;
@@ -29,20 +30,11 @@ inline fn toolFclose(stream: ?*anyopaque) void {
 }
 
 fn cDup0(src: ?[*]const u8, length: usize) ?[*:0]u8 {
-    if (length >= std.math.maxInt(usize)) return null;
-    const raw = c.malloc(length + 1) orelse return null;
-    const buf: [*]u8 = @ptrCast(raw);
-    if (length > 0) {
-        if (src) |s| {
-            @memcpy(buf[0..length], s[0..length]);
-        }
-    }
-    buf[length] = 0;
-    return @ptrCast(buf);
+    return mem.memdup0(src orelse "", length);
 }
 
 fn cStrdup(s: [*:0]const u8) ?[*:0]u8 {
-    return cDup0(s, std.mem.len(s));
+    return mem.strdup(s);
 }
 
 // ============================================================================
@@ -1359,9 +1351,9 @@ pub export fn tool_setopt_bitmask(
         skip = true;
 
     if (libcurlEnabled() and !skip and result == CURLE_OK) {
-        var preamble: [80]u8 = undefined;
+        var preamble: [79:0]u8 = undefined;
         var rest: c_ulong = @bitCast(lval);
-        _ = curl_msnprintf(&preamble, preamble.len, "curl_easy_setopt(curl, %s, ", name);
+        _ = curl_msnprintf(&preamble, preamble.len + 1, "curl_easy_setopt(curl, %s, ", name);
         var i: usize = 0;
         while (nvlist[i].name) |nv_name| : (i += 1) {
             if ((nvlist[i].value & ~rest) == 0) {
@@ -1369,17 +1361,17 @@ pub export fn tool_setopt_bitmask(
                 result = easysrc_addf(
                     &easysrc_code,
                     "%s(long)%s%s",
-                    @as([*:0]const u8, @ptrCast(&preamble)),
+                    @as([*:0]const u8, &preamble),
                     nv_name,
                     if (rest != 0) " |" else ");",
                 );
                 if (rest == 0 or result != CURLE_OK)
                     break;
-                _ = curl_msnprintf(&preamble, preamble.len, "%*s", @as(c_int, @intCast(std.mem.len(@as([*:0]const u8, @ptrCast(&preamble))))), "");
+                _ = curl_msnprintf(&preamble, preamble.len + 1, "%*s", @as(c_int, @intCast(std.mem.len(@as([*:0]const u8, &preamble)))), "");
             }
         }
         if (rest != 0 and result == CURLE_OK)
-            result = easysrc_addf(&easysrc_code, "%s%luUL);", @as([*:0]const u8, @ptrCast(&preamble)), rest);
+            result = easysrc_addf(&easysrc_code, "%s%luUL);", @as([*:0]const u8, &preamble), rest);
     }
     return result;
 }
@@ -1405,8 +1397,8 @@ fn libcurlGenerateSlist(slist: *curl_slist, slistno: *c_int) CURLcode {
         const node = cur.?;
         const data_str: [*:0]const u8 = if (node.data) |d| d else "";
         const escaped = cEscape(data_str, ZERO_TERMINATED) orelse return CURLE_OUT_OF_MEMORY;
+        defer mem.free(escaped);
         result = easysrc_addf(&easysrc_data, "slist%d = curl_slist_append(slist%d, \"%s\");", slistno.*, slistno.*, escaped);
-        c.free(@ptrCast(@constCast(escaped)));
     }
 
     return result;
@@ -1442,18 +1434,18 @@ fn libcurlGenerateMimePart(
         TOOLMIME_DATA => {
             if (part.data) |data| {
                 const escaped = cEscape(data, ZERO_TERMINATED) orelse return CURLE_OUT_OF_MEMORY;
+                defer mem.free(escaped);
                 result = easysrc_addf(&easysrc_code, "curl_mime_data(part%d, \"%s\", CURL_ZERO_TERMINATED);", mimeno, escaped);
-                c.free(@ptrCast(@constCast(escaped)));
             }
         },
         TOOLMIME_FILE, TOOLMIME_FILEDATA => {
             if (part.data) |data| {
                 const escaped = cEscape(data, ZERO_TERMINATED) orelse return CURLE_OUT_OF_MEMORY;
+                defer mem.free(escaped);
                 result = easysrc_addf(&easysrc_code, "curl_mime_filedata(part%d, \"%s\");", mimeno, escaped);
                 if (part.kind == TOOLMIME_FILEDATA and filename == null and result == CURLE_OK) {
                     result = easysrc_addf(&easysrc_code, "curl_mime_filename(part%d, NULL);", mimeno);
                 }
-                c.free(@ptrCast(@constCast(escaped)));
             }
         },
         TOOLMIME_STDIN => {
@@ -1473,26 +1465,26 @@ fn libcurlGenerateMimePart(
 
     if (result == CURLE_OK and part.encoder != null) {
         const escaped = cEscape(part.encoder.?, ZERO_TERMINATED) orelse return CURLE_OUT_OF_MEMORY;
+        defer mem.free(escaped);
         result = easysrc_addf(&easysrc_code, "curl_mime_encoder(part%d, \"%s\");", mimeno, escaped);
-        c.free(@ptrCast(@constCast(escaped)));
     }
 
     if (result == CURLE_OK and filename != null) {
         const escaped = cEscape(filename.?, ZERO_TERMINATED) orelse return CURLE_OUT_OF_MEMORY;
+        defer mem.free(escaped);
         result = easysrc_addf(&easysrc_code, "curl_mime_filename(part%d, \"%s\");", mimeno, escaped);
-        c.free(@ptrCast(@constCast(escaped)));
     }
 
     if (result == CURLE_OK and part.name != null) {
         const escaped = cEscape(part.name.?, ZERO_TERMINATED) orelse return CURLE_OUT_OF_MEMORY;
+        defer mem.free(escaped);
         result = easysrc_addf(&easysrc_code, "curl_mime_name(part%d, \"%s\");", mimeno, escaped);
-        c.free(@ptrCast(@constCast(escaped)));
     }
 
     if (result == CURLE_OK and part.type != null) {
         const escaped = cEscape(part.type.?, ZERO_TERMINATED) orelse return CURLE_OUT_OF_MEMORY;
+        defer mem.free(escaped);
         result = easysrc_addf(&easysrc_code, "curl_mime_type(part%d, \"%s\");", mimeno, escaped);
-        c.free(@ptrCast(@constCast(escaped)));
     }
 
     if (result == CURLE_OK and part.headers != null) {
@@ -1625,10 +1617,10 @@ pub export fn tool_setopt_offt(
 
     result = curl_easy_setopt(curl, tag, lval);
     if (libcurlEnabled() and result == CURLE_OK and lval != 0) {
-        var buf: [32]u8 = undefined;
-        const slice = std.fmt.bufPrint(buf[0 .. buf.len - 1], "{d}", .{lval}) catch "0";
+        var buf: [31:0]u8 = undefined;
+        const slice = std.fmt.bufPrint(buf[0..buf.len], "{d}", .{lval}) catch "0";
         buf[slice.len] = 0;
-        const formatted: [*:0]const u8 = @ptrCast(&buf);
+        const formatted: [*:0]const u8 = &buf;
         result = easysrc_addf(&easysrc_code, "curl_easy_setopt(curl, %s, (curl_off_t)%s);", name, formatted);
     }
     return result;
@@ -1682,8 +1674,8 @@ pub export fn tool_setopt_str(
             ZERO_TERMINATED;
         const escaped = cEscape(value.?, len);
         if (escaped) |esc| {
+            defer mem.free(esc);
             result = easysrc_addf(&easysrc_code, "curl_easy_setopt(curl, %s, \"%s\");", name, esc);
-            c.free(@ptrCast(@constCast(esc)));
         } else {
             result = CURLE_OUT_OF_MEMORY;
         }
@@ -2323,30 +2315,28 @@ const aliases: [284]LongShort = .{
     .{ .lname = "xattr", .desc = ARG_BOOL, .letter = ' ', .cmd = C_XATTR },
 };
 
-pub export fn parse_cert_parameter(
+fn parseCertParameterInner(
     cert_parameter: [*:0]const u8,
     certname: *?[*:0]u8,
     passphrase: *?[*:0]u8,
-) callconv(.c) ParameterError {
+) error{ BlankString, OutOfMemory }!void {
     const param_length = std.mem.len(cert_parameter);
 
     certname.* = null;
     passphrase.* = null;
 
     if (param_length == 0)
-        return PARAM_BLANK_STRING;
+        return error.BlankString;
 
     if (curl_strnequal(cert_parameter, "pkcs11:", 7) != 0 or
         std.mem.indexOfAny(u8, cert_parameter[0..param_length], ":\\") == null)
     {
-        certname.* = cStrdup(cert_parameter);
-        if (certname.* == null)
-            return PARAM_NO_MEM;
-        return PARAM_OK;
+        certname.* = cStrdup(cert_parameter) orelse return error.OutOfMemory;
+        return;
     }
 
-    const certname_raw = c.malloc(param_length + 1) orelse return PARAM_NO_MEM;
-    const actual_certname: [*:0]u8 = @ptrCast(certname_raw);
+    const actual_certname = mem.memdup0(cert_parameter, param_length) orelse return error.OutOfMemory;
+    errdefer mem.free(actual_certname);
 
     var i: usize = 0;
     var j: usize = 0;
@@ -2386,11 +2376,7 @@ pub export fn parse_cert_parameter(
                 }
                 i += 1;
                 if (i < param_length) {
-                    passphrase.* = cStrdup(cert_parameter + i);
-                    if (passphrase.* == null) {
-                        c.free(actual_certname);
-                        return PARAM_NO_MEM;
-                    }
+                    passphrase.* = cStrdup(cert_parameter + i) orelse return error.OutOfMemory;
                 }
                 break;
             },
@@ -2403,6 +2389,17 @@ pub export fn parse_cert_parameter(
     }
     actual_certname[j] = 0;
     certname.* = actual_certname;
+}
+
+pub export fn parse_cert_parameter(
+    cert_parameter: [*:0]const u8,
+    certname: *?[*:0]u8,
+    passphrase: *?[*:0]u8,
+) callconv(.c) ParameterError {
+    parseCertParameterInner(cert_parameter, certname, passphrase) catch |e| return switch (e) {
+        error.BlankString => PARAM_BLANK_STRING,
+        error.OutOfMemory => PARAM_NO_MEM,
+    };
     return PARAM_OK;
 }
 
@@ -2535,16 +2532,16 @@ fn strChrZ(s: [*:0]const u8, ch: u8) ?[*:0]const u8 {
     return null;
 }
 
-fn dataUrlencode(
+fn dataUrlencodeInner(
     nextarg: [*:0]const u8,
     postp: *?[*:0]u8,
     lenp: *usize,
-) ParameterError {
-    var err: ParameterError = PARAM_OK;
+) error{ OutOfMemory, ReadError, Other }!ParameterError {
     var p_opt = strChrZ(nextarg, '=');
     var nlen: usize = 0;
     var is_file: u8 = 0;
     var postdata: ?[*:0]u8 = null;
+    errdefer mem.free(postdata);
     var size: usize = 0;
 
     if (p_opt == null)
@@ -2567,67 +2564,69 @@ fn dataUrlencode(
             file = toolFopen(p, "rb");
             if (file == null) {
                 errorf("Failed to open %s", p);
-                return PARAM_READ_ERROR;
+                return error.ReadError;
             }
         }
 
-        err = file2memory(&postdata, &size, file);
+        const err = file2memory(&postdata, &size, file);
         if (file != null and file != stdin_ptr)
             toolFclose(file);
         if (err != PARAM_OK)
             return err;
     } else {
-        err = getstr(&postdata, p, ALLOW_BLANK);
+        const err = getstr(&postdata, p, ALLOW_BLANK);
         if (err != PARAM_OK)
             return err;
         size = std.mem.len(postdata.?);
     }
 
     if (postdata == null) {
-        postdata = cStrdup("");
-        if (postdata == null)
-            return PARAM_NO_MEM;
+        postdata = cStrdup("") orelse return error.OutOfMemory;
         size = 0;
     } else {
-        if (size > std.math.maxInt(c_int)) {
-            c.free(postdata);
-            return PARAM_NO_MEM;
-        }
-        const enc = curl_easy_escape(null, postdata.?, @intCast(size));
-        c.free(postdata);
+        if (size > std.math.maxInt(c_int))
+            return error.OutOfMemory;
+        const enc_ptr = curl_easy_escape(null, postdata.?, @intCast(size)) orelse return error.OutOfMemory;
+        defer curl_free(enc_ptr);
+        mem.free(postdata);
         postdata = null;
-        if (enc) |enc_ptr| {
-            var n: ?[*:0]u8 = null;
-            _ = replaceUrlEncodedSpaceByPlus(enc_ptr);
-            if (nlen > 0) {
-                var dyn: Dynbuf = .{};
-                curlx_dyn_init(&dyn, MAX_DATAURLENCODE);
-                if (curlx_dyn_addn(&dyn, nextarg, nlen) != CURLE_OK or
-                    curlx_dyn_addn(&dyn, "=", 1) != CURLE_OK or
-                    curlx_dyn_add(&dyn, enc_ptr) != CURLE_OK)
-                {
-                    curl_free(enc_ptr);
-                    return PARAM_NO_MEM;
-                }
-                curl_free(enc_ptr);
-                n = curlx_dyn_ptr(&dyn);
-                size = curlx_dyn_len(&dyn);
-            } else {
-                n = cStrdup(enc_ptr);
-                curl_free(enc_ptr);
-                if (n == null)
-                    return PARAM_NO_MEM;
-                size = std.mem.len(n.?);
+
+        var n: ?[*:0]u8 = null;
+        _ = replaceUrlEncodedSpaceByPlus(enc_ptr);
+        if (nlen > 0) {
+            var dyn: Dynbuf = .{};
+            curlx_dyn_init(&dyn, MAX_DATAURLENCODE);
+            errdefer curlx_dyn_free(&dyn);
+            if (curlx_dyn_addn(&dyn, nextarg, nlen) != CURLE_OK or
+                curlx_dyn_addn(&dyn, "=", 1) != CURLE_OK or
+                curlx_dyn_add(&dyn, enc_ptr) != CURLE_OK)
+            {
+                return error.OutOfMemory;
             }
-            postdata = n;
+            n = curlx_dyn_ptr(&dyn);
+            size = curlx_dyn_len(&dyn);
         } else {
-            return PARAM_NO_MEM;
+            n = cStrdup(enc_ptr) orelse return error.OutOfMemory;
+            size = std.mem.len(n.?);
         }
+        postdata = n;
     }
 
     postp.* = postdata;
     lenp.* = size;
     return PARAM_OK;
+}
+
+fn dataUrlencode(
+    nextarg: [*:0]const u8,
+    postp: *?[*:0]u8,
+    lenp: *usize,
+) ParameterError {
+    return dataUrlencodeInner(nextarg, postp, lenp) catch |e| switch (e) {
+        error.OutOfMemory => PARAM_NO_MEM,
+        error.ReadError => PARAM_READ_ERROR,
+        error.Other => PARAM_NO_MEM,
+    };
 }
 
 fn sethttpver(config: *OperationConfig, httpversion: c_long) void {
@@ -2675,16 +2674,16 @@ fn setTraceConfig(token_in: [*:0]const u8) CURLcode {
         } else if (len == 4 and curl_strnequal(name, "time", 4) != 0) {
             setGlobBit(.tracetime, toggle);
         } else {
-            var buffer: [64]u8 = undefined;
+            var buffer: [63:0]u8 = undefined;
             _ = curl_msnprintf(
                 &buffer,
-                buffer.len,
+                buffer.len + 1,
                 "%c%.*s,-lib-ids",
                 @as(c_int, if (toggle) '+' else '-'),
                 @as(c_int, @intCast(len)),
                 name,
             );
-            result = curl_global_trace(@ptrCast(&buffer));
+            result = curl_global_trace(&buffer);
             if (result != CURLE_OK)
                 return result;
         }
@@ -2785,48 +2784,48 @@ fn findTos(name: [*:0]const u8) ?u8 {
 
 const MAX_QUERY_LEN: usize = 100000;
 
-fn urlQuery(nextarg: [*:0]const u8, config: *OperationConfig) ParameterError {
+fn urlQueryInner(nextarg: [*:0]const u8, config: *OperationConfig) error{OutOfMemory}!ParameterError {
     var size: usize = 0;
-    var err: ParameterError = PARAM_OK;
     var query: ?[*:0]u8 = null;
+    errdefer mem.free(query);
     var dyn: Dynbuf = .{};
     curlx_dyn_init(&dyn, MAX_QUERY_LEN);
+    errdefer curlx_dyn_free(&dyn);
 
     if (nextarg[0] == '+') {
-        query = cStrdup(nextarg + 1);
-        if (query == null)
-            err = PARAM_NO_MEM;
+        query = cStrdup(nextarg + 1) orelse return error.OutOfMemory;
     } else {
-        err = dataUrlencode(nextarg, &query, &size);
+        const err = dataUrlencode(nextarg, &query, &size);
+        if (err != PARAM_OK) return err;
     }
 
-    if (err == PARAM_OK) {
-        const cfg_query_ptr = cfgStrPtr(config, .query);
-        if (cfg_query_ptr.*) |existing_query| {
-            const result = curlx_dyn_addf(&dyn, "%s&%s", existing_query, query.?);
-            c.free(query);
-            if (result != CURLE_OK) {
-                err = PARAM_NO_MEM;
-            } else {
-                c.free(existing_query);
-                cfg_query_ptr.* = curlx_dyn_ptr(&dyn);
-            }
-        } else {
-            cfg_query_ptr.* = query;
-        }
+    const cfg_query_ptr = cfgStrPtr(config, .query);
+    if (cfg_query_ptr.*) |existing_query| {
+        if (curlx_dyn_addf(&dyn, "%s&%s", existing_query, query.?) != CURLE_OK)
+            return error.OutOfMemory;
+        mem.free(query);
+        query = null;
+        mem.free(existing_query);
+        cfg_query_ptr.* = curlx_dyn_ptr(&dyn);
+    } else {
+        cfg_query_ptr.* = query;
     }
-    return err;
+    return PARAM_OK;
 }
 
-fn setData(cmd: cmdline_t, nextarg_in: [*:0]const u8, config: *OperationConfig) ParameterError {
+fn urlQuery(nextarg: [*:0]const u8, config: *OperationConfig) ParameterError {
+    return urlQueryInner(nextarg, config) catch PARAM_NO_MEM;
+}
+
+fn setDataInner(cmd: cmdline_t, nextarg_in: [*:0]const u8, config: *OperationConfig) error{ OutOfMemory, ReadError }!ParameterError {
     var nextarg = nextarg_in;
     var postdata: ?[*:0]u8 = null;
+    errdefer mem.free(postdata);
     var file: ?*anyopaque = null;
     var size: usize = 0;
-    var err: ParameterError = PARAM_OK;
 
     if (cmd == C_DATA_URLENCODE) {
-        err = dataUrlencode(nextarg, &postdata, &size);
+        const err = dataUrlencode(nextarg, &postdata, &size);
         if (err != PARAM_OK)
             return err;
     } else if (nextarg[0] == '@' and cmd != C_DATA_RAW) {
@@ -2840,17 +2839,18 @@ fn setData(cmd: cmdline_t, nextarg_in: [*:0]const u8, config: *OperationConfig) 
             file = toolFopen(nextarg, "rb");
             if (file == null) {
                 errorf("Failed to open %s", nextarg);
-                return PARAM_READ_ERROR;
+                return error.ReadError;
             }
         }
 
-        if (cmd == C_DATA_BINARY or cmd == C_JSON) {
-            err = file2memory(&postdata, &size, file);
-        } else {
-            err = file2string(&postdata, file);
+        const err = if (cmd == C_DATA_BINARY or cmd == C_JSON)
+            file2memory(&postdata, &size, file)
+        else blk: {
+            const e = file2string(&postdata, file);
             if (postdata) |pd|
                 size = std.mem.len(pd);
-        }
+            break :blk e;
+        };
 
         if (file != null and file != stdin_ptr)
             toolFclose(file);
@@ -2858,12 +2858,10 @@ fn setData(cmd: cmdline_t, nextarg_in: [*:0]const u8, config: *OperationConfig) 
             return err;
 
         if (postdata == null) {
-            postdata = cStrdup("");
-            if (postdata == null)
-                return PARAM_NO_MEM;
+            postdata = cStrdup("") orelse return error.OutOfMemory;
         }
     } else {
-        err = getstr(&postdata, nextarg, ALLOW_BLANK);
+        const err = getstr(&postdata, nextarg, ALLOW_BLANK);
         if (err != PARAM_OK)
             return err;
         size = std.mem.len(postdata.?);
@@ -2873,18 +2871,25 @@ fn setData(cmd: cmdline_t, nextarg_in: [*:0]const u8, config: *OperationConfig) 
         setCfgBit(config, .jsoned, true);
 
     const postdata_dyn = tool_zig_config_postdata_ptr(config);
-    if (curlx_dyn_len(postdata_dyn) != 0 and err == PARAM_OK and cmd != C_JSON and
+    defer cfgStrPtr(config, .postfields).* = curlx_dyn_ptr(postdata_dyn);
+    if (curlx_dyn_len(postdata_dyn) != 0 and cmd != C_JSON and
         curlx_dyn_addn(postdata_dyn, "&", 1) != CURLE_OK)
     {
-        err = PARAM_NO_MEM;
+        return error.OutOfMemory;
     }
 
-    if (err == PARAM_OK and curlx_dyn_addn(postdata_dyn, postdata, size) != CURLE_OK)
-        err = PARAM_NO_MEM;
+    if (curlx_dyn_addn(postdata_dyn, postdata, size) != CURLE_OK)
+        return error.OutOfMemory;
 
-    c.free(postdata);
-    cfgStrPtr(config, .postfields).* = curlx_dyn_ptr(postdata_dyn);
-    return err;
+    mem.free(postdata);
+    return PARAM_OK;
+}
+
+fn setData(cmd: cmdline_t, nextarg_in: [*:0]const u8, config: *OperationConfig) ParameterError {
+    return setDataInner(cmd, nextarg_in, config) catch |e| switch (e) {
+        error.OutOfMemory => PARAM_NO_MEM,
+        error.ReadError => PARAM_READ_ERROR,
+    };
 }
 
 fn setRate(nextarg: [*:0]const u8) ParameterError {
@@ -3010,12 +3015,12 @@ inline fn isBlank(ch: u8) bool {
 fn parseLocalport(config: *OperationConfig, nextarg: [*:0]const u8) ParameterError {
     var pp: ?[*:0]const u8 = null;
     var p: [*:0]const u8 = nextarg;
-    var buffer: [22]u8 = undefined;
+    var buffer: [21:0]u8 = undefined;
 
     while (isDigit(p[0]))
         p += 1;
     const plen = @intFromPtr(p) - @intFromPtr(nextarg);
-    if (plen >= buffer.len)
+    if (plen > buffer.len)
         return PARAM_BAD_USE;
     if (p[0] != 0) {
         var cur = p;
@@ -3028,9 +3033,9 @@ fn parseLocalport(config: *OperationConfig, nextarg: [*:0]const u8) ParameterErr
             cur += 1;
         pp = cur;
     }
-    _ = curl_msnprintf(&buffer, buffer.len, "%.*s", @as(c_int, @intCast(plen)), nextarg);
+    _ = curl_msnprintf(&buffer, buffer.len + 1, "%.*s", @as(c_int, @intCast(plen)), nextarg);
     var localport: c_long = @intCast(cfgInt(config, .localport));
-    if (str2unummax(&localport, @ptrCast(&buffer), 65535) != PARAM_OK)
+    if (str2unummax(&localport, &buffer, 65535) != PARAM_OK)
         return PARAM_BAD_USE;
     setCfgInt(config, .localport, localport);
 
@@ -3075,48 +3080,53 @@ fn parseContinueAt(config: *OperationConfig, nextarg: [*:0]const u8) ParameterEr
     return err;
 }
 
+fn parseEchFile(config: *OperationConfig, filename: [*:0]const u8) error{ BadUse, OutOfMemory }!ParameterError {
+    var tmpcfg: ?[*:0]u8 = null;
+    errdefer mem.free(tmpcfg);
+    const stdin_ptr = tool_zig_stdin();
+    const file = if (std.mem.eql(u8, std.mem.span(filename), "-"))
+        stdin_ptr
+    else
+        toolFopen(filename, FOPEN_READTEXT);
+    if (file == null) {
+        warnf("Could not read file \"%s\" specified for \"--ech ecl:\" option", filename);
+        return error.BadUse;
+    }
+    const err = file2string(&tmpcfg, file);
+    if (file != stdin_ptr)
+        toolFclose(file);
+    if (err != PARAM_OK)
+        return err;
+    const tmp = curl_maprintf("ecl:%s", tmpcfg) orelse return error.OutOfMemory;
+    defer curl_free(tmp);
+    mem.free(tmpcfg);
+    tmpcfg = null;
+    const dup = cStrdup(tmp);
+    cfgStrPtr(config, .ech_config).* = dup;
+    if (dup == null)
+        return error.OutOfMemory;
+    return PARAM_OK;
+}
+
 fn parseEch(config: *OperationConfig, nextarg_in: [*:0]const u8) ParameterError {
-    var nextarg = nextarg_in;
-    var err: ParameterError = PARAM_OK;
+    const nextarg = nextarg_in;
     const len = std.mem.len(nextarg);
     if (!feature_ech) {
-        err = PARAM_LIBCURL_DOESNT_SUPPORT;
+        return PARAM_LIBCURL_DOESNT_SUPPORT;
     } else if (len > 4 and curl_strnequal("pn:", nextarg, 3) != 0) {
-        err = getstr(cfgStrPtr(config, .ech_public), nextarg, DENY_BLANK);
+        return getstr(cfgStrPtr(config, .ech_public), nextarg, DENY_BLANK);
     } else if (len > 5 and curl_strnequal("ecl:", nextarg, 4) != 0) {
         if (nextarg[4] != '@') {
-            err = getstr(cfgStrPtr(config, .ech_config), nextarg, DENY_BLANK);
+            return getstr(cfgStrPtr(config, .ech_config), nextarg, DENY_BLANK);
         } else {
-            var tmpcfg: ?[*:0]u8 = null;
-            nextarg += 5;
-            const stdin_ptr = tool_zig_stdin();
-            const file = if (std.mem.eql(u8, std.mem.span(nextarg), "-"))
-                stdin_ptr
-            else
-                toolFopen(nextarg, FOPEN_READTEXT);
-            if (file == null) {
-                warnf("Could not read file \"%s\" specified for \"--ech ecl:\" option", nextarg);
-                return PARAM_BAD_USE;
-            }
-            err = file2string(&tmpcfg, file);
-            if (file != stdin_ptr)
-                toolFclose(file);
-            if (err != PARAM_OK)
-                return err;
-            const tmp = curl_maprintf("ecl:%s", tmpcfg);
-            c.free(tmpcfg);
-            if (tmp == null)
-                return PARAM_NO_MEM;
-            const dup = cStrdup(tmp.?);
-            curl_free(tmp);
-            cfgStrPtr(config, .ech_config).* = dup;
-            if (dup == null)
-                return PARAM_NO_MEM;
+            return parseEchFile(config, nextarg + 5) catch |e| switch (e) {
+                error.BadUse => PARAM_BAD_USE,
+                error.OutOfMemory => PARAM_NO_MEM,
+            };
         }
     } else {
-        err = getstr(cfgStrPtr(config, .ech), nextarg, DENY_BLANK);
+        return getstr(cfgStrPtr(config, .ech), nextarg, DENY_BLANK);
     }
-    return err;
 }
 
 fn parseHeader(config: *OperationConfig, cmd: cmdline_t, nextarg: [*:0]const u8) ParameterError {
@@ -3240,12 +3250,12 @@ fn parseRange(config: *OperationConfig, nextarg_in: [*:0]const u8) ParameterErro
     if (curlx_str_number(&nextarg, &value, CURL_OFF_T_MAX) == 0 and
         curlx_str_single(&nextarg, '-') != 0)
     {
-        var buffer: [32]u8 = undefined;
+        var buffer: [31:0]u8 = undefined;
         warnf("A specified range MUST include at least one dash (-). Appending one for you");
-        const slice = std.fmt.bufPrint(buffer[0 .. buffer.len - 1], "{d}-", .{value}) catch unreachable;
+        const slice = std.fmt.bufPrint(buffer[0..buffer.len], "{d}-", .{value}) catch unreachable;
         buffer[slice.len] = 0;
         cfgStrFree(config, .range);
-        const dup = cStrdup(@ptrCast(&buffer));
+        const dup = cStrdup(&buffer);
         cfgStrPtr(config, .range).* = dup;
         if (dup == null)
             err = PARAM_NO_MEM;
@@ -4187,6 +4197,21 @@ inline fn hasLeadingUnicode(arg: [*:0]const u8) bool {
 
 const MAX_OPTION_LEN: usize = 26;
 
+fn expandOptArg(desc: u8, nextarg: *?[*:0]const u8, nextalloc: *bool) error{ NotExpandable, ExpandFailed }!void {
+    if (argType(desc) < ARG_STRG)
+        return error.NotExpandable;
+    var nbuf: Dynbuf = .{};
+    errdefer curlx_dyn_free(&nbuf);
+    var replaced = false;
+    const err = varexpand(nextarg.*.?, &nbuf, &replaced);
+    if (err != PARAM_OK)
+        return error.ExpandFailed;
+    if (replaced) {
+        nextarg.* = curlx_dyn_ptr(&nbuf);
+        nextalloc.* = true;
+    }
+}
+
 pub export fn getparameter(
     flag_in: [*:0]const u8,
     nextarg_in: ?[*:0]const u8,
@@ -4202,6 +4227,7 @@ pub export fn getparameter(
     var err: ParameterError = PARAM_OK;
     var toggle = true;
     var nextalloc = false;
+    defer if (nextalloc) mem.freeTyped(nextarg);
     var consumearg = true;
     var a_opt: ?*const LongShort = null;
     verbose_nopts = 0;
@@ -4228,14 +4254,14 @@ pub export fn getparameter(
         if (curlx_str_until(&p, &out, MAX_OPTION_LEN, '=') == 0 and
             curlx_str_single(&p, '=') == 0)
         {
-            var tempword: [MAX_OPTION_LEN + 1]u8 = undefined;
+            var tempword: [MAX_OPTION_LEN:0]u8 = undefined;
             if (out.len > 0) {
                 if (out.str) |s| {
                     @memcpy(tempword[0..out.len], s[0..out.len]);
                 }
             }
             tempword[out.len] = 0;
-            a_opt = findlongopt(@ptrCast(&tempword));
+            a_opt = findlongopt(&tempword);
             nextarg = p;
             consumearg = false;
         } else {
@@ -4245,33 +4271,12 @@ pub export fn getparameter(
         if (a_opt) |a| {
             longopt = true;
             if (noflagged and argType(a.desc) != ARG_BOOL) {
-                err = PARAM_NO_PREFIX;
-                if (nextalloc) c.free(@constCast(nextarg));
-                return err;
+                return PARAM_NO_PREFIX;
             } else if (expand and nextarg != null) {
-                var nbuf: Dynbuf = .{};
-                var replaced = false;
-
-                if (argType(a.desc) < ARG_STRG) {
-                    err = PARAM_EXPAND_ERROR;
-                    if (nextalloc) c.free(@constCast(nextarg));
-                    return err;
-                }
-                err = varexpand(nextarg.?, &nbuf, &replaced);
-                if (err != PARAM_OK) {
-                    curlx_dyn_free(&nbuf);
-                    if (nextalloc) c.free(@constCast(nextarg));
-                    return err;
-                }
-                if (replaced) {
-                    nextarg = curlx_dyn_ptr(&nbuf);
-                    nextalloc = true;
-                }
+                expandOptArg(a.desc, &nextarg, &nextalloc) catch return PARAM_EXPAND_ERROR;
             }
         } else {
-            err = PARAM_OPTION_UNKNOWN;
-            if (nextalloc) c.free(@constCast(nextarg));
-            return err;
+            return PARAM_OPTION_UNKNOWN;
         }
     } else {
         flag += 1;
@@ -4343,8 +4348,6 @@ pub export fn getparameter(
             break;
     }
 
-    if (nextalloc)
-        c.free(@constCast(nextarg));
     return err;
 }
 

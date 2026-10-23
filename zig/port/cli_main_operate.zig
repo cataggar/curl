@@ -9,6 +9,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const mem = @import("mem.zig");
 
 const is_windows = builtin.os.tag == .windows;
 const is_darwin = builtin.os.tag.isDarwin();
@@ -870,7 +871,7 @@ pub const ProgressData = extern struct {
 };
 
 pub const per_transfer = extern struct {
-    errorbuffer: [CURL_ERROR_SIZE]u8 = @splat(0),
+    errorbuffer: [CURL_ERROR_SIZE - 1:0]u8 = @splat(0),
     next: ?*per_transfer = null,
     prev: ?*per_transfer = null,
     config: ?*OperationConfig = null,
@@ -984,15 +985,15 @@ extern fn tool_setopt_offt(curl: ?*CURL, name: [*:0]const u8, tag: CURLoption, l
 extern fn tool_setopt_str(curl: ?*CURL, config: *OperationConfig, name: [*:0]const u8, tag: CURLoption, value: ?[*:0]const u8) callconv(.c) CURLcode;
 extern fn tool_setopt_ptr(curl: ?*CURL, name: [*:0]const u8, tag: CURLoption, ...) callconv(.c) CURLcode;
 
-extern fn tool_debug_cb(handle: ?*CURL, @"type": c_uint, data: [*]u8, size: usize, userptr: ?*anyopaque) callconv(.c) c_int;
-extern fn tool_write_cb(buffer: [*]u8, sz: usize, nmemb: usize, userdata: ?*anyopaque) callconv(.c) usize;
-extern fn tool_read_cb(buffer: [*]u8, sz: usize, nmemb: usize, userdata: ?*anyopaque) callconv(.c) usize;
-extern fn tool_seek_cb(userdata: ?*anyopaque, offset: curl_off_t, whence: c_int) callconv(.c) c_int;
-extern fn tool_progress_cb(clientp: ?*anyopaque, dltotal: curl_off_t, dlnow: curl_off_t, ultotal: curl_off_t, ulnow: curl_off_t) callconv(.c) c_int;
-extern fn tool_readbusy_cb(clientp: ?*anyopaque, dltotal: curl_off_t, dlnow: curl_off_t, ultotal: curl_off_t, ulnow: curl_off_t) callconv(.c) c_int;
-extern fn tool_header_cb(ptr: [*]u8, size: usize, nmemb: usize, userdata: ?*anyopaque) callconv(.c) usize;
+extern fn tool_debug_cb(handle: ?*CURL, @"type": c_uint, data: [*]u8, size: usize, userptr: ?*OperationConfig) callconv(.c) c_int;
+extern fn tool_write_cb(buffer: [*]u8, sz: usize, nmemb: usize, userdata: ?*per_transfer) callconv(.c) usize;
+extern fn tool_read_cb(buffer: [*]u8, sz: usize, nmemb: usize, userdata: ?*per_transfer) callconv(.c) usize;
+extern fn tool_seek_cb(userdata: ?*per_transfer, offset: curl_off_t, whence: c_int) callconv(.c) c_int;
+extern fn tool_progress_cb(clientp: ?*per_transfer, dltotal: curl_off_t, dlnow: curl_off_t, ultotal: curl_off_t, ulnow: curl_off_t) callconv(.c) c_int;
+extern fn tool_readbusy_cb(clientp: ?*per_transfer, dltotal: curl_off_t, dlnow: curl_off_t, ultotal: curl_off_t, ulnow: curl_off_t) callconv(.c) c_int;
+extern fn tool_header_cb(ptr: [*]u8, size: usize, nmemb: usize, userdata: ?*per_transfer) callconv(.c) usize;
 extern fn tool_socket_open_mptcp_cb(clientp: ?*anyopaque, purpose: c_uint, address: ?*anyopaque) callconv(.c) curl_socket_t;
-extern fn xferinfo_cb(clientp: ?*anyopaque, dltotal: curl_off_t, dlnow: curl_off_t, ultotal: curl_off_t, ulnow: curl_off_t) callconv(.c) c_int;
+extern fn xferinfo_cb(clientp: ?*per_transfer, dltotal: curl_off_t, dlnow: curl_off_t, ultotal: curl_off_t, ulnow: curl_off_t) callconv(.c) c_int;
 
 extern fn progressbarinit(bar: *ProgressData, config: *OperationConfig) callconv(.c) void;
 extern fn progress_meter(multi: ?*CURLM, start: *curltime, final: bool) callconv(.c) bool;
@@ -1142,6 +1143,7 @@ const posix_c = if (!is_windows) struct {
         c_ospeed: c_ulong,
     };
 
+    const Passwd = if (builtin.os.tag.isDarwin()) passwd_darwin else passwd;
     const Termios = if (builtin.os.tag.isDarwin()) termios_darwin else termios_linux;
     const ECHO_FLAG: u32 = 0o000010;
     const TCSANOW: c_int = 0;
@@ -1165,7 +1167,7 @@ const posix_c = if (!is_windows) struct {
     extern "c" fn ftruncate(fd: c_int, length: i64) callconv(.c) c_int;
     extern "c" fn unlink(pathname: [*:0]const u8) callconv(.c) c_int;
     extern "c" fn geteuid() callconv(.c) u32;
-    extern "c" fn getpwuid(uid: u32) callconv(.c) ?*anyopaque;
+    extern "c" fn getpwuid(uid: u32) callconv(.c) ?*Passwd;
     extern "c" fn tcgetattr(fd: c_int, termios_p: *Termios) callconv(.c) c_int;
     extern "c" fn tcsetattr(fd: c_int, optional_actions: c_int, termios_p: *const Termios) callconv(.c) c_int;
 } else struct {};
@@ -1407,7 +1409,7 @@ fn cStrdup(s: [*:0]const u8) ?[*:0]u8 {
 
 inline fn safeFreePtr(comptime T: type, ptr: *?T) void {
     if (ptr.*) |p| {
-        Curl_cfree(@ptrCast(p));
+        mem.freeTyped(p);
         ptr.* = null;
     }
 }
@@ -1457,10 +1459,10 @@ const use_c_vastart = switch (builtin.cpu.arch) {
 const CVaListParam = switch (builtin.cpu.arch) {
     .x86_64 => if (builtin.os.tag == .windows) [*]u8 else *std.builtin.VaListX86_64,
     .aarch64, .aarch64_be => switch (builtin.os.tag) {
-        .macos, .ios, .tvos, .watchos, .visionos, .driverkit, .maccatalyst, .windows => [*]u8,
+        .macos, .ios, .tvos, .watchos, .visionos, .driverkit, .maccatalyst, .windows => std.builtin.VaList,
         else => std.builtin.VaListAarch64,
     },
-    else => *anyopaque,
+    else => std.builtin.VaList,
 };
 
 pub export fn notef_va(fmt: [*:0]const u8, ap: CVaListParam) callconv(.c) void {
@@ -1512,7 +1514,7 @@ const variadic_impl = struct {
             pub fn f(fmt: [*:0]const u8, ...) callconv(.c) void {
                 var ap = @cVaStart();
                 defer @cVaEnd(&ap);
-                const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
+                const param: CVaListParam = if (builtin.cpu.arch == .x86_64 and builtin.os.tag != .windows) &ap else ap;
                 notef_va(fmt, param);
             }
         }.f
@@ -1568,7 +1570,7 @@ const variadic_impl = struct {
             pub fn f(fmt: [*:0]const u8, ...) callconv(.c) void {
                 var ap = @cVaStart();
                 defer @cVaEnd(&ap);
-                const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
+                const param: CVaListParam = if (builtin.cpu.arch == .x86_64 and builtin.os.tag != .windows) &ap else ap;
                 warnf_va(fmt, param);
             }
         }.f
@@ -1624,7 +1626,7 @@ const variadic_impl = struct {
             pub fn f(fmt: ?[*:0]const u8, ...) callconv(.c) void {
                 var ap = @cVaStart();
                 defer @cVaEnd(&ap);
-                const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
+                const param: CVaListParam = if (builtin.cpu.arch == .x86_64 and builtin.os.tag != .windows) &ap else ap;
                 helpf_va(fmt, param);
             }
         }.f
@@ -1680,7 +1682,7 @@ const variadic_impl = struct {
             pub fn f(fmt: [*:0]const u8, ...) callconv(.c) void {
                 var ap = @cVaStart();
                 defer @cVaEnd(&ap);
-                const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
+                const param: CVaListParam = if (builtin.cpu.arch == .x86_64 and builtin.os.tag != .windows) &ap else ap;
                 errorf_va(fmt, param);
             }
         }.f
@@ -1736,7 +1738,7 @@ const variadic_impl = struct {
             pub fn f(plist: *?*slist_wc, fmt: [*:0]const u8, ...) callconv(.c) CURLcode {
                 var ap = @cVaStart();
                 defer @cVaEnd(&ap);
-                const param: CVaListParam = if (builtin.cpu.arch == .x86_64) &ap else @ptrCast(ap);
+                const param: CVaListParam = if (builtin.cpu.arch == .x86_64 and builtin.os.tag != .windows) &ap else ap;
                 return easysrc_addf_va(plist, fmt, param);
             }
         }.f
@@ -1936,17 +1938,9 @@ pub export fn tool_zig_stat_mtime(filename: [*:0]const u8, stamp: *i64) callconv
 
 pub export fn tool_zig_get_pw_dir() callconv(.c) ?[*:0]const u8 {
     if (!is_windows) {
-        const pw_raw = posix_c.getpwuid(posix_c.geteuid()) orelse return null;
-        if (builtin.os.tag.isDarwin()) {
-            const pw: *posix_c.passwd_darwin = @ptrCast(@alignCast(pw_raw));
-            if (pw.pw_dir) |d| {
-                if (d[0] != 0) return d;
-            }
-        } else {
-            const pw: *posix_c.passwd = @ptrCast(@alignCast(pw_raw));
-            if (pw.pw_dir) |d| {
-                if (d[0] != 0) return d;
-            }
+        const pw = posix_c.getpwuid(posix_c.geteuid()) orelse return null;
+        if (pw.pw_dir) |d| {
+            if (d[0] != 0) return d;
         }
     }
     return null;
@@ -2620,9 +2614,9 @@ pub export fn Curl_zig_ttyecho(enable: bool, fd: c_int) callconv(.c) bool {
 pub export fn Curl_zig_ssls_setopt(config: *OperationConfig, share: ?*CURLSH, easy: ?*CURL) callconv(.c) CURLcode {
     var result: CURLcode = curl_easy_setopt(easy, CURLOPT_SHARE, share);
     if (result == CURLE_OK and global != null and global.?.tracetype != TRACE_NONE) {
-        result = tool_setopt_ptr(easy, "CURLOPT_DEBUGFUNCTION", CURLOPT_DEBUGFUNCTION, @as(?*const anyopaque, @ptrCast(&tool_debug_cb)));
+        result = tool_setopt_ptr(easy, "CURLOPT_DEBUGFUNCTION", CURLOPT_DEBUGFUNCTION, &tool_debug_cb);
         if (result == CURLE_OK) {
-            result = tool_setopt_ptr(easy, "CURLOPT_DEBUGDATA", CURLOPT_DEBUGDATA, @as(?*const anyopaque, @ptrCast(config)));
+            result = tool_setopt_ptr(easy, "CURLOPT_DEBUGDATA", CURLOPT_DEBUGDATA, config);
         }
         _ = tool_setopt_long(easy, "CURLOPT_VERBOSE", CURLOPT_VERBOSE, 1);
     }
@@ -2703,7 +2697,7 @@ pub export fn Curl_zig_global_free_fields(g: *GlobalConfig) callconv(.c) ?*Opera
     Curl_cfree(g.libcurl);
     g.libcurl = null;
     if (is_windows) {
-        Curl_cfree(@ptrCast(g.term.buf));
+        mem.free(g.term.buf);
         g.term.buf = null;
     }
     const last = g.last;
@@ -2896,12 +2890,12 @@ fn setopt_bad(result: CURLcode) bool {
         result != CURLE_UNKNOWN_OPTION;
 }
 
-fn sockopt_callback(clientp: ?*anyopaque, curlfd: curl_socket_t, purpose: c_uint) callconv(.c) c_int {
+fn sockopt_callback(clientp: ?*OperationConfig, curlfd: curl_socket_t, purpose: c_uint) callconv(.c) c_int {
     if (purpose != 0) return 0; // CURLSOCKTYPE_IPCXN = 0, CURL_SOCKOPT_OK = 0
     if (is_windows) {
         return 0;
     } else {
-        const config: *OperationConfig = @ptrCast(@alignCast(clientp orelse return 0));
+        const config = clientp orelse return 0;
         const PosixSockopt = struct {
             const sockaddr = extern struct {
                 sa_family: if (builtin.os.tag.isDarwin()) u8 else u16,
@@ -3500,7 +3494,7 @@ fn tcp_setopts(config: *OperationConfig, curl: ?*CURL) void {
         _ = tool_setopt_long(curl, "CURLOPT_TCP_FASTOPEN", CURLOPT_TCP_FASTOPEN, 1);
     }
     if (config.mptcp) {
-        _ = tool_setopt_ptr(curl, "CURLOPT_OPENSOCKETFUNCTION", CURLOPT_OPENSOCKETFUNCTION, @as(?*const anyopaque, @ptrCast(&tool_socket_open_mptcp_cb)));
+        _ = tool_setopt_ptr(curl, "CURLOPT_OPENSOCKETFUNCTION", CURLOPT_OPENSOCKETFUNCTION, &tool_socket_open_mptcp_cb);
     }
     if (!config.nokeepalive) {
         _ = tool_setopt_long(curl, "CURLOPT_TCP_KEEPALIVE", CURLOPT_TCP_KEEPALIVE, 1);
@@ -3554,33 +3548,33 @@ fn ftp_setopts(config: *OperationConfig, curl: ?*CURL, use_proto: ?[*:0]const u8
 
 fn gen_trace_setopts(config: *OperationConfig, curl: ?*CURL) void {
     if (global != null and global.?.tracetype != TRACE_NONE) {
-        _ = tool_setopt_ptr(curl, "CURLOPT_DEBUGFUNCTION", CURLOPT_DEBUGFUNCTION, @as(?*const anyopaque, @ptrCast(&tool_debug_cb)));
-        _ = tool_setopt_ptr(curl, "CURLOPT_DEBUGDATA", CURLOPT_DEBUGDATA, @as(?*const anyopaque, @ptrCast(config)));
+        _ = tool_setopt_ptr(curl, "CURLOPT_DEBUGFUNCTION", CURLOPT_DEBUGFUNCTION, &tool_debug_cb);
+        _ = tool_setopt_ptr(curl, "CURLOPT_DEBUGDATA", CURLOPT_DEBUGDATA, config);
         _ = tool_setopt_long(curl, "CURLOPT_VERBOSE", CURLOPT_VERBOSE, 1);
     }
 }
 
 fn gen_cb_setopts(config: *OperationConfig, per: *per_transfer, curl: ?*CURL) void {
     _ = config;
-    _ = tool_setopt_ptr(curl, "CURLOPT_WRITEDATA", CURLOPT_WRITEDATA, @as(?*const anyopaque, @ptrCast(per)));
-    _ = tool_setopt_ptr(curl, "CURLOPT_INTERLEAVEDATA", CURLOPT_INTERLEAVEDATA, @as(?*const anyopaque, @ptrCast(per)));
-    _ = tool_setopt_ptr(curl, "CURLOPT_WRITEFUNCTION", CURLOPT_WRITEFUNCTION, @as(?*const anyopaque, @ptrCast(&tool_write_cb)));
-    _ = tool_setopt_ptr(curl, "CURLOPT_READDATA", CURLOPT_READDATA, @as(?*const anyopaque, @ptrCast(per)));
-    _ = tool_setopt_ptr(curl, "CURLOPT_READFUNCTION", CURLOPT_READFUNCTION, @as(?*const anyopaque, @ptrCast(&tool_read_cb)));
-    _ = tool_setopt_ptr(curl, "CURLOPT_SEEKDATA", CURLOPT_SEEKDATA, @as(?*const anyopaque, @ptrCast(per)));
-    _ = tool_setopt_ptr(curl, "CURLOPT_SEEKFUNCTION", CURLOPT_SEEKFUNCTION, @as(?*const anyopaque, @ptrCast(&tool_seek_cb)));
+    _ = tool_setopt_ptr(curl, "CURLOPT_WRITEDATA", CURLOPT_WRITEDATA, per);
+    _ = tool_setopt_ptr(curl, "CURLOPT_INTERLEAVEDATA", CURLOPT_INTERLEAVEDATA, per);
+    _ = tool_setopt_ptr(curl, "CURLOPT_WRITEFUNCTION", CURLOPT_WRITEFUNCTION, &tool_write_cb);
+    _ = tool_setopt_ptr(curl, "CURLOPT_READDATA", CURLOPT_READDATA, per);
+    _ = tool_setopt_ptr(curl, "CURLOPT_READFUNCTION", CURLOPT_READFUNCTION, &tool_read_cb);
+    _ = tool_setopt_ptr(curl, "CURLOPT_SEEKDATA", CURLOPT_SEEKDATA, per);
+    _ = tool_setopt_ptr(curl, "CURLOPT_SEEKFUNCTION", CURLOPT_SEEKFUNCTION, &tool_seek_cb);
 
     if (global != null and global.?.progressmode == CURL_PROGRESS_BAR and !global.?.noprogress and !global.?.silent) {
-        _ = tool_setopt_ptr(curl, "CURLOPT_XFERINFOFUNCTION", CURLOPT_XFERINFOFUNCTION, @as(?*const anyopaque, @ptrCast(&tool_progress_cb)));
-        _ = tool_setopt_ptr(curl, "CURLOPT_XFERINFODATA", CURLOPT_XFERINFODATA, @as(?*const anyopaque, @ptrCast(per)));
+        _ = tool_setopt_ptr(curl, "CURLOPT_XFERINFOFUNCTION", CURLOPT_XFERINFOFUNCTION, &tool_progress_cb);
+        _ = tool_setopt_ptr(curl, "CURLOPT_XFERINFODATA", CURLOPT_XFERINFODATA, per);
     } else if (per.uploadfile != null and strcmp(per.uploadfile.?, ".") == 0) {
         _ = tool_setopt_long(curl, "CURLOPT_NOPROGRESS", CURLOPT_NOPROGRESS, 0);
-        _ = tool_setopt_ptr(curl, "CURLOPT_XFERINFOFUNCTION", CURLOPT_XFERINFOFUNCTION, @as(?*const anyopaque, @ptrCast(&tool_readbusy_cb)));
-        _ = tool_setopt_ptr(curl, "CURLOPT_XFERINFODATA", CURLOPT_XFERINFODATA, @as(?*const anyopaque, @ptrCast(per)));
+        _ = tool_setopt_ptr(curl, "CURLOPT_XFERINFOFUNCTION", CURLOPT_XFERINFOFUNCTION, &tool_readbusy_cb);
+        _ = tool_setopt_ptr(curl, "CURLOPT_XFERINFODATA", CURLOPT_XFERINFODATA, per);
     }
 
-    _ = tool_setopt_ptr(curl, "CURLOPT_HEADERFUNCTION", CURLOPT_HEADERFUNCTION, @as(?*const anyopaque, @ptrCast(&tool_header_cb)));
-    _ = tool_setopt_ptr(curl, "CURLOPT_HEADERDATA", CURLOPT_HEADERDATA, @as(?*const anyopaque, @ptrCast(per)));
+    _ = tool_setopt_ptr(curl, "CURLOPT_HEADERFUNCTION", CURLOPT_HEADERFUNCTION, &tool_header_cb);
+    _ = tool_setopt_ptr(curl, "CURLOPT_HEADERDATA", CURLOPT_HEADERDATA, per);
 }
 
 fn proxy_setopts(config: *OperationConfig, curl: ?*CURL) CURLcode {
@@ -3749,7 +3743,7 @@ fn transfer_setopts(config: *OperationConfig, per: *per_transfer, curl: ?*CURL) 
     result = tool_setopt_str(curl, config, "CURLOPT_RANGE", CURLOPT_RANGE, config.range);
     if (setopt_bad(result)) return result;
 
-    _ = tool_setopt_ptr(curl, "CURLOPT_ERRORBUFFER", CURLOPT_ERRORBUFFER, @as(?*const anyopaque, @ptrCast(&per.errorbuffer)));
+    _ = tool_setopt_ptr(curl, "CURLOPT_ERRORBUFFER", CURLOPT_ERRORBUFFER, &per.errorbuffer);
     _ = tool_setopt_long(curl, "CURLOPT_TIMEOUT_MS", CURLOPT_TIMEOUT_MS, config.timeout_ms);
 
     result = setopt_post(config, curl);
@@ -3904,7 +3898,7 @@ fn mail_and_sasl_setopts(config: *OperationConfig, curl: ?*CURL) CURLcode {
 fn misc_setopts(config: *OperationConfig, curl: ?*CURL) CURLcode {
     var result: CURLcode = CURLE_OK;
 
-    _ = tool_setopt_ptr(curl, "CURLOPT_STDERR", CURLOPT_STDERR, @as(?*const anyopaque, @ptrCast(tool_stderr)));
+    _ = tool_setopt_ptr(curl, "CURLOPT_STDERR", CURLOPT_STDERR, tool_stderr);
     if (config.resolve != null) {
         _ = tool_setopt_slist(curl, "CURLOPT_RESOLVE", CURLOPT_RESOLVE, config.resolve);
     }
@@ -3959,8 +3953,8 @@ fn misc_setopts(config: *OperationConfig, curl: ?*CURL) CURLcode {
 
     if (config.ip_tos > 0 or config.vlan_priority > 0) {
         if (!is_windows and (!builtin.os.tag.isDarwin() or config.vlan_priority == 0)) {
-            _ = tool_setopt_ptr(curl, "CURLOPT_SOCKOPTFUNCTION", CURLOPT_SOCKOPTFUNCTION, @as(?*const anyopaque, @ptrCast(&sockopt_callback)));
-            _ = tool_setopt_ptr(curl, "CURLOPT_SOCKOPTDATA", CURLOPT_SOCKOPTDATA, @as(?*const anyopaque, @ptrCast(config)));
+            _ = tool_setopt_ptr(curl, "CURLOPT_SOCKOPTFUNCTION", CURLOPT_SOCKOPTFUNCTION, &sockopt_callback);
+            _ = tool_setopt_ptr(curl, "CURLOPT_SOCKOPTDATA", CURLOPT_SOCKOPTDATA, config);
         } else {
             if (is_windows and config.ip_tos > 0) {
                 errorf("Type of service is not supported in this build.");
@@ -4060,8 +4054,7 @@ fn is_pkcs11_uri(string: ?[*:0]const u8) bool {
 }
 
 fn add_per_transfer(per: *?*per_transfer) CURLcode {
-    const raw = Curl_ccalloc(1, @sizeOf(per_transfer)) orelse return CURLE_OUT_OF_MEMORY;
-    const p: *per_transfer = @ptrCast(@alignCast(raw));
+    const p = mem.create(per_transfer) orelse return CURLE_OUT_OF_MEMORY;
     if (transfers == null) {
         transfers_l = p;
         transfers = p;
@@ -4087,11 +4080,11 @@ fn del_per_transfer(per: *per_transfer) ?*per_transfer {
     } else {
         transfers_l = p;
     }
-    Curl_cfree(per.uploadfile);
-    Curl_cfree(per.outfile);
-    Curl_cfree(per.url);
+    mem.free(per.uploadfile);
+    mem.free(per.outfile);
+    mem.free(per.url);
     curl_easy_cleanup(per.curl);
-    Curl_cfree(per);
+    mem.destroy(per);
     return n;
 }
 
@@ -4342,7 +4335,7 @@ fn post_check_result(per: *per_transfer, result: CURLcode) CURLcode {
     const g = global.?;
 
     if (!config.synthetic_error and result != CURLE_OK and (!g.silent or g.showerror)) {
-        const msg: [*:0]const u8 = @ptrCast(&per.errorbuffer);
+        const msg: [*:0]const u8 = &per.errorbuffer;
         _ = curl_mfprintf(tool_stderr, "curl: (%d) %s\n", @as(c_int, @intCast(result)), if (msg[0] != 0) msg else curl_easy_strerror(result));
         if (result == CURLE_PEER_FAILED_VERIFICATION) {
             _ = fputs(CURL_CA_CERT_ERRORMSG, tool_stderr);
@@ -4913,6 +4906,41 @@ fn stream_isatty(stream: ?*FILE) bool {
     return toolIsatty(toolFileno(stream)) != 0;
 }
 
+fn initPerTransfer(
+    config: *OperationConfig,
+    state: *State,
+    etag_first: *OutStruct,
+    u: *getout,
+) error{ OutOfMemory, FailedInit }!*per_transfer {
+    errdefer if (etag_first.fopened) {
+        _ = fclose(etag_first.stream);
+    };
+
+    const curl = curl_easy_init() orelse return error.OutOfMemory;
+    errdefer curl_easy_cleanup(curl);
+
+    var per: ?*per_transfer = null;
+    if (add_per_transfer(&per) != CURLE_OK) return error.OutOfMemory;
+    const p = per.?;
+    p.etag_save = etag_first.*;
+
+    if (state.uploadfile) |upfile| {
+        p.uploadfile = mem.strdup(upfile) orelse return error.FailedInit;
+        errdefer {
+            mem.free(p.uploadfile);
+            p.uploadfile = null;
+        }
+        if (SetHTTPrequest(TOOL_HTTPREQ_PUT, &config.httpreq) != 0) {
+            return error.FailedInit;
+        }
+    }
+    p.config = config;
+    p.curl = curl;
+    p.urlnum = u.num;
+    p.out_scheme = null;
+    return p;
+}
+
 fn create_single(config: *OperationConfig, share: ?*CURLSH, state: *State, added: *bool, skipped: *bool) CURLcode {
     const g = global.?;
     const orig_isatty = g.isatty;
@@ -4920,7 +4948,6 @@ fn create_single(config: *OperationConfig, share: ?*CURLSH, state: *State, added
     var result: CURLcode = CURLE_OK;
 
     while (state.urlnode) |u| {
-        var per: ?*per_transfer = null;
         var etag_first: OutStruct = std.mem.zeroes(OutStruct);
         const err: ?*FILE = if (!g.silent or g.showerror) tool_stderr else null;
         var break_loop = false;
@@ -4935,7 +4962,7 @@ fn create_single(config: *OperationConfig, share: ?*CURLSH, state: *State, added
 
         if (state.upidx >= state.upnum) {
             state.urlnum = 0;
-            Curl_cfree(state.uploadfile);
+            mem.free(state.uploadfile);
             state.uploadfile = null;
             glob_cleanup(&state.inglob);
             state.upidx = 0;
@@ -4950,34 +4977,11 @@ fn create_single(config: *OperationConfig, share: ?*CURLSH, state: *State, added
         result = setup_etag_files(config, &etag_first, &break_loop);
         if (result != CURLE_OK or break_loop) return result;
 
-        const curl = curl_easy_init();
-        if (curl != null) {
-            result = add_per_transfer(&per);
-        } else {
-            result = CURLE_OUT_OF_MEMORY;
-        }
-        if (result != CURLE_OK) {
-            curl_easy_cleanup(curl);
-            if (etag_first.fopened) {
-                _ = fclose(etag_first.stream);
-            }
-            return result;
-        }
-        const p = per.?;
-        p.etag_save = etag_first;
-        if (state.uploadfile) |upfile| {
-            p.uploadfile = Curl_cstrdup(upfile);
-            if (p.uploadfile == null or SetHTTPrequest(TOOL_HTTPREQ_PUT, &config.httpreq) != 0) {
-                Curl_cfree(p.uploadfile);
-                p.uploadfile = null;
-                curl_easy_cleanup(curl);
-                return CURLE_FAILED_INIT;
-            }
-        }
-        p.config = config;
-        p.curl = curl;
-        p.urlnum = u.num;
-        p.out_scheme = null;
+        const p = initPerTransfer(config, state, &etag_first, u) catch |init_err| return switch (init_err) {
+            error.OutOfMemory => CURLE_OUT_OF_MEMORY,
+            error.FailedInit => CURLE_FAILED_INIT,
+        };
+        const curl = p.curl;
 
         const heads = &p.heads;
         heads.stream = stdio_streams.getStdout();
@@ -5133,7 +5137,7 @@ fn add_parallel_transfers(multi: ?*CURLM, share: ?*CURLSH, morep: *bool, addedp:
         _ = curl_easy_setopt(p.curl, CURLOPT_PIPEWAIT, @as(c_long, if (g.parallel_connect) 0 else 1));
         _ = curl_easy_setopt(p.curl, CURLOPT_PRIVATE, p);
         _ = curl_easy_setopt(p.curl, CURLOPT_NOSIGNAL, @as(c_long, 1));
-        _ = curl_easy_setopt(p.curl, CURLOPT_XFERINFOFUNCTION, @as(?*const anyopaque, @ptrCast(&xferinfo_cb)));
+        _ = curl_easy_setopt(p.curl, CURLOPT_XFERINFOFUNCTION, &xferinfo_cb);
         _ = curl_easy_setopt(p.curl, CURLOPT_XFERINFODATA, p);
         _ = curl_easy_setopt(p.curl, CURLOPT_NOPROGRESS, @as(c_long, 0));
         _ = curl_easy_setopt(p.curl, CURLOPT_ERRORBUFFER, &p.errorbuffer);
@@ -5239,10 +5243,10 @@ fn check_finished(s: *parastate) CURLcode {
     return result;
 }
 
-fn mnotify(multi: ?*CURLM, notification: c_uint, easy: ?*CURL, user_data: ?*anyopaque) callconv(.c) void {
+fn mnotify(multi: ?*CURLM, notification: c_uint, easy: ?*CURL, user_data: ?*parastate) callconv(.c) void {
     _ = multi;
     _ = easy;
-    const s: *parastate = @ptrCast(@alignCast(user_data orelse return));
+    const s = user_data orelse return;
     if (notification == CURLMNOTIFY_INFO_READ) {
         const result = check_finished(s);
         if (result != CURLE_OK and s.result == CURLE_OK) {
@@ -5266,16 +5270,16 @@ fn parallel_transfers(share: ?*CURLSH) CURLcode {
     };
     const s = &p;
     if (s.multi == null) return CURLE_OUT_OF_MEMORY;
+    defer _ = curl_multi_cleanup(s.multi);
 
     _ = curl_multi_setopt(s.multi, CURLMOPT_QUICK_EXIT, @as(c_long, 1));
-    _ = curl_multi_setopt(s.multi, CURLMOPT_NOTIFYFUNCTION, @as(?*const anyopaque, @ptrCast(&mnotify)));
+    _ = curl_multi_setopt(s.multi, CURLMOPT_NOTIFYFUNCTION, &mnotify);
     _ = curl_multi_setopt(s.multi, CURLMOPT_NOTIFYDATA, s);
     _ = curl_multi_setopt(s.multi, CURLMOPT_MAX_HOST_CONNECTIONS, @as(c_long, @intCast(global.?.parallel_host)));
     _ = curl_multi_notify_enable(s.multi, CURLMNOTIFY_INFO_READ);
 
     result = add_parallel_transfers(s.multi, s.share, &s.more_transfers, &s.added_transfers);
     if (result != CURLE_OK) {
-        _ = curl_multi_cleanup(s.multi);
         return result;
     }
 
@@ -5311,8 +5315,6 @@ fn parallel_transfers(share: ?*CURLSH) CURLcode {
     if (s.mcode != CURLM_OK) {
         result = if (s.mcode == CURLM_OUT_OF_MEMORY) CURLE_OUT_OF_MEMORY else CURLE_BAD_FUNCTION_ARGUMENT;
     }
-
-    _ = curl_multi_cleanup(s.multi);
 
     return result;
 }
@@ -5430,7 +5432,7 @@ fn win32_setup_certs(config: *OperationConfig) CURLcode {
     return CURLE_OK;
 }
 
-fn cacertpaths(config: *OperationConfig) CURLcode {
+fn cacertpathsInner(config: *OperationConfig) error{OutOfMemory}!CURLcode {
     var result: CURLcode = CURLE_OK;
 
     if (!feature_ssl or config.cacert != null or config.capath != null or
@@ -5443,44 +5445,42 @@ fn cacertpaths(config: *OperationConfig) CURLcode {
         return result;
     }
 
+    errdefer {
+        mem.free(config.capath);
+        config.capath = null;
+        mem.free(config.cacert);
+        config.cacert = null;
+    }
+
     var env = curl_getenv("CURL_CA_BUNDLE");
     if (env) |e| {
-        config.cacert = Curl_cstrdup(e);
-        curl_free(e);
-        if (config.cacert == null) {
-            result = CURLE_OUT_OF_MEMORY;
-        }
+        defer curl_free(e);
+        config.cacert = mem.strdup(e) orelse return error.OutOfMemory;
     } else {
         env = curl_getenv("SSL_CERT_DIR");
         if (env) |e| {
-            config.capath = Curl_cstrdup(e);
-            curl_free(e);
-            if (config.capath == null) {
-                result = CURLE_OUT_OF_MEMORY;
-            }
+            defer curl_free(e);
+            config.capath = mem.strdup(e) orelse return error.OutOfMemory;
         }
-        if (result == CURLE_OK) {
-            env = curl_getenv("SSL_CERT_FILE");
-            if (env) |e| {
-                config.cacert = Curl_cstrdup(e);
-                curl_free(e);
-                if (config.cacert == null) {
-                    result = CURLE_OUT_OF_MEMORY;
-                }
-            }
+        env = curl_getenv("SSL_CERT_FILE");
+        if (env) |e| {
+            defer curl_free(e);
+            config.cacert = mem.strdup(e) orelse return error.OutOfMemory;
         }
     }
 
-    if (result == CURLE_OK) {
-        result = win32_setup_certs(config);
-    }
+    result = win32_setup_certs(config);
     if (result != CURLE_OK) {
-        Curl_cfree(config.capath);
+        mem.free(config.capath);
         config.capath = null;
-        Curl_cfree(config.cacert);
+        mem.free(config.cacert);
         config.cacert = null;
     }
     return result;
+}
+
+fn cacertpaths(config: *OperationConfig) CURLcode {
+    return cacertpathsInner(config) catch CURLE_OUT_OF_MEMORY;
 }
 
 fn transfer_per_config(config: *OperationConfig, share: ?*CURLSH, added: *bool, skipped: *bool) CURLcode {
@@ -6075,7 +6075,7 @@ pub export fn tool_zig_per_abort(p: *const per_transfer) callconv(.c) bool {
     return p.abort;
 }
 pub export fn tool_zig_per_errorbuffer(p: *const per_transfer) callconv(.c) [*:0]const u8 {
-    return @ptrCast(&p.errorbuffer);
+    return &p.errorbuffer;
 }
 
 pub export fn tool_zig_scheme_is_http_or_https(scheme: ?[*:0]const u8) callconv(.c) bool {
@@ -6330,9 +6330,9 @@ pub export fn tool_zig_win_console_write(stream: ?*FILE, outs: *OutStruct, buffe
                 if (wlen_int <= 0) return -1;
                 const wlen: u32 = @intCast(wlen_int);
                 if (wlen > g.term.len) {
-                    const new_buf = Curl_crealloc(@ptrCast(g.term.buf), @as(usize, wlen) * @sizeOf(u16)) orelse return -1;
+                    const new_buf = mem.reallocMany(u16, g.term.buf, wlen) orelse return -1;
                     g.term.len = wlen;
-                    g.term.buf = @ptrCast(@alignCast(new_buf));
+                    g.term.buf = new_buf;
                 }
                 const wlen2 = WinCon.MultiByteToWideChar(CP_UTF8, 0, rbuf, @intCast(rlen), g.term.buf, @intCast(wlen));
                 if (wlen2 <= 0) return -1;

@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const mem = @import("mem.zig");
 
 pub const CURLcode = c_uint;
 pub const CURLE_OK: CURLcode = 0;
@@ -353,6 +354,90 @@ pub const OperationConfig = extern struct {
     ssl_version: u8,
     ssl_version_max: u8,
     fail: u8,
+    remote_name_all: bool,
+    remote_time: bool,
+    cookiesession: bool,
+    encoding: bool,
+    tr_encoding: bool,
+    use_resume: bool,
+    resume_from_current: bool,
+    disable_epsv: bool,
+    disable_eprt: bool,
+    ftp_pret: bool,
+    proto_present: bool,
+    proto_redir_present: bool,
+    mail_rcpt_allowfails: bool,
+    sasl_ir: bool,
+    proxytunnel: bool,
+    ftp_append: bool,
+    use_ascii: bool,
+    autoreferer: bool,
+    show_headers: bool,
+    no_body: bool,
+    dirlistonly: bool,
+    unrestricted_auth: bool,
+    netrc_opt: bool,
+    netrc: bool,
+    crlf: bool,
+    http09_allowed: bool,
+    nobuffer: bool,
+    readbusy: bool,
+    globoff: bool,
+    use_httpget: bool,
+    insecure_ok: bool,
+    doh_insecure_ok: bool,
+    proxy_insecure_ok: bool,
+    terminal_binary_ok: bool,
+    verifystatus: bool,
+    doh_verifystatus: bool,
+    create_dirs: bool,
+    ftp_create_dirs: bool,
+    ftp_skip_ip: bool,
+    proxynegotiate: bool,
+    proxyntlm: bool,
+    proxydigest: bool,
+    proxybasic: bool,
+    proxyanyauth: bool,
+    jsoned: bool,
+    ftp_ssl: bool,
+    ftp_ssl_reqd: bool,
+    ftp_ssl_control: bool,
+    ftp_ssl_ccc: bool,
+    socks5_gssapi_nec: bool,
+    tcp_nodelay: bool,
+    tcp_fastopen: bool,
+    retry_all_errors: bool,
+    retry_connrefused: bool,
+    tftp_no_options: bool,
+    ignorecl: bool,
+    disable_sessionid: bool,
+    raw: bool,
+    post301: bool,
+    post302: bool,
+    post303: bool,
+    nokeepalive: bool,
+    content_disposition: bool,
+    xattr: bool,
+    ssl_allow_beast: bool,
+    ssl_allow_earlydata: bool,
+    proxy_ssl_allow_beast: bool,
+    ssl_no_revoke: bool,
+    ssl_revoke_best_effort: bool,
+    native_ca_store: bool,
+    proxy_native_ca_store: bool,
+    ssl_auto_client_cert: bool,
+    proxy_ssl_auto_client_cert: bool,
+    noalpn: bool,
+    abstract_unix_socket: bool,
+    path_as_is: bool,
+    suppress_connect_headers: bool,
+    synthetic_error: bool,
+    ssh_compression: bool,
+    haproxy_protocol: bool,
+    disallow_username_in_url: bool,
+    mptcp: bool,
+    rm_partial: bool,
+    skip_existing: bool,
 };
 
 pub const curl_version_info_data = extern struct {
@@ -394,7 +479,7 @@ pub const scan_ctx = extern struct {
     elen: usize,
     olen: usize,
     rbuf: [40]u8,
-    obuf: [160]u8,
+    obuf: [159:0]u8,
     show: u8,
 };
 
@@ -448,7 +533,7 @@ extern var tool_stderr: ?*anyopaque;
 extern const helptext: [1]helptxt;
 
 inline fn helptextPtr() [*]const helptxt {
-    return @ptrCast(&helptext);
+    return &helptext;
 }
 
 extern fn curl_global_init(flags: c_long) callconv(.c) CURLcode;
@@ -488,10 +573,10 @@ extern fn curl_mime_filedata(part: ?*anyopaque, filename: ?[*:0]const u8) callco
 extern fn curl_mime_data_cb(
     part: ?*anyopaque,
     datasize: i64,
-    readfunc: ?*const fn ([*]u8, usize, usize, ?*anyopaque) callconv(.c) usize,
-    seekfunc: ?*const fn (?*anyopaque, i64, c_int) callconv(.c) c_int,
+    readfunc: ?*const fn ([*]u8, usize, usize, ?*tool_mime) callconv(.c) usize,
+    seekfunc: ?*const fn (?*tool_mime, i64, c_int) callconv(.c) c_int,
     freefunc: ?*const fn (?*anyopaque) callconv(.c) void,
-    arg: ?*anyopaque,
+    arg: ?*tool_mime,
 ) callconv(.c) CURLcode;
 extern fn curl_mime_subparts(part: ?*anyopaque, subparts: ?*anyopaque) callconv(.c) CURLcode;
 extern fn curl_mime_headers(part: ?*anyopaque, headers: ?*curl_slist, take_ownership: c_int) callconv(.c) CURLcode;
@@ -505,9 +590,14 @@ extern fn curl_easy_ssls_import(
     sdata_len: usize,
 ) callconv(.c) CURLcode;
 
+const ToolSslsCtx = extern struct {
+    fp: ?*anyopaque,
+    exported: c_int,
+};
+
 pub const curl_ssls_export_cb = *const fn (
     easy: ?*anyopaque,
-    userptr: ?*anyopaque,
+    userptr: ?*ToolSslsCtx,
     session_key: [*:0]const u8,
     shmac: [*]const u8,
     shmac_len: usize,
@@ -522,7 +612,7 @@ pub const curl_ssls_export_cb = *const fn (
 extern fn curl_easy_ssls_export(
     easy: ?*anyopaque,
     export_fn: curl_ssls_export_cb,
-    userptr: ?*anyopaque,
+    userptr: ?*ToolSslsCtx,
 ) callconv(.c) CURLcode;
 
 extern fn curlx_dyn_init(s: *Dynbuf, toobig: usize) callconv(.c) void;
@@ -589,20 +679,12 @@ inline fn isSpace(ch: u8) bool {
 }
 
 fn cStrdup(s: [*:0]const u8) ?[*:0]u8 {
-    const len = std.mem.len(s);
-    if (len >= std.math.maxInt(usize)) return null;
-    const raw = c.malloc(len + 1) orelse return null;
-    const buf: [*]u8 = @ptrCast(raw);
-    if (len > 0) {
-        @memcpy(buf[0..len], s[0..len]);
-    }
-    buf[len] = 0;
-    return @ptrCast(buf);
+    return mem.strdup(s);
 }
 
 inline fn safeFreePtr(comptime T: type, ptr: *?T) void {
     if (ptr.*) |p| {
-        c.free(@ptrCast(p));
+        mem.free(p);
         ptr.* = null;
     }
 }
@@ -636,7 +718,7 @@ inline fn checkPrefix(prefix: []const u8, s: [*:0]const u8) bool {
 // 1. src/tool_getpass.c
 // ============================================================================
 
-pub export fn getpass_r(prompt: [*:0]const u8, buffer: [*]u8, buflen: usize) callconv(.c) [*:0]u8 {
+pub export fn getpass_r(prompt: [*:0]const u8, buffer: [*:0]u8, buflen: usize) callconv(.c) [*:0]u8 {
     if (builtin.os.tag == .windows) {
         _ = c.fputs(prompt, tool_stderr);
         var i: usize = 0;
@@ -654,7 +736,7 @@ pub export fn getpass_r(prompt: [*:0]const u8, buffer: [*]u8, buflen: usize) cal
         if (i == buflen and buflen > 0) {
             buffer[buflen - 1] = 0;
         }
-        return @ptrCast(buffer);
+        return buffer;
     } else {
         const opened = posix_c.open("/dev/tty", 0);
         const fd: c_int = if (opened == -1) 0 else opened;
@@ -677,7 +759,7 @@ pub export fn getpass_r(prompt: [*:0]const u8, buffer: [*]u8, buflen: usize) cal
         if (fd != 0) {
             _ = posix_c.close(fd);
         }
-        return @ptrCast(buffer);
+        return buffer;
     }
 }
 
@@ -945,10 +1027,10 @@ pub export fn ipfs_url_rewrite(
 // 4. src/tool_libinfo.c
 // ============================================================================
 
-var no_protos: ?[*:0]const u8 = null;
+var no_protos: [1]?[*:0]const u8 = .{null};
 
 pub export var curlinfo: ?*curl_version_info_data = null;
-pub export var built_in_protos: [*]const ?[*:0]const u8 = @ptrCast(&no_protos);
+pub export var built_in_protos: [*]const ?[*:0]const u8 = &no_protos;
 pub export var proto_count: usize = 0;
 
 pub export var proto_file: ?[*:0]const u8 = null;
@@ -1036,7 +1118,7 @@ const maybe_feature = [_]FeatureNamePresent{
 };
 
 var fnames: [maybe_feature.len + 1]?[*:0]const u8 = @splat(null);
-pub export var feature_names: [*]const ?[*:0]const u8 = @ptrCast(&fnames);
+pub export var feature_names: [*]const ?[*:0]const u8 = &fnames;
 pub export var feature_count: usize = 0;
 
 pub export fn get_libcurl_info() callconv(.c) CURLcode {
@@ -1068,7 +1150,7 @@ pub export fn get_libcurl_info() callconv(.c) CURLcode {
             }
         }
         fnames[cpp_idx] = null;
-        feature_names = @ptrCast(&fnames);
+        feature_names = &fnames;
     }
 
     feature_count = 0;
@@ -1397,14 +1479,9 @@ pub export fn tool_ssls_load(
     return result;
 }
 
-const ToolSslsCtx = extern struct {
-    fp: ?*anyopaque,
-    exported: c_int,
-};
-
 fn toolSslsExp(
     easy: ?*anyopaque,
-    userptr: ?*anyopaque,
+    userptr: ?*ToolSslsCtx,
     session_key: [*:0]const u8,
     shmac: [*]const u8,
     shmac_len: usize,
@@ -1421,7 +1498,7 @@ fn toolSslsExp(
     _ = alpn;
     _ = earlydata_max;
 
-    const ctx: *ToolSslsCtx = @ptrCast(@alignCast(userptr.?));
+    const ctx = userptr.?;
     var enc: ?[*:0]u8 = null;
     var enc_len: usize = 0;
     var result: CURLcode = CURLE_OK;
@@ -1708,8 +1785,7 @@ pub export fn dumpeasysrc() callconv(.c) void {
 pub export var global: ?*GlobalConfig = null;
 
 pub export fn config_alloc() callconv(.c) ?*OperationConfig {
-    const raw = c.calloc(1, Curl_zig_sizeof_operation_config()) orelse return null;
-    const config: *OperationConfig = @ptrCast(@alignCast(raw));
+    const config = mem.create(OperationConfig) orelse return null;
 
     config.maxredirs = DEFAULT_MAXREDIRS;
     config.proto_default = null;
@@ -2094,12 +2170,12 @@ pub export fn helpscan(buf: [*]const u8, len: usize, ctx: *scan_ctx) callconv(.c
             }
         }
         if (buf[i] == '\n') {
-            if (ctx.olen == ctx.obuf.len) return false;
+            if (ctx.olen > ctx.obuf.len) return false;
             ctx.obuf[ctx.olen] = 0;
             ctx.olen = 0;
-            _ = c.puts(@ptrCast(&ctx.obuf));
+            _ = c.puts(&ctx.obuf);
         } else {
-            if (ctx.olen == ctx.obuf.len) return false;
+            if (ctx.olen >= ctx.obuf.len) return false;
             ctx.obuf[ctx.olen] = buf[i];
             ctx.olen += 1;
         }
@@ -2187,21 +2263,19 @@ pub export fn tool_version_info() callconv(.c) void {
 
     if (feature_names[0] != null) {
         const feat_ext_count = feature_count;
-        const alloc_bytes = @sizeOf(?[*:0]const u8) * (feat_ext_count + 1);
-        if (c.malloc(alloc_bytes)) |raw| {
-            const feat_ext: [*]?[*:0]const u8 = @ptrCast(@alignCast(raw));
+        if (mem.allocMany(?[*:0]const u8, feat_ext_count + 1)) |feat_ext| {
+            defer mem.freeTyped(feat_ext);
             for (0..feature_count) |i| {
                 feat_ext[i] = feature_names[i];
             }
             feat_ext[feat_ext_count] = null;
-            c.qsort(raw, feat_ext_count, @sizeOf(?[*:0]const u8), struplocompare4sort);
+            c.qsort(mem.toRawPtr(feat_ext).?, feat_ext_count, @sizeOf(?[*:0]const u8), struplocompare4sort);
             _ = curl_mprintf("Features:");
             var idx: usize = 0;
             while (feat_ext[idx]) |fname| : (idx += 1) {
                 _ = curl_mprintf(" %s", fname);
             }
             _ = c.puts("");
-            c.free(raw);
         }
     }
 
@@ -2241,8 +2315,7 @@ pub export fn tool_list_engines() callconv(.c) void {
 // ============================================================================
 
 fn toolMimeNew(parent: ?*tool_mime, kind: toolmimekind) ?*tool_mime {
-    const raw = c.calloc(1, @sizeOf(tool_mime)) orelse return null;
-    const m: *tool_mime = @ptrCast(@alignCast(raw));
+    const m = mem.create(tool_mime) orelse return null;
     m.kind = kind;
     m.parent = parent;
     if (parent) |p| {
@@ -2256,14 +2329,16 @@ fn toolMimeNewParts(parent: ?*tool_mime) ?*tool_mime {
     return toolMimeNew(parent, TOOLMIME_PARTS);
 }
 
-fn toolMimeNewData(parent: ?*tool_mime, mime_data: [*:0]const u8) ?*tool_mime {
-    const mime_data_copy = cStrdup(mime_data) orelse return null;
-    const m = toolMimeNew(parent, TOOLMIME_DATA) orelse {
-        c.free(mime_data_copy);
-        return null;
-    };
+fn toolMimeNewDataInner(parent: ?*tool_mime, mime_data: [*:0]const u8) error{OutOfMemory}!*tool_mime {
+    const mime_data_copy = cStrdup(mime_data) orelse return error.OutOfMemory;
+    errdefer mem.free(mime_data_copy);
+    const m = toolMimeNew(parent, TOOLMIME_DATA) orelse return error.OutOfMemory;
     m.data = mime_data_copy;
     return m;
+}
+
+fn toolMimeNewData(parent: ?*tool_mime, mime_data: [*:0]const u8) ?*tool_mime {
+    return toolMimeNewDataInner(parent, mime_data) catch null;
 }
 
 fn uztoso(uznum: usize) i64 {
@@ -2275,21 +2350,19 @@ fn sotouz(sonum: i64) usize {
     return if (sonum <= 0) 0 else @intCast(sonum);
 }
 
-fn toolMimeNewFiledata(
+fn toolMimeNewFiledataInner(
     parent: ?*tool_mime,
     filename: [*:0]const u8,
     isremotefile: bool,
     errcode: *CURLcode,
-) ?*tool_mime {
+) error{OutOfMemory}!*tool_mime {
     var result: CURLcode = CURLE_OK;
     errcode.* = CURLE_OUT_OF_MEMORY;
 
     if (!std.mem.eql(u8, std.mem.span(filename), "-")) {
-        const filedup = cStrdup(filename) orelse return null;
-        const m = toolMimeNew(parent, TOOLMIME_FILE) orelse {
-            c.free(filedup);
-            return null;
-        };
+        const filedup = cStrdup(filename) orelse return error.OutOfMemory;
+        errdefer mem.free(filedup);
+        const m = toolMimeNew(parent, TOOLMIME_FILE) orelse return error.OutOfMemory;
         m.data = filedup;
         if (!isremotefile) {
             m.kind = TOOLMIME_FILEDATA;
@@ -2298,19 +2371,20 @@ fn toolMimeNewFiledata(
         return m;
     } else {
         var data: ?[*:0]u8 = null;
+        errdefer safeFreePtr([*:0]u8, &data);
         var size: i64 = 0;
         var origin: i64 = 0;
 
         if (!Curl_zig_stdin_regular_size(&origin, &size)) {
             var stdinsize: usize = 0;
             switch (file2memory(&data, &stdinsize, tool_zig_stdin())) {
-                PARAM_NO_MEM => return null,
+                PARAM_NO_MEM => return error.OutOfMemory,
                 PARAM_READ_ERROR => {
                     result = CURLE_READ_ERROR;
                 },
                 else => {
                     if (stdinsize == 0) {
-                        data = cStrdup("") orelse return null;
+                        data = cStrdup("") orelse return error.OutOfMemory;
                     }
                 },
             }
@@ -2318,10 +2392,7 @@ fn toolMimeNewFiledata(
             origin = 0;
         }
 
-        const m = toolMimeNew(parent, TOOLMIME_STDIN) orelse {
-            safeFreePtr([*:0]u8, &data);
-            return null;
-        };
+        const m = toolMimeNew(parent, TOOLMIME_STDIN) orelse return error.OutOfMemory;
         m.data = data;
         m.origin = origin;
         m.size = size;
@@ -2332,6 +2403,15 @@ fn toolMimeNewFiledata(
         errcode.* = result;
         return m;
     }
+}
+
+fn toolMimeNewFiledata(
+    parent: ?*tool_mime,
+    filename: [*:0]const u8,
+    isremotefile: bool,
+    errcode: *CURLcode,
+) ?*tool_mime {
+    return toolMimeNewFiledataInner(parent, filename, isremotefile, errcode) catch null;
 }
 
 pub export fn tool_mime_free(mime: ?*tool_mime) callconv(.c) void {
@@ -2351,9 +2431,9 @@ pub export fn tool_mime_free(mime: ?*tool_mime) callconv(.c) void {
     c.free(m);
 }
 
-fn toolMimeStdinRead(buffer: [*]u8, size: usize, nitems_in: usize, arg: ?*anyopaque) callconv(.c) usize {
+fn toolMimeStdinRead(buffer: [*]u8, size: usize, nitems_in: usize, arg: ?*tool_mime) callconv(.c) usize {
     _ = size;
-    const sip: *tool_mime = @ptrCast(@alignCast(arg.?));
+    const sip = arg.?;
     var nitems = nitems_in;
 
     if (sip.size >= 0) {
@@ -2386,8 +2466,8 @@ fn toolMimeStdinRead(buffer: [*]u8, size: usize, nitems_in: usize, arg: ?*anyopa
     return nitems;
 }
 
-fn toolMimeStdinSeek(instream: ?*anyopaque, offset_in: i64, whence: c_int) callconv(.c) c_int {
-    const sip: *tool_mime = @ptrCast(@alignCast(instream.?));
+fn toolMimeStdinSeek(instream: ?*tool_mime, offset_in: i64, whence: c_int) callconv(.c) c_int {
+    const sip = instream.?;
     var offset = offset_in;
 
     switch (whence) {
@@ -2419,9 +2499,8 @@ fn tool2curlparts(curl: ?*anyopaque, m: ?*tool_mime, mime: ?*anyopaque) CURLcode
         count += 1;
     }
 
-    const raw = c.malloc(@sizeOf(*tool_mime) * count) orelse return CURLE_OUT_OF_MEMORY;
-    const nodes: [*]*tool_mime = @ptrCast(@alignCast(raw));
-    defer c.free(raw);
+    const nodes = mem.allocMany(*tool_mime, count) orelse return CURLE_OUT_OF_MEMORY;
+    defer mem.freeTyped(nodes);
 
     curr = first;
     var idx = count;
@@ -3025,8 +3104,7 @@ pub export fn formparse(
 var outnum_counter: i64 = 0;
 
 pub export fn new_getout(config: *OperationConfig) callconv(.c) ?*getout {
-    const raw = c.calloc(1, Curl_zig_sizeof_getout()) orelse return null;
-    const node: *getout = @ptrCast(@alignCast(raw));
+    const node = mem.create(getout) orelse return null;
     const last = config.url_last;
     if (last) |l| {
         l.next = node;
@@ -3363,9 +3441,9 @@ pub export fn proto2num(
                 },
             }
         } else {
-            var buffer: [32]u8 = undefined;
-            _ = curl_msnprintf(&buffer, buffer.len, "%.*s", @as(c_int, @intCast(plen)), str);
-            const buf_z: [*:0]const u8 = @ptrCast(&buffer);
+            var buffer: [31:0]u8 = undefined;
+            _ = curl_msnprintf(&buffer, buffer.len + 1, "%.*s", @as(c_int, @intCast(plen)), str);
+            const buf_z: [*:0]const u8 = &buffer;
             if (proto_token(buf_z)) |p| {
                 switch (action) {
                     .deny => protosetClear(&protoset, p),
@@ -3434,43 +3512,47 @@ pub export fn str2offset(val: *i64, str: [*:0]const u8) callconv(.c) ParameterEr
 
 const MAX_USERPWDLENGTH: usize = 100 * 1024;
 
-fn checkpasswd(kind: [*:0]const u8, i: usize, last: bool, userpwd: *?[*:0]u8) CURLcode {
-    const up = userpwd.* orelse return CURLE_OK;
+fn checkpasswdInner(kind: [*:0]const u8, i: usize, last: bool, userpwd: *?[*:0]u8) error{OutOfMemory}!void {
+    const up = userpwd.* orelse return;
     const up_slice = std.mem.span(up);
 
     const psep_idx = std.mem.findScalar(u8, up_slice, ':');
     const osep_idx = std.mem.findScalar(u8, up_slice, ';');
 
     if (psep_idx == null and up[0] != ';') {
-        var passwd: [2048]u8 = @splat(0);
-        var prompt: [256]u8 = undefined;
+        var passwd: [2047:0]u8 = @splat(0);
+        var prompt: [255:0]u8 = undefined;
         var dyn: Dynbuf = undefined;
 
         curlx_dyn_init(&dyn, MAX_USERPWDLENGTH);
+        errdefer curlx_dyn_free(&dyn);
         if (osep_idx) |oi| {
             up[oi] = 0;
         }
 
         if (i == 0 and last) {
-            _ = curl_msnprintf(&prompt, prompt.len, "Enter %s password for user '%s':", kind, up);
+            _ = curl_msnprintf(&prompt, prompt.len + 1, "Enter %s password for user '%s':", kind, up);
         } else {
-            _ = curl_msnprintf(&prompt, prompt.len, "Enter %s password for user '%s' on URL #%zu:", kind, up, i + 1);
+            _ = curl_msnprintf(&prompt, prompt.len + 1, "Enter %s password for user '%s' on URL #%zu:", kind, up, i + 1);
         }
 
-        _ = getpass_r(@ptrCast(&prompt), &passwd, passwd.len);
+        _ = getpass_r(&prompt, &passwd, passwd.len + 1);
         if (osep_idx) |oi| {
             up[oi] = ';';
         }
 
-        const passwd_z: [*:0]const u8 = @ptrCast(&passwd);
+        const passwd_z: [*:0]const u8 = &passwd;
         if (curlx_dyn_addf(&dyn, "%s:%s", up, passwd_z) != CURLE_OK) {
-            return CURLE_OUT_OF_MEMORY;
+            return error.OutOfMemory;
         }
 
-        c.free(up);
+        mem.free(up);
         userpwd.* = curlx_dyn_ptr(&dyn);
     }
+}
 
+fn checkpasswd(kind: [*:0]const u8, i: usize, last: bool, userpwd: *?[*:0]u8) CURLcode {
+    checkpasswdInner(kind, i, last, userpwd) catch return CURLE_OUT_OF_MEMORY;
     return CURLE_OK;
 }
 
