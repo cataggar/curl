@@ -1,6 +1,6 @@
 .{
     .name = .curl,
-    .version = "8.23.0-zig.2",
+    .version = "8.23.0-zig.3",
     .fingerprint = 0x3e01b4dd89fe94a,
     .minimum_zig_version = "0.17.0",
     .dependencies = .{},
