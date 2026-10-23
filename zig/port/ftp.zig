@@ -640,7 +640,8 @@ fn ftp_parse_url_path(data: *Curl_easy, ftpc: *ftp_conn, ftp: *FTP) CURLcode {
     }
 
     const rawPath = ftpc.rawpath orelse return CURLE_OUT_OF_MEMORY;
-    errdefer freedirs(ftpc);
+    var ok = false;
+    defer if (!ok) freedirs(ftpc);
     var fileName: ?[*:0]u8 = null;
     const filemethod = Curl_ftp_acc_get_ftp_filemethod(data);
 
@@ -746,6 +747,7 @@ fn ftp_parse_url_path(data: *Curl_easy, ftpc: *ftp_conn, ftp: *FTP) CURLcode {
         }
     }
 
+    ok = true;
     return CURLE_OK;
 }
 
@@ -2788,7 +2790,7 @@ fn ftp_pwd_resp(
         var entry_extracted: bool = false;
         var out: dynbuf = undefined;
         containers.curlx_dyn_init(&out, 1000);
-        errdefer containers.curlx_dyn_free(&out);
+        defer containers.curlx_dyn_free(&out);
 
         while (ptr[0] != '\n' and ptr[0] != 0 and ptr[0] != '"') : (ptr += 1) {}
 
@@ -3006,9 +3008,9 @@ fn ftp_pp_statemachine(
                 const os = curlx_memdup0(start, os_len) orelse return CURLE_OUT_OF_MEMORY;
 
                 if (primitives.curl_strequal(os, "OS/400") != 0) {
-                    errdefer mem.free(os);
                     result = ppSendf(data, &ftpc.pp, "%s", .{"SITE NAMEFMT 1"});
                     if (result != CURLE_OK) {
+                        mem.free(os);
                         return result;
                     }
                     if (ftpc.server_os) |old_os|
@@ -3556,23 +3558,24 @@ fn init_wc_data(
         }
     }
 
-    errdefer {
+    var ok = false;
+    defer if (!ok) {
         if (wildcard.pattern) |pat| {
             mem.free(pat);
             wildcard.pattern = null;
         }
         wildcard.dtor = null;
         wildcard.ftpwc = null;
-    }
+    };
 
     const ftpwc = mem.create(ftp_wc) orelse return CURLE_OUT_OF_MEMORY;
-    errdefer mem.freeTyped(ftpwc);
+    defer if (!ok) mem.freeTyped(ftpwc);
 
     ftpwc.parser = sasl_rtsp_ftplist.Curl_ftp_parselist_data_alloc();
     if (ftpwc.parser == null) {
         return CURLE_OUT_OF_MEMORY;
     }
-    errdefer sasl_rtsp_ftplist.Curl_ftp_parselist_data_free(&ftpwc.parser);
+    defer if (!ok) sasl_rtsp_ftplist.Curl_ftp_parselist_data_free(&ftpwc.parser);
 
     wildcard.ftpwc = ftpwc;
     wildcard.dtor = wc_data_dtor;
@@ -3590,6 +3593,7 @@ fn init_wc_data(
         return CURLE_OUT_OF_MEMORY;
     }
 
+    ok = true;
     infof(data, "Wildcard - Parsing started", .{});
     return CURLE_OK;
 }
@@ -3767,10 +3771,10 @@ fn ftp_do(data: *Curl_easy, done: *bool) callconv(.c) CURLcode {
         result = Curl_cwriter_create(&ftp_lc_writer, data, &ftp_cw_lc, CURL_CW_CONTENT_DECODE);
         if (result != CURLE_OK)
             return result;
-        errdefer Curl_cwriter_free(data, ftp_lc_writer);
 
         result = Curl_cwriter_add(data, ftp_lc_writer.?);
         if (result != CURLE_OK) {
+            Curl_cwriter_free(data, ftp_lc_writer);
             return result;
         }
     }
@@ -3855,7 +3859,8 @@ fn ftp_setup_connection(data: *Curl_easy, conn: *connectdata) callconv(.c) CURLc
     const ftpc = mem.create(ftp_conn) orelse return CURLE_OUT_OF_MEMORY;
     if (Curl_conn_meta_set(conn, CURL_META_FTP_CONN, ftpc, ftp_conn_dtor) != CURLE_OK)
         return CURLE_OUT_OF_MEMORY;
-    errdefer Curl_conn_meta_remove(conn, CURL_META_FTP_CONN);
+    var ok = false;
+    defer if (!ok) Curl_conn_meta_remove(conn, CURL_META_FTP_CONN);
 
     if (Curl_ftp_acc_get_str_ftp_account(data)) |acct_str| {
         ftpc.account = mem.strdup(acct_str);
@@ -3879,6 +3884,7 @@ fn ftp_setup_connection(data: *Curl_easy, conn: *connectdata) callconv(.c) CURLc
     ftpc.use_ssl = Curl_ftp_acc_get_use_ssl(data);
     ftpc.ccc = Curl_ftp_acc_get_ftp_ccc(data);
 
+    ok = true;
     trcFtp(data, "[%s] setup connection -> %d", .{ ftp_cstate(ftpc), @as(c_int, @intCast(result)) });
     return result;
 }

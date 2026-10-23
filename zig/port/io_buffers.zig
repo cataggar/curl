@@ -848,9 +848,11 @@ pub export fn Curl_dynhds_add(
     }
 
     const entry = entryNew(n, namelen, value, valuelen, d.opts) orelse return CURLE_OUT_OF_MEMORY;
-    errdefer entryFree(entry);
 
-    dynhdsEnsureCap(d) catch return CURLE_OUT_OF_MEMORY;
+    dynhdsEnsureCap(d) catch {
+        entryFree(entry);
+        return CURLE_OUT_OF_MEMORY;
+    };
 
     d.hds.?[d.hds_len] = entry;
     d.hds_len += 1;

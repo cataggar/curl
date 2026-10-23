@@ -2497,7 +2497,7 @@ pub export fn Curl_cf_socks_proxy_insert_after(
 
     const ctx = mem.create(SocksCtx) orelse return CURLE_OUT_OF_MEMORY;
     var ctx_owned = true;
-    errdefer if (ctx_owned) socks_proxy_ctx_free(ctx);
+    defer if (ctx_owned) socks_proxy_ctx_free(ctx);
 
     Curl_peer_link(&ctx.dest, dest);
     ctx.ip_version = ip_version;

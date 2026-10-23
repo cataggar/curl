@@ -340,7 +340,7 @@ fn inetNtop6(src: [*]const u8, dst: [*]u8, size: usize) c_uint {
     const INT16SZ = 2;
     const NUM_WORDS = IN6ADDRSZ / INT16SZ;
 
-    var tmp: [46]u8 = undefined;
+    var tmp: [46]u8 = @splat(0);
     var words: [NUM_WORDS]u32 = @splat(0);
 
     for (0..IN6ADDRSZ) |i| {
@@ -584,7 +584,9 @@ pub export fn curlx_inet_pton(af: c_int, src: [*:0]const u8, dst: *anyopaque) c_
 // ============================================================================
 
 fn bufToZSlice(buf: [*]u8, max_len: usize) [:0]u8 {
-    const len = std.mem.indexOfScalar(u8, buf[0..max_len], 0) orelse 0;
+    var len: usize = 0;
+    while (len < max_len and buf[len] != 0) : (len += 1) {}
+    if (len == max_len) len = 0;
     buf[len] = 0;
     return buf[0..len :0];
 }
@@ -707,7 +709,7 @@ pub export fn curlx_strerror(err: c_int, buf: [*]u8, buflen: usize) ?[*:0]const 
     const old_win_err = if (builtin.os.tag == .windows) win32.GetLastError() else 0;
     const old_errno = std.c._errno().*;
 
-    buf[0] = 0;
+    @memset(buf[0..buflen], 0);
 
     if (builtin.os.tag == .windows) {
         const crt_failed = win32.strerror_s(buf, buflen, err) != 0 or
@@ -719,7 +721,7 @@ pub export fn curlx_strerror(err: c_int, buf: [*]u8, buflen: usize) ?[*:0]const 
             formatUnknownErrorWindows(err, buf, buflen);
         }
     } else if (builtin.os.tag == .linux and builtin.abi.isGnu()) {
-        var buffer: [256]u8 = undefined;
+        var buffer: [256]u8 = @splat(0);
         const msg = glibc_strerr.strerror_r(err, &buffer, buffer.len);
         if (msg) |m| {
             if (buflen > 1) {
