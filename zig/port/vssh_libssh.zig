@@ -2466,7 +2466,7 @@ pub fn myssh_connect(data_opt: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
         return CURLE_FAILED_INIT;
     }
     var session_owned = true;
-    errdefer if (session_owned) {
+    defer if (session_owned) {
         if (sshc.ssh_session) |s| {
             ssh_free(s);
             sshc.ssh_session = null;

@@ -651,7 +651,7 @@ pub export fn Curl_get_pathname(
 
     var out: containers.dynbuf = undefined;
     containers.curlx_dyn_init(&out, MAX_PATHLENGTH);
-    errdefer containers.curlx_dyn_free(&out);
+    defer containers.curlx_dyn_free(&out);
 
     var cp: [*:0]const u8 = cp_init;
     curlx_str_passblanks(&cp);
@@ -1287,7 +1287,7 @@ pub export fn Curl_ssh_setup_connection(
     if (getSshConn(conn) == null) {
         const sshc = mem.create(ssh_conn) orelse return CURLE_OUT_OF_MEMORY;
         var sshc_owned = true;
-        errdefer if (sshc_owned) {
+        defer if (sshc_owned) {
             if (sshc.priv_key) |pk| mem.freeSecretZ(pk);
             if (sshc.pub_key) |pubk| mem.freeSecretZ(pubk);
             mem.freeTyped(sshc);
@@ -3216,6 +3216,14 @@ fn ssh_statemach_act(data: *Curl_easy, sshc: *ssh_conn, sshp: *SSHPROTO, block: 
                     }
                     sshc.ssh_session = null;
                 }
+                if (sshc.priv_key) |pk| {
+                    mem.freeSecretZ(pk);
+                    sshc.priv_key = null;
+                }
+                if (sshc.pub_key) |pubk| {
+                    mem.freeSecretZ(pubk);
+                    sshc.pub_key = null;
+                }
                 if (sshc.rsa) |r| {
                     mem.freeSecretZ(r);
                     sshc.rsa = null;
@@ -3385,7 +3393,7 @@ fn ssh_connect(data_opt: ?*Curl_easy, done: *bool) callconv(.c) CURLcode {
         return CURLE_FAILED_INIT;
     }
     var session_owned = true;
-    errdefer if (session_owned) {
+    defer if (session_owned) {
         _ = libssh2_session_free(sshc.ssh_session.?);
         sshc.ssh_session = null;
     };
