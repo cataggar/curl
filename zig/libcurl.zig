@@ -5,6 +5,7 @@ pub const Options = struct {
     optimize: std.builtin.OptimizeMode,
     linkage: std.builtin.LinkMode = .static,
     config_header: ?*std.Build.Step.ConfigHeader = null,
+    use_llvm: ?bool = null,
 };
 
 pub const c_flags = [_][]const u8{
@@ -273,7 +274,7 @@ pub fn addLibcurl(b: *std.Build, options: Options) *std.Build.Step.Compile {
 
     if (os_tag != .windows) {
         mod.pic = true;
-        if (options.optimize != .debug) {
+        if (options.optimize != .debug and (options.use_llvm orelse true)) {
             mod.stack_protector = true;
         }
     }
@@ -296,6 +297,7 @@ pub fn addLibcurl(b: *std.Build, options: Options) *std.Build.Step.Compile {
         .root_module = mod,
         .use_llvm = true,
     });
+    lib.use_llvm = options.use_llvm;
 
     if (os_tag == .linux) {
         lib.link_z_relro = true;

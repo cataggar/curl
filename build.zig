@@ -21,6 +21,9 @@ pub fn build(b: *std.Build) void {
     }
     const optimize = b.standardOptimizeOption(.{});
     const shared = b.option(bool, "shared", "Build shared libcurl library instead of static") orelse false;
+    const default_use_llvm = !(target.result.cpu.arch == .x86_64 and target.result.os.tag != .windows);
+    const use_llvm = b.option(bool, "use-llvm", "Use LLVM backend instead of Zig self-hosted backend (default: false on x86_64 POSIX)") orelse default_use_llvm;
+    const host_use_llvm = if (b.graph.host.result.cpu.arch == .x86_64 and b.graph.host.result.os.tag != .windows) use_llvm else true;
     const backend_opts = backends.fromBuild(b);
 
     const config_header = libcurl.createConfigHeader(b, target);
@@ -29,12 +32,14 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .linkage = if (shared) .dynamic else .static,
         .config_header = config_header,
+        .use_llvm = use_llvm,
     });
     backends.applyCMacros(lib.root_module, target, backend_opts);
     backends.linkBackends(lib.root_module, target, backend_opts);
     b.installArtifact(lib);
 
     const exe = cli.addCurlExe(b, target, optimize, lib, config_header, !shared);
+    exe.use_llvm = use_llvm;
     backends.applyCMacros(exe.root_module, target, backend_opts);
     if (shared) {
         backends.linkBackends(exe.root_module, target, backend_opts);
@@ -72,6 +77,7 @@ pub fn build(b: *std.Build) void {
     const unit_tests = b.addTest(.{
         .root_module = curl_mod,
     });
+    unit_tests.use_llvm = use_llvm;
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
     const cli_test_opts = b.addOptions();
@@ -87,6 +93,7 @@ pub fn build(b: *std.Build) void {
     const cli_tests = b.addTest(.{
         .root_module = cli_test_mod,
     });
+    cli_tests.use_llvm = use_llvm;
     const run_cli_tests = b.addRunArtifact(cli_tests);
 
     const backend_options_step = backends.createOptionsStep(b, backend_opts);
@@ -107,6 +114,7 @@ pub fn build(b: *std.Build) void {
     const backend_tests = b.addTest(.{
         .root_module = backend_test_mod,
     });
+    backend_tests.use_llvm = use_llvm;
     const run_backend_tests = b.addRunArtifact(backend_tests);
 
     const test_backends_step = b.step("test-backends", "Run backend tests");
@@ -125,6 +133,7 @@ pub fn build(b: *std.Build) void {
     const port_tests = b.addTest(.{
         .root_module = port_test_mod,
     });
+    port_tests.use_llvm = use_llvm;
     const run_port_tests = b.addRunArtifact(port_tests);
 
     const test_port_step = b.step("test-port", "Run Zig port unit tests");
@@ -139,6 +148,7 @@ pub fn build(b: *std.Build) void {
         .name = "curl_release",
         .root_module = release_mod,
     });
+    release_exe.use_llvm = host_use_llvm;
     const install_release = b.addInstallArtifact(release_exe, .{});
     const install_release_step = b.step(
         "install-curl-release",
@@ -149,6 +159,7 @@ pub fn build(b: *std.Build) void {
     const release_tests = b.addTest(.{
         .root_module = release_mod,
     });
+    release_tests.use_llvm = host_use_llvm;
     const run_release_tests = b.addRunArtifact(release_tests);
     const test_release_step = b.step("test-release", "Run release tooling tests");
     test_release_step.dependOn(&run_release_tests.step);
